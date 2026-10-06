@@ -14,6 +14,7 @@ import {
 } from "../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry, SessionContextBudgetStatus } from "../config/sessions/types.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
@@ -198,6 +199,7 @@ describe("buildStatusText prepared context windows", () => {
   async function renderTerminalFallback(
     params: {
       entry?: Partial<InternalSessionEntry>;
+      live?: boolean;
       message?: Record<string, unknown>;
       laterMessage?: Record<string, unknown>;
       status?: Partial<StatusTextParams>;
@@ -245,15 +247,25 @@ describe("buildStatusText prepared context windows", () => {
         append(params.laterMessage);
       }
       const original = loadSessionEntryReadOnly(scope);
-      const parts = await renderPreparedStatus({
-        sessionEntry: original,
-        sessionKey: scope.sessionKey,
-        storePath: scope.storePath,
-        contextTokens: 1_000_000,
-        ...params.status,
-      });
-      expect(loadSessionEntryReadOnly(scope)).toEqual(original);
-      return parts;
+      const runId = "current-live-run";
+      if (params.live) {
+        registerAgentRunContext(runId, { ...scope, projectSessionActive: true });
+      }
+      try {
+        const parts = await renderPreparedStatus({
+          sessionEntry: original,
+          sessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          contextTokens: 1_000_000,
+          ...params.status,
+        });
+        expect(loadSessionEntryReadOnly(scope)).toEqual(original);
+        return parts;
+      } finally {
+        if (params.live) {
+          clearAgentRunContext(runId);
+        }
+      }
     });
   }
 
@@ -299,7 +311,7 @@ describe("buildStatusText prepared context windows", () => {
   );
 
   it.each([
-    ["running session", { entry: { status: "running" } }],
+    ["running session", { live: true }],
     ["missing run", { entry: { lastRunId: undefined } }],
     ["failed assistant", { message: { stopReason: "error" } }],
     ["hidden assistant", { message: { content: [] } }],

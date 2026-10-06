@@ -144,6 +144,10 @@ own active chat runs and queued turns, and waits on the process-wide pending-rep
 count. Both report remaining work as named counts; categories can overlap and
 should not be added as distinct turns.
 
+If database closure refuses a follow-up drain, the drain parks its queued input
+instead of retrying against the closing owner. A fresh drain request can resume
+it after database admission reopens; durable input recovery owns restart replay.
+
 Read-only RPC waits (`agent.wait`, approval decision waits, `question.waitAnswer`,
 and `device.scopes.waitUpgrade`) stop observing when their client disconnects.
 When shutdown drain begins, connected waiters receive retryable `UNAVAILABLE`
@@ -152,6 +156,10 @@ These waits do not consume the stop drain budget. The underlying runs, decisions
 and admitted writes keep their normal drain and recovery behavior. This also
 applies to update restarts once the running Gateway contains this fix; installing
 new files cannot change a wait already held by an older Gateway process.
+
+For an accepted WebChat turn, `agent.wait` reports `pending` with
+`timeoutPhase: "queue"` when queue admission completes, including when the wait
+began before admission. Queuing does not complete the turn's run ID.
 
 Cron shutdown gives execution cleanup and durable result writes the same cleanup
 window. Finishing the job's execution does not by itself complete the drain:
@@ -581,32 +589,40 @@ Copying one does not grant permission to restart a service.
 
 ## How interrupted work is detected
 
-Startup reconciles older spawned session rows, including dashboard-shaped children,
-that still say `running` but have no live run, task, admission, or recovery owner.
-An abort flag or safe-tools hint alone does not establish a recovery owner.
-Completed child history stops retaining its requester only after delivery and
-cleanup finish with no outstanding requester, wake, collector, or recovery claim.
-Incomplete or unreadable child records still retain ownership.
-It records a diagnostic transcript
-receipt and marks the row `interrupted` in one transaction. The end timestamp records when
-startup observed the interruption, rather than an inferred execution finish time;
-the original activity timestamps remain intact. A failed receipt write becomes a
-warning and leaves the row eligible for a later repair.
+Persisted session status records only a run outcome: `done`, `failed`, `killed`,
+`timeout`, or `interrupted`. A new run clears the previous outcome; session rows
+derive `running` and `queued` from the live run registry and queue owner.
+Restart-aborted runs record `interrupted`, an interruption reason, and their end
+time while retaining the recovery owner's claims.
 
-Archiving cancels the session's work and settles a remaining `running` status as
-`killed`. Startup applies the same settlement to older archived rows after excluding
-live work. Existing terminal outcomes, recovery receipts, and pending delivery
-metadata remain intact; restoring an archived session does not resume its cancelled
-execution. Unarchived main sessions retain their separate resume path below.
+New input follows the live reply owner's queue policy. Without a live reply, durable execution
+fences must have terminal evidence before admission can retire them. Successful
+final delivery clears its pending intent and any unclaimed recovery route while
+preserving newer execution or delivery claims.
+
+Before readiness, startup invokes the shared Doctor transform to normalize older
+persisted `running` or `queued` values to `interrupted` once, except verified legacy
+yields retain an unset outcome so their child continuation keeps ownership. It logs
+the repaired count, preserves recovery claims and transcripts, and retains activity timestamps.
+Eligible legacy `running` entries without a claim receive recovery custody before
+their old status is removed, preserving their existing automatic resume path.
+The saved end time is preserved or falls back to the entry's last durable update.
+
+Archiving drains and cancels the session's work before committing the archive.
+Existing run outcomes, recovery receipts, and pending delivery metadata remain
+intact; restoring an archived session does not resume its cancelled execution.
+Unarchived main sessions retain their separate resume path below.
 
 Three complementary mechanisms mark sessions whose turn did not finish:
 
 - **At turn admission:** for an ordinary text turn on an existing main session,
-  the gateway appends the user message, marks the session running, and records
+  the gateway appends the user message, clears the previous outcome, and records
   its recovery delivery claim in one SQLite transaction before model or
   `before_agent_reply` hook execution. Control UI does this before returning the
   `started` acknowledgement. Channel dispatch does it when the prepared turn
   adopts the agent run.
+  Turns without a channel delivery route also acquire a durable recovery claim
+  in that admission write; the claim does not grant channel delivery authority.
   Commands, attachments, per-turn overrides, pending deliveries, prior abort
   hints, plugin-owned sessions, and turns with execution hooks keep their
   specialized admission paths.
@@ -619,9 +635,9 @@ Three complementary mechanisms mark sessions whose turn did not finish:
 - **At shutdown:** during the restart drain, every session with an active run
   is stamped with a recovery marker in the session store before the run is
   aborted.
-- **At startup:** the gateway scans session stores for sessions that still
-  claim to be running but have no live owner in the new process. This catches
-  hard crashes and kills where no shutdown code ran. Stale transcript lock
+- **At startup:** the gateway scans recovery-owned claims whose execution has
+  no live owner in the new process. This catches hard crashes and kills where
+  no shutdown code ran, without inferring recovery from a run outcome. Stale transcript lock
   files are cleaned up at the same time.
 
 Agents still undergoing database startup inspection retain their recovery work.
@@ -638,14 +654,13 @@ outstanding startup recovery failures from the running Gateway; the warning clea
 when the store scan succeeds.
 
 A restart abort preserves the interrupted turn's recovery claim even when command
-cleanup finishes before shutdown marking. On upgrade, startup also repairs an
-internal chat turn left running and aborted with a dead writer, a missing claim,
-and an incorrect terminal marker for that writer. It restores that turn's claim
-only when no live owner or recorded terminal delivery remains, then uses the normal
-transcript replay checks to resume. Earlier completed turns keep their receipts.
+cleanup finishes before shutdown marking. The Doctor transform also restores a
+missing claim for an older interrupted internal chat writer when its recorded
+terminal marker has no matching delivery evidence. Existing completed-turn
+receipts remain intact; recovery uses its normal transcript replay checks.
 
-If an older Gateway left a dead writer and an unfinished recovery cycle in a
-running, failed, or statusless session, `sessions.recover` reconciles that writer
+If a Gateway left a dead writer and an unfinished recovery cycle,
+`sessions.recover` reconciles that writer
 and starts a continuation in the same session. A new Control UI message also reconciles this
 state before admission, so a rejected send cannot trap the conversation in a
 "conversation changed" retry loop. Both paths preserve the session key and
@@ -769,6 +784,8 @@ durable channel-ingress claims can restore message-action authority. A resumed
 run keeps the original source-delivery mode and source correlation, including
 requester identity and any same-channel/thread restriction, so the same receipt
 remains authoritative even if another restart happens during recovery. A
+message-tool-only delivery policy also survives run admission and model fallback;
+private final text never becomes a pending automatic reply. A
 message-tool-only turn without reconstructable channel authority is tombstoned
 because OpenClaw cannot safely mint message-action authority without the
 original channel-ingress claim. The terminal notice directs the user to start a
@@ -841,6 +858,7 @@ Turns with only superseded children need no requester settlement.
 
 If a parent yielded while waiting for children, its saved batch collects both
 completed and interrupted results and wakes the parent once the batch settles.
+Yielded turns leave the persisted outcome unset while their continuation still owns unfinished work.
 A parent already working on those results resumes through ordinary main-session
 recovery. A child result or an `announce:` run identifier does not make unfinished
 parent work disposable. Both recovery paths give the parent the interrupted

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
@@ -129,18 +130,23 @@ export async function runReplyAgent(
     }));
   let didDeliverVisiblePartialReply = false;
   const onPartialReply = opts?.onPartialReply;
-  const runOpts = onPartialReply
-    ? {
-        ...opts,
-        onPartialReply: async (payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0]) => {
-          const observed = await settleProgressVisibilityCallbackResult(onPartialReply(payload));
-          if (observed.visible && hasOutboundReplyContent(payload, { trimText: true })) {
-            didDeliverVisiblePartialReply = true;
-          }
-          return observed.result;
-        },
-      }
-    : opts;
+  const runOpts = {
+    ...opts,
+    runId: opts?.runId ?? randomUUID(),
+    ...(onPartialReply
+      ? {
+          onPartialReply: async (
+            payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0],
+          ) => {
+            const observed = await settleProgressVisibilityCallbackResult(onPartialReply(payload));
+            if (observed.visible && hasOutboundReplyContent(payload, { trimText: true })) {
+              didDeliverVisiblePartialReply = true;
+            }
+            return observed.result;
+          },
+        }
+      : {}),
+  };
   const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
   if (replyOperationRunState) {
     replyOperationRunState.replyCompletion = resolveReplyCompletion(
@@ -193,7 +199,6 @@ export async function runReplyAgent(
     // Durable source ownership identifies provider redelivery even if the run
     // became terminal before its claim cleanup committed.
     if (
-      restartRecoveryEntry?.status !== "running" &&
       sessionKey &&
       storePath &&
       hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId)
@@ -620,7 +625,7 @@ export async function runReplyAgent(
     cfg,
     followupRun,
     getActiveSessionEntry: () => activeSessionEntry,
-    opts,
+    opts: runOpts,
     replyOperation,
     restartRecoverySourceTurnId,
     runtimePolicySessionKey,

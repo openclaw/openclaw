@@ -688,7 +688,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
         });
         await original;
         expect(loadSessionEntryReadOnly(scope)).toMatchObject({
-          status: "running",
+          status: "interrupted",
           abortedLastRun: true,
           restartRecoveryRuns: [expect.objectContaining({ runId })],
         });

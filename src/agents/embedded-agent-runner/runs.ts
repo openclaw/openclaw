@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import {
   collectErrorGraphCandidates,
   readErrorCauses,
@@ -99,6 +97,10 @@ import {
   isEmbeddedRunHandleAbortable,
   isEmbeddedRunHandleSupersedable,
 } from "./runs.probes.js";
+import {
+  clearActiveRunSessionIndex,
+  normalizeSessionFileRegistryKey,
+} from "./runs.session-index.js";
 
 export type {
   EmbeddedAgentQueueHandle,
@@ -134,49 +136,6 @@ export function formatEmbeddedAgentQueueFailureSummary(
   const errorPart = outcome.errorMessage ? ` error=${outcome.errorMessage}` : "";
   return `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=${outcome.gatewayHealth}${errorPart}`;
 }
-function clearActiveRunSessionIndex(
-  index: Map<string, string>,
-  sessionId: string,
-  key?: string,
-): void {
-  // File aliases always use the sweep: cleanup may not retain the registration's file token.
-  if (key) {
-    if (index.get(key) === sessionId) {
-      index.delete(key);
-    }
-    return;
-  }
-  for (const [entryKey, activeSessionId] of index) {
-    if (activeSessionId === sessionId) {
-      index.delete(entryKey);
-    }
-  }
-}
-
-function normalizeSessionFileRegistryKey(sessionFile: string | undefined): string | undefined {
-  const normalized = sessionFile?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized.startsWith("agent:") ||
-    normalized.startsWith("sqlite:") ||
-    normalized.startsWith("in-memory:")
-  ) {
-    return normalized;
-  }
-  const resolved = path.resolve(normalized);
-  const parent = path.dirname(resolved);
-  try {
-    // Canonicalize only the parent so a registry key stays stable when the
-    // transcript file itself is created or removed during the active run.
-    // Artifact-file symlinks are not runtime session identity after SQLite migration.
-    return path.join(fs.realpathSync(parent), path.basename(resolved));
-  } catch {
-    return resolved;
-  }
-}
-
 function clearEmbeddedRunAbandonmentBySessionId(sessionId: string): void {
   const abandonedRun = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId);
   if (!abandonedRun) {
@@ -1364,6 +1323,15 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   ) {
     return { aborted: false, drained: false, forceCleared: false };
   }
+  const persistenceSnapshot =
+    params.forceClear === true && params.sessionKey
+      ? tryLoadForceClearSessionSnapshot(
+          params.sessionKey,
+          agentId,
+          embeddedRunHandle?.runId ??
+            (replyOperation ? getAttachedBackend(replyOperation)?.runId : undefined),
+        )
+      : undefined;
   const staleExpiryBarrier = params.reason === "stuck_recovery" ? createDeferredCore() : undefined;
   // Recovery is a staleness expiry: stamp run_stalled on the reply operation
   // BEFORE any handle abort, or the run loop's abort handler re-enters
@@ -1411,10 +1379,6 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     if (!aborted && stampedStaleReplyRun && drained) {
       aborted = true;
     }
-    const persistenceSnapshot =
-      params.forceClear === true && params.sessionKey
-        ? tryLoadForceClearSessionSnapshot(params.sessionKey, agentId)
-        : undefined;
     const forceCleared =
       params.forceClear === true &&
       ((!expiredReplyRun && stampedStaleReplyRun && !ownerSettled) || !aborted || !drained)
@@ -1443,6 +1407,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
 
 type ForceClearSessionSnapshot = {
   agentId: string;
+  lifecycleRunId?: string;
   startedAt?: number;
   storePath: string;
   updatedAt: number;
@@ -1451,17 +1416,23 @@ type ForceClearSessionSnapshot = {
 function tryLoadForceClearSessionSnapshot(
   sessionKey: string,
   preparedAgentId?: string,
+  runId?: string,
 ): ForceClearSessionSnapshot | undefined {
   try {
     const cfg = getRuntimeConfig();
     const agentId = resolveSessionAgentId({ config: cfg, sessionKey, agentId: preparedAgentId });
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const entry = loadSessionEntry({ agentId, sessionKey, storePath });
-    if (!entry || entry.status !== "running") {
+    if (
+      !entry ||
+      entry.status !== undefined ||
+      (runId !== undefined && entry.lifecycleRunId !== runId)
+    ) {
       return undefined;
     }
     return {
       agentId,
+      lifecycleRunId: entry.lifecycleRunId,
       ...(entry.startedAt === undefined ? {} : { startedAt: entry.startedAt }),
       storePath,
       updatedAt: entry.updatedAt,
@@ -1475,14 +1446,9 @@ function tryLoadForceClearSessionSnapshot(
 }
 
 /** Persists terminal state when a forced registry clear cannot emit normal lifecycle. */
-async function persistForceClearedEmbeddedRunTerminalState(params: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  startedAt?: number;
-  storePath: string;
-  updatedAt: number;
-}): Promise<void> {
+async function persistForceClearedEmbeddedRunTerminalState(
+  params: ForceClearSessionSnapshot & { sessionId: string; sessionKey: string },
+): Promise<void> {
   try {
     await patchSessionEntryCore(
       {
@@ -1498,7 +1464,8 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
           isReplyRunActiveForSessionId(params.sessionId) ||
           resolveActiveReplyRunSessionId(params.sessionKey) !== undefined ||
           entry.sessionId !== params.sessionId ||
-          entry.status !== "running" ||
+          entry.status !== undefined ||
+          entry.lifecycleRunId !== params.lifecycleRunId ||
           entry.updatedAt !== params.updatedAt ||
           entry.startedAt !== params.startedAt
         ) {

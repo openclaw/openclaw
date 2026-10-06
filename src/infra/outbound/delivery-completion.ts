@@ -263,10 +263,7 @@ export async function settlePendingFinalDelivery(
       if (settled === current && !owedNotice && !clearsNotice && !terminalEvidence) {
         return null;
       }
-      wakeRecovery =
-        settled !== "queued" &&
-        internalEntry.status === "running" &&
-        internalEntry.abortedLastRun === true;
+      wakeRecovery = settled !== "queued" && internalEntry.abortedLastRun === true;
       return {
         ...(internalEntry.mainRestartRecovery
           ? {

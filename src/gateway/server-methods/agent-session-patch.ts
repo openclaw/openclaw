@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
+import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
 import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
@@ -246,6 +247,7 @@ export async function buildAgentSessionPatch(
   const shouldClearTerminalState =
     reuse.canReuseSession &&
     reuse.recoverableTerminalSession &&
+    !hasMainSessionRecoveryClaim(params.freshEntry) &&
     !freshSessionRotatedSinceLoad &&
     patchSessionId === params.freshEntry?.sessionId;
   const automaticRecoveryClearPatch = shouldClearRotatedState

@@ -78,6 +78,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabases,
   refreshAgentDatabaseIdleTimer,
+  registerAgentDatabaseHandle,
   retainAgentDatabase,
   retainIncognitoSharedState,
   retainFailedAgentDatabaseClose,
@@ -532,11 +533,10 @@ function* openOpenClawAgentDatabaseSteps(
     // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
     finishPhase("registration");
-    cache.leases.set(pathname, { leaseId, env: leaseEnvironment });
-    cache.databases.set(pathname, database);
+    const deferred = diagnostics.integrityGateMode === "deferred";
+    registerAgentDatabaseHandle(database, leaseId, leaseEnvironment, deferred);
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
     assertCurrent(database);
-    const deferred = diagnostics.integrityGateMode === "deferred";
     if (
       deferred ||
       (diagnostics.integrityGateOutcome === "cached" && !(isValidatedReopen && reuseIntegrity))
