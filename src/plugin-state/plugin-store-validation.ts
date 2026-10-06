@@ -14,14 +14,20 @@ type PluginStoreValidationErrors = {
 
 type PluginStoreOptionSignature = Record<string, string | number | undefined>;
 
+type PluginStoreOptionPolicy<T extends PluginStoreOptionSignature> = {
+  resolveOverflowPolicy(value: unknown): "evict-oldest" | "reject-new";
+  assertConsistent(pluginId: string, namespace: string, signature: T): void;
+  clear(): void;
+};
+
 export function createPluginStoreOptionPolicy<T extends PluginStoreOptionSignature>(params: {
   label: string;
   invalid: (message: string) => Error;
-}) {
+}): PluginStoreOptionPolicy<T> {
   const signatures = new Map<string, T>();
 
   return {
-    resolveOverflowPolicy(value: unknown): "evict-oldest" | "reject-new" {
+    resolveOverflowPolicy(value) {
       if (value === undefined || value === "evict-oldest") {
         return "evict-oldest";
       }
@@ -30,7 +36,7 @@ export function createPluginStoreOptionPolicy<T extends PluginStoreOptionSignatu
       }
       throw params.invalid(`${params.label} overflowPolicy must be evict-oldest or reject-new`);
     },
-    assertConsistent(pluginId: string, namespace: string, signature: T) {
+    assertConsistent(pluginId, namespace, signature) {
       const key = `${pluginId}\0${namespace}`;
       const existing = signatures.get(key);
       if (!existing) {

@@ -83,14 +83,9 @@ export {
 export { buildMediaUnderstandingRegistry as buildProviderRegistry } from "./provider-registry.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-type AutoModelSelectionParams = {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
+type AutoModelSelectionParams = Parameters<typeof resolveAutoImageModel>[0] & {
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
-  activeModel?: ActiveMediaModel;
 };
 /**
  * A provider registry, or a memoized factory that builds one on first use.

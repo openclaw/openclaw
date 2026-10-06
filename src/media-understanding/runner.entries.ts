@@ -350,10 +350,7 @@ export function buildModelDecision(params: {
   };
 }
 
-export type MediaRequestOverrides = {
-  prompt?: string;
-  language?: string;
-};
+export type MediaRequestOverrides = Pick<AudioTranscriptionRequest, "prompt" | "language">;
 
 type ProviderExecutionAuth =
   | {

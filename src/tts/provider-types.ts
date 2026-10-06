@@ -15,7 +15,9 @@ export type SpeechProviderConfig = Record<string, unknown>;
 export type SpeechProviderOverrides = Record<string, unknown>;
 
 /** Policy controlling which [[tts:*]] directive fields can affect synthesis. */
-export type SpeechModelOverridePolicy = Required<TtsModelOverrideConfig>;
+export type SpeechModelOverridePolicy = {
+  [Key in keyof TtsModelOverrideConfig]-?: Exclude<TtsModelOverrideConfig[Key], undefined>;
+};
 
 /** Parsed directive overrides grouped by provider. */
 export type TtsDirectiveOverrides = {

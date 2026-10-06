@@ -95,7 +95,13 @@ export function createRealtimeVoiceOutputActivityTracker(
       return Math.max(minMs, audioMs - (now() - playbackStartedAt) + marginMs);
     },
     /** Current output counters and playback timestamps. */
-    snapshot() {
+    snapshot(): Required<RealtimeVoiceOutputActivityDelta> & {
+      chunks: number;
+      playbackStarted: boolean;
+      streamEnding: boolean;
+      lastAudioAt?: number;
+      playbackStartedAt?: number;
+    } {
       return {
         audioMs,
         chunks,
