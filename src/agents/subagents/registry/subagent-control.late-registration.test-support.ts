@@ -176,13 +176,15 @@ export function registerLateDescendantControlTests({
             start,
             "discovery cannot adopt a selected child's replacement generation",
           ).toHaveBeenCalledOnce();
-          expect(getSubagentRunByChildSessionKey(childKey)?.execution.endedAt).toBeUndefined();
+          expect(
+            (await getSubagentRunByChildSessionKey(childKey))?.execution.endedAt,
+          ).toBeUndefined();
         } else {
           expect(
             start,
             "late descendant must be held before the capacity-releasing signal",
           ).not.toHaveBeenCalled();
-          expect(getSubagentRunByChildSessionKey(childKey)).toMatchObject({
+          expect(await getSubagentRunByChildSessionKey(childKey)).toMatchObject({
             endedReason: SUBAGENT_ENDED_REASON_KILLED,
             execution: { status: "terminal" },
           });
@@ -192,7 +194,8 @@ export function registerLateDescendantControlTests({
           "discovery cannot add another root or inhibit its lane",
         ).toHaveBeenCalledOnce();
         expect(
-          getSubagentRunByChildSessionKey("agent:main:subagent:other-turn-root")?.execution.endedAt,
+          (await getSubagentRunByChildSessionKey("agent:main:subagent:other-turn-root"))?.execution
+            .endedAt,
         ).toBeUndefined();
       } finally {
         proceed.resolve();

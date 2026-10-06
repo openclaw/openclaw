@@ -84,15 +84,7 @@ export async function getUpdateCheckResult(params: {
   return update;
 }
 
-type UpdateAvailability = {
-  available: boolean;
-  hasGitUpdate: boolean;
-  hasRegistryUpdate: boolean;
-  latestVersion: string | null;
-  gitBehind: number | null;
-};
-
-export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
+export function resolveUpdateAvailability(update: UpdateCheckResult) {
   if (update.installKind === "host" || update.installKind === "immutable") {
     return {
       available: false,

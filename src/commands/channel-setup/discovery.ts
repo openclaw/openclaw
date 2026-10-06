@@ -16,23 +16,10 @@ import {
   listTrustedChannelPluginCatalogEntries,
 } from "./trusted-catalog.js";
 
-type ChannelCatalogEntry = {
-  id: ChannelChoice;
-  meta: ChannelMeta;
-};
-
 /** Return true when channel metadata should appear in setup/onboarding choices. */
 export function shouldShowChannelInSetup(meta: Pick<ChannelMeta, "exposure">): boolean {
   return isChannelVisibleInSetup(meta);
 }
-
-type ResolvedChannelSetupEntries = {
-  entries: ChannelCatalogEntry[];
-  installedCatalogEntries: ChannelPluginCatalogEntry[];
-  installableCatalogEntries: ChannelPluginCatalogEntry[];
-  installedCatalogById: Map<ChannelChoice, ChannelPluginCatalogEntry>;
-  installableCatalogById: Map<ChannelChoice, ChannelPluginCatalogEntry>;
-};
 
 function resolveWorkspaceDir(cfg: OpenClawConfig, workspaceDir?: string): string | undefined {
   return workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
@@ -77,7 +64,7 @@ export function resolveChannelSetupEntries(params: {
   installedPlugins: ChannelPlugin[];
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): ResolvedChannelSetupEntries {
+}) {
   const workspaceDir = resolveWorkspaceDir(params.cfg, params.workspaceDir);
   const manifestInstalledIds = listManifestInstalledChannelIds({
     cfg: params.cfg,

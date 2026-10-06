@@ -1,4 +1,7 @@
-import type { GatewayWriteCustody } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
+import type {
+  GatewaySuspendBlocker,
+  GatewayWriteCustody,
+} from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 // Collects process activity shared by restart and host-suspension decisions.
 import { getActiveAcpTurnCount } from "../acp/control-plane/active-turns.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
@@ -20,82 +23,24 @@ import { getActiveAgentRunContextCount } from "./agent-run-registry.js";
 import { waitForGatewayDrain } from "./gateway-drain.js";
 import { readLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
-type GatewayActiveWorkCounts = {
-  queueSize: number;
-  pendingReplies: number;
-  embeddedRuns: number;
-  backgroundExecSessions: number;
-  cronRuns: number;
-  agentRuns: number;
-  acpRuns: number;
-  mediaRuns: number;
-  rootRequests: number;
-  sessionAdmissions: number;
-  sessionMutations: number;
-  chatRuns: number;
-  queuedTurns: number;
-  terminalPersistence: number;
-  terminalSessions: number;
-  lifecycleWrites: number;
-  /** Compatibility aggregate. Categories can overlap; use individual counts for diagnostics. */
-  totalActive: number;
-};
-
-export type GatewayActiveWorkBlocker = {
-  kind:
-    | "queue"
-    | "reply"
-    | "embedded-run"
-    | "background-exec"
-    | "cron-run"
-    | "agent-run"
-    | "acp-run"
-    | "media-generation"
-    | "root-request"
-    | "session-admission"
-    | "session-mutation"
-    | "chat-run"
-    | "queued-turn"
-    | "terminal-persistence"
-    | "terminal-session";
-  count: number;
-  message: string;
-};
-
-export type GatewayActiveWorkSnapshot = {
-  idle: boolean;
-  counts: GatewayActiveWorkCounts;
-  blockers: GatewayActiveWorkBlocker[];
-  writeCustody: GatewayWriteCustody;
-};
+export type GatewayActiveWorkBlocker = GatewaySuspendBlocker;
+export type GatewayActiveWorkSnapshot = ReturnType<typeof createGatewayActiveWorkSnapshot>;
 
 type GatewayActiveWorkWaitResult = {
   drained: boolean;
   snapshot: GatewayActiveWorkSnapshot;
 };
 
-export type GatewayActiveWorkInspectors = {
-  getQueueSize: () => number;
-  getPendingReplies: () => number;
-  getEmbeddedRuns: () => number;
-  getBackgroundExecSessions: () => number;
-  getCronRuns: () => number;
-  getAgentRuns: () => number;
-  getAcpRuns: () => number;
-  getMediaRuns: () => number;
-  getRootRequests: () => number;
+export type GatewayActiveWorkInspectors = Omit<
+  typeof defaultInspectors,
+  "getRootRequestHolders"
+> & {
   getRootRequestHolders?: () => string[];
-  getSessionAdmissions: () => number;
-  getSessionMutations: () => number;
-  getChatRuns: () => number;
   getChatRunHolders?: () => string[];
-  getQueuedTurns: () => number;
-  getTerminalPersistence: () => number;
   getTerminalPersistenceHolders?: () => string[];
-  getTerminalSessions: () => number;
 };
 
-const defaultInspectors: GatewayActiveWorkInspectors = {
+const defaultInspectors = {
   getQueueSize: getTotalQueueSize,
   getPendingReplies: getTotalPendingReplies,
   getEmbeddedRuns: getActiveEmbeddedRunCount,
@@ -143,10 +88,10 @@ export function readGatewayMaintenanceWork(inspectors: Partial<GatewayActiveWork
 export function createGatewayActiveWorkSnapshot(
   inspectors: Partial<GatewayActiveWorkInspectors> = {},
   options: { ignoreTerminalSessions?: boolean } = {},
-): GatewayActiveWorkSnapshot {
+) {
   const resolved = { ...defaultInspectors, ...inspectors };
   const maintenance = readGatewayMaintenanceWork(inspectors);
-  const counts: GatewayActiveWorkCounts = {
+  const counts = {
     queueSize: normalizeCount(resolved.getQueueSize()),
     pendingReplies: normalizeCount(resolved.getPendingReplies()),
     embeddedRuns: normalizeCount(resolved.getEmbeddedRuns()),
@@ -159,6 +104,7 @@ export function createGatewayActiveWorkSnapshot(
     queuedTurns: normalizeCount(resolved.getQueuedTurns()),
     terminalSessions: normalizeCount(resolved.getTerminalSessions()),
     ...maintenance.counts,
+    /** Compatibility aggregate. Categories can overlap; use individual counts for diagnostics. */
     totalActive: 0,
   };
   counts.totalActive =

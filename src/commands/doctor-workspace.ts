@@ -82,22 +82,10 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
   return true;
 }
 
-type RootMemoryFilesDetection = {
-  workspaceDir: string;
-  canonicalPath: string;
-  legacyPath: string;
-  canonicalExists: boolean;
-  legacyExists: boolean;
-  canonicalBytes?: number;
-  legacyBytes?: number;
-};
+type RootMemoryFilesDetection = Awaited<ReturnType<typeof detectRootMemoryFiles>>;
+type RootMemoryStatResult = Awaited<ReturnType<typeof statIfExists>>;
 
-type RootMemoryStatResult = {
-  exists: boolean;
-  bytes?: number;
-};
-
-async function statIfExists(filePath: string): Promise<RootMemoryStatResult> {
+async function statIfExists(filePath: string) {
   try {
     const stat = await fs.promises.stat(filePath);
     if (!stat.isFile()) {
@@ -123,7 +111,7 @@ async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> 
   }
 }
 
-async function detectRootMemoryFiles(workspaceDir: string): Promise<RootMemoryFilesDetection> {
+async function detectRootMemoryFiles(workspaceDir: string) {
   const resolvedWorkspace = path.resolve(workspaceDir);
   const canonicalPath = resolveCanonicalRootMemoryPath(resolvedWorkspace);
   const legacyPath = resolveLegacyRootMemoryPath(resolvedWorkspace);

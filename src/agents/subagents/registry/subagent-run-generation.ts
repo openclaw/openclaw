@@ -106,10 +106,13 @@ export function isSameSubagentRunOwner(
   if (!current || !expected) {
     return false;
   }
+  if (current === expected) {
+    return true;
+  }
   const key = runtimeKeys.get(current);
-  const shared = current === expected || (key !== undefined && key === runtimeKeys.get(expected));
   return (
-    shared &&
+    key !== undefined &&
+    key === runtimeKeys.get(expected) &&
     (isSameSubagentRun(current, expected) ||
       isQueuedSubagentRunRekey(expected, current) ||
       isQueuedSubagentRunRekey(current, expected))
