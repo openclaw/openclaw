@@ -118,17 +118,17 @@ after it. The realtime voice and its consult agent receive the same brief.
 
 All brief fields are optional:
 
-| Field                | Value                                                                                                                                           |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `task`               | Plain text describing what to achieve, up to 2000 characters.                                                                                   |
-| `context`            | Facts the voice may use, up to 4000 characters.                                                                                                 |
-| `language`           | Language name or BCP-47 tag, up to 100 characters.                                                                                              |
-| `identity`           | Introduction text, or `{ introduction, disclose: "volunteer" \| "when-asked" }`; up to 500 characters. Defaults to introducing only when asked. |
-| `disclosures`        | Up to 20 strings listing permitted personal details, each up to 500 characters. Defaults to none beyond the permitted identity.                 |
-| `approvals`          | What the voice may agree to, up to 2000 characters. Defaults to no spending or commitments beyond the task.                                     |
-| `voicemailMessage`   | Message to leave on a machine, up to 1000 characters. Defaults to a short message about the task saying the owner will follow up.               |
-| `successCriteria`    | What counts as done, up to 1000 characters.                                                                                                     |
-| `maxDurationSeconds` | Positive integer that shortens this call's duration limit; values above the configured cap are capped.                                          |
+| Field                | Value                                                                                                                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task`               | Plain text describing what to achieve, up to 2000 characters.                                                                                                                      |
+| `context`            | Facts the voice may use, up to 4000 characters.                                                                                                                                    |
+| `language`           | Language name or BCP-47 tag, up to 100 characters.                                                                                                                                 |
+| `identity`           | Introduction text, or `{ introduction, disclose: "volunteer" \| "when-asked" }`; up to 500 characters. Defaults to introducing only when asked.                                    |
+| `disclosures`        | Up to 20 strings listing permitted personal details, each up to 500 characters. Defaults to none beyond the permitted identity.                                                    |
+| `approvals`          | What the voice may agree to, up to 2000 characters. Defaults to no spending or commitments beyond the task.                                                                        |
+| `voicemailMessage`   | Message to leave on a machine, up to 1000 characters. Defaults to the supplied introduction or a neutral message, followed by a promise to try again later; excludes task details. |
+| `successCriteria`    | What counts as done, up to 1000 characters.                                                                                                                                        |
+| `maxDurationSeconds` | Positive integer that shortens this call's duration limit; values above the configured cap are capped.                                                                             |
 
 Briefs have an overall limit of 8000 JSON characters. Unknown fields are rejected.
 For a plumber visit:
@@ -204,10 +204,11 @@ These features are disabled by default. Configure them under
 - With Twilio machine detection, outbound conversation calls hold realtime input
   and the opening until a human or unknown result, or 30 seconds after the bridge
   is ready. A machine result blocks realtime speech even after that cap.
-- Twilio machine detection leaves the brief's voicemail message once and ends
-  the call using carrier text-to-speech followed by hang-up, or ends immediately
-  with `onMachine: "hang-up"`. The realtime stream is retired before carrier speech
-  starts. Notify calls wait for detection before playing the appropriate message.
+- Twilio machine detection leaves the brief's voicemail message once, waits for
+  realtime voice playback to finish, and then hangs up. When realtime playback
+  is unavailable, it retires the realtime stream and uses carrier text-to-speech
+  followed by hang-up. With `onMachine: "hang-up"`, it ends the call immediately.
+  Notify calls wait for detection before playing the appropriate message.
   The detected answer type is recorded. The mock provider can simulate this; Telnyx and Plivo behavior
   is unchanged. `voicemail.detection` defaults to `"off"`.
 
