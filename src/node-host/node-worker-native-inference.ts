@@ -142,12 +142,11 @@ export function projectNodeWorkerNativeInference(
 
 /** Diagnostic scrubbing covers every projected credential and configured header value. */
 function nodeWorkerNativeInferenceSecrets(snapshot: NodeWorkerNativeInferenceSnapshot): string[] {
-  return [
-    ...[...snapshot.models.values()].flatMap(({ model, credential }) => [
-      credential,
-      ...Object.values(model.headers ?? {}),
-    ]),
-  ].filter((value) => value.length > 0);
+  const secrets: string[] = [];
+  for (const { model, credential } of snapshot.models.values()) {
+    secrets.push(credential, ...Object.values(model.headers ?? {}));
+  }
+  return secrets.filter((value) => value.length > 0);
 }
 
 export function nodeWorkerNativeInferenceSecretsForDescriptor(

@@ -229,7 +229,12 @@ it.skipIf(process.platform === "win32")(
         await start(keys.Busy, "NATIVE-SLOT-B", "native-slot-b-at-capacity");
         const full = await wait("native-slot-b-at-capacity");
         expect(full.status).toBe("error");
-        expect(full.error).toMatch(/capacity/iu);
+        // agent.wait intentionally scrubs the internal refusal. The live claim and lack of a
+        // second provider request prove that the occupied physical slot rejected this turn.
+        expect(readPlacement(gateway, keys.Busy)).toMatchObject({
+          placement: { state: "active", turn_claim_id: null },
+          pending: undefined,
+        });
         expect(provider.requests).toEqual(["A"]);
         expect(readPlacement(gateway, keys.A).placement?.turn_claim_id).toBeTruthy();
         provider.releases.A.resolve();
