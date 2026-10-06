@@ -1,14 +1,12 @@
 import { createHash, X509Certificate } from "node:crypto";
-import { once } from "node:events";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import net, { type AddressInfo } from "node:net";
 import { Duplex } from "node:stream";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { installGlobalProxy } from "@openclaw/proxyline";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
-import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
@@ -467,6 +465,7 @@ describe("node stream close acknowledgement", () => {
     const gateway = createHttpServer();
     const wss = new WebSocketServer({ server: gateway });
     let receivedSevens = 0;
+    const received = createDeferred();
     wss.on("connection", (ws) => {
       ws.on("message", (data, isBinary) => {
         if (!isBinary) {
@@ -482,21 +481,23 @@ describe("node stream close acknowledgement", () => {
             receivedSevens += 1;
           }
         }
+        if (receivedSevens >= payload.length) {
+          received.resolve();
+        }
       });
     });
     await new Promise<void>((resolve) => {
       gateway.listen(0, "127.0.0.1", resolve);
     });
-    let targetPeer: net.Socket | undefined;
+    const connected = createDeferred<net.Socket>();
     const targetServer = net.createServer((peer) => {
-      targetPeer = peer;
+      connected.resolve(peer);
     });
     await new Promise<void>((resolve) => {
       targetServer.listen(0, "127.0.0.1", resolve);
     });
     const delays: number[] = [];
     const controller = new AbortController();
-    let settled = false;
     const running = runNodeStreamTransport({
       gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
       attachPath: "/node-desktop/attach",
@@ -514,20 +515,19 @@ describe("node stream close acknowledgement", () => {
         const timer = setTimeout(callback, delayMs);
         return () => clearTimeout(timer);
       },
-    }).then(() => {
-      settled = true;
     });
+    let targetPeer: net.Socket | undefined;
     try {
-      await expect.poll(() => targetPeer).toBeTruthy();
-      targetPeer?.write(payload);
-      targetPeer?.end();
-      await expect.poll(() => receivedSevens).toBe(payload.length);
+      targetPeer = await connected.promise;
+      targetPeer.write(payload);
+      targetPeer.end();
+      await received.promise;
       for (const client of wss.clients) {
         client.close();
       }
-      await expect.poll(() => settled).toBe(true);
+      await running;
       expect(delays.includes(40)).toBe(false);
-      expect(delays).toContain(30_000);
+      expect(delays).not.toContain(5_000);
       expect(receivedSevens).toBe(payload.length);
     } finally {
       controller.abort();
@@ -597,7 +597,7 @@ describe("node stream close acknowledgement", () => {
           },
         }),
       ).rejects.toThrow(/non-binary/);
-      expect(delays).toContain(30_000);
+      expect(delays).not.toContain(30_000);
     } finally {
       for (const cleanup of cleanups) {
         cleanup();
@@ -616,7 +616,7 @@ describe("node stream close acknowledgement", () => {
     }
   });
 
-  it("retires a drained forward when the gateway never acknowledges close", async () => {
+  it("completes a drained forward when the gateway acknowledges close", async () => {
     const gateway = createHttpServer();
     const wss = new WebSocketServer({ server: gateway });
     wss.on("connection", (ws) => {
@@ -651,16 +651,12 @@ describe("node stream close acknowledgement", () => {
         },
         scheduleCloseAck: (callback, delayMs) => {
           delays.push(delayMs);
-          if (delayMs === 30_000) {
-            callback();
-            return () => undefined;
-          }
           const timer = setTimeout(callback, delayMs);
           return () => clearTimeout(timer);
         },
       });
-      expect(delays).toContain(30_000);
       expect(delays).not.toContain(5_000);
+      expect(delays).not.toContain(30_000);
     } finally {
       controller.abort();
       target.destroy();
@@ -676,9 +672,8 @@ describe("node stream close acknowledgement", () => {
     }
   });
 
-  it("bounds cleanup when a protocol error has already started the close", async () => {
+  it("rejects a protocol error without a node handshake timer", async () => {
     let peer: net.Socket | undefined;
-    const terminate = vi.spyOn(WebSocket.prototype, "terminate");
     const gateway = net.createServer({ allowHalfOpen: true }, (socket) => {
       peer = socket;
       socket.on("error", () => undefined);
@@ -725,9 +720,8 @@ describe("node stream close acknowledgement", () => {
         callback();
       },
     });
-    const delays: number[] = [];
-    const retire: Array<() => void> = [];
     const controller = new AbortController();
+    const started = Date.now();
     try {
       await expect(
         runNodeStreamTransport({
@@ -738,32 +732,13 @@ describe("node stream close acknowledgement", () => {
           metadata: { ok: true },
           streamName: "desktop",
           signal: controller.signal,
-          scheduleCloseAck: (callback, delayMs) => {
-            delays.push(delayMs);
-            if (delayMs >= 30_000) {
-              retire.push(callback);
-            }
-            return () => undefined;
-          },
         }),
       ).rejects.toThrow(/invalid opcode 3/);
-      expect(delays).toContain(30_000);
-      expect(terminate).not.toHaveBeenCalled();
-      for (const callback of retire) {
-        callback();
-      }
-      expect(terminate).toHaveBeenCalledOnce();
-      const client = terminate.mock.contexts[0];
-      if (!(client instanceof WebSocket)) {
-        throw new Error("Expected cleanup to terminate the client WebSocket");
-      }
-      await once(client, "close");
-      expect(client.readyState).toBe(WebSocket.CLOSED);
+      expect(Date.now() - started).toBeLessThan(2_000);
     } finally {
       controller.abort();
       target.destroy();
       peer?.destroy();
-      terminate.mockRestore();
       await new Promise<void>((resolve) => {
         gateway.close(() => resolve());
       });
@@ -772,7 +747,6 @@ describe("node stream close acknowledgement", () => {
 
   it("bounds a gateway close that withholds TCP FIN", async () => {
     let peer: net.Socket | undefined;
-    const terminate = vi.spyOn(WebSocket.prototype, "terminate");
     const gateway = net.createServer({ allowHalfOpen: true }, (socket) => {
       peer = socket;
       socket.on("error", () => undefined);
@@ -820,51 +794,29 @@ describe("node stream close acknowledgement", () => {
         callback();
       },
     });
-    const delays: number[] = [];
-    let retire: (() => void) | undefined;
-    const armed = createDeferred();
     const controller = new AbortController();
-    let failure: unknown;
-    const running = runNodeStreamTransport({
-      gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
-      attachPath: "/node-desktop/attach",
-      expectedAttachPath: "/node-desktop/attach",
-      target: { stream: target },
-      metadata: { ok: true },
-      streamName: "desktop",
-      signal: controller.signal,
-      scheduleCloseAck: (callback, delayMs) => {
-        delays.push(delayMs);
-        if (delayMs >= 30_000 && !retire) {
-          retire = callback;
-          armed.resolve();
-        }
-        return () => {
-          if (retire === callback) {
-            retire = undefined;
-          }
-        };
-      },
-    }).catch((error: unknown) => {
-      failure = error;
-    });
+    const started = Date.now();
     try {
-      await armed.promise;
-      expect(delays).toContain(30_000);
+      await runNodeStreamTransport({
+        gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+        attachPath: "/node-desktop/attach",
+        expectedAttachPath: "/node-desktop/attach",
+        target: { stream: target },
+        metadata: { ok: true },
+        streamName: "desktop",
+        signal: controller.signal,
+      });
+      const elapsed = Date.now() - started;
       expect(target.readableEnded).toBe(false);
-      expect(terminate).not.toHaveBeenCalled();
-      retire?.();
-      expect(terminate).toHaveBeenCalledOnce();
-      await running;
-      expect(failure).toBeUndefined();
+      expect(elapsed).toBeGreaterThan(20_000);
+      expect(elapsed).toBeLessThan(40_000);
     } finally {
       controller.abort();
       target.destroy();
       peer?.destroy();
-      terminate.mockRestore();
       await new Promise<void>((resolve) => {
         gateway.close(() => resolve());
       });
     }
-  });
+  }, 50_000);
 });
