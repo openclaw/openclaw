@@ -575,6 +575,9 @@ For `claude-cli`, the installed Claude Code process uses its current native
 login. OpenClaw uses a non-secret route marker and never reads, persists,
 refreshes, selects, or forwards the native tokens.
 Set `CLAUDE_CONFIG_DIR` on the Gateway process to use a separate Claude configuration directory.
+The spawned `claude` then stores its native transcripts under `$CLAUDE_CONFIG_DIR/projects/`
+instead of `~/.claude/projects/`; OpenClaw's transcript probes, session catalog, and
+`doctor` resolve that same directory, so the two never need to be kept in sync by hand.
 Explicit OpenClaw-managed API-key and token profiles continue to use the
 protected, per-invocation credential-forwarding CLI path.
 

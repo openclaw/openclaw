@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-const CLAUDE_PROJECTS_DIRNAME = path.join(".claude", "projects");
+const CLAUDE_DEFAULT_CONFIG_DIRNAME = ".claude";
+const CLAUDE_PROJECTS_DIRNAME = "projects";
 const MAX_SANITIZED_PROJECT_LENGTH = 200;
 
 // Claude CLI stores project state under a sanitized workspace key. Add a stable
@@ -35,14 +36,42 @@ function canonicalizeWorkspaceDir(workspaceDir: string): string {
   }
 }
 
+/**
+ * Resolves the Claude CLI configuration directory that owns `projects/`.
+ *
+ * Claude Code writes every transcript under `$CLAUDE_CONFIG_DIR/projects/` when that
+ * variable is set on the process that spawns it, and under `~/.claude/projects/`
+ * otherwise. The Gateway forwards `CLAUDE_CONFIG_DIR` to the CLI (clear-env allowlist;
+ * the documented way to give the Gateway a separate login), so the transcript probe
+ * must follow the same rule or every turn reads as transcript-missing. An explicit
+ * `homeDir` keeps the HOME-relative layout: callers and tests that inject a home are
+ * describing a fixture, not a configured override.
+ */
+export function resolveClaudeCliConfigDir(params?: {
+  homeDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const explicitHomeDir = normalizeOptionalString(params?.homeDir);
+  if (explicitHomeDir) {
+    return path.join(explicitHomeDir, CLAUDE_DEFAULT_CONFIG_DIRNAME);
+  }
+  const env = params?.env ?? process.env;
+  const configuredDir = env.CLAUDE_CONFIG_DIR?.trim();
+  if (configuredDir) {
+    return path.resolve(configuredDir);
+  }
+  return path.join(env.HOME?.trim() || os.homedir(), CLAUDE_DEFAULT_CONFIG_DIRNAME);
+}
+
+/** Resolves Claude CLI's per-workspace project directory. */
 export function resolveClaudeCliProjectDirForWorkspace(params: {
   workspaceDir: string;
   homeDir?: string;
+  env?: NodeJS.ProcessEnv;
 }): string {
-  const homeDir = normalizeOptionalString(params.homeDir) || process.env.HOME || os.homedir();
   const canonicalWorkspaceDir = canonicalizeWorkspaceDir(params.workspaceDir);
   return path.join(
-    homeDir,
+    resolveClaudeCliConfigDir({ homeDir: params.homeDir, env: params.env }),
     CLAUDE_PROJECTS_DIRNAME,
     sanitizeClaudeCliProjectKey(canonicalWorkspaceDir),
   );
