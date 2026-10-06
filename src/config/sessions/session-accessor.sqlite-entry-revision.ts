@@ -114,6 +114,8 @@ class SessionEntryRevisionConflictError extends Error {
   readonly code = "invalid_state";
 }
 
+export class SessionEntryRevisionChangedError extends SessionEntryRevisionConflictError {}
+
 /** Reuse prepared facts until this connection observes a write, then compare only their predicate. */
 export function createSessionEntryRevisionGuard(
   database: DatabaseSync,
@@ -138,7 +140,7 @@ export function createSessionEntryRevisionGuard(
     assertSourceCurrent();
     // A foreign commit during the predicate must not be hidden by its later revision.
     if (!cacheValidityTokensEqual(before, after)) {
-      throw new SessionEntryRevisionConflictError(
+      throw new SessionEntryRevisionChangedError(
         "Session entry facts changed during their mutation check",
       );
     }
