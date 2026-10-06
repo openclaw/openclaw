@@ -1,12 +1,12 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import * as fsSafe from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import {
@@ -268,6 +268,7 @@ it.each([
 it.each(["copy", "retain"] as const)(
   "allows hard-link add, remove, and round-trip churn after inventory during %s",
   async (materialize) => {
+    const advanceCtime = createFileMutationClock();
     for (const change of ["add", "remove", "round-trip"]) {
       let capture = "";
       const f = await fixture(false, async (source) => {
@@ -277,16 +278,13 @@ it.each(["copy", "retain"] as const)(
         }
       });
       const before = await fs.lstat(f.file, { bigint: true });
-      // Ensure NTFS advances ctime so this exercises digest-backed admission.
-      if (process.platform === "win32") {
-        await delay(40);
-      }
       if (change !== "remove") {
         await fs.link(f.file, capture);
       }
       if (change !== "add") {
         await fs.unlink(capture);
       }
+      advanceCtime(before);
       const after = await fs.lstat(f.file, { bigint: true });
       expect(after.ctimeNs).not.toBe(before.ctimeNs);
       for (const field of [

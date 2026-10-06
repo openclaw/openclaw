@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fsSync, { closeSync, openSync, readSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -10,6 +9,7 @@ import {
   hashFileDescriptorSync,
   hashFileMutationSnapshotSync,
 } from "./file-descriptor.js";
+import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 
 let directory: string;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,10 +29,6 @@ describe("pinned file descriptors", () => {
       await fs.writeFile(file, Buffer.alloc(8192, 0x61));
       await fs.utimes(file, 1_700_000_000, 1_700_000_000);
       const expected = fsSync.lstatSync(file, { bigint: true });
-      // NTFS can expose 15.6 ms change-time ticks despite the nanosecond API.
-      if (process.platform === "win32") {
-        await delay(40);
-      }
       const read = fsSync.readSync;
       let hashed = false;
       vi.spyOn(fsSync, "readSync").mockImplementation((...args: Parameters<typeof read>) => {
@@ -40,10 +36,12 @@ describe("pinned file descriptors", () => {
         hashed ||= count === 0;
         return count;
       });
-      const lstat = fsSync.lstatSync;
       let mutated = false;
-      vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-        if (args[0] === file && hashed && !mutated) {
+      const advanceCtime = createFileMutationClock({
+        beforeLstatSync: (pathname) => {
+          if (pathname !== file || !hashed || mutated) {
+            return;
+          }
           mutated = true;
           if (change === "hard link") {
             fsSync.linkSync(file, path.join(directory, "capture"));
@@ -51,8 +49,8 @@ describe("pinned file descriptors", () => {
             fsSync.writeFileSync(file, Buffer.alloc(8192, 0x62));
             fsSync.utimesSync(file, expected.atime, expected.mtime);
           }
-        }
-        return lstat(...args);
+          advanceCtime(expected);
+        },
       });
       if (change === "hard link") {
         expect(hashFileMutationSnapshotSync(file, expected)).toBe(

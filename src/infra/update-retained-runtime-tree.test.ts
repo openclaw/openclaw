@@ -8,6 +8,7 @@ import { loadPluginManifest } from "../plugins/manifest.js";
 import { readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
@@ -396,29 +397,28 @@ it.each(["next-entry", "copy-publication"] as const)(
       fsSync.writeFileSync(later, content);
       fsSync.chmodSync(later, 0o444);
       fsSync.utimesSync(later, before.atime, before.mtime);
+      advanceCtime(before);
+      expect(fsSync.lstatSync(later, { bigint: true }).ctimeNs).not.toBe(before.ctimeNs);
     };
-    if (stage === "next-entry") {
-      const lstat = fs.lstat;
-      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        if (args[0] === later) {
+    const advanceCtime = createFileMutationClock({
+      beforeLstat: (pathname) => {
+        if (stage === "next-entry" && pathname === later) {
           mutate();
         }
-        return await lstat(...args);
-      });
-    } else {
+      },
+      beforeLstatSync: (pathname) => {
+        if (stage === "copy-publication" && pathname === later) {
+          mutate();
+        }
+      },
+    });
+    if (stage === "copy-publication") {
       const link = fs.link;
       vi.spyOn(fs, "link").mockImplementation(async (existing, target) => {
         if (existing === later) {
           throw Object.assign(new Error("hard link unavailable"), { code: "EMLINK" });
         }
         return await link(existing, target);
-      });
-      const lstatSync = fsSync.lstatSync;
-      vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-        if (args[0] === later) {
-          mutate();
-        }
-        return lstatSync(...args);
       });
     }
     await expect(f.link()).rejects.toThrow("changed after snapshot inventory");
