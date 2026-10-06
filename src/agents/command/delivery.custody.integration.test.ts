@@ -66,7 +66,6 @@ async function admitCompletion(
   const original: SessionEntry = {
     sessionId: `requester-${name}`,
     lifecycleRevision: "original-revision",
-    status: "running",
     updatedAt: Date.now(),
     ...patch,
   };

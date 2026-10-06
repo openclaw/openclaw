@@ -20,7 +20,6 @@ import * as configSessions from "../../config/sessions.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
-  listSessionEntriesCore,
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -116,7 +115,12 @@ import {
 } from "./main-session-recovery-store.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
-import { createRestartRecoveryTranscriptFixture } from "./main-session-restart-recovery-fixture.test-support.js";
+import {
+  createRestartRecoveryStoreFixture,
+  mainSessionEntry,
+  makePendingFinalDelivery,
+  readStore,
+} from "./main-session-restart-recovery-fixture.test-support.js";
 import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 import {
@@ -137,7 +141,6 @@ import {
   scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease,
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
-import { registerStartupSessionRepairCases } from "./main-session-startup-repair.test-harness.js";
 
 const transcriptMocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(),
@@ -212,8 +215,14 @@ vi.mock("../../config/sessions/transcript.js", async (importOriginal) => {
 
 let tmpDir: string;
 let freshTmpDir: string;
-const transcriptFixture = createRestartRecoveryTranscriptFixture(readStore);
-const { writeTranscript } = transcriptFixture;
+const {
+  makeSessionsDir,
+  writeStorePath,
+  writeStore,
+  transcriptFixture,
+  writeTranscript,
+  writeCompletedToolTranscript,
+} = createRestartRecoveryStoreFixture(() => tmpDir);
 
 function seedQueuedFinal(id: string, text: string): void {
   const entry: QueuedDelivery = {
@@ -255,46 +264,11 @@ afterEach(async () => {
   }
 });
 
-async function makeSessionsDir(agentId = "main"): Promise<string> {
-  const sessionsDir = path.join(tmpDir, "agents", agentId, "sessions");
-  await fs.mkdir(sessionsDir, { recursive: true });
-  return sessionsDir;
-}
-
-async function writeStorePath(
-  storePath: string,
-  store: Record<string, SessionEntryFixture>,
-): Promise<void> {
-  await Promise.all(
-    Object.entries(store).map(([sessionKey, entry]) =>
-      replaceSessionEntry({ storePath, sessionKey }, createSessionEntry(entry)),
-    ),
-  );
-}
-
-async function writeStore(
-  sessionsDir: string,
-  store: Record<string, SessionEntryFixture>,
-): Promise<void> {
-  await writeStorePath(path.join(sessionsDir, "sessions.json"), store);
-}
-
-function mainSessionEntry(overrides: SessionEntryFixture = {}): SessionEntry {
-  return createSessionEntry({
-    sessionId: "main-session",
-    permissionMode: "guarded",
-    updatedAt: Date.now() - 10_000,
-    status: "running",
-    abortedLastRun: true,
-    ...overrides,
-  });
-}
-
 function runningSessionEntry(sessionId: string, overrides: SessionEntryFixture = {}): SessionEntry {
   return createSessionEntry({
     sessionId,
     updatedAt: Date.now() - 10_000,
-    status: "running",
+    restartRecoveryDeliveryRunId: `${sessionId}-run`,
     ...overrides,
   });
 }
@@ -332,20 +306,6 @@ async function makeMainSessionFixture(
     storePath,
     sessionKey,
     readEntry: () => loadSessionEntry({ sessionKey, storePath }),
-  };
-}
-
-function makePendingFinalDelivery(
-  text = "interrupted response",
-  overrides: Partial<NonNullable<SessionEntry["pendingFinalDelivery"]>> = {},
-): NonNullable<SessionEntry["pendingFinalDelivery"]> {
-  return {
-    kind: "replayable",
-    text,
-    createdAt: Date.now(),
-    intentId: "intent-prepared-default",
-    deliveries: [{ id: "delivery-prepared-default", state: "prepared" }],
-    ...overrides,
   };
 }
 
@@ -392,12 +352,6 @@ async function writeMainSession({
   await writeStore(sessionsDir, mainSessionStore(entry, sessionKey));
 }
 
-function readStore(storePath: string): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
-}
-
 async function writePreparedMainSessionTranscript(
   messages: readonly unknown[],
   entry: SessionEntryFixture = {},
@@ -407,14 +361,6 @@ async function writePreparedMainSessionTranscript(
   await writeMainSession({ sessionsDir, ...entry });
   await writeTranscript(sessionsDir, "main-session", messages);
   return sessionsDir;
-}
-
-async function writeCompletedToolTranscript(sessionsDir: string, human = false): Promise<void> {
-  await writeTranscript(sessionsDir, "main-session", [
-    makeUserMessage("run the tool", human ? { provenance: { kind: "external_user" } } : {}),
-    { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
-    makeToolResultMessage(),
-  ]);
 }
 
 async function loadTestTranscript(
@@ -537,7 +483,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("marks only recoverable sessions owned by active runs", async () => {
-    // Only top-level running main sessions are restart-recoverable. Completed,
+    // Only top-level admitted main sessions are restart-recoverable. Completed,
     // child, cron, and non-active sessions must not be marked.
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
@@ -674,7 +620,6 @@ describe("main-session-restart-recovery", () => {
       const storeTargets = await discoverRestartRecoveryStoreTargets({
         cfg,
         stateDir: tmpDir,
-        statuses: ["running"],
       });
 
       expect(storeTargets).toContainEqual({
@@ -753,6 +698,7 @@ describe("main-session-restart-recovery", () => {
           sessionId: "configured-idle-session",
           status: "done",
           abortedLastRun: false,
+          mainRestartRecovery: undefined,
         }),
       );
       const configuredBefore = sessionAccessor.loadSessionEntry(configured);
@@ -799,13 +745,19 @@ describe("main-session-restart-recovery", () => {
       } satisfies OpenClawConfig;
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "agent:main:unrelated", storePath },
-        mainSessionEntry({ sessionId: "unrelated", status: "done", abortedLastRun: false }),
+        mainSessionEntry({
+          sessionId: "unrelated",
+          status: "done",
+          abortedLastRun: false,
+          mainRestartRecovery: undefined,
+        }),
       );
       const target = { agentId: "ops", sessionKey: "global", storePath };
       await replaceSessionEntry(
         target,
         mainSessionEntry({
           sessionId: "yielded-requester",
+          status: undefined,
           endedAt: 10,
           abortedLastRun: false,
         }),
@@ -893,6 +845,7 @@ describe("main-session-restart-recovery", () => {
             sessionId: "unrelated-main-session",
             status: "done",
             abortedLastRun: false,
+            mainRestartRecovery: undefined,
           }),
         );
         const mainBefore = sessionAccessor.loadExactSessionEntryReadOnly(mainTarget)?.entry;
@@ -1042,7 +995,7 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams()).toMatchObject({ agentId: "main", sessionKey: "global" });
   });
 
-  it("marks queued abort-registry runs before lifecycle start changes session status", async () => {
+  it("marks queued abort-registry runs before lifecycle start", async () => {
     tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
@@ -1056,6 +1009,7 @@ describe("main-session-restart-recovery", () => {
       },
     });
 
+    using _ = vi.spyOn(Date, "now").mockReturnValue(3_000);
     const result = await markRestartAbortedMainSessions({
       resolveGatewayContext,
       stateDir: tmpDir,
@@ -1073,7 +1027,7 @@ describe("main-session-restart-recovery", () => {
     expect(result).toEqual({ marked: 1, skipped: 0 });
     expect(store["agent:main:main"]).toEqual(
       expect.objectContaining({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryRuns: [
           {
@@ -1084,7 +1038,7 @@ describe("main-session-restart-recovery", () => {
       }),
     );
     expect(store["agent:main:main"]?.startedAt).toBeUndefined();
-    expect(store["agent:main:main"]?.endedAt).toBeUndefined();
+    expect(store["agent:main:main"]?.endedAt).toBe(3_000);
     expect(store["agent:main:main"]?.runtimeMs).toBeUndefined();
   });
 
@@ -1249,8 +1203,8 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
     expect(gatewayParams().sessionKey).toBe(sessionKey);
+    expect(readStore(path.join(sessionsDir, "sessions.json"))[sessionKey]?.status).toBeUndefined();
     expect(readStore(path.join(sessionsDir, "sessions.json"))[sessionKey]).toMatchObject({
-      status: "running",
       abortedLastRun: false,
     });
 
@@ -1321,7 +1275,7 @@ describe("main-session-restart-recovery", () => {
       rootAdmission?.release();
 
       expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
       });
       expect(loadSessionEntry({ sessionKey, storePath })?.restartRecoveryRuns).toBeUndefined();
@@ -1705,7 +1659,7 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryDeliveryRunId: firstRecoveryRunId,
       restartRecoveryDeliverySourceRunId: "control-ui-run",
       sessionId: "main-session",
-      status: "running",
+      status: "interrupted",
     });
     expect(pending?.mainRestartRecovery?.reservation).toBeUndefined();
     expect(pending?.mainRestartRecovery?.executionIdentity).toBeUndefined();
@@ -1737,8 +1691,8 @@ describe("main-session-restart-recovery", () => {
       mainRestartRecovery: { chargedAttempts: 2 },
       restartRecoveryDeliveryRunId: firstRecoveryRunId,
       restartRecoveryDeliverySourceRunId: "control-ui-run",
-      status: "running",
     });
+    expect(recovered?.status).toBeUndefined();
     const agentRequests = vi
       .mocked(callGateway)
       .mock.calls.map(([request]) => request)
@@ -1989,7 +1943,7 @@ describe("main-session-restart-recovery", () => {
     }
     expect(settlementFailed).toBe(true);
     const entry = readEntry();
-    expect(entry).toMatchObject({ status: "running", abortedLastRun: true });
+    expect(entry).toMatchObject({ status: "interrupted", abortedLastRun: true });
     expect(entry?.mainRestartRecovery).toMatchObject({ chargedAttempts: 1 });
     expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
   });
@@ -2091,7 +2045,7 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ started: 0, settled: 0, failed: 1, skipped: 0 }, {});
     expect(readEntry()).toMatchObject({
       abortedLastRun: true,
-      status: "running",
+      status: "interrupted",
       mainRestartRecovery: {
         foregroundClaims: { tokens: [expect.any(String)] },
       },
@@ -2136,7 +2090,7 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).toHaveBeenCalledOnce();
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
     const store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(store["agent:main:main"]?.status).toBe("running");
+    expect(store["agent:main:main"]?.status).toBeUndefined();
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
@@ -2430,7 +2384,7 @@ describe("main-session-restart-recovery", () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": {
-        ...runningSessionEntry("missing-transcript-session"),
+        ...runningSessionEntry("missing-transcript-session", { status: "interrupted" }),
         abortedLastRun: true,
         pendingFinalDelivery: makePendingFinalDelivery("The durable final answer.", {
           createdAt: Date.now() - 5_000,
@@ -2447,15 +2401,15 @@ describe("main-session-restart-recovery", () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:active-key": {
-        ...runningSessionEntry("active-key-session"),
+        ...runningSessionEntry("active-key-session", { status: "interrupted" }),
         abortedLastRun: true,
       },
       "agent:main:active-id": {
-        ...runningSessionEntry("active-id-session"),
+        ...runningSessionEntry("active-id-session", { status: "interrupted" }),
         abortedLastRun: true,
       },
       "agent:main:recoverable": {
-        ...runningSessionEntry("recoverable-session"),
+        ...runningSessionEntry("recoverable-session", { status: "interrupted" }),
         abortedLastRun: true,
       },
     });
@@ -2490,7 +2444,7 @@ describe("main-session-restart-recovery", () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": {
-        ...runningSessionEntry("stale-session"),
+        ...runningSessionEntry("stale-session", { status: "interrupted" }),
         abortedLastRun: true,
       },
     });
@@ -2511,117 +2465,6 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
-  it("marks startup-orphaned running main sessions before recovery", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const cutoff = Date.now();
-    await writeStore(sessionsDir, {
-      "agent:main:main": {
-        sessionId: "main-session",
-        updatedAt: cutoff - 10_000,
-        status: "running",
-      },
-      "agent:main:active-key": {
-        sessionId: "active-key-session",
-        updatedAt: cutoff - 10_000,
-        status: "running",
-      },
-      "agent:main:active-id": {
-        sessionId: "active-id-session",
-        updatedAt: cutoff - 10_000,
-        status: "running",
-      },
-      "agent:main:fresh": {
-        sessionId: "fresh-session",
-        updatedAt: cutoff + 1,
-        status: "running",
-      },
-      "agent:main:subagent:child": {
-        sessionId: "child-session",
-        updatedAt: cutoff - 10_000,
-        status: "running",
-        spawnDepth: 1,
-      },
-      "agent:main:cron:nightly": {
-        sessionId: "cron-session",
-        updatedAt: cutoff - 10_000,
-        status: "running",
-      },
-      "agent:main:completed": {
-        sessionId: "completed-session",
-        updatedAt: cutoff - 10_000,
-        status: "done",
-        restartRecoveryRuns: [
-          {
-            runId: "completed-prior-process-run",
-            lifecycleGeneration: "prior-process",
-          },
-        ],
-      },
-      "agent:main:already-marked": {
-        sessionId: "already-marked-session",
-        updatedAt: cutoff - 10_000,
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryRuns: [
-          {
-            runId: "marked-prior-process-run",
-            lifecycleGeneration: "prior-process",
-          },
-        ],
-      },
-    });
-    await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "run the tool" },
-      { role: "toolResult", content: "done" },
-    ]);
-    await writeTranscript(sessionsDir, "already-marked-session", [
-      { role: "user", content: "already interrupted" },
-      { role: "toolResult", content: "done" },
-    ]);
-
-    const marked = await markStartupOrphanedMainSessionsForRecovery({
-      stateDir: tmpDir,
-      activeSessionKeys: ["agent:main:active-key"],
-      activeSessionIds: ["active-key-session", "active-id-session"],
-      updatedBeforeMs: cutoff,
-    });
-
-    expect(marked).toEqual({ marked: 1, skipped: 2 });
-    let store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
-    expect(store["agent:main:active-key"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:active-id"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:fresh"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:cron:nightly"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:completed"]?.abortedLastRun).toBeUndefined();
-    expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(true);
-    expect(store["agent:main:completed"]?.restartRecoveryRuns).toHaveLength(1);
-    expect(store["agent:main:already-marked"]?.restartRecoveryRuns).toHaveLength(1);
-
-    const recovered = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
-
-    expect(recovered).toEqual({ started: 2, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledTimes(2);
-    store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
-    expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
-  });
-
-  registerStartupSessionRepairCases(() => ({
-    tmpDir,
-    makeSessionsDir,
-    mainSessionEntry,
-    writeStore,
-    writeTranscript,
-    runningSessionEntry,
-    makePendingFinalDelivery,
-    readStore,
-    expectRecovery,
-    gatewayRuntime: mockRecoveryRuntime,
-    dispatchSettlement,
-  }));
-
   it("does not create empty agent databases while scanning startup recovery", async () => {
     const agentIds = Array.from({ length: 12 }, (_, index) => `agent-${index + 1}`);
     const databasePaths = await Promise.all(
@@ -2639,44 +2482,29 @@ describe("main-session-restart-recovery", () => {
     }
   });
 
-  it("does not enter the writer lane for agent databases without running sessions", async () => {
-    const agentIds = Array.from({ length: 12 }, (_, index) => `agent-${index + 1}`);
-    const env = { ...process.env, OPENCLAW_STATE_DIR: tmpDir };
-    for (const agentId of agentIds) {
-      openOpenClawAgentDatabase({
-        agentId,
-        env,
-        path: path.join(tmpDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
-      });
-    }
-    closeOpenClawAgentDatabasesForTest();
-    const applySessionEntryReplacements = vi.spyOn(
-      sessionAccessor,
-      "applySessionEntryReplacements",
-    );
-
-    try {
-      await expect(
-        markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir }),
-      ).resolves.toEqual({ marked: 0, skipped: 0 });
-      expect(applySessionEntryReplacements).not.toHaveBeenCalled();
-    } finally {
-      applySessionEntryReplacements.mockRestore();
-    }
-  });
-
   it("keeps corrupt existing agent databases on the startup recovery error path", async () => {
     await makeSessionsDir();
     const databasePath = path.join(tmpDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     await fs.writeFile(databasePath, "not a sqlite database");
 
-    await expect(
-      markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir }),
-    ).rejects.toThrow();
+    await expect(markStartupOrphanedMainSessionsForRecovery({ stateDir: tmpDir })).resolves.toEqual(
+      {
+        marked: 0,
+        skipped: 0,
+        failedTargets: [
+          {
+            agentId: "main",
+            storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+          },
+        ],
+      },
+    );
+    expect(readStartupRecoveryWarning()).toBeDefined();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("keeps a live session running after delayed stale registration", async () => {
+  it("preserves a live session after delayed stale registration", async () => {
     const sessionsDir = await makeSessionsDir();
     const cutoff = Date.now();
     const sessionKey = "agent:main:generation-race";
@@ -2685,12 +2513,12 @@ describe("main-session-restart-recovery", () => {
       [sessionKey]: {
         sessionId,
         updatedAt: cutoff - 10_000,
-        status: "running",
+        restartRecoveryDeliveryRunId: "generation-race-run",
       },
       "agent:main:control": {
         sessionId: "control-session",
         updatedAt: cutoff - 10_000,
-        status: "running",
+        restartRecoveryDeliveryRunId: "control-run",
       },
     });
     await writeTranscript(sessionsDir, "control-session", [
@@ -2729,7 +2557,7 @@ describe("main-session-restart-recovery", () => {
         sessionKey,
         storePath: path.join(sessionsDir, "sessions.json"),
       });
-      expect(activeEntry).toMatchObject({ status: "running" });
+      expect(activeEntry?.status).toBeUndefined();
       expect(activeEntry?.abortedLastRun).toBeUndefined();
     } finally {
       clearActiveEmbeddedRun(sessionId, currentHandle, sessionKey);
@@ -2746,7 +2574,7 @@ describe("main-session-restart-recovery", () => {
       [sessionKey]: {
         sessionId,
         updatedAt: Date.now() - 10_000,
-        status: "running",
+        restartRecoveryDeliveryRunId: "generation-race-run",
       },
     });
 
@@ -2797,7 +2625,7 @@ describe("main-session-restart-recovery", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       const entry = loadSessionEntry({ sessionKey, storePath });
-      expect(entry).toMatchObject({ status: "running" });
+      expect(entry?.status).toBeUndefined();
       expect(entry?.abortedLastRun).toBeUndefined();
       expect(entry?.mainRestartRecovery).toBeUndefined();
       expect(liveAbort).not.toHaveBeenCalled();
@@ -2817,7 +2645,7 @@ describe("main-session-restart-recovery", () => {
       "agent:main:main": {
         sessionId: "default-main-session",
         updatedAt: cutoff - 10_000,
-        status: "running",
+        restartRecoveryDeliveryRunId: "default-main-run",
       },
     });
     await writeTranscript(defaultSessionsDir, "default-main-session", [
@@ -2830,7 +2658,7 @@ describe("main-session-restart-recovery", () => {
       "agent:main:main": {
         sessionId: "custom-main-session",
         updatedAt: cutoff - 10_000,
-        status: "running",
+        restartRecoveryDeliveryRunId: "custom-main-run",
       },
     });
     await writeTranscript(path.dirname(customStorePath), "custom-main-session", [
@@ -2880,8 +2708,9 @@ describe("main-session-restart-recovery", () => {
             "agent:late:main": {
               sessionId: "late-session",
               updatedAt: 1,
-              status: "running",
+              status: "interrupted",
               abortedLastRun: true,
+              restartRecoveryDeliveryRunId: "late-run",
             },
           });
           await writeTranscript(lateSessionsDir, "late-session", [
@@ -2941,7 +2770,7 @@ describe("main-session-restart-recovery", () => {
           sessionKey: "agent:main:main",
           storePath: path.join(sessionsDir, "sessions.json"),
         }),
-      ).toMatchObject({ status: "running", abortedLastRun: true });
+      ).toMatchObject({ status: "interrupted", abortedLastRun: true });
     } finally {
       vi.useRealTimers();
     }
@@ -2973,7 +2802,7 @@ describe("main-session-restart-recovery", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(callGateway).not.toHaveBeenCalled();
       expect(readEntry()).toMatchObject({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
       });
     } finally {
@@ -3028,8 +2857,8 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:fresh"]).toMatchObject({
       sessionId: "post-start-session",
-      status: "running",
     });
+    expect(store["agent:main:fresh"]?.status).toBeUndefined();
     expect(store["agent:main:fresh"]?.abortedLastRun).toBeUndefined();
   });
 
@@ -3084,7 +2913,7 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(readEntry()).toMatchObject({
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
     });
   });
@@ -3132,10 +2961,14 @@ describe("main-session-restart-recovery", () => {
       expect(callGateway).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(readEntry()).toMatchObject({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
       });
-      expect(readEntry()?.mainRestartRecovery).toBeUndefined();
+      expect(readEntry()?.mainRestartRecovery).toMatchObject({
+        cycleId: "interrupted-cycle",
+        revision: 1,
+        chargedAttempts: 0,
+      });
     } finally {
       releaseObserve.resolve();
       await stopping;
@@ -3228,7 +3061,7 @@ describe("main-session-restart-recovery", () => {
 
       const entry = readEntry();
       expect(entry).toMatchObject({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         pendingFinalDelivery: {
           kind: "replayable",
@@ -3259,7 +3092,7 @@ describe("main-session-restart-recovery", () => {
           [`agent:${agentId}:main`]: {
             sessionId: `${agentId}-session`,
             updatedAt: 1,
-            status: "running",
+            restartRecoveryDeliveryRunId: `${agentId}-run`,
             lifecycleRunId: `${agentId}-run`,
             abortedLastRun: false,
           },
@@ -3317,7 +3150,7 @@ describe("main-session-restart-recovery", () => {
             sessionKey: "agent:main:main",
             storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
           }),
-        ).toMatchObject({ status: "running", abortedLastRun: false });
+        ).toMatchObject({ abortedLastRun: false });
         if (transient) {
           expect(readStartupRecoveryWarning()).toBeUndefined();
         } else {
@@ -3382,7 +3215,7 @@ describe("main-session-restart-recovery", () => {
         "agent:main:late-startup-row": {
           sessionId: "late-startup-session",
           updatedAt: 1,
-          status: "running",
+          restartRecoveryDeliveryRunId: "late-startup-run",
         },
       });
       await writeTranscript(sessionsDir, "late-startup-session", [
@@ -3402,7 +3235,7 @@ describe("main-session-restart-recovery", () => {
         sessionKey: "agent:main:late-startup-row",
         storePath: path.join(sessionsDir, "sessions.json"),
       });
-      expect(lateEntry).toMatchObject({ status: "running" });
+      expect(lateEntry?.status).toBeUndefined();
       expect(lateEntry?.abortedLastRun).toBeUndefined();
     } finally {
       await recovery?.stop();
@@ -3428,7 +3261,7 @@ describe("main-session-restart-recovery", () => {
         },
       },
       "agent:main:other": {
-        ...runningSessionEntry("other-session"),
+        ...runningSessionEntry("other-session", { status: "interrupted" }),
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-other",
         restartRecoveryDeliverySourceRunId: "source-other",
@@ -3845,7 +3678,7 @@ describe("main-session-restart-recovery", () => {
         storePath,
       });
       expect(readEntry()).toMatchObject({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryDeliverySourceRunId: "source-main",
         mainRestartRecovery: { chargedAttempts: 1 },
@@ -3978,8 +3811,8 @@ describe("main-session-restart-recovery", () => {
         await expect(recovery).resolves.toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
         expect(abort).toHaveBeenCalledOnce();
         expect(scheduleSpy).toHaveBeenCalledTimes(expectedScheduleCount);
+        expect(readEntry()?.status).toBe(expectedAbortedLastRun ? "interrupted" : undefined);
         expect(readEntry()).toMatchObject({
-          status: "running",
           abortedLastRun: expectedAbortedLastRun,
           restartRecoveryDeliverySourceRunId: "source-main",
         });
@@ -4000,7 +3833,7 @@ describe("main-session-restart-recovery", () => {
       [sessionKey]: {
         sessionId,
         updatedAt: Date.now() - 10_000,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-main",
         restartRecoveryDeliverySourceRunId: "source-main",
@@ -4064,7 +3897,7 @@ describe("main-session-restart-recovery", () => {
     const storePath = path.join(sessionsDir, "sessions.json");
     await writeStore(sessionsDir, {
       "agent:main:main": {
-        ...runningSessionEntry("replacement-session"),
+        ...runningSessionEntry("replacement-session", { status: "interrupted" }),
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "replacement-recovery",
         restartRecoveryDeliverySourceRunId: "replacement-source",
@@ -4101,7 +3934,7 @@ describe("main-session-restart-recovery", () => {
         sessionId: "main-session",
         updatedAt: Date.now() - 10_000,
         startedAt: Date.now() - 20_000,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryBeforeAgentReplyState: "pending",
         restartRecoveryDeliveryRunId: "recovery-1",
@@ -4190,7 +4023,8 @@ describe("main-session-restart-recovery", () => {
     expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ idempotencyKey: expect.stringMatching(/:resumed-notice$/) }),
     );
-    expect(readEntry()).toMatchObject({ status: "running", abortedLastRun: false });
+    expect(readEntry()?.status).toBeUndefined();
+    expect(readEntry()).toMatchObject({ abortedLastRun: false });
   });
 
   it("reconciles a receipt delivered during a restart-recovery continuation", async () => {
@@ -4297,8 +4131,8 @@ describe("main-session-restart-recovery", () => {
           idempotencyKey: expect.stringMatching(/:resumed-notice$/),
         }),
       );
+      expect(readEntry()?.status).toBeUndefined();
       expect(readEntry()).toMatchObject({
-        status: "running",
         abortedLastRun: false,
       });
     },

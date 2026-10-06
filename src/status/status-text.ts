@@ -33,6 +33,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../config/sessions/lifecycle-read.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import {
   formatUsageWindowSummary,
@@ -230,11 +231,18 @@ export async function buildStatusReplyParts(
     sessionEntry?.modelOverride?.trim() && !sessionEntry?.providerOverride?.trim(),
   );
   const modelParams = { selectedProvider, selectedModel, sessionEntry, parseSelectedProvider };
-  const activeModel = readSessionFallbackModel({
-    ...modelParams,
-    config: cfg,
-    sessionScope: { agentId: statusAgentId, sessionKey, storePath },
-  });
+  const activeModel =
+    resolveProjectedAgentRunProgressState({
+      agentId: statusAgentId,
+      sessionId: sessionEntry?.sessionId,
+      sessionKeys: sessionKey ? [sessionKey] : [],
+    }) === undefined
+      ? readSessionFallbackModel({
+          ...modelParams,
+          config: cfg,
+          sessionScope: { agentId: statusAgentId, sessionKey, storePath },
+        })
+      : undefined;
   const modelRefs = resolveSelectedAndActiveModel({
     ...modelParams,
     sessionEntry: activeModel ?? sessionEntry,

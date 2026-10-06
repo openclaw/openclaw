@@ -200,11 +200,11 @@ export async function repairLegacySessionEntryStates(params: {
       ...params,
       source: "raw",
       rawNeedsRepair: hasLegacySessionEntryState,
-      rawTransform: (entry, _sessionKey, updatedAt) => {
+      rawTransform: (entry, sessionKey, updatedAt) => {
         if (!hasLegacySessionEntryState(entry)) {
           return entry;
         }
-        const next = migrateLegacySessionEntryState(entry, updatedAt);
+        const next = migrateLegacySessionEntryState(entry, updatedAt, sessionKey);
         return hasLegacySessionProviderState(entry)
           ? normalizeLegacySessionEntryDelivery(next)
           : next;

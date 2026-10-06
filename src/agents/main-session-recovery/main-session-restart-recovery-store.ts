@@ -2,10 +2,15 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
-  listSessionEntriesByStatus,
+  hasMainSessionRecoveryClaim,
+  isMainRestartRecoveryCandidate,
+} from "../../config/sessions/restart-recovery-state.js";
+import {
   loadExactSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { isTerminalSessionStatus } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentSessionWorkStartError } from "../../gateway/agent-turn/agent-handler-helpers.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
@@ -22,8 +27,7 @@ import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
   getMainSessionRecoveryRetryCount,
-  isMainRestartRecoveryAggregateTerminalOnly,
-  isMainRestartRecoveryCandidate,
+  isMainRestartRecoveryTerminalOnly,
 } from "./main-session-recovery-state.js";
 import {
   commitMainSessionRecovery,
@@ -96,7 +100,8 @@ async function completePendingFinalRecoveryWithNotice(
   entry: SessionEntry,
   target: MainSessionRecoveryStoreTarget,
 ): Promise<boolean> {
-  const endedAt = Date.now();
+  const completedOutcome = isTerminalSessionStatus(entry.status) && entry.status !== "interrupted";
+  const endedAt = completedOutcome ? (entry.endedAt ?? Date.now()) : Date.now();
   let completed = false;
   await updateSessionEntry(
     target,
@@ -116,7 +121,9 @@ async function completePendingFinalRecoveryWithNotice(
         }),
         endedAt,
         lifecycleRunId: undefined,
-        lastRunId: resolveRestartRecoveryTerminalClientRunId(current),
+        lastRunId: completedOutcome
+          ? current.lastRunId
+          : resolveRestartRecoveryTerminalClientRunId(current),
         pendingFinalDelivery: undefined,
         ...(pending?.context &&
         pending.intentId &&
@@ -136,7 +143,7 @@ async function completePendingFinalRecoveryWithNotice(
           typeof current.startedAt === "number"
             ? Math.max(0, endedAt - current.startedAt)
             : undefined,
-        status: "done" as const,
+        status: completedOutcome ? current.status : ("done" as const),
         updatedAt: endedAt,
       };
     },
@@ -156,7 +163,7 @@ export function loadExpectedRestartRecoveryTarget(params: {
   });
   const entry = exact?.sessionKey === params.expected.sessionKey ? exact.entry : undefined;
   return entry?.sessionId === params.expected.sessionId &&
-    entry.status === "running" &&
+    hasMainSessionRecoveryClaim(entry) &&
     entry.abortedLastRun === true &&
     (params.expected.claim
       ? normalizeOptionalString(entry.restartRecoveryDeliveryRunId) ===
@@ -199,10 +206,10 @@ export async function recoverStore(params: {
       });
       entries = entry ? [{ sessionKey: params.expectedTarget.sessionKey, entry }] : [];
     } else {
-      entries = await listSessionEntriesByStatus(
-        { agentId: params.storeAgentId, storePath: params.storePath },
-        ["running"],
-      );
+      entries = await readSessionEntrySummariesInWorker({
+        agentId: params.storeAgentId,
+        storePath: params.storePath,
+      });
     }
   } catch (err) {
     mainSessionRecoveryLog.warn(`failed to load session store ${params.storePath}: ${String(err)}`);
@@ -214,6 +221,12 @@ export async function recoverStore(params: {
     a.sessionKey.localeCompare(b.sessionKey),
   )) {
     let entry = loadedEntry;
+    const isRecoveryCandidate =
+      !loadedEntry.mainRestartRecovery?.tombstone &&
+      hasMainSessionRecoveryClaim(loadedEntry) &&
+      (loadedEntry.abortedLastRun === true ||
+        isMainRestartRecoveryTerminalOnly(loadedEntry) ||
+        (isTerminalSessionStatus(loadedEntry.status) && loadedEntry.status !== "interrupted"));
     let decision: MainSessionRecoveryDecision = {
       decision: "deferred",
       reason: "preparation_failed",
@@ -235,10 +248,7 @@ export async function recoverStore(params: {
       if (stopped()) {
         return result;
       }
-      if (
-        entry.status !== "running" ||
-        (entry.abortedLastRun !== true && !isMainRestartRecoveryAggregateTerminalOnly(entry))
-      ) {
+      if (!isRecoveryCandidate) {
         continue;
       }
       if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
@@ -303,10 +313,7 @@ export async function recoverStore(params: {
         recoveryView.status === "tombstoned"
       ) {
         skip(recoveryView.status);
-        if (
-          recoveryView.status === "inactive" &&
-          isMainRestartRecoveryAggregateTerminalOnly(loadedEntry)
-        ) {
+        if (recoveryView.status === "inactive" && isMainRestartRecoveryTerminalOnly(loadedEntry)) {
           decision = { decision: "settled", reason: "terminal-residue", nextOwner: "none" };
         }
         continue;
@@ -439,7 +446,8 @@ export async function recoverStore(params: {
           params.handledSessionKeys.add(resumeDedupeKey);
           skip("invalid_harness_completion");
         } else if (
-          reconciliation.entry?.status === "running" &&
+          reconciliation.entry &&
+          hasMainSessionRecoveryClaim(reconciliation.entry) &&
           reconciliation.entry.abortedLastRun === true
         ) {
           result.failed++;
@@ -527,6 +535,7 @@ export async function recoverStore(params: {
             : {}),
           forceRestartSafeTools:
             pendingAction === "fail" ||
+            (isTerminalSessionStatus(entry.status) && entry.status !== "interrupted") ||
             entry.restartRecoveryForceSafeTools === true ||
             hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
         };
@@ -625,12 +634,7 @@ export async function recoverStore(params: {
         }
       }
     } finally {
-      if (
-        loadedEntry.status === "running" &&
-        (loadedEntry.abortedLastRun === true ||
-          isMainRestartRecoveryAggregateTerminalOnly(loadedEntry)) &&
-        isMainRestartRecoveryCandidate(loadedEntry, sessionKey)
-      ) {
+      if (isRecoveryCandidate && isMainRestartRecoveryCandidate(loadedEntry, sessionKey)) {
         mainSessionRecoveryLog.info(
           `main-session restart recovery candidate ${JSON.stringify({
             boot: lifecycleGeneration,
