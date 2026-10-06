@@ -88,7 +88,11 @@ export function isSessionStoreReadCandidateCurrent(candidate: SessionStoreReadCa
   if (currentPhysicalPath === capturedPhysicalPath) {
     return true;
   }
-  if (candidate.scope || !isSymlinkFreeWindowsShortPath(candidate.physicalPath)) {
+  if (
+    candidate.scope ||
+    (!isSymlinkFreeWindowsShortPath(candidate.path) &&
+      !isSymlinkFreeWindowsShortPath(candidate.physicalPath))
+  ) {
     return false;
   }
   return matchesWindowsFileAlias(currentPhysicalPath, capturedPhysicalPath);
