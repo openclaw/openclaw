@@ -340,7 +340,14 @@ async function dispatchDiscordMessageAction(
       action: action === "edit" ? "editMessage" : "deleteMessage",
       channelId: resolveDiscordChannelId(currentDmChannel ?? target),
       messageId,
-      ...(action === "edit" ? { content: params.message } : {}),
+      ...(action === "edit"
+        ? {
+            content: params.message,
+            components: coerceDiscordComponentParam(params.components),
+            __sessionKey: readStringParam(params, "__sessionKey"),
+            __agentId: readStringParam(params, "__agentId"),
+          }
+        : {}),
     });
   }
 

@@ -6,6 +6,8 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { coerceDiscordComponentParam, readDiscordComponentSpec } from "../components.js";
+import { editDiscordComponentMessage } from "../send.components.js";
 import * as discordMessagingActionRuntime from "../send.js";
 import { buildDiscordTextChunks } from "../send.shared.js";
 import { resolveDiscordChannelId } from "../targets.js";
@@ -112,6 +114,23 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
         required: true,
       });
       const snapshot = ctx.options?.progressSnapshot;
+      // Progress drafts remain plain-text edits owned by the compositor.
+      const componentSpec = snapshot
+        ? null
+        : readDiscordComponentSpec(coerceDiscordComponentParam(ctx.params.components));
+      if (componentSpec) {
+        const content = readStringParam(ctx.params, "content", { allowEmpty: true, trim: false });
+        const spec = componentSpec.text
+          ? componentSpec
+          : { ...componentSpec, text: content?.trim() ? content : undefined };
+        await ctx.assertReadTargetAllowed({ channelId });
+        const message = await editDiscordComponentMessage(`channel:${channelId}`, messageId, spec, {
+          ...ctx.withOpts(),
+          sessionKey: readStringParam(ctx.params, "__sessionKey"),
+          agentId: readStringParam(ctx.params, "__agentId"),
+        });
+        return jsonResult({ ok: true, message });
+      }
       const content = snapshot
         ? (buildDiscordTextChunks(
             createChannelProgressDraftCompositor({

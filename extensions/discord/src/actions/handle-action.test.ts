@@ -865,6 +865,41 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it.each([undefined, "Approved"])(
+    "forwards component edits with optional text %s",
+    async (message) => {
+      const components = { blocks: [{ type: "text", text: "Approved card" }] };
+      const cfg = discordConfig();
+      await handleDiscordMessageAction({
+        action: "edit",
+        params: {
+          channelId: "channel:123",
+          messageId: "456",
+          message,
+          components: JSON.stringify(components),
+          __sessionKey: "agent:main:discord:channel:123",
+          __agentId: "main",
+        },
+        accountId: "work",
+        cfg,
+      });
+      expectDiscordActionCall({
+        payload: {
+          action: "editMessage",
+          accountId: "work",
+          channelId: "123",
+          messageId: "456",
+          content: message,
+          components,
+          __sessionKey: "agent:main:discord:channel:123",
+          __agentId: "main",
+        },
+        cfg,
+        options: defaultActionOptions(),
+      });
+    },
+  );
+
   it("does not use another provider's current target for Discord sends", async () => {
     await expect(
       handleDiscordMessageAction({

@@ -95,6 +95,8 @@ const {
     removeRoleDiscord: vi.fn(async () => ({ ok: true })),
     searchMessagesDiscord: vi.fn(async () => ({})),
     sendDiscordComponentMessage: vi.fn(componentMessageDefault),
+    editDiscordComponentMessage:
+      vi.fn<typeof import("../send.components.js").editDiscordComponentMessage>(),
     sendMessageDiscord: vi.fn(async () => ({})),
     sendStickerDiscord: vi.fn(async () => ({})),
     sendVoiceMessageDiscord: vi.fn(async () => ({})),
@@ -117,7 +119,11 @@ vi.mock("../send.js", async (importOriginal) => {
 
 vi.mock("../send.components.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../send.components.js")>();
-  return { ...actual, sendDiscordComponentMessage: discordSendMocks.sendDiscordComponentMessage };
+  return {
+    ...actual,
+    sendDiscordComponentMessage: discordSendMocks.sendDiscordComponentMessage,
+    editDiscordComponentMessage: discordSendMocks.editDiscordComponentMessage,
+  };
 });
 
 vi.mock("../send.shared.js", async (importOriginal) => {
@@ -256,6 +262,7 @@ const rolesEnabled = (key: keyof DiscordActionConfig) => key === "roles";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  discordSendMocks.editDiscordComponentMessage.mockReset();
   fetchChannelInfoDiscord.mockImplementation(defaultFetchChannelInfoDiscord);
   clearPresences();
   vi.mocked(resolveDiscordTargetChannelId).mockReset();
@@ -1228,6 +1235,79 @@ describe("handleDiscordMessagingAction", () => {
       suppressEmbeds: false,
       reply: { messageId: "custom-1", scope: "all" },
     });
+  });
+
+  it("edits Components V2 through the public action without PATCH content", async () => {
+    const { editDiscordComponentMessage: realEditDiscordComponentMessage } =
+      await vi.importActual<typeof import("../send.components.js")>("../send.components.js");
+    const loopback = await createDiscordLoopbackRest();
+    discordSendMocks.editDiscordComponentMessage.mockImplementation((to, messageId, spec, options) =>
+      realEditDiscordComponentMessage(to, messageId, spec, { ...options, rest: loopback.rest }),
+    );
+    try {
+      for (const message of [undefined, "Approved"]) {
+        await handleDiscordMessageAction({
+          action: "edit",
+          params: {
+            channelId: "channel:123",
+            messageId: "456",
+            message,
+            components: JSON.stringify({
+              blocks: [{ type: "text", text: "Resolved decision" }],
+            }),
+            __sessionKey: "agent:main:discord:channel:123",
+            __agentId: "main",
+          },
+          cfg: DISCORD_TEST_CFG,
+        });
+      }
+      const patches = loopback.requests.filter((request) => request.method === "PATCH");
+      expect(patches).toHaveLength(2);
+      for (const [index, patch] of patches.entries()) {
+        expect(patch.path).toBe("/v10/channels/123/messages/456");
+        const body = JSON.parse(patch.body) as Record<string, unknown>;
+        expect(body.flags).toBe(MessageFlags.IsComponentsV2);
+        expect(body).not.toHaveProperty("content");
+        expect(body).not.toHaveProperty("nonce");
+        expect(body.components).toEqual([
+          expect.objectContaining({
+            type: ComponentType.Container,
+            components: [
+              ...(index === 1 ? [{ type: ComponentType.TextDisplay, content: "Approved" }] : []),
+              { type: ComponentType.TextDisplay, content: "Resolved decision" },
+            ],
+          }),
+        ]);
+      }
+      expect(discordSendMocks.editMessageDiscord).not.toHaveBeenCalled();
+      expect(discordSendMocks.editDiscordComponentMessage.mock.calls[0]?.[3]).toMatchObject({
+        cfg: DISCORD_TEST_CFG,
+        sessionKey: "agent:main:discord:channel:123",
+        agentId: "main",
+      });
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it("keeps component edits behind the message and target gates", async () => {
+    const params = {
+      channelId: "123",
+      messageId: "456",
+      components: { blocks: [{ type: "text", text: "Approved" }] },
+    };
+    await expect(handleMessagingAction("editMessage", params, () => false)).rejects.toThrow(
+      "Discord message edits are disabled.",
+    );
+    await expectBlockedRead(
+      discordSendMocks.editDiscordComponentMessage,
+      "editMessage",
+      params,
+      enableAllActions,
+      discordGuildChannelsCfg({ "999": { enabled: true } }, "G1"),
+    );
+    expect(discordSendMocks.editDiscordComponentMessage).not.toHaveBeenCalled();
+    expect(discordSendMocks.editMessageDiscord).not.toHaveBeenCalled();
   });
 
   it("delivers stringified components through the full messaging action to REST", async () => {

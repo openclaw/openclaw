@@ -235,6 +235,7 @@ describe("Discord retained progress edits", () => {
         to: `channel:${threadId}`,
         messageId,
         message: "Generic fallback must not replace the retained card.",
+        components: { blocks: [{ type: "invalid-progress-component" }] },
       },
       progressSnapshot: snapshot,
       conversationReadOrigin: "direct-operator",

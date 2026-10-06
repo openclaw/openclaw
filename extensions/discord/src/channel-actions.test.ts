@@ -224,7 +224,7 @@ describe("discordMessageActions", () => {
     );
     expect(workDiscovery?.actions).toEqual(expectedDiscordActions(["poll"]));
     expect(schemaForAction(defaultDiscovery, "send")).toMatchObject({
-      actions: ["send"],
+      actions: ["send", "edit"],
       properties: {
         components: { description: expect.stringContaining("Discord Components V2") },
       },
@@ -236,7 +236,7 @@ describe("discordMessageActions", () => {
       },
     });
     expect(schemaForAction(workDiscovery, "send")).toMatchObject({
-      actions: ["send"],
+      actions: ["send", "edit"],
       visibility: "all-configured",
       properties: {
         components: { description: expect.stringContaining("Discord Components V2") },
@@ -290,8 +290,8 @@ describe("discordMessageActions", () => {
         },
       },
     });
-    expect(schemaForAction(discovery, "send")).toMatchObject({
-      actions: ["send"],
+    expect(schemaForAction(discovery, "edit")).toMatchObject({
+      actions: ["send", "edit"],
       properties: {
         components: {
           description: expect.stringContaining("Discord Components V2"),

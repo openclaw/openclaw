@@ -138,7 +138,7 @@ function describeDiscordMessageTool({
   }
   if (actions.has("send")) {
     schema.push({
-      actions: ["send"],
+      actions: ["send", ...(actions.has("edit") ? (["edit"] as const) : [])],
       visibility: "all-configured",
       properties: {
         components: Type.Optional(
@@ -163,7 +163,7 @@ function describeDiscordMessageTool({
             {
               additionalProperties: true,
               description:
-                "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
+                "Discord Components V2 payload for send and edit actions. Edits replace the card in place without plain-text content. Accepts the same object consumed by the Discord components adapter.",
             },
           ),
         ),
