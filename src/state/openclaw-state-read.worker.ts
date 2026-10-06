@@ -41,6 +41,7 @@ import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-app
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
 import {
+  readWorkerPlacementEnvironmentOwnerInDatabase,
   readWorkerPlacementRecoveryCandidatesInDatabase,
   readWorkerSessionPlacementProjectionInDatabase,
 } from "../gateway/worker-environments/placement-read-projection.js";
@@ -625,6 +626,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 placements: readWorkerPlacementsForReconcileInDatabase(db),
+              };
+            }
+            if (command.type === "workers.placementEnvironmentOwner") {
+              return {
+                type: command.type,
+                placement: readWorkerPlacementEnvironmentOwnerInDatabase(db, command.environmentId),
               };
             }
             if (command.type === "workers.placementPendingResults") {

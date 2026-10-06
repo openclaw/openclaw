@@ -242,6 +242,21 @@ export function createWorkerSessionPlacementStore(
       };
     },
 
+    async readEnvironmentOwner(environmentId: string) {
+      const result = await executeExistingOpenClawStateRead(
+        { path },
+        {
+          type: "workers.placementEnvironmentOwner",
+          environmentId: required(environmentId, "environment id"),
+        },
+        { current: true },
+      );
+      if (!result || !result.ok || result.type !== "workers.placementEnvironmentOwner") {
+        throw new Error("Worker placement environment owner source is unavailable");
+      }
+      return result.placement;
+    },
+
     async readRecoveryCandidates() {
       const result = await executeExistingOpenClawStateRead(
         { path },
