@@ -18,7 +18,6 @@ import {
 } from "../../admitted-run-context.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
-import { adoptSubagentProgressDraft } from "../registry/subagent-progress-draft.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-pause.js";
@@ -505,76 +504,5 @@ it.each([
       execute.resolve();
       await fixture.settle();
     }
-  },
-);
-
-it.each(["running", "completed"] as const)(
-  "retires a retained progress draft when stop closes a cohort with a completed and a %s child",
-  async (sibling) => {
-    const requesterKey = "agent:main:stop-progress";
-    const turnRunId = "progress-parent-turn";
-    const runIds = ["progress-done", `progress-${sibling}`];
-    for (const sessionKey of [requesterKey, ...runIds.map((id) => `agent:main:subagent:${id}`)]) {
-      await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey,
-        defaultSessionId: `${sessionKey}-session`,
-      });
-    }
-    for (const runId of runIds) {
-      await registerSubagentRun({
-        runId,
-        childSessionKey: `agent:main:subagent:${runId}`,
-        requesterSessionKey: requesterKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: requesterKey,
-        requesterTurnRunId: turnRunId,
-        task: "Delegated work",
-        cleanup: "keep",
-        expectsCompletionMessage: true,
-      });
-    }
-    const endedAt = Date.now();
-    // A completed child only owes its wake; stop cancels that wake without a kill intent.
-    const completed = runIds.slice(0, sibling === "completed" ? 2 : 1).map((runId) => {
-      const entry = structuredClone(subagentRuns.get(runId)!);
-      entry.execution = {
-        ...entry.execution,
-        status: "terminal",
-        endedAt,
-        outcome: { status: "ok" },
-      };
-      entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
-      return entry;
-    });
-    await mutateSubagentRuns(
-      completed.map(({ runId }) => runId),
-      () => ({
-        value: undefined,
-        postimages: new Map(completed.map((entry) => [entry.runId, entry])),
-      }),
-    );
-    const draft = { push: vi.fn(), retire: vi.fn() };
-    expect(
-      adoptSubagentProgressDraft(
-        runIds.map((runId) => ({
-          runId,
-          childSessionKey: `agent:main:subagent:${runId}`,
-          expectsCompletionMessage: true,
-        })),
-        draft,
-      ),
-    ).toBe(true);
-
-    await abortControlledSubagents({
-      cfg: getRuntimeConfig(),
-      sessionKey: requesterKey,
-      agentId: "main",
-    });
-    await fixture.settle();
-
-    expect(subagentRuns.get("progress-done")?.suppressCompletionDelivery).toBe(true);
-    expect(draft.retire).toHaveBeenCalledOnce();
   },
 );

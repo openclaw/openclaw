@@ -264,6 +264,7 @@ async function adoptProgressContinuation(
     typeof messageId !== "number" ||
     !Number.isFinite(messageId) ||
     !text ||
+    stream.isStopped() ||
     turn.isSuperseded()
   ) {
     return false;

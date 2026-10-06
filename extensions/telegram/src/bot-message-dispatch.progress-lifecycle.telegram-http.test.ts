@@ -32,7 +32,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   } = http;
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["rejected", "no-message-id", "media", "buttons"] as const)(
+  it.each(["rejected", "no-message-id", "stopped", "media", "buttons"] as const)(
     "delivers the continuation instead of adopting a %s progress card",
     async (outcome) => {
       const waitingText = "Waiting for delegated work.";
@@ -54,6 +54,12 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
           kind: undefined,
           fileName: "report.pdf",
         });
+      } else if (outcome === "stopped") {
+        // The user deleted the card, so its preview stops editing before the parent yields.
+        http.respondToCall = (call) =>
+          call.method === "editMessageText"
+            ? { error_code: 400, description: "Bad Request: message to edit not found" }
+            : undefined;
       } else {
         reply.interactive = {
           blocks: [{ type: "buttons", buttons: [{ label: "Continue", value: "go" }] }],
@@ -71,6 +77,10 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
           } else {
             await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
             await waitForBotApiCall((call) => call.method === "sendMessage");
+            if (outcome === "stopped") {
+              await emitToolStart(options, { name: "read", phase: "start", toolCallId: "inspect" });
+              await waitForBotApiCall((call) => call.method === "editMessageText");
+            }
           }
         },
         {
@@ -93,6 +103,8 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
         expect(calls.some((call) => String(call.fields.text).includes("Pending delegation"))).toBe(
           true,
         );
+      } else if (outcome === "stopped") {
+        expect([...visibleMessages.values()]).toContain(waitingText);
       } else if (outcome === "media") {
         const document = acceptedCalls.find((call) => call.method === "sendDocument");
         const upload = resolveTelegramTestUpload(document!.fields, "document");
@@ -320,6 +332,60 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
     },
   );
+
+  it("gives a queued turn its own progress card while the adopted card stays retained", async () => {
+    let draft:
+      | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressContinuation"]>>[0]
+      | undefined;
+    let parentCallbacks: ReplyResolverOptions | undefined;
+    await dispatchProgressTurn(
+      async (options) => {
+        parentCallbacks = options;
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
+        await waitForBotApiCall((call) => call.method === "sendMessage");
+      },
+      {
+        mode: "progress",
+        toolProgress: true,
+        finalReply: setReplyPayloadMetadata(
+          { text: "Waiting for delegated work." },
+          {
+            progressContinuation: {
+              adopt: (candidate) => {
+                draft = candidate;
+                return true;
+              },
+              close: () => undefined,
+            },
+          },
+        ),
+      },
+    );
+    const [retained] = [...visibleMessages.entries()];
+    assert(retained && draft);
+    const [retainedId, retainedText] = retained;
+
+    await parentCallbacks?.onQueuedFollowupAdmitted?.();
+    await emitToolStart(parentCallbacks, {
+      name: "web_search",
+      phase: "start",
+      toolCallId: "queued",
+    });
+    await expect
+      .poll(() => [...visibleMessages.entries()].filter(([id]) => id !== retainedId), {
+        timeout: 5_000,
+      })
+      .toEqual([[expect.any(Number), expect.stringContaining("Web Search")]]);
+    expect(visibleMessages.get(retainedId)).toBe(retainedText);
+
+    draft.retire();
+    await expect.poll(() => visibleMessages.has(retainedId), { timeout: 5_000 }).toBe(false);
+    expect(
+      calls
+        .filter((call) => call.method === "deleteMessage")
+        .map((call) => Number(call.fields.message_id)),
+    ).toEqual([retainedId]);
+  });
 
   it("shows compaction transitions and retires progress only after the final is accepted", async () => {
     const snapshots: string[] = [];

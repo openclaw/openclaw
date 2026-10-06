@@ -17,10 +17,7 @@ import {
   getFollowupForCohort,
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
-import {
-  settleSubagentProgressDraft,
-  withSubagentProgressDraft,
-} from "../registry/subagent-progress-draft.js";
+import { withSubagentProgressDraft } from "../registry/subagent-progress-draft.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   matchesSubagentRequesterSession,
@@ -126,7 +123,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         finalAssistantVisibleText: delivery?.finalAssistantVisibleText,
       }),
     );
-    settleSubagentProgressDraft(batch);
   };
   const admittedRearmGeneration = initialState.rearmGeneration;
   if (isCronSessionKey(requesterSessionKey)) {

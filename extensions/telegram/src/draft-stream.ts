@@ -843,6 +843,8 @@ export function createTelegramDraftStream(params: {
     waitForInFlight,
     messageId: () => streamMessageId,
     lastDeliveredText: () => lastDeliveredText,
+    /** A failed preview stops editing for good; it can no longer carry live progress. */
+    isStopped: () => streamState.stopped,
     currentMessageSnapshot: (): TelegramDraftMessageSnapshot | undefined => {
       const ownsReplyTarget =
         !consumesReplyTarget ||

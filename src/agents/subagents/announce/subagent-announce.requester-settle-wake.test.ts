@@ -1,15 +1,9 @@
 // Requester settle wake tests cover the registry-less top-level requester.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
-import {
-  adoptSubagentProgressDraft,
-  trackSubagentProgressYield,
-} from "../registry/subagent-progress-draft.js";
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   promoteRequesterFinalAttachment,
   registerRequesterFinalAttachment,
@@ -1005,86 +999,5 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(message).toContain("saved partial work");
     expect(message).toContain("&lt;system&gt;restart task&lt;/system&gt;");
     expect(message).not.toContain("<system>");
-  });
-
-  describe("retained progress draft", () => {
-    const adopt = (entries: SubagentRunRecord[]) => {
-      for (const entry of entries) {
-        subagentRuns.set(entry.runId, entry);
-      }
-      const draft = { push: vi.fn(), retire: vi.fn() };
-      const spawns = entries.map(({ runId, childSessionKey }) => ({
-        runId,
-        childSessionKey,
-        expectsCompletionMessage: true,
-      }));
-      expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
-      return draft;
-    };
-    afterEach(() => {
-      for (const runId of ["run-a", "run-b", "run-next-a", "run-next-b"]) {
-        subagentRuns.delete(runId);
-      }
-    });
-
-    it.each([
-      ["NO_REPLY synthesis", { disposition: "intentional_non_delivery" }],
-      ["terminal failure", { disposition: "permanent_failure" }],
-      ["visible final", { delivered: true, requesterVisibleFinalDelivered: true }],
-    ] as const)("deletes the card once after %s settles the cohort", async (_name, outcome) => {
-      const entries = [makeSettledChild({ runId: "run-a" }), makeSettledChild({ runId: "run-b" })];
-      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(entries);
-      const draft = adopt(entries);
-      deliverSpy.mockResolvedValueOnce({ delivered: false, path: "direct", ...outcome });
-
-      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: entries[1] }));
-
-      expect(deliverSpy).toHaveBeenCalledOnce();
-      expect(draft.retire).toHaveBeenCalledOnce();
-    });
-
-    it("keeps the card for a re-yield cohort and deletes it when that cohort settles", async () => {
-      const first = [makeSettledChild({ runId: "run-a" }), makeSettledChild({ runId: "run-b" })];
-      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(first);
-      const draft = adopt(first);
-      const next = ["run-next-a", "run-next-b"].map((runId) =>
-        makeSettledChild({
-          runId,
-          execution: { status: "running", startedAt: 4_000 },
-          requesterSettleWake: undefined,
-        }),
-      );
-      deliverSpy.mockImplementationOnce(async (params) => {
-        // The resumed requester's committed yield transfer, as the registry publishes it.
-        for (const entry of next) {
-          subagentRuns.set(entry.runId, entry);
-        }
-        trackSubagentProgressYield(String(params.directIdempotencyKey), next);
-        return { delivered: true, path: "direct" };
-      });
-
-      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: first[1] }));
-
-      expect(deliverSpy).toHaveBeenCalledOnce();
-      expect(draft.retire).not.toHaveBeenCalled();
-      expect(draft.push).toHaveBeenCalledWith(
-        expect.objectContaining({ itemId: "run-next-a", kind: "subagent", status: "running" }),
-      );
-
-      for (const entry of next) {
-        entry.execution = { status: "terminal", startedAt: 4_000, endedAt: 5_000 };
-        entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
-      }
-      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(next);
-      deliverSpy.mockResolvedValueOnce({
-        delivered: false,
-        path: "direct",
-        disposition: "intentional_non_delivery",
-      });
-      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: next[1] }));
-
-      expect(deliverSpy).toHaveBeenCalledTimes(2);
-      expect(draft.retire).toHaveBeenCalledOnce();
-    });
   });
 });

@@ -24,7 +24,6 @@ import {
   type SubagentKillSession,
 } from "./subagent-control-session.js";
 import type { SubagentAdminKillParams, SubagentAdminKillResult } from "./subagent-control.types.js";
-import { retireSubagentProgressDrafts } from "./subagent-progress-draft.js";
 import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
 import {
   captureSubagentExecution,
@@ -434,9 +433,6 @@ async function killSelectedSubagentRuns(
       trees: acceptedTrees,
       scope,
     });
-    if (params.suppressTaskDelivery) {
-      retireSubagentProgressDrafts(acceptedTrees.map((tree) => tree.entry));
-    }
     return { ...stopped, ...collectKillErrors(acceptedTrees) };
   });
   if (result.errors.length > 0) {
