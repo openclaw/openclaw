@@ -83,12 +83,14 @@ suite.define(() => {
               if (testCase.selector === ".chat-session-activity") {
                 const activity = page.locator(".chat-thread .chat-session-activity");
                 const summary = activity.locator("summary");
+                // The expanded summary's source link navigates instead of toggling.
+                const chevron = summary.locator(".chat-session-activity__chevron");
                 await expectBrowser(summary, label).toBeVisible();
                 await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
                 const collapsed = await measureMargin(page, testCase);
                 expect(collapsed.closed, `${label} collapsed left edge`).toBeCloseTo(0, 0);
                 expect(collapsed.open, `${label} collapsed right edge`).toBeCloseTo(0, 0);
-                await summary.click();
+                await chevron.click();
                 await expectBrowser(activity.locator(".chat-bubble"), label).toBeVisible();
                 await expectBrowser(
                   activity.locator(".chat-message-disclosure__toggle"),
@@ -107,7 +109,7 @@ suite.define(() => {
                     `${label} media stays inside the activity`,
                   ).toBeGreaterThanOrEqual(-1);
                 }
-                await summary.click();
+                await chevron.click();
                 await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
               } else if (!("excluded" in testCase)) {
                 await expect
