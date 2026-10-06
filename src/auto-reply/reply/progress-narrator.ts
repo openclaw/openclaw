@@ -371,12 +371,7 @@ function createProgressNarrator(params: {
   };
 }
 
-/**
- * Wraps reply options with a progress narrator when the channel opted in via
- * onNarrationUpdate and a utility model resolves (explicit config or the
- * primary provider's declared default; utilityModel: "" disables).
- * Returns the options unchanged otherwise.
- */
+/** Requires onNarrationUpdate and a utility model; utilityModel: "" disables narration. */
 export function attachProgressNarratorToReplyOptions(params: {
   cfg: OpenClawConfig;
   agentId: string;

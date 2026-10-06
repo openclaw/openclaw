@@ -1,4 +1,3 @@
-/** Reply threading policy helpers for channel replies and status notices. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -32,7 +31,6 @@ function normalizeReplyToModeChatType(
     : undefined;
 }
 
-/** Resolve configured reply-to mode from channel and chat-type config. */
 function resolveConfiguredReplyToMode(
   cfg: OpenClawConfig,
   provider?: string,
@@ -67,7 +65,6 @@ function resolveConfiguredReplyToMode(
   return accountConfig?.replyToMode ?? channelConfig?.replyToMode ?? "all";
 }
 
-/** Resolve effective reply-to mode for a channel/account/chat tuple. */
 export function resolveReplyToMode(
   cfg: OpenClawConfig,
   channel?: OriginatingChannelType,
@@ -121,7 +118,6 @@ export function resolveReplyDeliveryAccountId(
   return listedDefault ?? DEFAULT_ACCOUNT_ID;
 }
 
-/** Build the canonical reply policy context consumed by delivery adapters. */
 export function createReplyDeliveryContext(
   replyToMode: ReplyToMode,
   chatType?: string | null,
@@ -145,7 +141,6 @@ function suppressReplyTarget(payload: ReplyPayload): ReplyPayload {
   );
 }
 
-/** Create a reply-to filter using channel-specific explicit-tag defaults. */
 export function createReplyToModeFilterForChannel(
   mode: ReplyToMode,
   channel?: OriginatingChannelType,
@@ -193,7 +188,6 @@ export function createReplyToModeFilterForChannel(
   });
 }
 
-/** Resolve whether implicit current-message replies are allowed under threading policy. */
 export function resolveImplicitCurrentMessageReplyAllowance(
   mode: ReplyToMode | undefined,
   policy?: ReplyThreadingPolicy,
@@ -204,7 +198,6 @@ export function resolveImplicitCurrentMessageReplyAllowance(
   );
 }
 
-/** Build threading policy for batched reply-to mode. */
 export function resolveBatchedReplyThreadingPolicy(
   mode: ReplyToMode,
   isBatched: boolean,

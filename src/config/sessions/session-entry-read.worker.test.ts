@@ -387,12 +387,12 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
                 sessionKeys.slice(1).some((key) => value.includes(key))),
           ).length;
         try {
-          const read = () =>
+          const read = (requestedKeys = [...sessionKeys, rawKey]) =>
             readSessionRowDatabaseFacts({
               kind: "session-row-facts",
               database: target,
               env,
-              sessionKeys: [...sessionKeys, rawKey],
+              sessionKeys: requestedKeys,
               continuation: continuation?.receipt,
             });
           const first = read();
@@ -433,6 +433,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
               .map(([sql]) => sql)
               .filter((sql) => /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE|ROLLBACK)\b/iu.test(sql)),
           ).toEqual(["BEGIN", "COMMIT", "BEGIN", "COMMIT"]);
+          expect(read([boardKeys[1]!]).rows[0]?.hasBoard).toBe(true);
         } finally {
           continuation?.release();
           exec.mockRestore();

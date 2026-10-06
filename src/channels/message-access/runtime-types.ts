@@ -17,7 +17,6 @@ import type {
   RouteGateFacts,
 } from "./types.js";
 
-/** Describes one identity field used for stable ids or platform-specific aliases. */
 export type ChannelIngressIdentityField = {
   /** Unique field key used in subject alias maps and diagnostics. */
   key?: string;
@@ -25,9 +24,7 @@ export type ChannelIngressIdentityField = {
   kind?: ChannelIngressIdentifierKind;
   /** Shared normalizer used for both entries and subjects when no side-specific normalizer exists. */
   normalize?: (value: string) => string | null | undefined;
-  /** Normalizes configured allowlist entries for this identity field. */
   normalizeEntry?: (value: string) => string | null | undefined;
-  /** Normalizes inbound subject values for this identity field. */
   normalizeSubject?: (value: string) => string | null | undefined;
   /** Static strength of this identity field. `verified` requires owning-boundary metadata. */
   authentication?:
@@ -39,7 +36,6 @@ export type ChannelIngressIdentityField = {
   sensitivity?: "normal" | "pii";
 };
 
-/** Named alias field such as email, phone, UUID, room id, or platform user id. */
 export type ChannelIngressIdentityAlias = ChannelIngressIdentityField & {
   key: string;
 };
@@ -71,7 +67,6 @@ export type ChannelIngressIdentityDescriptor = {
   }) => string;
 };
 
-/** Convenience input for defining a stable identity descriptor with optional aliases. */
 export type StableChannelIngressIdentityParams = ChannelIngressIdentityField &
   Pick<
     ChannelIngressIdentityDescriptor,
@@ -83,7 +78,6 @@ export type StableChannelIngressIdentityParams = ChannelIngressIdentityField &
     resolveEntryId?: ChannelIngressIdentityDescriptor["resolveEntryId"];
   };
 
-/** Raw sender identity passed by a plugin for one inbound event. */
 export type ChannelIngressIdentitySubjectInput = {
   /** Stable sender id appended to effective allowlists when access groups matched. */
   stableId?: string | number | null;
@@ -93,13 +87,11 @@ export type ChannelIngressIdentitySubjectInput = {
   authentication?: Record<string, IdentifierAuthentication | undefined>;
 };
 
-/** Minimal config subset consumed by the ingress resolver. */
 export type ChannelIngressConfigInput = {
   /** Static or dynamic access group definitions referenced by allowlist entries. */
   accessGroups?: ChannelIngressStateInput["accessGroups"];
 } | null;
 
-/** Command gate input for control-command authorization. */
 export type ChannelMessageIngressCommandInput = NonNullable<
   ChannelIngressPolicyInput["command"]
 > & {
@@ -113,7 +105,6 @@ export type ChannelMessageIngressCommandInput = NonNullable<
   commandGroupAllowFromFallbackToAllowFrom?: boolean;
 };
 
-/** Preset form for command gates accepted by `createChannelIngressResolver`. */
 export type ChannelIngressCommandPresetInput = Omit<
   Partial<ChannelMessageIngressCommandInput>,
   "useAccessGroups"
@@ -126,7 +117,6 @@ export type ChannelIngressCommandPresetInput = Omit<
   cfg?: ChannelIngressConfigInput;
 };
 
-/** Preset form for event gates accepted by `createChannelIngressResolver`. */
 export type ChannelIngressEventPresetInput = Partial<ChannelIngressEventInput> & {
   /** Convenience flag used to derive pairing defaults for group events. */
   isGroup?: boolean;
@@ -152,11 +142,8 @@ export type ChannelIngressRouteDescriptor = {
   id: string;
   /** Route kind for diagnostics and graph consumers. */
   kind?: RouteGateFacts["kind"];
-  /** Whether this route policy is configured. */
   configured?: boolean;
-  /** Whether the inbound event matched this route. */
   matched?: boolean;
-  /** Whether this route admits the inbound event. */
   allowed?: boolean;
   /** Whether to include this route descriptor in the graph. */
   enabled?: boolean;
@@ -164,7 +151,6 @@ export type ChannelIngressRouteDescriptor = {
   precedence?: number;
   /** How route sender allowlists combine with effective channel allowlists. */
   senderPolicy?: RouteGateFacts["senderPolicy"];
-  /** Route-specific sender allowlist entries. */
   senderAllowFrom?: Array<string | number> | null;
   /** Indicates whether route sender entries came from effective DM or group policy. */
   senderAllowFromSource?: RouteGateFacts["senderAllowFromSource"];
@@ -183,23 +169,17 @@ export type ChannelIngressAccessGroupMembershipResolver = (params: {
   subject: ChannelIngressIdentitySubjectInput;
 }) => boolean | Promise<boolean>;
 
-/** Complete input for resolving one inbound channel message or event. */
 export type ResolveChannelMessageIngressParams = {
   /** Channel id used for config, diagnostics, access groups, and pairing-store reads. */
   channelId: ChannelIngressChannelId;
   /** Account id scoped to this channel instance. */
   accountId: string;
-  /** Identity descriptor that normalizes sender and allowlist material. */
   identity: ChannelIngressIdentityDescriptor;
-  /** Inbound sender identity for this event. */
   subject: ChannelIngressIdentitySubjectInput;
-  /** Conversation classification and id. */
   conversation: ChannelIngressStateInput["conversation"];
-  /** Event auth mode and pairing/origin-subject facts. */
   event: ChannelIngressEventInput;
   /** Exact finalized host context this result may enter; omit for decision-only checks. */
   contextBinding?: ChannelIngressContextBinding;
-  /** Sender, command, event, route, and activation policy. */
   policy: ChannelIngressPolicyInput;
   /** Raw direct-message allowlist entries. */
   allowFrom?: Array<string | number> | null;
@@ -213,13 +193,10 @@ export type ResolveChannelMessageIngressParams = {
   accessGroups?: ChannelIngressStateInput["accessGroups"];
   /** Precomputed access-group memberships for this subject. */
   accessGroupMembership?: readonly AccessGroupMembershipFact[];
-  /** Resolver for dynamic access groups. */
   resolveAccessGroupMembership?: ChannelIngressAccessGroupMembershipResolver;
   /** Concrete sender entry appended to effective allowlists when an access group matched. */
   accessGroupMatchedAllowFromEntry?: string | number | null;
-  /** Records whether a provider-specific missing-config fallback was applied. */
   providerMissingFallbackApplied?: boolean;
-  /** Mention or activation facts for activation gates. */
   mentionFacts?: ChannelIngressStateInput["mentionFacts"];
   /** Optional pairing-store reader for direct-message allowlist material. */
   readStoreAllowFrom?: (params: {
@@ -254,7 +231,6 @@ export type CreateChannelIngressResolverParams = Pick<
   defaultDmPolicy?: ChannelIngressPolicyInput["dmPolicy"];
   /** Default group policy for message calls that omit it. */
   defaultGroupPolicy?: ChannelIngressPolicyInput["groupPolicy"];
-  /** Default group allowlist fallback behavior. */
   groupAllowFromFallbackToAllowFrom?: boolean;
   /** Weakest exact-pair identifier claim allowed to authorize. */
   minIdentifierAuthentication?: ChannelIngressPolicyInput["minIdentifierAuthentication"];
@@ -262,7 +238,6 @@ export type CreateChannelIngressResolverParams = Pick<
   mutableIdentifierMatching?: ChannelIngressPolicyInput["mutableIdentifierMatching"];
 };
 
-/** Per-message input for a resolver created by `createChannelIngressResolver`. */
 export type ChannelIngressResolverMessageParams = Omit<
   ResolveChannelMessageIngressParams,
   | "channelId"
@@ -279,9 +254,7 @@ export type ChannelIngressResolverMessageParams = Omit<
 > & {
   /** Event facts or presets; defaults to a normal inbound message event. */
   event?: ChannelIngressEventPresetInput;
-  /** DM policy override for this event. */
   dmPolicy?: ChannelIngressPolicyInput["dmPolicy"];
-  /** Group policy override for this event. */
   groupPolicy?: ChannelIngressPolicyInput["groupPolicy"];
   /** Additional policy fields merged with resolver defaults. */
   policy?: Partial<Omit<ChannelIngressPolicyInput, "dmPolicy" | "groupPolicy">>;
@@ -289,7 +262,6 @@ export type ChannelIngressResolverMessageParams = Omit<
   command?: ChannelIngressCommandPresetInput | false;
 };
 
-/** Reusable high-level ingress resolver for message, command, and event surfaces. */
 export type ChannelIngressResolver = {
   /** Resolve a normal inbound message with sender, route, command, event, and activation gates. */
   message(params: ChannelIngressResolverMessageParams): Promise<ResolvedChannelMessageIngress>;
@@ -299,7 +271,6 @@ export type ChannelIngressResolver = {
   event(params: ChannelIngressResolverMessageParams): Promise<ResolvedChannelMessageIngress>;
 };
 
-/** One-shot helper input using a simple stable identity descriptor. */
 export type ResolveStableChannelMessageIngressParams = Omit<
   CreateChannelIngressResolverParams,
   "identity"
@@ -308,7 +279,6 @@ export type ResolveStableChannelMessageIngressParams = Omit<
 
 /** Sender/conversation projection consumed by channel handlers. */
 export type ChannelIngressSenderAccess = {
-  /** True when the sender gate admits the event. */
   allowed: boolean;
   /** Final ingress decision after all gates, not just the sender gate. */
   decision: ChannelIngressDecision["decision"];
@@ -320,17 +290,12 @@ export type ChannelIngressSenderAccess = {
   effectiveAllowFrom: string[];
   /** Effective group allowlist entries after fallback and access-group processing. */
   effectiveGroupAllowFrom: string[];
-  /** Whether provider-specific fallback behavior was applied. */
   providerMissingFallbackApplied: boolean;
 };
 
-/** Command projection consumed by channel command/control handlers. */
 export type ChannelIngressCommandAccess = {
-  /** True when a command gate was requested for this event. */
   requested: boolean;
-  /** True when the command gate authorizes this sender. */
   authorized: boolean;
-  /** True when an unauthorized control command should be blocked. */
   shouldBlockControlCommand: boolean;
   /** Command gate reason when present, otherwise decisive ingress reason. */
   reasonCode: IngressReasonCode;
@@ -338,7 +303,6 @@ export type ChannelIngressCommandAccess = {
   gate?: AccessGraphGate;
 };
 
-/** Route projection consumed by room/thread/topic handlers. */
 export type ChannelIngressRouteAccess = {
   /** True when all configured route gates admit the event. */
   allowed: boolean;
@@ -350,11 +314,8 @@ export type ChannelIngressRouteAccess = {
   gate?: AccessGraphGate;
 };
 
-/** Activation/mention projection consumed by group handlers. */
 export type ChannelIngressActivationAccess = {
-  /** True when an activation gate ran. */
   ran: boolean;
-  /** True when activation admits the event. */
   allowed: boolean;
   /** True when the event should be skipped instead of dispatched. */
   shouldSkip: boolean;
@@ -368,18 +329,13 @@ export type ChannelIngressActivationAccess = {
   gate?: AccessGraphGate;
 };
 
-/** Full ingress result returned by runtime resolvers. */
 export type ResolvedChannelMessageIngress = {
   /** Redacted normalized state used as input to the decision engine. */
   state: ChannelIngressState;
   /** Ordered access graph plus final admission decision. */
   ingress: ChannelIngressDecision;
-  /** Sender/conversation projection. */
   senderAccess: ChannelIngressSenderAccess;
-  /** Route projection. */
   routeAccess: ChannelIngressRouteAccess;
-  /** Command projection. */
   commandAccess: ChannelIngressCommandAccess;
-  /** Activation/mention projection. */
   activationAccess: ChannelIngressActivationAccess;
 };

@@ -1,4 +1,3 @@
-// Formats stable user-facing config write failures.
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ConfigValidationIssue } from "./types.js";
@@ -102,7 +101,6 @@ export function createConfigValidationFailedError(issues: ConfigValidationIssue[
   );
 }
 
-/** True when a config write was refused because the candidate failed schema validation. */
 export function isConfigValidationFailedError(
   error: unknown,
 ): error is Error & { issues: ConfigValidationIssue[] } {
@@ -130,7 +128,6 @@ export function createConfigIncludeOwnershipError(refusal: ConfigIncludeOwnershi
   );
 }
 
-/** True when a config write was refused because it would flatten an included file. */
 export function isConfigIncludeOwnershipError(
   error: unknown,
 ): error is Error & ConfigIncludeOwnershipRefusal {

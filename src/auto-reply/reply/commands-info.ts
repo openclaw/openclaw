@@ -1,4 +1,3 @@
-/** Handles informational commands such as /help, /commands, /tools, and exports. */
 import {
   resolveEffectiveToolInventory,
   acquireEffectiveToolInventoryRuntimeModelContext,

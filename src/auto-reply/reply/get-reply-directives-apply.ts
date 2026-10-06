@@ -33,7 +33,6 @@ import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
-type AgentEntry = AgentConfig;
 
 const commandsStatusLoader = createLazyImportLoader(() => import("./commands-status.runtime.js"));
 const directiveLevelsLoader = createLazyImportLoader(
@@ -114,7 +113,7 @@ export async function applyInlineDirectiveOverrides(params: {
   agentDir: string;
   workspaceDir: string;
   agentCfg: AgentDefaults;
-  agentEntry?: AgentEntry;
+  agentEntry?: AgentConfig;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;

@@ -37,7 +37,8 @@ export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
 export function resolveRestartRecoveryTerminalClientRunId(
   entry: Pick<SessionEntry, "restartRecoveryDeliverySourceRunId" | "restartRecoverySourceIngress">,
 ): string | undefined {
-  return entry.restartRecoverySourceIngress === "control-ui"
+  return entry.restartRecoverySourceIngress === "control-ui" ||
+    entry.restartRecoverySourceIngress === "internal"
     ? normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId)
     : undefined;
 }

@@ -1,4 +1,3 @@
-/** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
 import { SessionRestartRecoveryTombstoneError } from "../../config/sessions/lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
@@ -23,7 +22,6 @@ import { sendReplyRestartRecoveryNotice } from "./reply-turn-recovery-notice.js"
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
-/** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {

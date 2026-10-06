@@ -144,6 +144,91 @@ it("batches snapshot replacement while preserving values, revisions, and rollbac
 });
 
 describe("prepared session entry reads", () => {
+  it("reuses detached entry and participant facts until the transaction changes", () => {
+    const database = createDatabase();
+    const key = database.keys[0];
+    const read = () => readExactSessionEntryRowValidated(database, key, "list");
+    read();
+    const queries = trackSqliteStatementExecutions(
+      database.db,
+      ["entries", "participants"],
+      (sql) =>
+        sql.includes('from "session_participants"')
+          ? "participants"
+          : sql.includes('from "session_nodes"')
+            ? "entries"
+            : null,
+    );
+    database.db.exec("BEGIN");
+    try {
+      const first = read()!;
+      first.entry.label = "caller-owned";
+      first.row.entry_json = "{}";
+      first.entry.participants![0]!.identity.id = "caller-owned";
+      for (let repeat = 0; repeat < 3; repeat++) {
+        expect(read()?.entry).toMatchObject({
+          label: "label-0",
+          participants: [{ identity: { id: "participant-0" } }],
+        });
+      }
+      expect(queries.counts).toEqual({ entries: 0, participants: 0 });
+
+      database.db
+        .prepare("UPDATE session_participants SET actor_id = 'local' WHERE session_key = ?")
+        .run(key);
+      expect(read()?.entry.participants?.[0]?.identity.id).toBe("local");
+      database.db.exec("SAVEPOINT participant_edit");
+      database.db
+        .prepare("UPDATE session_participants SET actor_id = 'pending' WHERE session_key = ?")
+        .run(key);
+      expect(read()?.entry.participants?.[0]?.identity.id).toBe("pending");
+      database.db.exec("ROLLBACK TO participant_edit");
+      expect(read()?.entry.participants?.[0]?.identity.id).toBe("local");
+      database.db.exec("RELEASE participant_edit");
+    } finally {
+      database.db.exec("ROLLBACK");
+      queries.restore();
+    }
+    expect(read()?.entry.participants?.[0]?.identity.id).toBe("participant-0");
+  });
+
+  it("refreshes warm row facts after data-only foreign commits and connection reopen", () => {
+    const filename = path.join(tempDirs.make("session-row-freshness-"), "agent.sqlite");
+    const database = createDatabase(filename);
+    database.db.exec("PRAGMA journal_mode=WAL");
+    const peer = new DatabaseSync(filename);
+    openedDatabases.push(peer);
+    const key = database.keys[0];
+    const read = () => readExactSessionEntryRowValidated(database, key, "list")?.entry;
+    const commit = (value: string) => {
+      peer.exec("BEGIN IMMEDIATE");
+      peer
+        .prepare(
+          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', ?) WHERE session_key = ?",
+        )
+        .run(value, key);
+      peer
+        .prepare("UPDATE session_participants SET actor_id = ? WHERE session_key = ?")
+        .run(value, key);
+      peer.exec("COMMIT");
+    };
+    expect(read()?.label).toBe("label-0");
+    expect(read()?.participants?.[0]?.identity.id).toBe("participant-0");
+    commit("foreign");
+    expect(read()).toMatchObject({
+      label: "foreign",
+      participants: [{ identity: { id: "foreign" } }],
+    });
+    database.db.close();
+    commit("reopened");
+    database.db.open();
+    admitSqliteSchema(database.db);
+    expect(read()).toMatchObject({
+      label: "reopened",
+      participants: [{ identity: { id: "reopened" } }],
+    });
+  });
+
   it("keeps fresh bindings and participant values without recompiling warm metadata reads", () => {
     const database = createDatabase();
     const read = (key: string) => readExactSessionEntryRowValidated(database, key, "list")?.entry;

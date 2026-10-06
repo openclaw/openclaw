@@ -17,6 +17,7 @@ import { createExpectedBroadOperatorScopes } from "./scope-expectations.test-sup
 import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
 const pluginHandler: GatewayRequestHandler = ({ respond }) => respond(true, {});
@@ -602,6 +603,24 @@ describe("method scope resolution and authorization", () => {
 });
 
 describe("session-scoped method admission", () => {
+  it.each([
+    ["sessions.describe", { key: "agent:main:requester" }, { allowed: true }],
+    ["send", { sessionKey: "agent:main:requester" }, { allowed: true }],
+    [
+      "chat.inject",
+      { sessionKey: "agent:main:requester" },
+      { allowed: false, missingScope: "operator.admin" },
+    ],
+  ] as const)(
+    "checks requester delivery method %s against the real plugin client grant",
+    (method, params, expected) => {
+      const client = createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "voice-call" });
+      expect(authorizeOperatorScopesForMethod(method, client.connect.scopes ?? [], params)).toEqual(
+        expected,
+      );
+    },
+  );
+
   it.each([
     ["canvas.document.preview", { html: "<p>Preview</p>" }, true],
     ["models.list", {}, true],
