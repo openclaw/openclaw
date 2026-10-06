@@ -675,16 +675,15 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
     }
     const names = new Set();
     const completedNames = new Set(
-      expectedAttempt < effectiveRunAttempt
-        ? attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name)
-        : [],
+      attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name),
     );
     for (const rawJob of attempt.jobs) {
       const job = normalizedAttemptJob(rawJob, expectedAttempt);
-      // Skipped jobs and GitHub's runnerless, stepless queued rerun copies (beside a
-      // completed sibling in a superseded attempt) never executed, so they carry no
-      // evidence. Drop them before identity checks because such copies may collide.
-      const ghost = job.status === "queued" && !rawJob.runner_name && rawJob.steps?.length === 0;
+      // Skipped jobs and GitHub's runnerless queued rerun copies (beside a completed
+      // sibling in the same attempt) carry no independent evidence. GitHub may
+      // mirror the completed sibling's steps onto these copies, so runner identity is
+      // the stable discriminator. Drop them before identity checks because they collide.
+      const ghost = job.status === "queued" && !rawJob.runner_id && !rawJob.runner_name;
       const skipped = job.status === "completed" && job.conclusion === "skipped";
       if (skipped || (ghost && completedNames.has(job.name))) {
         continue;
