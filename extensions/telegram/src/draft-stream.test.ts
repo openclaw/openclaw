@@ -1262,3 +1262,33 @@ describe("Telegram preview native quotes", () => {
     },
   );
 });
+
+describe("Telegram preview send authority", () => {
+  it("does not apply a failed final's authority to the next generation's lazy preview", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockResolvedValueOnce({ message_id: 17 }).mockResolvedValueOnce({
+      message_id: 42,
+    });
+    api.editMessageText.mockRejectedValue(new Error("Bad Request: message to edit not found"));
+    const stream = createDraftStream(api);
+    let authorized = true;
+    stream.update("Working");
+    await stream.flush();
+    stream.update("Final answer", {
+      assertPlatformSendAuthorized: () => {
+        if (!authorized) {
+          throw new Error("Send authority revoked");
+        }
+      },
+    });
+    await stream.stop();
+    expect(stream.isStopped()).toBe(true);
+    authorized = false;
+
+    stream.forceNewMessage();
+    stream.updateLazy(() => "Next turn");
+    await stream.flush();
+    expectNthPreviewSend(api, 2, "Next turn");
+    expect(stream.isStopped()).toBe(false);
+  });
+});

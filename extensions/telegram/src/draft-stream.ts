@@ -743,6 +743,9 @@ export function createTelegramDraftStream(params: {
       lastDeliveredText = "";
       loop.resetPending();
       lastRequestedPreview = undefined;
+      // The dropped pending update takes its send authority with it.
+      pendingPlatformSendAuthorization = undefined;
+      requestedUpdates += 1;
     }
     loop.resetThrottleWindow();
   };
@@ -856,7 +859,12 @@ export function createTelegramDraftStream(params: {
         options?.onPlatformSendDispatch,
         options?.assertPlatformSendAuthorized,
       ),
-    updateLazy: (resolveText: () => string | undefined) => updateDraft({ resolveText }),
+    // A lazy update replaces the pending one and carries no send authority.
+    updateLazy: (resolveText: () => string | undefined) => {
+      pendingPlatformSendAuthorization = undefined;
+      requestedUpdates += 1;
+      updateDraft({ resolveText });
+    },
     updatePreview,
     flush,
     waitForInFlight,
