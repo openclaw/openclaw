@@ -12,6 +12,7 @@ import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/cha
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
@@ -73,6 +74,9 @@ export type StreamGroupOptions = StreamMessageOptions & {
   showAssistantAvatar?: boolean;
   startupLabel?: string;
   waitingApproval?: boolean;
+  waitingSubagents?: ChatSubagentWait;
+  runningSubagents?: number;
+  onOpenSession?: (key: string) => void;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
@@ -89,6 +93,25 @@ export function renderStreamGroupParts(
   );
 }
 
+/** A wait no loaded handoff can place: the standard working row, after the transcript. */
+export function renderUnplacedSubagentWait(
+  sessionKey: string,
+  wait: ChatSubagentWait,
+  opts: StreamGroupOptions,
+) {
+  return renderStreamGroup(
+    [
+      {
+        kind: "reading-indicator",
+        key: `waiting-subagents:${sessionKey}`,
+        startedAt: wait.startedAt ?? 0,
+        waitingOn: "subagents",
+      },
+    ],
+    opts,
+  );
+}
+
 export function renderStreamGroupPart(
   part: StreamGroupPart,
   opts: StreamGroupOptions,
@@ -99,6 +122,9 @@ export function renderStreamGroupPart(
       mascot: opts.branding?.mascot,
       workingPhrases: opts.branding?.workingPhrases,
       waitingApproval: opts.waitingApproval === true,
+      waitingSubagents: part.waitingOn === "subagents" ? opts.waitingSubagents : undefined,
+      runningSubagents: opts.runningSubagents,
+      onOpenSession: opts.onOpenSession,
       startupLabel: opts.startupLabel,
       outputTokens: opts.runOutputTokens,
       presentation,

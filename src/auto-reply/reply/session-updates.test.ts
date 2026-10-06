@@ -34,6 +34,16 @@ const {
 // mock-isolation: Session classification is outside skill snapshot publication.
 vi.mock("../../agents/sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatus: () => ({ sandboxed: false, sandboxRequired: false }),
+  withSandboxRuntimeStatusInWorker: async (
+    _params: unknown,
+    source: { assertCurrent: () => void },
+    consume: (sandbox: { sandboxed: boolean; sandboxRequired: boolean }) => Promise<unknown>,
+  ) => {
+    source.assertCurrent();
+    const result = await consume({ sandboxed: false, sandboxRequired: false });
+    source.assertCurrent();
+    return result;
+  },
 }));
 
 // mock-isolation: Use a fixed policy while testing skill ownership and publication.

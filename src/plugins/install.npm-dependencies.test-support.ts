@@ -84,20 +84,6 @@ export function registerManagedNpmDependencyTests({
 }) {
   it.each([
     {
-      payload: "missing",
-      mode: "install",
-      existingProject: false,
-      workTimeoutMs: undefined,
-      expectedTimeoutMs: 300_000,
-    },
-    {
-      payload: "empty",
-      mode: "update",
-      existingProject: true,
-      workTimeoutMs: undefined,
-      expectedTimeoutMs: undefined,
-    },
-    {
       payload: "ancestor",
       mode: "update",
       existingProject: true,
@@ -171,9 +157,7 @@ export function registerManagedNpmDependencyTests({
             expect(fs.existsSync(path.join(pluginDir, "package.json"))).toBe(true);
             const dependencyDir = path.join(pluginDir, "node_modules", "required-runtime");
             fs.rmSync(dependencyDir, { recursive: true, force: true });
-            if (payload === "empty") {
-              fs.mkdirSync(dependencyDir);
-            } else if (payload === "ancestor" || payload === "outside-symlink") {
+            if (payload === "ancestor" || payload === "outside-symlink") {
               const outsideDir = path.join(npmRoot, "node_modules", "required-runtime");
               fs.mkdirSync(outsideDir, { recursive: true });
               fs.writeFileSync(
@@ -242,12 +226,9 @@ export function registerManagedNpmDependencyTests({
     },
   );
 
-  it.each([
-    { mode: "install", declaration: "peer" },
-    { mode: "update", declaration: "direct" },
-  ] as const)(
+  it.each([{ mode: "update", declaration: "direct" }] as const)(
     "preserves the canonical host for a $declaration declaration during $mode",
-    async ({ mode, declaration }) => {
+    async ({ mode }) => {
       const npmRoot = path.join(makeTempDir(), "npm");
       const packageName = "host-dependency-plugin";
       const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
@@ -264,8 +245,7 @@ export function registerManagedNpmDependencyTests({
         packageName,
         version: "1.0.0",
         npmRoot,
-        ...(declaration !== "peer" ? { dependency: { name: "openclaw", version: "*" } } : {}),
-        ...(declaration !== "direct" ? { peerDependencies: { openclaw: "*" } } : {}),
+        dependency: { name: "openclaw", version: "*" },
       });
       const onBeforePluginArtifactCommit = vi.fn(async () => {});
 

@@ -1229,6 +1229,7 @@ src/plugins/compat/model-account-connect-record.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
+src/plugins/compat/reply-tool-authority-record.ts
 src/plugins/compat/session-persistence-records.ts
 src/plugins/compat/tts-preferences-record.ts
 src/plugins/compat/watched-sessions.ts

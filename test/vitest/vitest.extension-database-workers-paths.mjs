@@ -28,6 +28,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/qa-channel/src/inbound.dispatch-lifecycle.test.ts",
   "extensions/qa-channel/src/inbound.preview-terminal.test.ts",
   "extensions/qa-channel/src/inbound.test.ts",
+  "extensions/litellm/index.test.ts",
   "extensions/qa-lab/src/codex-plugin-lifecycle.test.ts",
   "extensions/qa-lab/src/gateway-child-artifacts.test.ts",
   "extensions/qa-lab/src/gateway-child-auth-handoff.test.ts",
