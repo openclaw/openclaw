@@ -42,6 +42,9 @@ export type WorktreeCleanupMutation = <T>(
 
 export type WorktreeCleanupOwnerPolicy = {
   retryDeferred?: boolean;
+  prepareOwners?: (
+    records: readonly ManagedWorktreeRecord[],
+  ) => Promise<Pick<WorktreeCleanupOwnerPolicy, "shouldProtectOwner" | "shouldRemoveOwner">>;
   shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
   shouldRemoveOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
   withOwnerCleanup?: <T>(
