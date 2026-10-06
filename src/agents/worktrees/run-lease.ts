@@ -8,7 +8,11 @@ import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { sleep } from "../../utils/sleep.js";
-import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
+import {
+  assertManagedWorktreeRemovalComplete,
+  lockWorktreeForProcess,
+  unlockWorktree,
+} from "./git-lock.js";
 import { worktreePathExists } from "./git.js";
 import { readRegistryWorktree, readRegistryWorktrees } from "./registry-read.js";
 import {
@@ -16,7 +20,6 @@ import {
   hasLiveWorktreeRunLeaseRow,
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
-import { assertManagedWorktreeRemovalComplete } from "./removal-git.js";
 import {
   admitWorktreeRunLeaseRowAsync,
   releaseWorktreeRunLeaseRowAsync,

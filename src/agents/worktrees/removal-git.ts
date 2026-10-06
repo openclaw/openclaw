@@ -7,7 +7,6 @@ import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
-import { WorktreeRemovalContentionError } from "./errors.js";
 import {
   commandError,
   listGitWorktrees,
@@ -23,29 +22,6 @@ import type { ExactStateSnapshot } from "./snapshot-exact-state.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 type GitOptions = Parameters<typeof runGit>[2];
-
-/** A pending ref owns recovery even after its remover exits or registry activity changes. */
-export async function assertManagedWorktreeRemovalComplete(
-  record: Pick<ManagedWorktreeRecord, "id" | "repoRoot">,
-  options?: GitOptions,
-): Promise<void> {
-  const pending = await runGit(
-    record.repoRoot,
-    ["show-ref", "--verify", "--quiet", `refs/openclaw/removals/${record.id}`],
-    options,
-  );
-  options?.signal?.throwIfAborted();
-  options?.beforeRun?.();
-  if (pending.termination !== "exit" || (pending.code !== 0 && pending.code !== 1)) {
-    throw commandError("git show-ref --verify pending removal", pending);
-  }
-  if (pending.code === 0) {
-    throw new WorktreeRemovalContentionError(
-      "busy",
-      "Worktree removal is incomplete; recover its preserved snapshot before continuing",
-    );
-  }
-}
 
 function missingPathOrThrow(error: unknown): undefined {
   if (!isMissingPathError(error)) {

@@ -5,12 +5,12 @@ import {
   SessionWorktreeLifecycleError,
   WorktreeRemovalContentionError,
 } from "../agents/worktrees/errors.js";
+import { assertManagedWorktreeRemovalComplete } from "../agents/worktrees/git-lock.js";
 import { runGit } from "../agents/worktrees/git.js";
 import {
   assertWorktreeRemovalAvailable,
   getRegistryWorktree,
 } from "../agents/worktrees/registry.js";
-import { assertManagedWorktreeRemovalComplete } from "../agents/worktrees/removal-git.js";
 import {
   classifyWorktreeRemovalError,
   managedWorktrees,

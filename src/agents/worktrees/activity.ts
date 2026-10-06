@@ -1,10 +1,13 @@
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import { withWorktreeMutationLease } from "./allocation.js";
-import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
+import {
+  assertManagedWorktreeRemovalComplete,
+  lockWorktreeForProcess,
+  unlockWorktree,
+} from "./git-lock.js";
 import { readRegistryWorktreeForMutation, requireActiveWorktreeRecord } from "./registry-read.js";
 import { assertWorktreeRemovalAvailable, updateRegistryWorktree } from "./registry.js";
-import { assertManagedWorktreeRemovalComplete } from "./removal-git.js";
 import { withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { withGitLockTransition } from "./run-lease.js";
 import type { ManagedWorktreeRecord } from "./types.js";
