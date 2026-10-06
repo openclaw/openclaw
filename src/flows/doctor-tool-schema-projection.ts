@@ -153,12 +153,8 @@ export async function collectAgentRuntimeToolSchemaFindings(
   }
 
   return collectNormalizedToolSchemaFindings({
-    agentId: params.agentId,
+    ...params,
     tools,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    modelRef: params.modelRef,
-    model: params.model,
     normalizationFailureFinding: (error) =>
       agentRuntimeToolFailureFinding({
         agentId: params.agentId,
