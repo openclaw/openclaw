@@ -24,6 +24,7 @@ import {
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import { rotateTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
+import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 
 function transcriptMessages(count: number): TranscriptEvent[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -202,16 +203,30 @@ describe("SQLite transcript watermark queries", () => {
     });
   });
 
-  it("keeps a WAL snapshot until its read transaction ends", () => {
+  it("reads hot and cold watermarks in one statement while preserving a caller's WAL snapshot", () => {
     const target = scope("first");
     const database = openOpenClawAgentDatabase(target);
     const before = readSessionTranscriptWatermark(target);
     const peer = new (requireNodeSqlite().DatabaseSync)(database.path);
     try {
+      const queries = trackSqliteStatementExecutions(database.db, ["watermarks"], (sql) =>
+        isHotWatermarkQuery(sql) || sql.includes('from "session_transcript_cold_archives"')
+          ? "watermarks"
+          : null,
+      );
+      try {
+        expect(readSessionTranscriptWatermarkInDatabase(database, target.sessionId)).toEqual(
+          before,
+        );
+        expect(queries.counts.watermarks).toBe(1);
+      } finally {
+        queries.restore();
+      }
       expect(peer.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       const db = getNodeSqliteKysely<DB>(peer);
       runSqliteDeferredTransactionSync(database.db, () => {
         expect(readSessionTranscriptHotWatermark(database, target.sessionId)).toEqual(before);
+        peer.exec("BEGIN IMMEDIATE");
         executeSqliteQuerySync(
           peer,
           db
@@ -219,11 +234,39 @@ describe("SQLite transcript watermark queries", () => {
             .set({ generation: "peer-generation" })
             .where("session_id", "=", target.sessionId),
         );
+        peer.prepare("DELETE FROM transcript_events WHERE session_id = ?").run(target.sessionId);
+        peer
+          .prepare(
+            "INSERT INTO session_transcript_cold_archives (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes, archive_bytes, last_seq, archived_at, storage) VALUES (?, 'archive-generation', 'watermark.jsonl.zst', ?, 43, 43, 43, 42, 1, 'file')",
+          )
+          .run(target.sessionId, "0".repeat(64));
+        peer.exec("COMMIT");
         expect(readSessionTranscriptHotWatermark(database, target.sessionId)).toEqual(before);
+        expect(readSessionTranscriptWatermarkInDatabase(database, target.sessionId)).toEqual(
+          before,
+        );
       });
       expect(readSessionTranscriptWatermark(target)).toEqual({
-        ...before,
         generation: "peer-generation",
+        maxSeq: 42,
+      });
+      expect(readSessionTranscriptHotWatermark(database, target.sessionId)).toEqual({
+        generation: "peer-generation",
+        maxSeq: null,
+      });
+      peer.exec("BEGIN IMMEDIATE");
+      peer
+        .prepare("DELETE FROM session_transcript_cold_archives WHERE session_id = ?")
+        .run(target.sessionId);
+      peer
+        .prepare(
+          'INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 7, \'{"type":"session"}\', 1)',
+        )
+        .run(target.sessionId);
+      peer.exec("COMMIT");
+      expect(readSessionTranscriptWatermark(target)).toEqual({
+        generation: "peer-generation",
+        maxSeq: 7,
       });
       expect(database.db.isTransaction).toBe(false);
     } finally {
