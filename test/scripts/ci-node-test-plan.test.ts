@@ -3056,11 +3056,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   );
 
   it.each(["github"])(
-    "shares one prepared runtime across affordable %s tooling groups",
+    "shares one prepared runtime across affordable %s groups",
     (runnerBackend) => {
       const targets = [
         PRIVATE_QA_TOOLING_TEST,
-        "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+        "src/infra/update-candidate-canary.integration.test.ts",
       ];
       vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
         Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),

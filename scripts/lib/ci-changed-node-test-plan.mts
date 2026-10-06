@@ -995,13 +995,14 @@ export function createChangedNodeTestShards(
   const canonicalTargets = prTargetPlans
     .filter(({ target }) => !target.startsWith("extensions/"))
     .filter(
-      ({ plans }) =>
+      ({ target, plans }) =>
         plans.every((plan) => plan.includePatterns) &&
         plans.every(
           (plan) =>
             plan.config !== BOUNDARY_NODE_TEST_CONFIG && plan.config !== "ui/vitest.config.ts",
         ) &&
         (prTargetPlans.length > 96 ||
+          resolveVitestPretestBuildMode([{ includePatterns: [target] }]) === "private-qa" ||
           plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config))) &&
         plans.every((plan) => isCanonicalNodeTestConfig(plan.config)),
     )

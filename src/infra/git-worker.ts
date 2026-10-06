@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { Transferable } from "node:worker_threads";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   GitWorktreeEffect,
@@ -14,6 +13,7 @@ import { runGitBytes, runGitBuffered } from "../agents/worktrees/git.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { withContentGitSlot } from "./git-content-budget.js";
 import { startGitOperationTiming } from "./git-operation-timing.js";
 import { restoreGitWorkerFailure, serializeGitWorkerFailure } from "./git-worker-context.js";
 import type {
@@ -36,8 +36,6 @@ type GitWorkerRuntime = {
   workspace?: GitPool;
   worktrees?: GitPool;
   worktreeMaintenance?: GitPool;
-  contentProcesses: number;
-  contentWaiters: Set<() => void>;
   pending: Set<Promise<unknown>>;
   closing?: Promise<void>;
 };
@@ -88,7 +86,7 @@ const SPAWN_OPERATIONS = {
 function runtime(): GitWorkerRuntime {
   return resolveGlobalSingleton<GitWorkerRuntime>(
     Symbol.for("openclaw.gitOperations"),
-    () => ({ pending: new Set(), contentProcesses: 0, contentWaiters: new Set() }),
+    () => ({ pending: new Set() }),
     (state) => {
       state.closing ??= (async () => {
         await Promise.all([
@@ -111,40 +109,6 @@ function runtime(): GitWorkerRuntime {
       return state.closing;
     },
   );
-}
-
-async function withContentGitSlot<T>(
-  state: GitWorkerRuntime,
-  signal: AbortSignal,
-  run: () => Promise<T>,
-): Promise<T> {
-  signal.throwIfAborted();
-  await new Promise<void>((resolve, reject) => {
-    const start = () => {
-      state.contentWaiters.delete(start);
-      signal.removeEventListener("abort", abort);
-      state.contentProcesses++;
-      resolve();
-    };
-    const abort = () => {
-      state.contentWaiters.delete(start);
-      reject(toErrorObject(signal.reason, "Git read aborted"));
-    };
-    if (state.contentProcesses < 2) {
-      start();
-    } else {
-      state.contentWaiters.add(start);
-      signal.addEventListener("abort", abort, { once: true });
-    }
-  });
-  try {
-    signal.throwIfAborted();
-    return await run();
-  } finally {
-    // A canceled worker can retire before its Git process; keep its slot through cleanup.
-    state.contentProcesses--;
-    state.contentWaiters.values().next().value?.();
-  }
 }
 
 function poolFor(
@@ -265,6 +229,10 @@ async function executeOperation(
     command.type === "checkout.diff" ||
     command.type === "checkout.baseline" ||
     command.type === "pull-request.branch-facts";
+  const contentGit =
+    contentRead ||
+    command.type === "worktree.snapshot" ||
+    command.type === "worktree.snapshot-verify-exact";
   let gitCommandCount = 0;
   let summedGitWallMs = 0;
   let summedGitQueueWaitMs = 0;
@@ -314,7 +282,7 @@ async function executeOperation(
                 signal,
                 beforeRun: options.assertCurrent,
                 killProcessTree: true,
-                lowerPriority: contentRead,
+                lowerPriority: contentGit,
               }),
             );
           } finally {
@@ -323,7 +291,7 @@ async function executeOperation(
             }
           }
         };
-        const output = await (contentRead ? withContentGitSlot(state, signal, execute) : execute());
+        const output = await (contentGit ? withContentGitSlot(execute, signal) : execute());
         const stdout = ownedWorkerBytes(output.stdout);
         const stderr = ownedWorkerBytes(output.stderr);
         result = { ...output, stdout, stderr };

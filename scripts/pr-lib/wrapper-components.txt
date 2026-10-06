@@ -872,6 +872,7 @@ src/infra/gateway-process-argv.ts
 src/infra/gateway-scheduler.ts
 src/infra/gateway-supervision.ts
 src/infra/git-commit.ts
+src/infra/git-content-budget.ts
 src/infra/git-exec.ts
 src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
@@ -1350,7 +1351,6 @@ src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-instance-owned-values.ts
-src/plugins/plugin-instance-runtime-scope.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts

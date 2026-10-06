@@ -41,14 +41,6 @@ const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
 
 type ErrorPayload = Record<string, unknown>;
 
-type ApiErrorInfo = {
-  httpCode?: string;
-  type?: string;
-  code?: string;
-  message?: string;
-  requestId?: string;
-};
-
 export function formatProviderRefusalText(message: {
   diagnostics?: unknown;
   errorCode?: unknown;
@@ -173,7 +165,7 @@ export function isGenericProviderInternalError(raw: string): boolean {
   );
 }
 
-export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
+export function parseApiErrorInfo(raw?: string) {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
@@ -288,7 +280,7 @@ const TRANSPORT_ERRORS = [
 ];
 
 export function isKnownTransportErrorCode(value: string): boolean {
-  return TRANSPORT_ERRORS.some(({ code }) => code?.exec(value)?.[0] === value);
+  return TRANSPORT_ERRORS.some(({ code }) => code.exec(value)?.[0] === value);
 }
 
 export function formatTransportErrorCopy(raw: string): string | undefined {
@@ -297,7 +289,7 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
   }
   const lower = normalizeLowercaseStringOrEmpty(raw);
   for (const { code, phrases, message } of TRANSPORT_ERRORS) {
-    if (code?.test(raw) || phrases.some((phrase) => lower.includes(phrase))) {
+    if (code.test(raw) || phrases.some((phrase) => lower.includes(phrase))) {
       return message;
     }
   }

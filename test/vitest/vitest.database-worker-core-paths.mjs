@@ -2,6 +2,7 @@
 export const databaseWorkerCoreTestFiles = [
   "src/gateway/worker-environments/worker-turn-transcript-target.test.ts",
   "src/state/openclaw-agent-db.worker-admission.test.ts",
+  "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
   "src/channels/feedback-reflection.worker.test.ts",
   "src/config/sessions/session-accessor.sqlite-bounded-context.test.ts",
   "src/gateway/server-methods/chat-transcript-persistence.mirrors.test.ts",

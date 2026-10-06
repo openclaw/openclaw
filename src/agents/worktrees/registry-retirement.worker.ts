@@ -10,15 +10,31 @@ import {
   WORKTREE_RECORD_COLUMNS,
   worktreeGcRevision,
 } from "./registry-read.kernel.js";
-import type { ManagedWorktreeRecord } from "./types.js";
+import { assertWorktreeRegistryPredicates } from "./registry-run-end.worker.js";
+import type { ManagedWorktreeRecord, WorktreeRemovalDeferral } from "./types.js";
 
 export function deferWorktreeCleanupInWorker(
-  { observed, reason }: { observed: ManagedWorktreeRecord; reason: string | null },
+  {
+    observed,
+    reason,
+    retry,
+    removalToken,
+  }: {
+    observed: ManagedWorktreeRecord;
+    reason: string | null;
+    retry?: WorktreeRemovalDeferral;
+    removalToken?: string;
+  },
   options: OpenClawStateDatabaseOptions,
 ): boolean {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      if (removalToken) {
+        assertWorktreeRegistryPredicates(db, [
+          { kind: "removal-claim", id: observed.id, token: removalToken },
+        ]);
+      }
       const current = getRegistryWorktreeInDatabase(db, observed.id);
       const revision = worktreeGcRevision(observed);
       if (!current || current.removedAt !== undefined || worktreeGcRevision(current) !== revision) {
@@ -29,7 +45,8 @@ export function deferWorktreeCleanupInWorker(
         getNodeSqliteKysely<Pick<DB, "worktrees">>(db)
           .updateTable("worktrees")
           .set({
-            gc_protection_json: reason === null ? null : JSON.stringify({ revision, reason }),
+            gc_protection_json:
+              reason === null ? null : JSON.stringify({ revision, reason, retry }),
           })
           .where("id", "=", observed.id),
       );

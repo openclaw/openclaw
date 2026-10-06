@@ -234,8 +234,8 @@ export class GatewayScheduler {
     const next = this.nextWakeAtMs;
     if (next !== null) {
       const nowMs = this.now();
-      // Node clamps larger delays to 1ms. Long deadlines retain their absolute due time.
-      const delayMs = Math.min(2_147_483_647, Math.max(0, next - nowMs));
+      // Node truncates fractional delays and clamps overflow to 1ms; never arm before due.
+      const delayMs = Math.min(2_147_483_647, Math.max(0, Math.ceil(next - nowMs)));
       this.cancelTimer = runInDetachedAsyncContext(() =>
         this.clock.arm(
           () => (generation === this.timerGeneration ? this.wake(nowMs + delayMs) : undefined),
@@ -257,7 +257,7 @@ export class GatewayScheduler {
       .toSorted(
         (a, b) => this.remaining(a, nowMs, elapsedMs) - this.remaining(b, nowMs, elapsedMs),
       );
-    const started: Promise<void>[] = [];
+    let started: Promise<void>[] | undefined;
     if (nowMs - expectedAtMs > 60_000) {
       log.debug(`late wake by ${nowMs - expectedAtMs}ms; coalescing ${due.length} due jobs`);
     }
@@ -275,23 +275,22 @@ export class GatewayScheduler {
         if (job.everyMs === undefined) {
           this.jobs.delete(job.id);
         }
-        started.push(this.run(job));
+        const running = this.run(job);
+        if (running) {
+          (started ??= []).push(running);
+        }
       }
     } finally {
       this.dispatching = false;
       this.arm();
     }
-    return Promise.all(started).then(() => undefined);
+    return started ? Promise.all(started).then(() => undefined) : undefined;
   }
 
-  private run(job: ScheduledWork): Promise<void> {
+  private run(job: ScheduledWork): Promise<void> | void {
     // Cadence jobs can run every few milliseconds (event-loop sampling runs every 20ms),
     // so only one-shot runs are worth a debug line.
-    if (job.everyMs === undefined) {
-      log.debug(`running ${job.id}`);
-    } else {
-      log.trace(`running ${job.id}`);
-    }
+    log[job.everyMs === undefined ? "debug" : "trace"](`running ${job.id}`);
     const done = createDeferredCore();
     const work = new AsyncWorkScope();
     job.running = done.promise;
@@ -317,7 +316,7 @@ export class GatewayScheduler {
     }
     if (!result && !work.hasPendingWork) {
       finish();
-      return done.promise;
+      return;
     }
     void Promise.resolve(result)
       .catch((error: unknown) => log.error(`${job.id} failed: ${String(error)}`))

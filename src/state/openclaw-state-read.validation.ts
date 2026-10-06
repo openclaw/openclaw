@@ -390,6 +390,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       isWorkspaceJournalReadCommand(input.command) ||
       input.command.type === "workers.placementRecoveryCandidates" ||
       input.command.type === "workers.placementPreservation" ||
+      (input.command.type === "workers.placementEnvironmentOwner" &&
+        typeof input.command.environmentId === "string") ||
       (input.command.type === "workers.placementPendingResults" &&
         (input.command.sessionId === undefined || typeof input.command.sessionId === "string")) ||
       (input.command.type === "workers.placementProjection" &&
