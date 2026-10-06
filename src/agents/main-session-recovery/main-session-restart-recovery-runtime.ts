@@ -95,10 +95,13 @@ export async function recoverRestartAbortedMainSessions(params: {
   const skipReasons = new Map<MainSessionRecoverySkipReason, number>();
   const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
 
-  for (const target of await discoverRestartRecoveryStoreTargets({
+  const targets = await discoverRestartRecoveryStoreTargets({
     ...params,
     statuses: ["running"],
-  })) {
+  });
+
+  for (let i = 0; i < targets.length; i++) {
+    const target = targets[i]!;
     if (params.shouldContinue?.() === false) {
       break;
     }
@@ -119,6 +122,14 @@ export async function recoverRestartAbortedMainSessions(params: {
     result.settled += storeResult.settled;
     result.failed += storeResult.failed;
     result.skipped += storeResult.skipped;
+    // Yield to the event loop between stores so that each store's synchronous
+    // I/O (SQLite reads, filesystem stat calls) doesn't accumulate into a
+    // single blocking burst that starves the Gateway request loop (#149935).
+    if (i < targets.length - 1) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    }
   }
 
   if (result.started > 0 || result.settled > 0 || result.failed > 0 || result.skipped > 0) {
