@@ -1,7 +1,10 @@
-import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { isRecord, truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BoardGetParams, SessionsCreateResult } from "@openclaw/gateway-protocol";
+import {
+  isRecord,
+  normalizeOptionalString,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { requestSessionCreate } from "../sessions/create.ts";
 import { replaceCard, workboardCardRunId, workboardCardSessionKey } from "./card-state.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload } from "./normalization.ts";
@@ -14,10 +17,8 @@ import {
 import { workboardCardSessionTarget } from "./session-resolution.ts";
 import type {
   WorkboardCard,
-  WorkboardExecution,
   WorkboardExecutionEngine,
   WorkboardExecutionMode,
-  WorkboardExecutionStatus,
   WorkboardUiState,
 } from "./types.ts";
 
@@ -39,14 +40,6 @@ function assertCurrentCard(state: WorkboardUiState, card: WorkboardCard): void {
   }
 }
 
-function engineModel(engine: WorkboardExecutionEngine | null | undefined): string | undefined {
-  return engine === "codex"
-    ? WORKBOARD_ENGINE_MODELS.codex
-    : engine === "claude"
-      ? WORKBOARD_ENGINE_MODELS.claude
-      : undefined;
-}
-
 function buildCardSessionLabel(card: WorkboardCard): string {
   const suffix = card.id.trim().slice(0, 8) || "card";
   const title = card.title.trim() || "Workboard card";
@@ -58,63 +51,11 @@ function buildCardSessionLabel(card: WorkboardCard): string {
   return `${truncateUtf16Safe(title, titleMax - 3).trimEnd()}...${suffixText}`;
 }
 
-function isScheduledForLater(card: WorkboardCard, now = Date.now()): boolean {
-  const scheduledAt = card.metadata?.automation?.scheduledAt;
-  if (typeof scheduledAt === "number") {
-    return scheduledAt > now;
-  }
-  return card.status === "scheduled";
-}
-
-function buildWorkboardExecution(params: {
-  card: WorkboardCard;
-  engine: WorkboardExecutionEngine;
-  mode: WorkboardExecutionMode;
-  sessionKey?: string | null;
-  runId?: string;
-  status: WorkboardExecutionStatus;
-}): WorkboardExecution {
-  const now = Date.now();
-  const model = engineModel(params.engine);
-  return {
-    id: params.card.execution?.id ?? `${params.card.id}:agent-session`,
-    kind: "agent-session",
-    engine: params.engine,
-    mode: params.mode,
-    status: params.status,
-    startedAt: now,
-    updatedAt: now,
-    ...(model ? { model } : {}),
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    ...(params.runId ? { runId: params.runId } : {}),
-  };
-}
-
 function workboardRunWasAborted(result: unknown): boolean {
   return (
     isRecord(result) &&
     (result.aborted === true || (Array.isArray(result.runIds) && result.runIds.length > 0))
   );
-}
-
-async function abortWorkboardSessionRun(params: {
-  client: GatewayBrowserClient;
-  session: BoardGetParams;
-  runId?: string;
-  assertCurrent: () => void;
-}): Promise<boolean> {
-  const targetedAbort = await params.client.request("chat.abort", {
-    ...params.session,
-    ...(params.runId ? { runId: params.runId } : {}),
-  });
-  params.assertCurrent();
-  const aborted = workboardRunWasAborted(targetedAbort);
-  if (aborted || !params.runId) {
-    return aborted;
-  }
-  // A card run id that no longer names the live run aborts nothing, so retry
-  // session-wide before reporting failure; otherwise Stop strands an active run.
-  return workboardRunWasAborted(await params.client.request("chat.abort", params.session));
 }
 
 export async function startWorkboardCard(params: {
@@ -136,9 +77,16 @@ export async function startWorkboardCard(params: {
   }
   const engine = params.engine;
   const mode = params.mode ?? "autonomous";
-  const model = engineModel(engine);
+  const model =
+    engine === "codex" || engine === "claude" ? WORKBOARD_ENGINE_MODELS[engine] : undefined;
+  const scheduledAt = params.card.metadata?.automation?.scheduledAt;
   state.error = null;
-  if (mode === "autonomous" && isScheduledForLater(params.card)) {
+  if (
+    mode === "autonomous" &&
+    (typeof scheduledAt === "number"
+      ? scheduledAt > Date.now()
+      : params.card.status === "scheduled")
+  ) {
     state.error = "Scheduled cards cannot start before their scheduled time.";
     params.requestUpdate?.();
     return null;
@@ -170,29 +118,38 @@ export async function startWorkboardCard(params: {
     const shouldClearManualSchedule = params.card.metadata?.automation?.scheduledAt !== undefined;
     const shouldUnscheduleManual = params.card.status === "scheduled";
     const nextCardStatus = shouldUnscheduleManual ? "todo" : params.card.status;
-    const sessionKey = await requestSessionCreate(params.client, {
+    const result = await params.client.request<SessionsCreateResult>("sessions.create", {
       ...(params.card.agentId ? { agentId: params.card.agentId } : {}),
       label: buildCardSessionLabel(params.card),
       ...(model ? { model } : {}),
     });
+    const sessionKey = normalizeOptionalString(result?.key);
+    if (!sessionKey) {
+      throw new Error("sessions.create returned no key");
+    }
     assertCurrentCard(state, params.card);
+    const now = Date.now();
     const payload = await params.client.request("workboard.cards.update", {
       id: params.card.id,
       expectedUpdatedAt: params.card.updatedAt,
       patch: {
         status: nextCardStatus,
         ...(shouldClearManualSchedule ? { scheduledAt: null } : {}),
-        ...(sessionKey ? { sessionKey } : {}),
+        sessionKey,
         runId: null,
         ...(engine
           ? {
-              execution: buildWorkboardExecution({
-                card: params.card,
+              execution: {
+                id: params.card.execution?.id ?? `${params.card.id}:agent-session`,
+                kind: "agent-session",
                 engine,
-                mode,
-                sessionKey,
+                mode: "manual",
                 status: "idle",
-              }),
+                startedAt: now,
+                updatedAt: now,
+                ...(model ? { model } : {}),
+                sessionKey,
+              },
             }
           : { execution: null }),
       },
@@ -235,17 +192,23 @@ export async function stopWorkboardCard(params: {
   const assertCurrent = () => assertCurrentCard(state, params.card);
   try {
     assertCurrent();
-    const sessionAborted = session
-      ? await abortWorkboardSessionRun({
-          client: params.client,
-          session,
-          runId: workboardCardRunId(params.card),
-          assertCurrent,
-        })
-      : false;
+    let sessionAborted = false;
+    if (session) {
+      const runId = workboardCardRunId(params.card);
+      const targetedAbort = await params.client.request("chat.abort", {
+        ...session,
+        ...(runId ? { runId } : {}),
+      });
+      assertCurrent();
+      sessionAborted = workboardRunWasAborted(targetedAbort);
+      // A stale card run id aborts nothing; retry session-wide before giving up.
+      if (!sessionAborted && runId) {
+        sessionAborted = workboardRunWasAborted(await params.client.request("chat.abort", session));
+      }
+    }
     assertCurrent();
     if (!sessionAborted) {
-      if (linkedSessionKey && !session) {
+      if (!session) {
         throw new Error(
           "Refresh this card's session details before stopping it, or use Edit to choose its session.",
         );

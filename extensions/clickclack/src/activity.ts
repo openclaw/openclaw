@@ -1,8 +1,3 @@
-/**
- * Publishes agent activity (streamed commentary + tool progress) into
- * ClickClack as durable `agent_commentary` / `agent_tool` message rows,
- * coalesced so one logical step becomes one row instead of a row per frame.
- */
 import {
   formatChannelProgressDraftLineForEntry,
   isCompleteAgentPreamble,
@@ -13,7 +8,6 @@ import type { ClickClackMessageProvenance } from "./types.js";
 
 const CLICKCLACK_COMMENTARY_FLUSH_MS = 700;
 
-/** Destination for durable activity rows (channel or DM conversation). */
 type ClickClackActivityTarget = {
   channelId?: string;
   conversationId?: string;
@@ -55,22 +49,10 @@ function commentaryBody(payload: ClickClackItemEventPayload): string {
 }
 
 function activityBody(payload: ClickClackItemEventPayload): string {
-  // Reuse the shared channel progress-line renderer so ClickClack rows show
-  // the same tool name + command/argument detail as Discord/Slack/Telegram
-  // progress lines instead of a bespoke format.
   const line = formatChannelProgressDraftLineForEntry(undefined, {
+    ...payload,
     event: "item",
-    itemId: payload.itemId,
-    toolCallId: payload.toolCallId,
     itemKind: payload.kind,
-    title: payload.title,
-    name: payload.name,
-    phase: payload.phase,
-    status: payload.status,
-    summary: payload.summary,
-    progressText: payload.progressText,
-    meta: payload.meta,
-    commandBearing: payload.commandBearing,
   })?.trim();
   if (line) {
     return line;
@@ -103,17 +85,7 @@ type ToolRow = {
   sentBody?: string;
 };
 
-/** Publisher wired into one agent turn via `replyOptions.onItemEvent`. */
-export type ClickClackActivityPublisher = {
-  onItemEvent: (payload: ClickClackItemEventPayload) => false;
-  /**
-   * Records the resolved model/thinking for this turn (from
-   * `replyOptions.onModelSelected`); stamped onto subsequent activity rows.
-   */
-  setProvenance: (provenance: ClickClackMessageProvenance) => void;
-  /** Flushes pending commentary and awaits all outstanding POST/PATCH work. */
-  finalize: () => Promise<void>;
-};
+export type ClickClackActivityPublisher = ReturnType<typeof createClickClackActivityPublisher>;
 
 /**
  * Creates a per-turn activity publisher. Publishing is best-effort: transport
@@ -125,7 +97,7 @@ export function createClickClackActivityPublisher(params: {
   turnId: string;
   flushMs?: number;
   onError?: (error: unknown) => void;
-}): ClickClackActivityPublisher {
+}) {
   const flushMs = params.flushMs ?? CLICKCLACK_COMMENTARY_FLUSH_MS;
   const commentaryByItem = new Map<string, CommentarySegment>();
   const toolRows = new Map<string, ToolRow>();
@@ -258,7 +230,7 @@ export function createClickClackActivityPublisher(params: {
   };
 
   return {
-    onItemEvent: (payload) => {
+    onItemEvent: (payload: ClickClackItemEventPayload): false => {
       if (
         payload.hideFromChannelProgress ||
         payload.suppressChannelProgress ||
@@ -291,9 +263,11 @@ export function createClickClackActivityPublisher(params: {
       // Activity transport is serialized in the background; queueing is not visibility.
       return false;
     },
-    setProvenance: (next) => {
+    /** Model/thinking from onModelSelected is stamped onto subsequent activity rows. */
+    setProvenance: (next: ClickClackMessageProvenance) => {
       provenance = next;
     },
+    /** Flushes pending commentary and awaits all outstanding POST/PATCH work. */
     finalize: async () => {
       await flushAllCommentary();
       await chain;

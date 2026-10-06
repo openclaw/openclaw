@@ -1,7 +1,12 @@
 import { listAgentEntries } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "./types.js";
 
-/** Attach the non-serialized list projection used by legacy runtime consumers. */
+/**
+ * @deprecated Untyped, non-enumerable SDK compatibility for third-party plugins built
+ * against releases through 2026.9.x; internal code must not read this projection.
+ * Remove after 2027-01-02. Use canonical cfg.agents.entries, or listAgentIds /
+ * resolveAgentConfig from openclaw/plugin-sdk/agent-runtime instead.
+ */
 export function attachAgentListProjection(config: OpenClawConfig): OpenClawConfig {
   const agents = config.agents;
   if (!agents || typeof agents !== "object" || Array.isArray(agents)) {

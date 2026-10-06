@@ -187,8 +187,6 @@ internal class ChatComposerTextDraftStore(
     records += retainedNewestFirst.asReversed()
     return ArrayList(records.flatten())
   }
-
-  internal fun size(): Int = drafts.size
 }
 
 private fun pendingSendCheckpointEntry(
@@ -498,15 +496,6 @@ internal suspend fun stageChatShareDraft(
     droppedAttachmentCount = droppedAttachmentCount,
   )
 }
-
-internal fun canCommitStagedChatShare(
-  stagedId: Long,
-  currentHead: ChatShareDraft?,
-  ownerSnapshot: ChatComposerOwner,
-  currentOwner: ChatComposerOwner,
-): Boolean =
-  currentHead?.id == stagedId &&
-    ownerSnapshot == currentOwner
 
 internal fun appendChatDictationTranscript(
   currentInput: String,

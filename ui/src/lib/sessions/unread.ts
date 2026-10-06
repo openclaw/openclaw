@@ -59,11 +59,17 @@ export class SessionUnreadPatchGuard {
   /** Permanent rejections latch this episode; transport failures may retry. */
   patchFailed(activeSessionKey: string, error?: unknown) {
     if (activeSessionKey.trim() === this.activeSessionKey) {
-      const code = asNullableRecord(error)?.gatewayCode;
-      this.requested =
-        code === ErrorCodes.INVALID_REQUEST ||
-        code === ErrorCodes.FORBIDDEN ||
-        code === ErrorCodes.APPROVAL_NOT_FOUND;
+      this.requested = isPermanentUnreadAckFailure(error);
     }
   }
+}
+
+/** Invalid state and missing access persist; transport failures may succeed on retry. */
+export function isPermanentUnreadAckFailure(error: unknown): boolean {
+  const code = asNullableRecord(error)?.gatewayCode;
+  return (
+    code === ErrorCodes.INVALID_REQUEST ||
+    code === ErrorCodes.FORBIDDEN ||
+    code === ErrorCodes.APPROVAL_NOT_FOUND
+  );
 }

@@ -2,8 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
-import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { readDevicePairingNodeSnapshot } from "../../infra/device-pairing-store-readonly.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -19,14 +18,14 @@ import {
   createDeviceWorkerRuntime,
 } from "../worker-environments/device-provider.js";
 import { environmentsHandlers } from "./environments.js";
-import { pairedNodeDevice } from "./environments.test-support.js";
+import { createDevicePairingNodeSnapshot, pairedNodeDevice } from "./environments.test-support.js";
 import { nodeHandlers } from "./nodes.js";
 import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
-  listDevicePairing: vi.fn(),
+vi.mock("../../infra/device-pairing-store-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing-store-readonly.js")>()),
+  readDevicePairingNodeSnapshot: vi.fn(),
 }));
 vi.mock("../../infra/device-pairing-node-facts.js", () => ({
   updatePairedNodeSessionHost: vi.fn(async () => true),
@@ -50,11 +49,9 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
     },
   });
   const paired = pairedNodeDevice("node-1", { commands: [CODEX_COMMAND] });
-  vi.mocked(listDevicePairing).mockResolvedValue({ pending: [], paired: [paired] });
-  const binding = expectDefined(
-    projectPairedDeviceNodeBindings([paired]).get("node-1"),
-    "paired node binding",
-  );
+  const snapshot = createDevicePairingNodeSnapshot([paired]);
+  vi.mocked(readDevicePairingNodeSnapshot).mockResolvedValue(snapshot);
+  const binding = expectDefined(snapshot.bindings.get("node-1"), "paired node binding");
   const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
   const client = createWorkerSupervisorNodeClient();
   client.connect.commands = [CODEX_COMMAND];

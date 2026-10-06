@@ -5,6 +5,7 @@ import {
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readResolvedDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
+import { readInstallOwner } from "../../infra/install-owner.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   DEFAULT_PACKAGE_CHANNEL,
@@ -18,6 +19,7 @@ import {
   DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
 } from "../../infra/update-doctor-result.js";
+import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
@@ -36,6 +38,7 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-stat
 import { formatCliCommand } from "../command-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
+import { refuseHostOwnedUpdate, reportHostOwnedUpdate } from "./host-owned.js";
 import {
   parseUpdateTimeoutMs,
   readPackageVersion,
@@ -58,6 +61,7 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
   withPrePluginUpdateDoctorEnv,
 } from "./update-command-fresh-doctor.js";
+import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
 import {
   collectPostCorePluginAdvisories,
@@ -84,7 +88,13 @@ import {
 export async function updateFinalizeCommand(
   opts: UpdateFinalizeOptions,
   recoveryRunIds?: readonly string[],
+  handoff?: ManagedHandoffRepair,
 ): Promise<void> {
+  // Refuse retained recovery before discovery; preflight rechecks before state writes.
+  await assertUpdateRecoveryAdmission({ env: process.env });
+  const discoveredRoot = await resolveUpdateRoot();
+  await refuseHostOwnedUpdate(discoveredRoot, opts);
+  await refuseImmutableUpdateActivation(discoveredRoot, opts);
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
@@ -100,6 +110,7 @@ export async function updateFinalizeCommand(
   let exitCode: number | undefined;
   await withCommandProcessScope(async (stopChildren) => {
     const lifecycle = new UpdateFinalizationLifecycle(Boolean(opts.json), timeoutMs, stopChildren);
+    lifecycle.handoff = handoff;
     try {
       const { root, installKind, runId } = await withUpdateAdmissionReporting(
         opts,
@@ -124,6 +135,14 @@ export async function updateFinalizeCommand(
                 const resolvedInstallKind = await resolveUpdateInstallKind(resolvedRoot, {
                   timeoutMs: lifecycle.budget("preflight"),
                 });
+                if (resolvedInstallKind === "host") {
+                  reportHostOwnedUpdate(await readInstallOwner(resolvedRoot), opts);
+                }
+                if (resolvedInstallKind === "immutable") {
+                  throw new Error(
+                    "Use openclaw update recover --root <installation-root> for immutable activation recovery.",
+                  );
+                }
                 lifecycle.recordInstallKind(
                   resolvedInstallKind,
                   await readPackageVersion(resolvedRoot),
@@ -240,7 +259,10 @@ async function prepareUpdateFinalization(
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
   });
-  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
+  const configSnapshot = await readConfigFileSnapshot({
+    skipPluginValidation: true,
+    observe: false,
+  });
   const preFinalizeConfig =
     (await readPostCorePreUpdateSourceConfig({
       sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
@@ -267,7 +289,7 @@ async function prepareUpdateFinalization(
   );
   const channel = requestedChannel ?? storedChannel ?? effectiveChannel ?? DEFAULT_PACKAGE_CHANNEL;
   if (requestedChannel) {
-    configSnapshot = await withPluginLifecycleLease(phase, async () => {
+    await withPluginLifecycleLease(phase, async () => {
       const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
       return await persistRequestedUpdateChannel({
         configSnapshot: snapshot,
@@ -279,7 +301,6 @@ async function prepareUpdateFinalization(
   return {
     root,
     installKind,
-    configSnapshot,
     preFinalizeConfig,
     requestedChannel,
     storedChannel,
@@ -305,7 +326,6 @@ async function updateFinalizeCommandInternal(
     effectiveChannel,
     channel,
   } = prepared;
-  let { configSnapshot } = prepared;
   let doctorWarnings: string[] = [];
   const doctorWarningTimes = new Map<string, number>();
   const onDoctorWarnings = (warnings: string[]) => {
@@ -334,11 +354,7 @@ async function updateFinalizeCommandInternal(
   let outcome: { complete: () => Promise<void> } | { error: unknown };
   try {
     if (prepared.installKind === "git") {
-      await withPluginLifecycleLease({}, async (lease) => {
-        await withCommandProcessScope(() =>
-          completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins"), lease }),
-        );
-      });
+      await completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins") });
     }
     const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
       await lifecycle.run("configSnapshot", () => createUpdateConfigSnapshot());
@@ -355,6 +371,7 @@ async function updateFinalizeCommandInternal(
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
             onWarnings: onDoctorWarnings,
+            onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
           }),
         undefined,
         {
@@ -369,6 +386,7 @@ async function updateFinalizeCommandInternal(
               options: { repair: true, nonInteractive: true, json: opts.json },
               runtime: { ...defaultRuntime, log: defaultRuntime.error },
             });
+            lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
             // Fresh Doctor owns database fences; the parent retains service custody.
             await maintenance?.releaseState();
           },
@@ -377,14 +395,14 @@ async function updateFinalizeCommandInternal(
       return await lifecycle.run(
         "plugins",
         (phase) =>
-          withPluginLifecycleLease(phase, async () => {
-            return await withCommandProcessScope(async () => {
+          withPluginLifecycleLease(phase, () =>
+            withCommandProcessScope(async () => {
               const preparedConfig = await preparePostCorePluginConfig({
                 requestedChannel,
                 preUpdateConfig: preFinalizeConfig,
                 assertCurrent: phase.assertCurrent,
               });
-              configSnapshot = preparedConfig.configSnapshot;
+              const { configSnapshot } = preparedConfig;
               const postDoctorStoredChannel = configSnapshot.valid
                 ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
                 : null;
@@ -407,8 +425,8 @@ async function updateFinalizeCommandInternal(
                 assertCurrent: phase.assertCurrent,
                 runtime: createNonExitingRuntime(),
               });
-            });
-          }),
+            }),
+          ),
         pluginOutcome,
       );
     });
@@ -421,11 +439,11 @@ async function updateFinalizeCommandInternal(
           nodeRunner,
           runId: invokingRunId,
           pluginUpdate: initialPluginUpdate,
-          freshDoctorRequired: initialPluginUpdate.changed,
           yes: opts.yes === true,
           json: opts.json === true,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
           onWarnings: onDoctorWarnings,
+          onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
         });
         const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
         phase.assertCurrent();
@@ -444,7 +462,7 @@ async function updateFinalizeCommandInternal(
     );
     const pluginUpdate = completedPluginUpdate.pluginUpdate;
     lifecycle.recordWarnings(collectPostCorePluginAdvisories(pluginUpdate), "plugins");
-    configSnapshot = completedPluginUpdate.configSnapshot;
+    const { configSnapshot } = completedPluginUpdate;
     const completionBudget = lifecycle.budget("completionCache");
     // Leave shutdown time inside the phase deadline so optional cache failures can settle.
     const completionTimeout = completionBudget - Math.min(1_000, completionBudget / 2);
@@ -515,6 +533,9 @@ async function updateFinalizeCommandInternal(
               })
             : undefined;
         const observed = failure ? await lifecycle.observeFailure(failure) : undefined;
+        if (!failure) {
+          lifecycle.handoff?.complete(invokingRunId);
+        }
         if (opts.json) {
           defaultRuntime.writeJson({
             ...result,

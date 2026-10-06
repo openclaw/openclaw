@@ -145,6 +145,7 @@ async function dispatch(params: {
 
 async function createLifecycleInvoke() {
   const client = createClient("node");
+  const send = vi.spyOn(client.socket, "send");
   client.connect.client.id = GATEWAY_CLIENT_IDS.NODE_HOST;
   client.connect.commands = [NODE_WORKER_ENVIRONMENT_STOP_COMMAND];
   let generation = "generation-live";
@@ -190,6 +191,7 @@ async function createLifecycleInvoke() {
   const context = createContext({ nodeRegistry: registry });
   return {
     client,
+    send,
     context,
     invokeId,
     registry,
@@ -353,7 +355,7 @@ describe("draining Gateway completion ownership", () => {
         requestParams: { id: "question-unrelated" },
         context,
         client,
-        handler: vi.fn(),
+        handler: vi.fn<GatewayRequestHandler>(),
       });
       expect(unrelated).toHaveBeenCalledWith(
         false,
@@ -528,7 +530,7 @@ describe("draining Gateway completion ownership", () => {
           requestParams: { id: "unrelated-invoke", nodeId: "node-1", ok: true },
           context,
           client: node,
-          handler: vi.fn(),
+          handler: vi.fn<GatewayRequestHandler>(),
         });
         expect(ignored).toHaveBeenCalledWith(
           false,
@@ -712,6 +714,17 @@ describe("restart lifecycle completion ownership", () => {
           undefined,
           expect.objectContaining({ code: "UNAVAILABLE" }),
         );
+        if (changed === "owner" || changed === "pairing") {
+          expect(invoke.send).toHaveBeenCalledWith(
+            expect.stringContaining('"event":"node.invoke.cancel"'),
+          );
+          await expect(invoke.result).resolves.toMatchObject({
+            ok: false,
+            error: {
+              code: changed === "owner" ? "APPROVAL_AUTHORITY_CLOSED" : "PAIRING_CHANGED",
+            },
+          });
+        }
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       } finally {
         await invoke.finish();
@@ -760,6 +773,15 @@ describe("restart lifecycle completion ownership", () => {
         }
         resumeHandler.resolve();
         expect(await response).toHaveBeenCalledWith(true, { ok: true, ignored: true }, undefined);
+        expect(invoke.send).toHaveBeenCalledWith(
+          expect.stringContaining('"event":"node.invoke.cancel"'),
+        );
+        await expect(invoke.result).resolves.toMatchObject({
+          ok: false,
+          error: {
+            code: changed === "owner" ? "APPROVAL_AUTHORITY_CLOSED" : "PAIRING_CHANGED",
+          },
+        });
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       } finally {
         resumeHandler.resolve();

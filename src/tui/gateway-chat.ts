@@ -60,10 +60,12 @@ import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
 import {
+  readTuiGatewayModelCatalog,
   refreshTuiGatewayModelCatalog,
   type GatewayModelCatalogEntry,
 } from "./gateway-chat-models.js";
@@ -73,6 +75,7 @@ import type {
   TuiBackend,
   TuiEvent,
   TuiModelChoice,
+  TuiModelCatalogScope,
   TuiApprovalDecision,
   TuiSessionList,
   TuiSessionDescription,
@@ -168,15 +171,14 @@ export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
   private readonly chatStream = new GatewayChatStreamProjection();
   private readonly historyLifetime = new AbortController();
-  private readyPromise: Promise<void>;
-  private resolveReady?: () => void;
+  private ready = createDeferredCore();
   private pendingConnectError?: Error;
-  private readonly modelCatalogs = new Map<string | undefined, GatewayModelCatalogEntry>();
+  private readonly modelCatalogs = new Map<string, GatewayModelCatalogEntry>();
   readonly connection: ResolvedGatewayConnection;
   hello?: HelloOk;
 
   onEvent?: (evt: TuiEvent) => void;
-  onModelsChanged?: (agentId?: string) => void;
+  onModelsChanged?: (scope: TuiModelCatalogScope) => void;
   onConnected?: () => void;
   onConnectError?: (error: Error) => void;
   onDisconnected?: (reason: string) => void;
@@ -184,10 +186,6 @@ export class GatewayChatClient implements TuiBackend {
 
   constructor(connection: ResolvedGatewayConnection) {
     this.connection = connection;
-
-    this.readyPromise = new Promise((resolve) => {
-      this.resolveReady = resolve;
-    });
 
     this.client = new GatewayClient({
       url: connection.url,
@@ -208,6 +206,7 @@ export class GatewayChatClient implements TuiBackend {
         GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS,
         GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
         GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+        GATEWAY_CLIENT_CAPS.ULTRAFAST,
       ],
       instanceId: randomUUID(),
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
@@ -216,7 +215,7 @@ export class GatewayChatClient implements TuiBackend {
       onHelloOk: (hello) => {
         this.pendingConnectError = undefined;
         this.hello = hello;
-        this.resolveReady?.();
+        this.ready.resolve();
         this.onConnected?.();
       },
       onEvent: (evt) => {
@@ -232,9 +231,7 @@ export class GatewayChatClient implements TuiBackend {
         this.chatStream.clear();
         this.modelCatalogs.clear();
         // Reset so waitForReady() blocks again until the next successful reconnect.
-        this.readyPromise = new Promise((resolve) => {
-          this.resolveReady = resolve;
-        });
+        this.ready = createDeferredCore();
         if (this.pendingConnectError && this.onConnectError) {
           // Dedupe is per close-cycle: clearing here lets the next reconnect
           // attempt report its own failure cause. Holding the guard until a
@@ -322,7 +319,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async waitForReady() {
-    await this.readyPromise;
+    await this.ready.promise;
   }
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
@@ -348,21 +345,15 @@ export class GatewayChatClient implements TuiBackend {
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
       ...(opts.runId ? { runId: opts.runId } : {}),
     };
-    if (opts.runId) {
-      return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
-        "chat.abort",
-        params,
-      );
-    }
     try {
       return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
         "chat.abort",
-        { ...params, preserveSideRuns: true },
+        opts.runId ? params : { ...params, preserveSideRuns: true },
       );
     } catch (err) {
       // Protocol v4 peers reject unknown fields. Retry the shipped abort shape
       // so mixed-version TUI stops still work, even without BTW isolation.
-      if (!isLegacyParameterError(err, "chat.abort", "preservesideruns")) {
+      if (opts.runId || !isLegacyParameterError(err, "chat.abort", "preservesideruns")) {
         throw err;
       }
       return await this.client.request<{ ok: boolean; aborted: boolean; runIds?: string[] }>(
@@ -440,9 +431,9 @@ export class GatewayChatClient implements TuiBackend {
     const signal = this.historyLifetime.signal;
     for (;;) {
       signal.throwIfAborted();
-      const connection = this.readyPromise;
+      const connection = this.ready;
       const hello = this.hello;
-      const isCurrentConnection = () => connection === this.readyPromise && hello === this.hello;
+      const isCurrentConnection = () => connection === this.ready && hello === this.hello;
       try {
         const [description, listing] = await Promise.all([
           this.client.request<Pick<TuiSessionDescription, "session">>(
@@ -465,13 +456,13 @@ export class GatewayChatClient implements TuiBackend {
           throw error;
         }
       }
-      await racePromiseWithAbortSignal(this.readyPromise, signal);
+      await racePromiseWithAbortSignal(this.ready.promise, signal);
     }
   }
 
   async listAgents() {
     const result = await this.client.request<TuiAgentsList>("agents.list", {});
-    if (!this.modelCatalogs.has(result.defaultId)) {
+    if (!this.getKnownModels({ agentId: result.defaultId })) {
       void this.listModels({ agentId: result.defaultId }).catch(() => {});
     }
     return result;
@@ -530,15 +521,17 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request("status");
   }
 
-  getKnownModels(opts?: { agentId?: string }): TuiModelChoice[] | undefined {
-    return this.modelCatalogs.get(opts?.agentId)?.models;
+  getKnownModels(opts: TuiModelCatalogScope = {}): TuiModelChoice[] | undefined {
+    return readTuiGatewayModelCatalog(this.modelCatalogs, opts, this.hello?.features.capabilities);
   }
 
-  listModels(opts?: { agentId?: string }): Promise<TuiModelChoice[]> {
+  listModels(opts: TuiModelCatalogScope = {}): Promise<TuiModelChoice[]> {
     return refreshTuiGatewayModelCatalog({
       catalogs: this.modelCatalogs,
       client: this.client,
-      agentId: opts?.agentId,
+      agentId: opts.agentId,
+      sessionKey: opts.sessionKey,
+      capabilities: this.hello?.features.capabilities,
       published:
         this.hello?.features.capabilities?.includes(GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG) ===
         true,
@@ -557,17 +550,22 @@ export class GatewayChatClient implements TuiBackend {
     if (!clear && !refresh && !scope) {
       return;
     }
-    for (const [agentId, entry] of this.modelCatalogs) {
-      if (scope && (scope.agentId !== agentId || scope.sessionKey || scope.authProfileId)) {
+    for (const entry of this.modelCatalogs.values()) {
+      if (
+        scope &&
+        (scope.authProfileId ||
+          scope.agentId !== entry.scope.agentId ||
+          (scope.sessionKey && scope.sessionKey !== entry.scope.sessionKey))
+      ) {
         continue;
       }
       // An invalidation must not wait behind, or be overwritten by, an older held request.
       entry.pending = undefined;
       if (clear) {
         entry.models = undefined;
-        this.onModelsChanged?.(agentId);
+        this.onModelsChanged?.(entry.scope);
       }
-      void this.listModels({ agentId }).catch(() => {});
+      void this.listModels(entry.scope).catch(() => {});
     }
   }
 

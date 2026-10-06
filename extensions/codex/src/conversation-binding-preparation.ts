@@ -41,7 +41,6 @@ import {
 import { buildCodexProjectDocThreadConfig } from "./app-server/project-doc-thread-config.js";
 import { assertCodexThreadAcceptsDirectInput } from "./app-server/protocol-validators.js";
 import type {
-  CodexConfigReadResponse,
   CodexServiceTier,
   CodexThreadResumeResponse,
   CodexThreadStartParams,
@@ -70,7 +69,7 @@ import {
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
-} from "./app-server/thread-lifecycle.js";
+} from "./app-server/thread-model-selection.js";
 import {
   isSameCodexAppServerThreadOwner,
   releaseCodexAppServerBindingSubscription,
@@ -284,17 +283,24 @@ async function resolveThreadBindingRuntime(params: CodexThreadBindingParams) {
   };
 }
 
-function buildConversationThreadRequest(
+export async function buildConversationThreadRequestForClient(
+  client: CodexAppServerClient,
   resolved: ConversationAppServerRuntime & { model?: string; modelProvider?: string },
-  serviceTier?: CodexServiceTier | null,
-  effectiveNativeConfig?: CodexConfigReadResponse,
-): CodexThreadStartParams {
+  serviceTier: CodexServiceTier | null | undefined,
+  requestOptions: () => CodexAppServerLeasedRequestOptions,
+): Promise<CodexThreadStartParams> {
+  const effectiveConfig = await readCodexEffectiveConfig(
+    client,
+    resolved.workspaceDir,
+    requestOptions(),
+  );
+  requestOptions();
   const { runtime } = resolved;
   // Bound conversations have no app approval/tool bridge. Per-app config
   // overrides apps._default, so disable the feature for this handlerless runtime.
   const config = buildCodexProjectDocThreadConfig(
     mergeCodexThreadConfigs(runtime.networkProxy?.configPatch, buildDisabledAppsConfigPatch()),
-    effectiveNativeConfig,
+    effectiveConfig,
   );
   return {
     cwd: resolved.workspaceDir,
@@ -309,21 +315,6 @@ function buildConversationThreadRequest(
     ...(runtime.networkProxy ? { config } : { sandbox: runtime.sandbox, config }),
     ...(serviceTier ? { serviceTier } : {}),
   };
-}
-
-export async function buildConversationThreadRequestForClient(
-  client: CodexAppServerClient,
-  resolved: ConversationAppServerRuntime & { model?: string; modelProvider?: string },
-  serviceTier: CodexServiceTier | null | undefined,
-  requestOptions: () => CodexAppServerLeasedRequestOptions,
-): Promise<CodexThreadStartParams> {
-  const effectiveConfig = await readCodexEffectiveConfig(
-    client,
-    resolved.workspaceDir,
-    requestOptions(),
-  );
-  requestOptions();
-  return buildConversationThreadRequest(resolved, serviceTier, effectiveConfig);
 }
 
 async function writeThreadBindingFromResponse(

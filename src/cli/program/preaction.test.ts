@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
+import { captureEnv } from "../../test-utils/env.js";
 import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
 import { setCommandJsonMode } from "./json-mode.js";
 import {
@@ -77,8 +78,7 @@ let originalProcessArgv: string[];
 let originalProcessTitle: string;
 let originalProcessTitleDescriptor: PropertyDescriptor | undefined;
 let observedProcessTitle: string;
-let originalNodeNoWarnings: string | undefined;
-let originalHideBanner: string | undefined;
+let originalEnv: ReturnType<typeof captureEnv>;
 let originalForceStderr: boolean;
 let originalEarlyConsoleRoutingRestore: boolean | null;
 let observedMachineOutputStdoutIsTTY: boolean | undefined;
@@ -93,8 +93,7 @@ beforeEach(() => {
   originalProcessTitle = process.title;
   originalProcessTitleDescriptor = Object.getOwnPropertyDescriptor(process, "title");
   observedProcessTitle = originalProcessTitle;
-  originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
-  originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+  originalEnv = captureEnv(["NODE_NO_WARNINGS", "OPENCLAW_HIDE_BANNER"]);
   originalForceStderr = loggingState.forceConsoleToStderr;
   originalEarlyConsoleRoutingRestore = loggingState.earlyConsoleRoutingRestore;
   observedMachineOutputStdoutIsTTY = undefined;
@@ -128,16 +127,7 @@ afterEach(() => {
   }
   loggingState.forceConsoleToStderr = originalForceStderr;
   loggingState.earlyConsoleRoutingRestore = originalEarlyConsoleRoutingRestore;
-  if (originalNodeNoWarnings === undefined) {
-    delete process.env.NODE_NO_WARNINGS;
-  } else {
-    process.env.NODE_NO_WARNINGS = originalNodeNoWarnings;
-  }
-  if (originalHideBanner === undefined) {
-    delete process.env.OPENCLAW_HIDE_BANNER;
-  } else {
-    process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
-  }
+  originalEnv.restore();
 });
 
 describe("registerPreActionHooks", () => {

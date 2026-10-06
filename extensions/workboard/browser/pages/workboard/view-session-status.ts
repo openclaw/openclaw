@@ -94,14 +94,9 @@ class WorkboardSessionStatus extends LitElement {
     super.disconnectedCallback();
   }
 
-  protected override willUpdate(changed: PropertyValues) {
-    const previous: unknown = changed.get("context");
-    if (
-      previous &&
-      typeof previous === "object" &&
-      "id" in previous &&
-      previous.id !== this.context.id
-    ) {
+  protected override willUpdate(changed: PropertyValues<this>) {
+    const previous = changed.get("context");
+    if (previous && previous.id !== this.context.id) {
       this.dismiss();
     }
     if (!this.presentation.visible) {

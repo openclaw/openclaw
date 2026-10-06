@@ -7,6 +7,7 @@ import { icons } from "../../../components/icons.ts";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
   canvasWidgetNameForDocument,
   mcpAppWidgetNameForViewId,
@@ -20,10 +21,13 @@ import {
   resolveEmbedSandbox,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
+import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
 import { exportWidget } from "./widget-export.ts";
 import "./browser-tab-card.ts";
+
+registerMcpAppEnglish();
 
 type WidgetCardOptions = {
   rawText?: string | null;
@@ -147,7 +151,7 @@ function handleWidgetPromptMessage(frame: HTMLIFrameElement, data: unknown) {
   if (!payload || payload.type !== WIDGET_PROMPT_MESSAGE_TYPE) {
     return;
   }
-  dispatchWidgetPrompt(frame, payload.prompt, frame.getAttribute("src") ?? "");
+  void dispatchWidgetPrompt(frame, payload.prompt, frame.getAttribute("src") ?? "");
 }
 
 // Prompt authority is a MessagePort OFFERED by the trusted bridge script that
@@ -342,85 +346,63 @@ const loadMcpAppView = async () => {
 };
 
 const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.ts");
-
-function renderMcpAppView(params: {
-  sessionKey: string;
-  viewId: string;
-  height: number;
-  title: string;
-}) {
-  // Insert the tag before its chunk arrives. Native custom-element upgrade
-  // preserves these bound fields, so the first preview initializes after registration.
-  void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch((error: unknown) => {
-    console.error("[openclaw] failed to load MCP App view", error);
-  });
-  return html`<mcp-app-view
-    .sessionKey=${params.sessionKey}
-    .viewId=${params.viewId}
-    .height=${params.height}
-    .title=${params.title}
-  ></mcp-app-view>`;
-}
+const loadYouTubeVideo = () => import("./youtube-video-card.ts");
 
 function renderWidgetContent(
-  kind: "canvas-html" | "mcp-app",
   preview: CanvasToolPreview,
   sandbox: string,
   options?: WidgetCardOptions,
 ) {
-  switch (kind) {
-    case "canvas-html": {
-      // The authenticated view RPC serves scripted widget documents;
-      // explicit strict document previews keep their hosted artifact path.
-      if (preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(preview)) {
-        void ensureCustomElementDefined("openclaw-canvas-widget-view", loadCanvasWidgetView).catch(
-          (error: unknown) => console.error("[openclaw] failed to load widget view", error),
-        );
-        return keyed(
-          `${preview.viewId}\0${getCanvasWidgetFrameConnectionGeneration()}`,
-          html`
-            <openclaw-canvas-widget-view
-              .docId=${preview.viewId!.trim()}
-              .sessionKey=${options?.sessionKey ?? ""}
-              .messageTimestamp=${options?.messageTimestamp}
-              .title=${preview.title?.trim() || t("chat.toolCards.canvas")}
-              .preferredHeight=${preview.preferredHeight}
-              .allowScripts=${sandbox.includes("allow-scripts")}
-              .connectionGeneration=${getCanvasWidgetFrameConnectionGeneration()}
-            ></openclaw-canvas-widget-view>
-          `,
-        );
-      }
-      const promptCapable = isInternalCanvasEntryUrl(preview.url);
-      return renderPreviewFrame({
-        title: preview.title?.trim() || t("chat.toolCards.canvas"),
-        src: resolveCanvasIframeUrl(
-          preview.url,
-          options?.canvasPluginSurfaceUrl,
-          options?.allowExternalEmbedUrls ?? false,
-        ),
-        frameKey: preview.url?.trim() || preview.viewId?.trim(),
-        connectionGeneration: promptCapable
-          ? getCanvasWidgetFrameConnectionGeneration()
-          : undefined,
-        height: preview.preferredHeight,
-        sandbox,
-        // Only hosted Canvas documents may drive the chat; externally
-        // allowed embed URLs render but never get prompt authority.
-        promptCapable,
-      });
-    }
-    case "mcp-app":
-      return preview.mcpApp
-        ? renderMcpAppView({
-            sessionKey: options?.sessionKey ?? "",
-            viewId: preview.mcpApp.viewId,
-            height: preview.preferredHeight ?? 600,
-            title: preview.title?.trim() || t("mcpApp.title"),
-          })
-        : nothing;
+  if (preview.mcpApp) {
+    // Insert the tag before its chunk arrives. Native custom-element upgrade
+    // preserves these bound fields, so the first preview initializes after registration.
+    void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch((error: unknown) => {
+      console.error("[openclaw] failed to load MCP App view", error);
+    });
+    return html`<mcp-app-view
+      .sessionKey=${options?.sessionKey ?? ""}
+      .viewId=${preview.mcpApp.viewId}
+      .height=${preview.preferredHeight ?? 600}
+      .title=${preview.title?.trim() || t("mcpApp.title")}
+    ></mcp-app-view>`;
   }
-  return nothing;
+  // The authenticated view RPC serves scripted widget documents;
+  // explicit strict document previews keep their hosted artifact path.
+  if (preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(preview)) {
+    void ensureCustomElementDefined("openclaw-canvas-widget-view", loadCanvasWidgetView).catch(
+      (error: unknown) => console.error("[openclaw] failed to load widget view", error),
+    );
+    return keyed(
+      `${preview.viewId}\0${options?.sessionKey ?? ""}`,
+      html`
+        <openclaw-canvas-widget-view
+          .docId=${preview.viewId!.trim()}
+          .sessionKey=${options?.sessionKey ?? ""}
+          .messageTimestamp=${options?.messageTimestamp}
+          .title=${preview.title?.trim() || t("chat.toolCards.canvas")}
+          .preferredHeight=${preview.preferredHeight}
+          .allowScripts=${sandbox.includes("allow-scripts")}
+          .connectionGeneration=${getCanvasWidgetFrameConnectionGeneration()}
+        ></openclaw-canvas-widget-view>
+      `,
+    );
+  }
+  const promptCapable = isInternalCanvasEntryUrl(preview.url);
+  return renderPreviewFrame({
+    title: preview.title?.trim() || t("chat.toolCards.canvas"),
+    src: resolveCanvasIframeUrl(
+      preview.url,
+      options?.canvasPluginSurfaceUrl,
+      options?.allowExternalEmbedUrls ?? false,
+    ),
+    frameKey: preview.url?.trim() || preview.viewId?.trim(),
+    connectionGeneration: promptCapable ? getCanvasWidgetFrameConnectionGeneration() : undefined,
+    height: preview.preferredHeight,
+    sandbox,
+    // Only hosted Canvas documents may drive the chat; externally
+    // allowed embed URLs render but never get prompt authority.
+    promptCapable,
+  });
 }
 
 function handleWidgetExportAction(
@@ -588,6 +570,24 @@ export function renderToolPreview(
   if (preview.surface !== "assistant_message") {
     return nothing;
   }
+  const video = !preview.mcpApp ? parseYouTubeVideoUrl(preview.url) : undefined;
+  if (video) {
+    void ensureCustomElementDefined("openclaw-youtube-video", loadYouTubeVideo).catch(
+      (error: unknown) => console.error("[openclaw] failed to load YouTube player", error),
+    );
+    return keyed(
+      `${options?.sessionKey ?? ""}\0${video.watchUrl}`,
+      html`<openclaw-youtube-video
+        .video=${video}
+        .videoTitle=${preview.title ?? ""}
+        .enabled=${options?.embedSandboxMode !== "strict" && preview.sandbox !== "strict"}
+      >
+        <a href=${video.watchUrl} target="_blank" rel="noopener noreferrer">
+          ${preview.title?.trim() || t("chat.youtube.video")}${icons.externalLink}
+        </a>
+      </openclaw-youtube-video>`,
+    );
+  }
   const contentKind = preview.mcpApp ? "mcp-app" : "canvas-html";
   const sandbox = resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox);
   const provider = options?.boardProvider;
@@ -644,7 +644,7 @@ export function renderToolPreview(
     >
       ${actions}
       <div class="chat-tool-card__preview-panel" data-side="canvas">
-        ${renderWidgetContent(contentKind, preview, sandbox, options)}
+        ${renderWidgetContent(preview, sandbox, options)}
       </div>
     </div>
   `;

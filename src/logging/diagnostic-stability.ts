@@ -4,6 +4,10 @@ import {
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 import {
+  DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
+  type DiagnosticMemoryPressureMetrics,
+} from "../infra/diagnostic-process-types.js";
+import {
   DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY,
   normalizeDiagnosticStabilityQuery,
 } from "./diagnostic-stability-query.js";
@@ -13,15 +17,13 @@ export {
   normalizeDiagnosticStabilityQuery,
 } from "./diagnostic-stability-query.js";
 
-// Ring-buffer recorder for stability diagnostics and support-bundle snapshots.
 const MAX_DIAGNOSTIC_EXPORTER_STATES = 16;
 const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const SAFE_EXPORTER_CODE = /^[A-Za-z0-9_-]{1,120}$/u;
 
-/** Sanitized diagnostic event record retained in the stability ring buffer. */
-export type DiagnosticStabilityEventRecord = {
+export type DiagnosticStabilityEventRecord = DiagnosticMemoryPressureMetrics & {
   seq: number;
   ts: number;
   type: DiagnosticEventPayload["type"];
@@ -60,10 +62,6 @@ export type DiagnosticStabilityEventRecord = {
   costUsd?: number;
   count?: number;
   bytes?: number;
-  limitBytes?: number;
-  thresholdBytes?: number;
-  rssGrowthBytes?: number;
-  windowMs?: number;
   eventLoopDelayP99Ms?: number;
   eventLoopDelayMaxMs?: number;
   eventLoopUtilization?: number;
@@ -103,7 +101,6 @@ export type DiagnosticStabilityEventRecord = {
   };
 };
 
-/** Point-in-time stability snapshot with records and derived summaries. */
 export type DiagnosticStabilitySnapshot = {
   generatedAt: string;
   capacity: number;
@@ -252,7 +249,10 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "gateway.event_loop.sample":
     case "diagnostic.gc":
     case "diagnostic.child_process.spawn":
-      // Runtime measurements are exporter-only and excluded by the subscription.
+    case "worker.request":
+    case "log.record":
+    case "telemetry.exporter":
+      // These events use separate exporters and are excluded by the subscription.
       break;
     case "model.usage":
       copy(event, "channel", "provider", "model");
@@ -488,10 +488,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
         }
       }
       break;
-    case "log.record":
-      record.level = event.level;
-      record.source = event.loggerName;
-      break;
     case "security.event":
       record.source = event.category;
       copy(event, "action", "outcome");
@@ -506,17 +502,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.level = event.level;
       assignReasonCode(record, event.reason);
       record.memory = { ...event.memory };
-      copy(event, "thresholdBytes", "rssGrowthBytes", "windowMs");
+      copy(event, ...DIAGNOSTIC_MEMORY_PRESSURE_METRICS);
       break;
     case "payload.large":
       copy(event, "surface", "action", "bytes", "limitBytes", "count", "channel", "pluginId");
       assignReasonCode(record, event.reason);
-      break;
-    case "telemetry.exporter":
-      record.source = copyExporterCode(event.exporter);
-      record.target = event.signal;
-      record.outcome = event.status;
-      assignReasonCode(record, event.reason ?? event.errorCategory);
       break;
     case "diagnostic.async_queue.dropped":
       copy(
@@ -552,9 +542,6 @@ function appendRecord(record: DiagnosticStabilityEventRecord): void {
 }
 
 function upsertExporterRecord(record: DiagnosticStabilityEventRecord): void {
-  if (!record.source) {
-    return;
-  }
   const state = getDiagnosticStabilityState();
   const key = `${record.source}\u0000${record.target ?? "unknown"}\u0000${record.transport ?? "unknown"}`;
   if (record.outcome === "dropped") {
@@ -629,12 +616,6 @@ function listRecords(): DiagnosticStabilityEventRecord[] {
     }
   }
   return records;
-}
-
-function listExporterRecords(): DiagnosticStabilityEventRecord[] {
-  return [...getDiagnosticStabilityState().exporterRecords.values()].toSorted(
-    (left, right) => left.seq - right.seq,
-  );
 }
 
 function summarizeRecords(
@@ -726,7 +707,6 @@ function selectRecords(
   };
 }
 
-/** Starts the process-wide diagnostic event recorder if it is not already active. */
 export function startDiagnosticStabilityRecorder(): void {
   const state = getDiagnosticStabilityState();
   if (state.unsubscribe) {
@@ -746,19 +726,18 @@ export function startDiagnosticStabilityRecorder(): void {
         "gateway.event_loop.sample",
         "diagnostic.gc",
         "diagnostic.child_process.spawn",
+        "worker.request",
       ],
     },
   );
 }
 
-/** Stops the process-wide diagnostic event recorder. */
 export function stopDiagnosticStabilityRecorder(): void {
   const state = getDiagnosticStabilityState();
   state.unsubscribe?.();
   state.unsubscribe = null;
 }
 
-/** Returns a sanitized stability snapshot from the process-wide ring buffer. */
 export function getDiagnosticStabilitySnapshot(options?: {
   limit?: number;
   type?: string;
@@ -767,7 +746,9 @@ export function getDiagnosticStabilitySnapshot(options?: {
   const state = getDiagnosticStabilityState();
   const exporterQuery = options?.type === "telemetry.exporter";
   const { filtered, events } = selectRecords(
-    exporterQuery ? listExporterRecords() : listRecords(),
+    exporterQuery
+      ? [...state.exporterRecords.values()].toSorted((left, right) => left.seq - right.seq)
+      : listRecords(),
     options,
   );
   return {
@@ -802,7 +783,6 @@ export function selectDiagnosticStabilitySnapshot(
   };
 }
 
-/** Resets recorder state and subscriptions for isolated tests. */
 export function resetDiagnosticStabilityRecorderForTest(): void {
   const state = getDiagnosticStabilityState();
   state.unsubscribe?.();

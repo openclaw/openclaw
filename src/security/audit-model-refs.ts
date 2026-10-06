@@ -53,13 +53,6 @@ export function collectAuditModelRefs(cfg: OpenClawConfig): AuditModelRef[] {
   for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
     add(fallback, "agents.defaults.model.fallbacks");
   }
-  add(
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel),
-    "agents.defaults.imageModel.primary",
-  );
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
-    add(fallback, "agents.defaults.imageModel.fallbacks");
-  }
 
   for (const agent of listAgentEntries(cfg)) {
     if (!agent || typeof agent !== "object") {

@@ -1,4 +1,4 @@
-import type { CopilotClient } from "@github/copilot-sdk";
+import type { CopilotClient, SessionConfig } from "@github/copilot-sdk";
 import {
   compactWithSafetyTimeout,
   getModelProviderRequestTransport,
@@ -17,8 +17,11 @@ import {
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { AttemptParamsLike, ModelRefInputObject } from "./src/attempt-types.js";
-import type { CopilotSessionConfig } from "./src/attempt.js";
+import type {
+  AttemptParamsLike,
+  CopilotAttemptParams,
+  ModelRefInputObject,
+} from "./src/attempt-types.js";
 import { createCopilotByokAuth, resolveCopilotAuth, tokenFingerprint } from "./src/auth-bridge.js";
 import { createCopilotByokProxy } from "./src/byok-proxy.js";
 import {
@@ -44,13 +47,7 @@ import type {
 type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
-type CopilotSettledTurnFinalizationAttemptParams = Parameters<
-  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
->[0]["attempt"];
-type CopilotHarnessAttemptParams = (
-  | AgentHarnessAttemptParamsV2
-  | CopilotSettledTurnFinalizationAttemptParams
-) & {
+type CopilotHarnessAttemptParams = CopilotAttemptParams & {
   initialReplayState?: AgentHarnessAttemptParamsV2["initialReplayState"] & {
     journalValidated?: boolean;
     sdkSessionId?: string;
@@ -62,31 +59,23 @@ const COPILOT_PROVIDER_IDS: ReadonlySet<string> = new Set(["github-copilot"]);
 interface CreateCopilotAgentHarnessOptions {
   id?: string;
   label?: string;
-  pluginConfig?: unknown;
   pool?: CopilotClientPool;
   poolOptions?: CopilotClientPoolOptions;
   sessionStore?: CopilotSessionBindingStore;
 }
 
-interface TrackedSession {
-  journalVersion?: 1;
-  sdkSessionId: string;
+interface TrackedSession extends Omit<CopilotSessionBinding, "schemaVersion" | "updatedAt"> {
   client: CopilotClient;
   clientOptions: ClientCreateOptions;
   poolKey: PoolKey;
-  sessionConfig: CopilotSessionConfig;
-  // A provider/model/cwd/auth change starts a fresh SDK session instead of resuming.
-  compatKey: string;
-  compactKey: string;
-  authMode: "gitHubToken" | "useLoggedInUser" | "byok";
-  authProfileId?: string;
-  authProfileVersion?: string;
+  sessionConfig: SessionConfig;
 }
 
 export type CopilotSessionBinding = {
   schemaVersion: 2;
   journalVersion?: 1;
   sdkSessionId: string;
+  // A provider/model/cwd/auth change starts a fresh SDK session instead of resuming.
   compatKey: string;
   compactKey: string;
   authMode: "gitHubToken" | "useLoggedInUser" | "byok";
@@ -177,13 +166,7 @@ function normalizeBinding(
     sdkSessionId: value.sdkSessionId.trim(),
     compatKey: value.compatKey,
     compactKey: value.compactKey,
-    authMode: value.authMode,
-    ...(value.authMode === "gitHubToken" || value.authMode === "byok"
-      ? {
-          authProfileId: value.authProfileId,
-          authProfileVersion: value.authProfileVersion,
-        }
-      : {}),
+    ...sessionAuthFields(value),
     updatedAt: value.updatedAt,
   };
 }
@@ -219,11 +202,7 @@ async function lookupStoredBinding(
   try {
     return normalizeAttemptBinding(await store?.lookup(key));
   } catch {
-    try {
-      await store?.delete(key);
-    } catch {
-      // Durable binding cleanup is best-effort; the turn can create a fresh SDK session.
-    }
+    await deleteStoredBinding(store, key);
     return undefined;
   }
 }
@@ -232,18 +211,11 @@ async function registerStoredBinding(
   store: CopilotSessionBindingStore | undefined,
   key: string,
   binding: CopilotSessionBinding,
-): Promise<boolean> {
+): Promise<void> {
   try {
     await store?.register(key, binding);
-    return true;
   } catch {
-    try {
-      await store?.delete(key);
-    } catch {
-      // A failed invalidation just degrades to in-memory reuse for this process.
-    }
-    // The in-memory binding still keeps this process warm; persistence is an optimization.
-    return false;
+    await deleteStoredBinding(store, key);
   }
 }
 
@@ -255,7 +227,7 @@ async function deleteStoredBinding(
     await store?.delete(key);
     return true;
   } catch {
-    // Reset must still clear tracked SDK sessions even if plugin state is unhealthy.
+    // Failed durable cleanup must not block fresh sessions or tracked-session reset.
     return false;
   }
 }
@@ -267,7 +239,7 @@ async function compactTrackedSdkSession(params: {
   customInstructions?: string;
   gitHubToken?: string;
   onSession?: (session: CopilotHistoryCompactSession) => void;
-  sessionConfig: CopilotSessionConfig;
+  sessionConfig: SessionConfig;
   sdkSessionId: string;
 }): Promise<CopilotHistoryCompactResult> {
   params.assertCurrent();
@@ -353,12 +325,14 @@ function computeSessionKey(
   let resolvedAgentId = "";
   let resolvedCopilotHome = "";
   try {
+    const authContext = {
+      agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
+      agentDir: input.params.agentDir,
+      copilotHome: input.params.copilotHome,
+    };
     const resolved = !options.includeAuth
       ? resolveCopilotAuth({
-          agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
-          agentDir: input.params.agentDir,
-          workspaceDir: input.params.workspaceDir,
-          copilotHome: input.params.copilotHome,
+          ...authContext,
           auth: { useLoggedInUser: true },
         })
       : (() => {
@@ -385,18 +359,12 @@ function computeSessionKey(
           });
           return modelProvider.mode === "byok"
             ? createCopilotByokAuth({
-                agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
-                agentDir: input.params.agentDir,
-                workspaceDir: input.params.workspaceDir,
-                copilotHome: input.params.copilotHome,
+                ...authContext,
                 authProfileId: modelProvider.authProfileId,
                 authProfileVersion: modelProvider.authProfileVersion,
               })
             : resolveCopilotAuth({
-                agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
-                agentDir: input.params.agentDir,
-                workspaceDir: input.params.workspaceDir,
-                copilotHome: input.params.copilotHome,
+                ...authContext,
                 auth: input.params.auth,
                 resolvedApiKey: input.params.resolvedApiKey,
                 authProfileId: input.params.authProfileId,
@@ -410,9 +378,6 @@ function computeSessionKey(
       `auth.profileId=${resolved.authProfileId ?? ""}`,
       `auth.profileVersion=${resolved.authProfileVersion ?? ""}`,
     ];
-    if (!options.includeAuth) {
-      authParts = [];
-    }
   } catch {
     authParts = ["auth=unresolvable"];
   }
@@ -643,17 +608,7 @@ export function createCopilotAgentHarness(
         ...(operation === "settled-tool-finalization" ? { operation } : {}),
         onSessionEstablished:
           operation === "attempt" && openclawSessionId
-            ? ({
-                compactionSessionConfig,
-                sdkSessionId,
-                pooledClient,
-                sessionConfig,
-              }: {
-                compactionSessionConfig?: CopilotSessionConfig;
-                sdkSessionId: string;
-                pooledClient: PooledClient;
-                sessionConfig: CopilotSessionConfig;
-              }) =>
+            ? ({ compactionSessionConfig, sdkSessionId, pooledClient, sessionConfig }) =>
                 bindingQueue.enqueue(openclawSessionId, async () => {
                   const tracked: TrackedSession = {
                     sdkSessionId,
@@ -678,15 +633,7 @@ export function createCopilotAgentHarness(
                 })
             : undefined,
         onDeferredCompaction: openclawSessionId
-          ? ({
-              abort,
-              cleanup,
-              sdkSessionId,
-            }: {
-              abort: () => void;
-              cleanup: Promise<DeferredCompactionCleanupOutcome>;
-              sdkSessionId: string;
-            }) =>
+          ? ({ abort, cleanup, sdkSessionId }) =>
               bindingQueue.enqueue(openclawSessionId, async () => {
                 const trackedBinding = trackedSessions.get(openclawSessionId);
                 const storedBinding = await lookupStoredBinding(

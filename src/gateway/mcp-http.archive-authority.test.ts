@@ -78,7 +78,7 @@ describe("MCP HTTP session archive authority", () => {
       toolCallerIdentity = getGatewayToolCallerIdentity();
       return completed;
     });
-    resolveTools.mockReset().mockReturnValue({
+    resolveTools.mockReset().mockResolvedValue({
       agentId: "main",
       workspaceDir: "/workspace/archive-authority",
       captureFinalCronCreatorTools: undefined,
@@ -137,7 +137,7 @@ describe("MCP HTTP session archive authority", () => {
       });
       expect(resolveTools).toHaveBeenCalledTimes(1);
       expect(resolveTools.mock.calls[0]?.[0]).toMatchObject({ sessionKey, senderIsOwner: false });
-      expect(resolveTools.mock.calls[0]?.[0].sessionControlAuthority).toBe(operatorAuthority);
+      expect(resolveTools.mock.calls[0]?.[0].admittedRunContext).toBe(admittedRunContext);
       expect(execute).not.toHaveBeenCalled();
 
       expect(await sendRequest(grant.token, "tools/call", headers)).toMatchObject({
@@ -177,7 +177,7 @@ describe("MCP HTTP session archive authority", () => {
           sessionKey: attachGrant?.sessionKey ?? "agent:main:archive-authority-spoofed",
           senderIsOwner: kind === "owner",
         });
-        expect(resolveTools.mock.calls[0]?.[0].sessionControlAuthority).toBeUndefined();
+        expect(resolveTools.mock.calls[0]?.[0].admittedRunContext).toBeUndefined();
 
         expect(await sendRequest(token, "tools/call")).toMatchObject({
           result: { ...completed, isError: false },

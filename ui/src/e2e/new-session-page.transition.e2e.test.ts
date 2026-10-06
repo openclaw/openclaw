@@ -9,6 +9,7 @@ import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   holdModuleResponse,
@@ -211,8 +212,28 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator(".new-session-page__message").fill("verify the default mock");
-      await page.getByRole("button", { name: "Start session" }).click();
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill("verify the default mock");
+      const confirmationConsumed = await composer.evaluate((textarea) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        const end = new CompositionEvent("compositionend", { bubbles: true });
+        textarea.dispatchEvent(end);
+        const confirm = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
+        textarea.dispatchEvent(confirm);
+        return confirm.defaultPrevented;
+      });
+      expect(confirmationConsumed).toBe(false);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await composer.inputValue()).toBe("verify the default mock");
+      await captureProof(page, "ime-confirmation-retains-draft.png");
+      await composer.dispatchEvent("keyup", { key: "Enter" });
+      await composer.press("Enter");
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", message: "verify the default mock" },
@@ -229,6 +250,7 @@ suite.define(() => {
       }
       const firstKey = firstParams.key;
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
+      await captureProof(page, "ime-deliberate-enter-created.png");
 
       await page.getByRole("link", { name: "New conversation" }).first().click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
@@ -300,14 +322,17 @@ suite.define(() => {
     const chatModuleBlocked = new Promise<void>((resolve) => {
       releaseChatModule = resolve;
     });
-    await page.route("**/assets/route-entry-*.js*", async (route) => {
-      chatModuleRequested = true;
-      await chatModuleBlocked;
-      await route.continue();
-    });
+    await page.route(
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+      async (route) => {
+        chatModuleRequested = true;
+        await chatModuleBlocked;
+        await route.continue();
+      },
+    );
     const pendingPreviewModule = await holdModuleResponse(
       page,
-      /\/assets\/pending-session-create-[^/]+\.js(?:\?|$)/u,
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.ts"),
     );
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-sol",

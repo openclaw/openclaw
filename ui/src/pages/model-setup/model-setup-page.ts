@@ -18,6 +18,7 @@ import { ModelProviderLoginController } from "../model-providers/login-controlle
 import {
   captureModelSetupConnection,
   modelSetupAgentSelection,
+  modelSetupOwnerChanges,
   reconcileModelSetupConnection,
   FirstRunSetup,
   type ModelSetupRouteData,
@@ -26,6 +27,7 @@ import { ModelSetupIconLoader } from "./model-setup-icon-loader.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 import { NativeModelSetup } from "./native-model-setup.ts";
 import {
+  candidateActivation,
   findPreparedModelCandidate,
   type ModelSetupPrepareOption,
   preparedModelActivation,
@@ -45,8 +47,6 @@ import {
 } from "./state.ts";
 import { renderModelSetup, revealModelSetupFeedback } from "./view.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
-
-export type { ModelSetupRouteData } from "./first-run-setup.ts";
 
 export class ModelSetupPage extends OpenClawLightDomElement {
   private readonly actionsDisabled = (): boolean =>
@@ -143,20 +143,15 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     refresh: () => this.detect(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
+    .watchStore(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       (gateway) => this.synchronizeGateway(gateway.snapshot),
     )
-    .watch(
+    .watchStore(
       () => this.context && this.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => this.synchronizeGateway(this.context.gateway.snapshot),
     )
-    .watch(
-      () => this.firstRun,
-      (firstRun, notify) => firstRun.subscribe(notify),
-    );
+    .watchStore(() => this.firstRun);
   private readonly wizard = new ModelSetupWizardRunner({
     getClient: () => this.context?.gateway.snapshot.client ?? null,
     getAgentId: () => this.agentSelection.state.selectedId ?? null,
@@ -179,6 +174,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
           ),
     onBackgroundCompletion: (completion) =>
       this.runWizardMutation(() => Promise.resolve(completion), true),
+    onSessionMissing: () => {
+      this.firstRun.wizardMissing();
+      void this.detect();
+    },
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
@@ -214,6 +213,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         agentId: outcome.agentId,
       });
       this.pageState = { phase: "ready", result: outcome.value };
+      this.firstRun.reconcileMissingWizard(outcome.value);
       if (
         !outcome.value.manualProviders.some((provider) => provider.id === this.manualProviderId)
       ) {
@@ -280,16 +280,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       this.wizard.suspend(suspendedNotice);
       return;
     }
-    const authenticatedOwnerLost =
-      previous &&
-      (!connection.recoveryScope || connection.recoveryScope !== previous.recoveryScope);
-    const ownerChanged =
-      previous &&
-      (connection.agentId !== previous.agentId ||
-        connection.selectionIntentRevision !== previous.selectionIntentRevision ||
-        connection.firstRun !== previous.firstRun ||
-        connection.connectionRevision !== previous.connectionRevision ||
-        authenticatedOwnerLost);
+    const { authenticatedOwnerLost, ownerChanged } = modelSetupOwnerChanges(previous, connection);
     const setupAuthorityLost =
       connection.connected && !hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
     if (authenticatedOwnerLost || setupAuthorityLost) {
@@ -373,10 +364,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }
 
   private canVerify(client: GatewayBrowserClient | null): client is GatewayBrowserClient {
-    const snapshot = this.context.gateway.snapshot;
     return (
       this.canUseSetup(client) &&
-      isGatewayMethodAdvertised(snapshot, "openclaw.setup.verify") === true
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "openclaw.setup.verify") === true
     );
   }
 
@@ -508,12 +498,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       }
       this.wizard.close();
       void this.activate(
-        {
-          kind: candidate.kind,
-          modelRef: candidate.modelRef,
-          ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
-          ...nativeSessionCatalogPreference,
-        },
+        { ...candidateActivation(candidate), ...nativeSessionCatalogPreference },
         activationTargetId(candidate.kind, candidate.modelRef),
       );
       return;
@@ -688,10 +673,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         }
       },
       onVerify: () => void this.firstRun.verify(),
-      onActivateCandidate: ({ kind, modelRef, modelTarget }) =>
+      onActivateCandidate: (candidate) =>
         void this.activate(
-          { kind, modelRef, ...(modelTarget ? { modelTarget } : {}) },
-          activationTargetId(kind, modelRef),
+          candidateActivation(candidate),
+          activationTargetId(candidate.kind, candidate.modelRef),
         ),
       onStartAuth: (option) => {
         this.wizard.prepareSignIn(option.kind, option.label);

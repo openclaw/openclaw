@@ -6,6 +6,7 @@ import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
 import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
 import { SaveMediaSourceError } from "../../media/store.shared.js";
+import type { GenerateVideoParams } from "../../video-generation/runtime-types.js";
 import { generateVideo } from "../../video-generation/runtime.js";
 import type {
   VideoGenerationProvider,
@@ -17,7 +18,6 @@ import {
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
-import { ToolInputError } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
 import { videoGenerationTaskLifecycle } from "./media-generate-background.js";
@@ -54,29 +54,6 @@ export function normalizeResolution(
   return normalized;
 }
 
-// Extra roles cannot align to an asset; empty or non-string slots leave its role unset.
-export function parseRoleArray(params: {
-  raw: unknown;
-  kind: "imageRoles" | "videoRoles" | "audioRoles";
-  assetCount: number;
-}): string[] {
-  if (params.raw === undefined || params.raw === null) {
-    return [];
-  }
-  if (!Array.isArray(params.raw)) {
-    throw new ToolInputError(
-      `${params.kind} must be a JSON array of role strings, parallel to the reference list.`,
-    );
-  }
-  const roles = params.raw.map((entry) => (typeof entry === "string" ? entry.trim() : ""));
-  if (roles.length > params.assetCount) {
-    throw new ToolInputError(
-      `${params.kind} has ${roles.length} entries but only ${params.assetCount} reference ${params.kind === "imageRoles" ? "image" : params.kind === "videoRoles" ? "video" : "audio"}${params.assetCount === 1 ? "" : "s"} were provided; extra roles cannot be aligned positionally.`,
-    );
-  }
-  return roles;
-}
-
 export async function loadReferenceAssets(params: {
   inputs: string[];
   roles: string[];
@@ -90,16 +67,9 @@ export async function loadReferenceAssets(params: {
   signal?: AbortSignal;
 }): Promise<LoadedMediaToolReference<VideoGenerationSourceAsset>[]> {
   const loaded = await loadMediaToolReferences<VideoGenerationSourceAsset>({
-    inputs: params.inputs,
+    ...params,
     toolName: "video_generate",
-    expectedKind: params.expectedKind,
     sandbox: params.sandboxConfig,
-    workspaceDir: params.workspaceDir,
-    cwd: params.cwd,
-    fsPolicy: params.fsPolicy,
-    maxBytes: params.maxBytes,
-    ssrfPolicy: params.ssrfPolicy,
-    signal: params.signal,
     mapMedia: (media) => ({
       buffer: media.buffer,
       mimeType: "mimeType" in media ? media.mimeType : media.contentType,
@@ -122,27 +92,21 @@ type ExecutedVideoGeneration = MediaGenerateToolExecutionResult & {
   mediaUrls: string[];
 };
 
-export async function executeVideoGenerationJob(params: {
-  effectiveCfg: OpenClawConfig;
-  prompt: string;
-  agentDir?: string;
-  model?: string;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: VideoGenerationResolution;
-  durationSeconds?: number;
-  audio?: boolean;
-  watermark?: boolean;
-  filename?: string;
-  loadedReferenceImages: LoadedReferenceAsset[];
-  loadedReferenceVideos: LoadedReferenceAsset[];
-  loadedReferenceAudios: LoadedReferenceAsset[];
-  taskHandle?: MediaGenerationTaskHandle | null;
-  providerOptions?: Record<string, unknown>;
-  autoProviderFallback?: boolean;
-  timeoutMs?: number;
-  providers?: VideoGenerationProvider[];
-}): Promise<ExecutedVideoGeneration> {
+export async function executeVideoGenerationJob(
+  params: Omit<
+    GenerateVideoParams,
+    "cfg" | "modelOverride" | "authStore" | "inputImages" | "inputVideos" | "inputAudios"
+  > & {
+    effectiveCfg: OpenClawConfig;
+    model?: string;
+    filename?: string;
+    loadedReferenceImages: LoadedReferenceAsset[];
+    loadedReferenceVideos: LoadedReferenceAsset[];
+    loadedReferenceAudios: LoadedReferenceAsset[];
+    taskHandle?: MediaGenerationTaskHandle | null;
+    providers?: VideoGenerationProvider[];
+  },
+): Promise<ExecutedVideoGeneration> {
   if (params.taskHandle) {
     videoGenerationTaskLifecycle.recordTaskProgress({
       handle: params.taskHandle,
@@ -315,17 +279,8 @@ export async function executeVideoGenerationJob(params: {
     taskHandle: params.taskHandle,
     warning,
     details: {
-      ...buildMediaReferenceDetails({
-        entries: params.loadedReferenceImages,
-        singleKey: "image",
-        pluralKey: "images",
-        getResolvedInput: (entry) => entry.resolvedInput,
-      }),
-      ...buildMediaReferenceDetails({
-        entries: params.loadedReferenceVideos,
-        singleKey: "video",
-        pluralKey: "videos",
-        getResolvedInput: (entry) => entry.resolvedInput,
+      ...buildMediaReferenceDetails(params.loadedReferenceImages, "image"),
+      ...buildMediaReferenceDetails(params.loadedReferenceVideos, "video", {
         singleRewriteKey: "videoRewrittenFrom",
       }),
       ...(normalizedSize ||

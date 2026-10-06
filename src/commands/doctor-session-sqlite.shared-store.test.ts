@@ -1,10 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { readSqliteTranscriptPayload } from "../../scripts/lib/sqlite-transcript-payload.mjs";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  lookupSessionGoalOperation,
+  readSessionGoalOperationInDatabase,
   type SessionGoalOperation,
 } from "../config/sessions/goals-operations.js";
 import {
@@ -36,17 +35,16 @@ import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-par
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
 import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  cleanupSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../test-utils/session-state-cleanup.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-doctor-canonical-store-");
 
 async function createStore() {
-  const root = fs.realpathSync.native(tempDirs.make("openclaw-doctor-canonical-store-"));
+  const root = sessionDirs.make();
   const stateDir = path.join(root, "state");
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const storePath = path.join(root, "custom", "shared.sqlite");
@@ -64,9 +62,10 @@ async function createStore() {
   await upsertSessionEntryCore(scope, { sessionId: "doctor-session", updatedAt: 1 });
   const options = toDatabaseOptions(resolveSqliteReadScope(scope));
   const sqlitePath = resolveOpenClawAgentSqlitePath(options);
+  await cleanupSessionStateForTest({ stateDir, rootPath: root });
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  return { cfg, env, options, scope, sqlitePath, stateDir, storePath };
+  return { cfg, env, options, root, scope, sqlitePath, stateDir, storePath };
 }
 
 async function createHistoricalSharedStore() {
@@ -89,6 +88,7 @@ async function createHistoricalSharedStore() {
   );
   const goalReceipt = turn.sessionTurnMutationResult?.result;
   expect(goalReceipt).toMatchObject({ action: "start", status: "started", runId: "goal-start" });
+  await cleanupSessionStateForTest({ stateDir: store.stateDir, rootPath: store.root });
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   const source = openNodeSqliteDatabase(store.sqlitePath);
@@ -231,7 +231,7 @@ function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistor
   });
   expect(readStoredGoalState(reopened.db, store.scope.sessionKey)).toEqual(store.goalState);
   expect(
-    lookupSessionGoalOperation({
+    readSessionGoalOperationInDatabase(reopened, {
       ...store.scope,
       expectedSessionId: "doctor-session",
       operation: store.goalOperation,

@@ -1,4 +1,3 @@
-import { readActiveTranscriptEntryAnchor } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { createAbortError } from "../../../infra/abort-signal.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
@@ -13,8 +12,9 @@ import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
-import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
+import { runAgentEndSideEffectsAsync } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
+import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
 import type { AgentSession, SessionMessageEntry } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
@@ -22,11 +22,11 @@ import { log } from "../logger.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
+import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js";
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { resolveTerminalMessageEntryId } from "./attempt-terminal-anchor.js";
-import { shouldPersistCompletedBootstrapTurn } from "./attempt-thread-helpers.js";
 import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
@@ -117,7 +117,7 @@ export function finalizeEmbeddedAttempt(
     promptError,
   };
 
-  trajectoryRecorder.recordEvent("model.completed", {
+  const modelFields = {
     ...terminalFields,
     promptErrorSource: terminalState.promptErrorSource,
     terminalError: terminal.terminalError,
@@ -127,21 +127,17 @@ export function finalizeEmbeddedAttempt(
     assistantTexts: result.assistantTexts,
     stopReason,
     finalPromptText: result.finalPromptText,
+  };
+  trajectoryRecorder.recordEvent("model.completed", {
+    ...modelFields,
     messagesSnapshot: result.messagesSnapshot,
   });
   trajectoryRecorder.recordEvent(
     "trace.artifacts",
     buildTrajectoryArtifacts({
       status: terminal.status,
-      ...terminalFields,
-      promptErrorSource: terminalState.promptErrorSource,
-      terminalError: terminal.terminalError,
-      usage: result.attemptUsage,
-      promptCache: result.promptCache,
+      ...modelFields,
       compactionCount: result.compactionCount ?? 0,
-      assistantTexts: result.assistantTexts,
-      stopReason,
-      finalPromptText: result.finalPromptText,
       itemLifecycle: result.itemLifecycle,
       toolMetas: result.toolMetas,
       didSendViaMessagingTool: result.didSendViaMessagingTool,
@@ -196,7 +192,7 @@ export async function completeEmbeddedAttemptAfterTurn(
   const { hookRunner } = sessionRuntime.agentSession;
   const { promptStartedAt, yieldAborted, transcriptLeafId } = prompt;
   const { sessionIdUsed, promptError, messagesSnapshot } = settled;
-  const { nestedToolActivities } = toolBase;
+  const { nestedToolActivityState } = toolBase;
   const { prePromptMessageCount } = sessionRuntime.state;
   const contextEngineAfterTurnCheckpoint = sessionRuntime.contextGuards.getAfterTurnCheckpoint();
   const { lastCallUsage, promptCache, compactionOccurredThisAttempt } = settled;
@@ -206,104 +202,72 @@ export async function completeEmbeddedAttemptAfterTurn(
   // rewrite callback reacquires the synchronous session write boundary.
   if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
     const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
-    if (attempt.onContextEngineTurnCandidate) {
-      const admission = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
-      const terminalEntryId = resolveTerminalMessageEntryId(sessionManager) ?? undefined;
-      const terminal =
-        admission && terminalEntryId
-          ? readActiveTranscriptEntryAnchor({
-              agentId: admission.agentId,
-              sessionId: admission.sessionId,
-              sessionKey: admission.sessionKey,
-              storePath: admission.storePath,
-              entryId: terminalEntryId,
-            })
-          : undefined;
-      if (admission && terminal) {
-        attempt.onContextEngineTurnCandidate({
-          boundary: { admission, terminal },
-          sessionIdUsed,
-          sessionKey: attempt.sessionKey,
-          sessionTarget: attempt.sessionTarget,
-          promptError: Boolean(promptError),
-          aborted: lifecycleState.aborted,
-          yieldAborted,
-          isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
-          runtimeContext: {
-            provider: attempt.provider,
-            modelId: attempt.modelId,
-            modelContextWindow: attempt.modelContextWindow,
+    await finalizeHarnessContextEngineTurn({
+      ...attempt,
+      contextEngine: activeContextEngine,
+      promptError: Boolean(promptError),
+      aborted: lifecycleState.aborted,
+      yieldAborted,
+      sessionIdUsed,
+      messagesSnapshot,
+      prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
+      tokenBudget: attempt.contextTokenBudget,
+      turnCandidate: attempt.onContextEngineTurnCandidate
+        ? {
+            admission: attempt.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+            terminalEntryId: resolveTerminalMessageEntryId(sessionManager),
+            record: attempt.onContextEngineTurnCandidate,
+          }
+        : undefined,
+      runtimeContext: attempt.onContextEngineTurnCandidate
+        ? undefined
+        : buildAfterTurnRuntimeContextFromUsage({
+            attempt,
+            workspaceDir: effectiveWorkspace,
+            agentDir,
             tokenBudget: attempt.contextTokenBudget,
-          },
-        });
-      }
-    } else {
-      const afterTurnRuntimeContext = buildAfterTurnRuntimeContextFromUsage({
-        attempt,
-        workspaceDir: effectiveWorkspace,
-        agentDir,
-        tokenBudget: attempt.contextTokenBudget,
-        lastCallUsage,
-        promptCache,
-        activeAgentId: sessionAgentId,
-        contextEnginePluginId: resolveActiveContextEnginePluginId(),
-      });
-      await finalizeHarnessContextEngineTurn({
-        contextEngine: activeContextEngine,
-        promptError: Boolean(promptError),
-        aborted: lifecycleState.aborted,
-        yieldAborted,
-        sessionIdUsed,
-        sessionKey: attempt.sessionKey,
-        sessionTarget: attempt.sessionTarget,
-        sessionFile: attempt.sessionFile,
-        messagesSnapshot,
-        prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
-        tokenBudget: attempt.contextTokenBudget,
-        runtimeContext: afterTurnRuntimeContext,
-        contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        providerId: attempt.provider,
-        requestedModelId: attempt.requestedModelId,
-        modelId: attempt.modelId,
-        fallbackReason: attempt.fallbackReason,
-        degradedReason: attempt.degradedReason,
-        runMaintenance: async (contextParams) =>
-          await runContextEngineMaintenance({
-            ...contextParams,
-            contextEngine: contextParams.contextEngine as never,
-            sessionManager: contextParams.sessionManager as never,
-            withSessionManagerRewriteLock: withOwnedTranscriptWrite,
-            config: attempt.config,
-            agentId: sessionAgentId,
-            contextEngineAgentId: attempt.contextEngineAgentId,
+            lastCallUsage,
+            promptCache,
+            activeAgentId: sessionAgentId,
+            contextEnginePluginId: resolveActiveContextEnginePluginId(),
           }),
-        sessionManager,
-        config: attempt.config,
-        warn: (message) => log.warn(message),
-        isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
-      });
-    }
+      contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+      providerId: attempt.provider,
+      runMaintenance: async (contextParams) =>
+        await runContextEngineMaintenance({
+          ...contextParams,
+          contextEngine: activeContextEngine,
+          sessionManager,
+          withSessionManagerRewriteLock: withOwnedTranscriptWrite,
+          config: attempt.config,
+          agentId: sessionAgentId,
+          contextEngineAgentId: attempt.contextEngineAgentId,
+        }),
+      sessionManager,
+      warn: (message) => log.warn(message),
+      isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
+    });
   }
 
   const shouldPersistBootstrapCompletion = () => {
     const lifecycleState = projectAgentRunAttemptTerminal(executionState.terminal);
-    return shouldPersistCompletedBootstrapTurn({
-      shouldRecordCompletedBootstrapTurn,
-      promptError,
-      aborted: lifecycleState.aborted,
-      timedOutDuringCompaction: lifecycleState.timedOutDuringCompaction,
-      compactionOccurredThisAttempt,
-    });
+    return (
+      shouldRecordCompletedBootstrapTurn &&
+      !promptError &&
+      !lifecycleState.aborted &&
+      !lifecycleState.timedOutDuringCompaction &&
+      !compactionOccurredThisAttempt
+    );
   };
   if (!beforeAgentFinalizeRevisionReason && shouldPersistBootstrapCompletion()) {
     await withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, () => {
+      withSessionManagerWrite(sessionManager, async () => {
         // Cancellation can arrive while an eligible completion waits for its writer.
         if (!shouldPersistBootstrapCompletion()) {
           return;
         }
         try {
-          sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+          await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
             timestamp: Date.now(),
             runId: attempt.runId,
             sessionId: attempt.sessionId,
@@ -351,17 +315,24 @@ export async function completeEmbeddedAttemptAfterTurn(
       entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
     }
     const reachedPromptBoundary = transcriptLeafId === null || entry?.id === transcriptLeafId;
-    runAgentEndSideEffects({
+    await runAgentEndSideEffectsAsync({
       skillExperienceReviewSource:
         sourceTarget && terminalEntry && reachedPromptBoundary
           ? { ...sourceTarget, entryId: terminalEntry.id }
           : undefined,
-      event: {
-        messages: projectNestedToolActivityForHooks(messagesSnapshot, nestedToolActivities ?? []),
-        success: !lifecycleForAgentEnd.aborted && !promptError,
-        error: agentEndError,
-        durationMs: Date.now() - promptStartedAt,
-      },
+      event: bindAgentHarnessHookMessages(
+        {
+          messages: messagesSnapshot,
+          success: !lifecycleForAgentEnd.aborted && !promptError,
+          error: agentEndError,
+          durationMs: Date.now() - promptStartedAt,
+        },
+        async () =>
+          projectNestedToolActivityForHooks(
+            messagesSnapshot,
+            await readAttemptNestedToolActivity(sessionManager, nestedToolActivityState),
+          ),
+      ),
       ctx: buildEmbeddedAgentEndContext({
         run: attempt,
         agentId: sessionAgentId,

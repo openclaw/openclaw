@@ -1,4 +1,3 @@
-// Resolves abort cutoff markers used to stop stale reply streams.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -47,13 +46,12 @@ export function applyAbortCutoffToSessionEntry(
   entry.abortCutoffTimestamp = cutoff?.timestamp;
 }
 
-function toNumericMessageSid(value: string | undefined): bigint | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed || !/^\d+$/.test(trimmed)) {
+function toNumericMessageSid(value: string): bigint | undefined {
+  if (!/^\d+$/.test(value)) {
     return undefined;
   }
   try {
-    return BigInt(trimmed);
+    return BigInt(value);
   } catch {
     return undefined;
   }

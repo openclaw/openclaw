@@ -17,7 +17,6 @@ import {
   canRunPreparedAgentRuntimeAuthAttempt,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../../runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../../thinking-runtime.js";
 import { log } from "../logger.js";
 import { formatEmbeddedRunStageSummary } from "./attempt-stage-timing.js";
@@ -58,14 +57,12 @@ export async function prepareEmbeddedRunRuntime(input: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }) {
   const params = input.runParams;
-  let provider = input.provider;
-  let modelId = input.modelId;
   const modelSetup = await resolveEmbeddedRunModelSetup({
     assertCurrent: input.assertCurrent,
     runParams: params,
     sessionAdmission: input.sessionAdmission,
-    provider,
-    modelId,
+    provider: input.provider,
+    modelId: input.modelId,
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
     globalLane: input.globalLane,
@@ -74,10 +71,10 @@ export async function prepareEmbeddedRunRuntime(input: {
     onHooksResolved: () => input.markStartupStage("hooks"),
     preparedModelRuntime: input.preparedModelRuntime,
   });
-  provider = modelSetup.provider;
-  modelId = modelSetup.modelId;
   const pluginMetadataSnapshot = input.preparedModelRuntime?.metadataSnapshot;
   const {
+    provider,
+    modelId,
     requestedModelId,
     modelSelectionChangedByHook,
     requestStreamTransportOverrides,
@@ -141,23 +138,6 @@ export async function prepareEmbeddedRunRuntime(input: {
     outerContextTokenMeta =
       contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
   };
-  const selectHarnessForModel = (
-    candidate: typeof model,
-    plan?: AgentRuntimeAuthPlan,
-    preparedAuthAttempt?: PreparedAgentRuntimeAuthAttempt,
-  ) =>
-    nativeSessionRuntime?.auth === "native"
-      ? nativeSessionRuntime.harness
-      : selectEmbeddedRunHarness({
-          runParams: params,
-          provider,
-          modelId,
-          model: candidate,
-          plan,
-          preparedAuthAttempt,
-          requestStreamTransportOverrides,
-          pinnedHarnessId,
-        });
   const selectHarnessForPreparedAttempts = (
     candidate: typeof model,
     attempts: readonly PreparedAgentRuntimeAuthAttempt[],
@@ -176,7 +156,17 @@ export async function prepareEmbeddedRunRuntime(input: {
   input.markStartupStage("model-resolution");
   input.notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
-  agentHarness = selectHarnessForModel(models.effective);
+  agentHarness =
+    nativeSessionRuntime?.auth === "native"
+      ? nativeSessionRuntime.harness
+      : selectEmbeddedRunHarness({
+          runParams: params,
+          provider,
+          modelId,
+          model: models.effective,
+          requestStreamTransportOverrides,
+          pinnedHarnessId,
+        });
   pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
   const authStages = log.isEnabled("trace") ? createStageTimingTracker(Date.now) : undefined;
   const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
@@ -396,7 +386,7 @@ export async function prepareEmbeddedRunRuntime(input: {
         }
         didTransientCooldownProbe = true;
         log.warn(
-          `probing cooldowned auth profile for ${provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
+          `checking cooldowned auth profile for ${provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
         );
       }
       if (
@@ -460,7 +450,7 @@ export async function prepareEmbeddedRunRuntime(input: {
       if (initialProfileInCooldown) {
         didTransientCooldownProbe = true;
         log.warn(
-          `probing cooldowned auth profile for ${provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
+          `checking cooldowned auth profile for ${provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
         );
       }
       preparedProfileAttempted = initialAttempt?.kind === "profile";

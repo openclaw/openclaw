@@ -9,11 +9,9 @@ import type { RunCliAgentParams } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   append: vi.fn(),
-  flush: vi.fn(),
   open: vi.fn(),
   getTarget: vi.fn<() => SessionTranscriptRuntimeTarget | undefined>(),
-  admit: vi.fn<(write: () => void) => Promise<void>>(),
-  databaseWrite: vi.fn(),
+  admit: vi.fn<(write: () => void | Promise<void>) => Promise<void>>(),
   owned: vi.fn(),
   fence: vi.fn<() => SessionTranscriptWriterFence | undefined>(),
   writer: vi.fn(),
@@ -48,6 +46,17 @@ vi.mock("../../config/sessions/transcript.js", () => ({
 vi.mock("../../config/sessions/transcript-write-context.js", () => ({
   captureOwnedTranscriptWriteAssertion: () => mocks.owned,
   getOwnedSessionTranscriptWriterFence: mocks.fence,
+  withSessionTranscriptWriteAssertion: (
+    _scope: SessionTranscriptRuntimeTarget,
+    assertCurrent: () => void,
+    write: () => Promise<void>,
+  ) => {
+    assertCurrent();
+    return mocks.admit(async () => {
+      assertCurrent();
+      await write();
+    });
+  },
   SessionTranscriptWriterClaimReboundError: class extends Error {},
 }));
 vi.mock("../../config/sessions/session-cold-storage.js", () => ({
@@ -63,12 +72,6 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 vi.mock("../../routing/session-key.js", () => ({
   parseAgentSessionKey: () => ({ agentId: "logical" }),
-}));
-vi.mock("../../state/openclaw-agent-db-write.js", () => ({
-  withOpenClawAgentDatabaseWrite: (
-    options: { agentId: string; path?: string },
-    write: () => void,
-  ) => mocks.databaseWrite({ agentId: options.agentId, path: options.path }, write),
 }));
 vi.mock("../agent-scope.js", () => ({ resolveSessionAgentId: () => "logical" }));
 vi.mock("../bootstrap-mode.js", () => ({ isHeartbeatLifecycleRunKind: vi.fn() }));
@@ -87,18 +90,17 @@ vi.mock("../stream-message-shared.js", () => ({
 }));
 vi.mock("../sessions/session-manager.js", () => ({
   SessionManager: {
-    open: mocks.open,
+    openAsync: mocks.open,
     inMemory: () => ({
       getSessionTarget: mocks.getTarget,
-      appendMessage: mocks.append,
-      flushPendingPersistence: mocks.flush,
+      appendMessageAsync: mocks.append,
     }),
   },
 }));
 vi.mock("../sessions/session-manager-write-admission.js", () => ({
   withSessionManagerWrite: (
     manager: Pick<SessionManager, "getSessionTarget">,
-    write: () => void,
+    write: () => void | Promise<void>,
   ) => (manager.getSessionTarget() ? mocks.admit(write) : Promise.resolve(write())),
 }));
 
@@ -128,9 +130,8 @@ beforeEach(() => {
   mocks.cloneEnv.mockReturnValue(capturedEnv);
   mocks.restore.mockImplementation(async (_scope, assertCurrent?: () => void) => assertCurrent?.());
   mocks.getTarget.mockReturnValue(target);
-  mocks.open.mockImplementation(() => SessionManager.inMemory());
+  mocks.open.mockImplementation(async () => SessionManager.inMemory());
   mocks.admit.mockImplementation(async (write) => write());
-  mocks.databaseWrite.mockImplementation((_options, write: () => void) => mocks.admit(write));
   mocks.patch.mockImplementation(async () => ({ ...current }));
   mocks.resolvePath.mockReturnValue(source.path);
   mocks.read.mockImplementation(
@@ -182,7 +183,7 @@ function deferAdmission() {
   const admission = deferOperation();
   mocks.admit.mockImplementation(async (write) => {
     await admission.enter();
-    write();
+    await write();
   });
   return admission;
 }
@@ -203,14 +204,13 @@ function deferRestoration() {
 }
 
 it.each(["native", "supplied"] as const)(
-  "waits for %s admission before appending and flushing",
+  "waits for %s admission before appending",
   async (branch) => {
     const admission = deferAdmission();
     const { params, result } = run(branch);
     try {
       await admission.wait(result);
       expect(mocks.append).not.toHaveBeenCalled();
-      expect(mocks.flush).not.toHaveBeenCalled();
       expect(mocks.open).not.toHaveBeenCalled();
     } finally {
       admission.release();
@@ -222,17 +222,7 @@ it.each(["native", "supplied"] as const)(
         content: [{ type: "text", text: "Policy block" }],
       }),
     );
-    expect(mocks.flush).toHaveBeenCalledOnce();
-    expect(mocks.append.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.flush.mock.invocationCallOrder[0]!,
-    );
     expect(params.onUserMessagePersisted).not.toHaveBeenCalled();
-    if (branch === "native") {
-      expect(mocks.databaseWrite).toHaveBeenCalledWith(
-        expect.objectContaining(source),
-        expect.any(Function),
-      );
-    }
   },
 );
 
@@ -260,7 +250,6 @@ it.each(["missing", "session", "lifecycle", "writer", "store"] as const)(
     }
     expect(mocks.open).not.toHaveBeenCalled();
     expect(mocks.append).not.toHaveBeenCalled();
-    expect(mocks.flush).not.toHaveBeenCalled();
     expect(mocks.warn).toHaveBeenCalledOnce();
   },
 );
@@ -281,7 +270,6 @@ it.each(["native", "supplied"] as const)(
         await result;
       }
       expect(mocks.append).not.toHaveBeenCalled();
-      expect(mocks.flush).not.toHaveBeenCalled();
     }
   },
 );
@@ -291,7 +279,6 @@ it("leaves supplied initial-writer creation with the session manager", async () 
   await run("supplied").result;
   expect(mocks.read).not.toHaveBeenCalled();
   expect(mocks.append).toHaveBeenCalledOnce();
-  expect(mocks.flush).toHaveBeenCalledOnce();
 });
 
 it("keeps a supplied detached manager targetless", async () => {
@@ -334,7 +321,6 @@ it("refuses a changed store owner before deferred cold restoration mutates it", 
     await result;
   }
   expect(mocks.restoreCommit).not.toHaveBeenCalled();
-  expect(mocks.databaseWrite).not.toHaveBeenCalled();
   expect(mocks.open).not.toHaveBeenCalled();
   expect(mocks.append).not.toHaveBeenCalled();
   expect(mocks.warn).toHaveBeenCalledOnce();
@@ -366,12 +352,10 @@ it.each(["current", "lifecycle", "writer"] as const)(
     await run("native").result;
     if (claim === "current") {
       expect(mocks.append).toHaveBeenCalledOnce();
-      expect(mocks.flush).toHaveBeenCalledOnce();
       expect(mocks.warn).not.toHaveBeenCalled();
     } else {
       expect(mocks.open).not.toHaveBeenCalled();
       expect(mocks.append).not.toHaveBeenCalled();
-      expect(mocks.flush).not.toHaveBeenCalled();
       expect(mocks.warn).toHaveBeenCalledOnce();
     }
   },

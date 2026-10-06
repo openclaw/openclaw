@@ -213,6 +213,7 @@ export class DecisionProviderHost {
     config: OpenClawConfig,
     registry: PluginRegistry,
     consumerId?: string,
+    isAdmissible?: () => boolean,
   ): Promise<DecisionOutcome> {
     const started = performance.now();
     const facts: DecisionEvaluationFacts = { dispatched: false };
@@ -226,6 +227,7 @@ export class DecisionProviderHost {
         registry,
         facts,
         consumerId,
+        isAdmissible,
       );
       return outcome;
     } finally {
@@ -248,6 +250,7 @@ export class DecisionProviderHost {
     registry: PluginRegistry,
     facts: DecisionEvaluationFacts,
     consumerId?: string,
+    isAdmissible?: () => boolean,
   ): Promise<DecisionOutcome> {
     options.signal.throwIfAborted();
     const instance = getPluginInstance(this.record);
@@ -285,10 +288,15 @@ export class DecisionProviderHost {
       settle = resolve;
     });
     this.pending.set(controller, { consumerId, done });
+    let observedInterruption: DecisionOutcome | undefined;
+    let admissionError: { error: unknown } | undefined;
     const interrupted = (): DecisionOutcome | undefined => {
       options.signal.throwIfAborted();
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {
         throw controller.signal.reason;
+      }
+      if (admissionError) {
+        throw admissionError.error;
       }
       if (
         this.retired ||
@@ -301,9 +309,22 @@ export class DecisionProviderHost {
         controller.signal.reason === "decision-deadline" ||
         performance.now() >= deadlineMonotonicMs
       ) {
-        const outcome = this.unavailable("deadline");
-        this.fail(health, "transport");
-        return outcome;
+        // The host deadline bounds this request; it is not a provider-reported outage.
+        // Genuine transport, rate-limit, and auth failures are accounted below.
+        return this.unavailable("deadline");
+      }
+      if (observedInterruption) {
+        return observedInterruption;
+      }
+      try {
+        if (isAdmissible && !isAdmissible()) {
+          return this.unavailable("disabled");
+        }
+      } catch (error) {
+        // Adapters may sanitize this error and yield during cleanup. Preserve
+        // the caller-owned terminal assertion rather than treating it as health.
+        admissionError = { error };
+        throw error;
       }
       const currentConfig = readConfig();
       const selection = resolveDecisionModelSetting(currentConfig, options.agentId);
@@ -336,6 +357,16 @@ export class DecisionProviderHost {
               ...(options.agentId ? { agentId: options.agentId } : {}),
               signal,
               deadlineMonotonicMs,
+              ...(isAdmissible
+                ? {
+                    isAdmissible: () => {
+                      // The same owner fences consumer and provider generations. Keep
+                      // its observed outcome even if config changes back during cleanup.
+                      observedInterruption ??= interrupted();
+                      return observedInterruption === undefined;
+                    },
+                  }
+                : {}),
             });
           },
           // The provider callback's physical settlement is already tracked by
@@ -391,6 +422,9 @@ export class DecisionProviderHost {
       options.signal.throwIfAborted();
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {
         throw controller.signal.reason;
+      }
+      if (admissionError) {
+        throw admissionError.error;
       }
       if (error instanceof DecisionContractError) {
         throw error;

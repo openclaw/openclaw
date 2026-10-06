@@ -1,4 +1,5 @@
 /** Keeps automatic auth profiles stable unless reset, unavailable, or recovering a preference. */
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,7 +15,6 @@ import {
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
-import { hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import {
   isActiveUnusableWindow,
   isModelScopedCooldownReason,
@@ -29,6 +29,7 @@ import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 
 // Read-only auth resolution must not import session persistence.
@@ -208,17 +209,9 @@ function isProfileForProvider(params: {
 }
 
 function uniqueProviders(provider: string, acceptedProviderIds?: readonly string[]): string[] {
-  const providers = new Set<string>();
-  const push = (value: string | undefined) => {
-    const normalized = value?.trim();
-    if (normalized) {
-      providers.add(normalized);
-    }
-  };
-  const candidates =
-    acceptedProviderIds && acceptedProviderIds.length > 0 ? acceptedProviderIds : [provider];
-  candidates.forEach(push);
-  return [...providers];
+  return normalizeUniqueTrimmedStringList(
+    acceptedProviderIds?.length ? acceptedProviderIds : [provider],
+  );
 }
 
 /** Resolve a person's new-session default through the canonical credential store. */
@@ -277,19 +270,13 @@ export async function clearSessionAuthProfileOverride(params: {
   storePath?: string;
   assertCommitAllowed?: () => void;
 }) {
-  const { sessionEntry, sessionStore, sessionKey, storePath } = params;
   await persistSessionAuthProfileOverrideState({
-    agentId: params.agentId,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
+    ...params,
     state: {
       authProfileOverride: undefined,
       authProfileOverrideSource: undefined,
       authProfileOverrideCompactionCount: undefined,
     },
-    storePath,
-    assertCommitAllowed: params.assertCommitAllowed,
   });
 }
 
@@ -330,7 +317,7 @@ async function resolveSessionAuthProfileOverride(params: {
     !sessionEntry.authProfileOverride?.trim() &&
     !params.requesterProfileId &&
     !hasConfiguredAuthProfiles &&
-    !hasAnyAuthProfileStoreSource(agentDir)
+    !(await hasAnyAuthProfileStoreSourceAsync(agentDir))
   ) {
     return { profileId: undefined, store: undefined };
   }

@@ -1,7 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import type { ApprovalChannelReviewer } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  ApprovalChannelReviewer,
+  PluginApprovalResolveParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import { isPluginApprovalRequest, type ChannelApprovalKind } from "../../infra/approval-types.js";
@@ -64,12 +67,6 @@ type ResolvedApprovalEvent<TPayload> = {
 };
 
 type ApprovalRequestDeliveryRoute = "approval-client" | "forwarder" | "turn-source" | "none";
-
-type ApprovalResolveParams = {
-  id: string;
-  decision: string;
-  reviewer?: ApprovalChannelReviewer;
-};
 
 function isApprovalDecision(value: string): value is ExecApprovalDecision {
   return value === "allow-once" || value === "allow-always" || value === "deny";
@@ -142,7 +139,7 @@ export function buildRequestedApprovalEvent<
   };
 }
 
-export function resolveApprovalDecisionParams<TParams extends ApprovalResolveParams>(params: {
+export function resolveApprovalDecisionParams<TParams extends PluginApprovalResolveParams>(params: {
   rawParams: unknown;
   validate: Validator<TParams>;
   methodName: string;
@@ -533,17 +530,18 @@ export async function handleApprovalResolve<
   const recordFilter = custody
     ? (record: ExecApprovalRecord<TPayload>) => custody.authorizes(record)
     : undefined;
+  const lookup = {
+    manager: params.manager,
+    authority: params.authority,
+    getCfg: params.context.getRuntimeConfig,
+    inputId: params.inputId,
+    client: params.client,
+    exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
+    recordFilter,
+  };
   let resolved: ApprovalRecordLookupResult<TPayload>;
   try {
-    resolved = await resolvePendingApprovalRecord({
-      manager: params.manager,
-      authority: params.authority,
-      getCfg: params.context.getRuntimeConfig,
-      inputId: params.inputId,
-      client: params.client,
-      exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
-      recordFilter,
-    });
+    resolved = await resolvePendingApprovalRecord(lookup);
   } catch (err) {
     respondFailure(err);
     return;
@@ -555,15 +553,7 @@ export async function handleApprovalResolve<
   if (!resolved.ok) {
     let resolvedRepeat: ApprovalRecordLookupResult<TPayload>;
     try {
-      resolvedRepeat = await resolveResolvedApprovalRecord({
-        manager: params.manager,
-        authority: params.authority,
-        getCfg: params.context.getRuntimeConfig,
-        inputId: params.inputId,
-        client: params.client,
-        exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
-        recordFilter,
-      });
+      resolvedRepeat = await resolveResolvedApprovalRecord(lookup);
     } catch (err) {
       respondFailure(err);
       return;

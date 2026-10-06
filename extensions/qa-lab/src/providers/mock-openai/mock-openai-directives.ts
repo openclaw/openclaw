@@ -292,24 +292,6 @@ export function buildQaA2aMessageToolMirrorSessionsSendArgs(
   };
 }
 
-export function extractToolErrorForNamedCall(params: {
-  input: ResponsesInputItem[];
-  name: string;
-  toolJson: Record<string, unknown> | null;
-}) {
-  const error = typeof params.toolJson?.error === "string" ? params.toolJson.error.trim() : "";
-  if (!error) {
-    return undefined;
-  }
-  const namedFunctionCall = params.input.some(
-    (item) => item.type === "function_call" && item.name === params.name,
-  );
-  if (namedFunctionCall) {
-    return error;
-  }
-  return undefined;
-}
-
 export function hasToolErrorOutput(toolJson: Record<string, unknown> | null, toolOutput: string) {
   if (typeof toolJson?.error === "string" && toolJson.error.trim()) {
     return true;
@@ -328,21 +310,17 @@ export function extractSessionStatusSessionKey(
   toolOutput: string,
 ) {
   const details = toolJson?.details;
-  if (details && typeof details === "object") {
-    const sessionKey = (details as { sessionKey?: unknown }).sessionKey;
-    if (typeof sessionKey === "string" && sessionKey.trim()) {
-      return sessionKey.trim();
-    }
-  }
-  const topLevelSessionKey = toolJson?.sessionKey;
-  if (typeof topLevelSessionKey === "string" && topLevelSessionKey.trim()) {
-    return topLevelSessionKey.trim();
-  }
-  const statusLineSessionKey = /(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1];
-  if (statusLineSessionKey?.trim()) {
-    return statusLineSessionKey.trim();
-  }
-  return /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ?? "";
+  return (
+    normalizeOptionalString(
+      details && typeof details === "object"
+        ? (details as { sessionKey?: unknown }).sessionKey
+        : undefined,
+    ) ??
+    normalizeOptionalString(toolJson?.sessionKey) ??
+    normalizeOptionalString(/(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1]) ??
+    /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ??
+    ""
+  );
 }
 
 export function resolveHeartbeatPromptReply(text: string): "HEARTBEAT_OK" | "NO_REPLY" | undefined {

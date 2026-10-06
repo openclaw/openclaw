@@ -7,7 +7,7 @@ import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
-import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js";
+import { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import {
   emitCodexAppServerEvent,
   withCodexAppServerFastModeServiceTier,
@@ -83,6 +83,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     });
     const startupResult = await startCodexAttemptThread({
       assertCurrent: connection.assertCurrent,
+      authority: connection.authority,
       attemptClientFactory,
       bindingStore,
       runtime: connection.options.runtime,
@@ -112,22 +113,23 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
-      skillsInstructions: context.skillsInstructions,
+      refreshableInstructions: context.refreshableInstructions,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeModelAdmission: resources.nativeModelAdmission,
       nativeHookRelayRequired:
-        (nativeToolSurfaceEnabled &&
+        params.requireWorkspaceOnly !== true &&
+        ((nativeToolSurfaceEnabled &&
           params.pluginHarnessToolPolicyRestricted !== true &&
           (resources.nativeProcessAuthority?.requiresProcessAdmission ||
             resources.nativeModelAdmission === "required")) ||
-        (connection.options.nativeHookRelay?.enabled !== false &&
-          params.pluginHarnessToolPolicyRestricted !== true &&
-          connection.nativeHookRelayEvents.includes("pre_tool_use") &&
-          (hasBeforeToolCallPolicy() ||
-            (appServer.loopDetectionPreToolUseRelay &&
-              Boolean(connection.sandboxSessionKey) &&
-              loopDetectionEnabled))),
+          (connection.options.nativeHookRelay?.enabled !== false &&
+            params.pluginHarnessToolPolicyRestricted !== true &&
+            connection.nativeHookRelayEvents.includes("pre_tool_use") &&
+            (hasBeforeToolCallPolicy() ||
+              (appServer.loopDetectionPreToolUseRelay &&
+                Boolean(connection.sandboxSessionKey) &&
+                loopDetectionEnabled)))),
       bundleMcpThreadConfig,
       configuredMcpDynamicSurface: attemptTools.configuredMcp !== undefined,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
@@ -160,15 +162,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     await attemptTools.captureCronCreatorToolAllowlist();
     pluginAppServer = startupResult.pluginAppServer;
     toolBridge.setRemoteWorkspaceFileReader?.(
-      ({ path, maxBytes, workspaceRoot, signal, timeoutMs }) =>
-        readBoundedCodexRemoteWorkspaceFile({
-          client: startupResult.client,
-          path,
-          maxBytes,
-          workspaceRoot,
-          signal,
-          timeoutMs,
-        }),
+      createCodexRemoteWorkspaceFileReader(startupResult.client, connection.authority),
     );
     if (
       usesSupervisionConnection &&

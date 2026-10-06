@@ -1,7 +1,7 @@
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { tryReadJson } from "../../infra/json-files.js";
-import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
+import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.types.js";
 import {
   decodeHeaderEnvPlaceholder,
   isRecord,
@@ -132,9 +132,6 @@ export async function writeGeminiSystemSettings(
       mcpServers,
     },
   ) as Record<string, unknown>;
-  if (!isRecord(settings.mcp) || !isRecord(settings.mcpServers)) {
-    throw new Error("Gemini MCP settings merge produced an invalid object");
-  }
   return await writeGeminiSettings(settings, inheritedEnv);
 }
 

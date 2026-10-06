@@ -68,7 +68,7 @@ internal fun rememberVoiceNoteRecorderController(
         scope = scope,
         outputDirectory = context.cacheDir,
         engine = AndroidVoiceNoteRecordingEngine(context),
-        requestPermission = viewModel::requestVoiceNotePermission,
+        requestPermission = viewModel::requestRecordAudioPermission,
         acquireMic = viewModel::tryAcquireVoiceNoteMic,
         releaseMic = viewModel::releaseVoiceNoteMic,
         onFinished = { recording ->

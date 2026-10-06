@@ -7,7 +7,7 @@ import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispat
 import { formatErrorMessage } from "../../infra/errors.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
 import {
   extractAssistantDisplayText,
@@ -29,18 +29,19 @@ import {
   type WebchatReplyMediaRequesterContext,
 } from "./chat-reply-media.js";
 import {
+  buildTranscriptReplyTextFromInputs,
   readChatSendReplyPayload,
   type DeliveredChatSendReply,
 } from "./chat-send-command-replies.js";
 import { isChatSendReplyDeliveryAuthorized } from "./chat-send-delivery-authority.js";
-import { buildTranscriptReplyTextFromInputs } from "./chat-send-reply-dispatch.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import {
   assistantTranscriptScope,
   publishAssistantTranscriptRewrite,
   rewriteSourceReplyTranscriptMirrors,
   type SourceReplyContentState,
-  type SourceReplyTranscriptMirrorMetadata,
+  type SourceReplyTranscriptMirror,
+  type SourceReplyTranscriptRewrite,
 } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -79,11 +80,13 @@ export function createChatSendLateReplyFinalizer(
   params: Omit<FinalizeChatSendAgentRepliesBase, "emitFirstAssistantServerTiming">,
 ) {
   return async ({
-    runId,
+    runId: runtimeRunId,
+    clientRunId: runId,
     payloads,
     completion,
     isCurrent,
   }: Pick<QueuedFollowupReplyBatch, "runId" | "payloads" | "completion"> & {
+    clientRunId: string;
     isCurrent: () => boolean;
   }): Promise<ChatSendAgentReplyFinalization> => {
     const { context, session } = params;
@@ -130,6 +133,9 @@ export function createChatSendLateReplyFinalizer(
           }
         },
       });
+      if (!isCurrent()) {
+        return { kind: "dropped", reason: "no-visible-content" };
+      }
       if (
         completion.kind === "failed" ||
         completion.kind === "aborted" ||
@@ -180,7 +186,7 @@ export function createChatSendLateReplyFinalizer(
         : result;
     } catch (error) {
       // Preparation failure can still complete the run. An uncertain broadcast cannot be replayed.
-      if (terminal && !publicationStarted) {
+      if (terminal && !publicationStarted && isCurrent()) {
         context.chatRunState.flushPendingText(runId);
         broadcastChatTerminal({
           ...broadcastParams,
@@ -191,9 +197,12 @@ export function createChatSendLateReplyFinalizer(
       throw error;
     } finally {
       if (terminal) {
-        context.removeChatRun(runId, runId, session.sessionKey);
-        context.chatRunState.clearRun(runId);
-        context.agentRunSeq.delete(runId);
+        context.removeChatRun(runtimeRunId, runId, session.sessionKey);
+        if (isCurrent()) {
+          context.chatRunState.clearRun(runId);
+          context.agentRunSeq.delete(runId);
+        }
+        context.agentRunSeq.delete(runtimeRunId);
       }
     }
   };
@@ -247,10 +256,16 @@ async function finalizeChatSendAgentReplyPayloads(
       }
     },
   });
-  const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-    sessionKey,
-    sessionLoadOptions,
-  );
+  const { storePath: latestStorePath, entry: latestEntry } =
+    await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: context.getRuntimeConfig(),
+      key: sessionKey,
+      ...sessionLoadOptions,
+      projection: [],
+    });
+  if (!authorizeDelivery("session preparation")) {
+    return { kind: "dropped", reason: "no-visible-content" };
+  }
   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
   const { finalInputsByIndex, sourceReplyContentStates, sourceReplyBroadcastContent } =
     await withPreparedWebchatReplyMedia(
@@ -294,9 +309,7 @@ async function finalizeChatSendAgentReplyPayloads(
             backedManagedOutgoingContent: false,
           };
           contentStates[replyIndex] = state;
-          if (state.broadcastContent.length > 0) {
-            broadcastContent.push(...state.broadcastContent);
-          }
+          broadcastContent.push(...state.broadcastContent);
         }
         return {
           finalInputsByIndex: inputsByIndex,
@@ -313,15 +326,8 @@ async function finalizeChatSendAgentReplyPayloads(
     return { kind: "dropped", reason: "no-visible-content" };
   }
 
-  const sourceReplyPersistenceRequests: Array<{
-    idempotencyKey: string;
-    metadata: SourceReplyTranscriptMirrorMetadata;
-    state: SourceReplyContentState;
-  }> = [];
-  const sourceReplyMirrorCandidates: Array<{
-    idempotencyKey: string;
-    metadata: SourceReplyTranscriptMirrorMetadata;
-  }> = [];
+  const sourceReplyPersistenceRequests: SourceReplyTranscriptRewrite[] = [];
+  const sourceReplyMirrorCandidates: SourceReplyTranscriptMirror[] = [];
   for (const [replyIndex, sourceReplyPayload] of agentRunReplyPayloads.entries()) {
     const state = sourceReplyContentStates[replyIndex];
     if (!state) {
@@ -438,14 +444,8 @@ export async function finalizeChatSendSourceReplies(
   },
 ): Promise<boolean> {
   const result = await finalizeChatSendAgentReplyPayloads({
-    requesterContext: params.requesterContext,
-    abortSignal: params.abortSignal,
-    accountId: params.accountId,
-    context: params.context,
-    emitFirstAssistantServerTiming: params.emitFirstAssistantServerTiming,
+    ...params,
     inputs: selectChatSendAgentReplyInputs(params),
-    session: params.session,
-    suppressFinal: params.suppressFinal,
   });
   return result.kind === "delivered" && result.hasSourceReplyTranscriptMirror;
 }

@@ -421,8 +421,6 @@ test("sessions.patch archives failed placement without reclaim after its environ
   const archived = await patchPlacement({
     workerEnvironmentService: {
       get: () => ({ state: "destroyed" }),
-      cancelInferenceForSession: vi.fn(() => []),
-      hasInferenceForSession: vi.fn(() => false),
     },
     workerSessionPlacementService: placementReader(() => placement),
     workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
@@ -445,8 +443,6 @@ test.each([
         ? {
             workerEnvironmentService: {
               get: () => ({ state: "destroyed" }),
-              cancelInferenceForSession: vi.fn(() => []),
-              hasInferenceForSession: vi.fn(() => false),
             },
           }
         : {}),

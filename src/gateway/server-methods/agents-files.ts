@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   type AgentsFilesGetParams,
   ErrorCodes,
@@ -118,10 +118,6 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
   );
 }
 
-function hashWorkspaceFileContent(content: Buffer | string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
 function respondWorkspaceFileUnsafe(respond: RespondFn, name: string): void {
   respond(
     false,
@@ -189,7 +185,6 @@ async function readWorkspaceFileContent(
     const workspaceRoot = await root(workspaceDir);
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
     return safeRead.buffer.toString("utf-8");
   } catch (err) {
@@ -250,9 +245,8 @@ async function readWorkspaceFileHash(
   try {
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
-    return hashWorkspaceFileContent(safeRead.buffer);
+    return sha256Hex(safeRead.buffer);
   } catch (err) {
     if (isMissingPathError(err)) {
       return undefined;
@@ -340,7 +334,7 @@ export const agentFileHandlers: Pick<
       file = {
         size: data.length,
         updatedAtMs: Math.floor(stat.mtimeMs),
-        hash: hashWorkspaceFileContent(data),
+        hash: sha256Hex(data),
         content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data),
       };
     } else {
@@ -349,7 +343,6 @@ export const agentFileHandlers: Pick<
         const workspaceRoot = await root(workspaceDir);
         safeRead = await workspaceRoot.read(name, {
           hardlinks: "reject",
-          nonBlockingRead: true,
         });
       } catch (err) {
         if (isMissingPathError(err)) {
@@ -365,7 +358,7 @@ export const agentFileHandlers: Pick<
       file = {
         size: safeRead.stat.size,
         updatedAtMs: Math.floor(safeRead.stat.mtimeMs),
-        hash: hashWorkspaceFileContent(safeRead.buffer),
+        hash: sha256Hex(safeRead.buffer),
         content: safeRead.buffer.toString("utf-8"),
       };
     }
@@ -448,7 +441,7 @@ export const agentFileHandlers: Pick<
             if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
               throw new Error("Workspace document exceeds its read bound");
             }
-            currentHash = hashWorkspaceFileContent(data);
+            currentHash = sha256Hex(data);
           }
           if (currentHash !== expectedHash) {
             return { currentHash };
@@ -514,7 +507,7 @@ export const agentFileHandlers: Pick<
           missing: false,
           size: meta?.size,
           ...(!access ? { updatedAtMs: meta?.updatedAtMs } : {}),
-          hash: hashWorkspaceFileContent(content),
+          hash: sha256Hex(content),
           content,
         },
       },

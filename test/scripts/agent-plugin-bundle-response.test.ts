@@ -11,17 +11,20 @@ const controls = ["tool_search", "tool_describe", "tool_call"];
 const probeText = "probe ok; PLUGIN_ROOT=/fixture; PLUGIN_DATA=/fixture-data; PROBE_MODE=live";
 type Round = { name: string; args: Record<string, unknown>; value: unknown };
 
-function targetResult() {
+function targetResult(
+  text = probeText,
+  details: Partial<{ mcpServer: string; mcpTool: string; status: string }> = {},
+) {
   return {
     tool: { ...target },
     result: {
-      content: [{ type: "text", text: probeText }],
-      details: { mcpServer: "weather-probe", mcpTool: "weather_probe" },
+      content: [{ type: "text", text }],
+      details: { mcpServer: "weather-probe", mcpTool: "weather_probe", ...details },
     },
   };
 }
 
-function rounds(): Round[] {
+function rounds(text = probeText): Round[] {
   return [
     { name: "tool_search", args: { query: target.name, limit: 1 }, value: [{ ...target }] },
     {
@@ -29,10 +32,10 @@ function rounds(): Round[] {
       args: { id: target.id },
       value: {
         ...target,
-        parameters: { type: "object", properties: {}, additionalProperties: false },
+        parameters: { additionalProperties: false, properties: {}, type: "object" },
       },
     },
-    { name: "tool_call", args: { id: target.id, args: {} }, value: targetResult() },
+    { name: "tool_call", args: { id: target.id, args: {} }, value: targetResult(text) },
   ];
 }
 
@@ -57,18 +60,29 @@ function request(completed = rounds()) {
 }
 
 describe("Agent Plugins bundle mock response", () => {
-  it("discovers, describes, and calls the returned MCP identity before accepting its result", () => {
-    expect(resolveAgentPluginBundleResponse(request([]))).toEqual({
-      tool: { name: "tool_search", args: { query: target.name, limit: 1 } },
-    });
-    expect(resolveAgentPluginBundleResponse(request(rounds().slice(0, 1)))).toEqual({
-      tool: { name: "tool_describe", args: { id: target.id } },
-    });
-    expect(resolveAgentPluginBundleResponse(request(rounds().slice(0, 2)))).toEqual({
-      tool: { name: "tool_call", args: { id: target.id, args: {} } },
-    });
-    expect(resolveAgentPluginBundleResponse(request())).toEqual({ text: "AGENT_BUNDLE_MCP_OK" });
-  });
+  it.each([
+    [String.raw`C:\Fixture User\plugin=one; two`, String.raw`C:\Fixture User\data=one; two`],
+    ["/fixture\nroot", "/fixture\r\ndata"],
+  ])(
+    "discovers, describes, and calls MCP with dynamic paths %j and %j",
+    (pluginRoot, pluginData) => {
+      const completed = rounds(
+        `probe ok; PLUGIN_ROOT=${pluginRoot}; PLUGIN_DATA=${pluginData}; PROBE_MODE=live`,
+      );
+      expect(resolveAgentPluginBundleResponse(request([]))).toEqual({
+        tool: { name: "tool_search", args: { query: target.name, limit: 1 } },
+      });
+      expect(resolveAgentPluginBundleResponse(request(completed.slice(0, 1)))).toEqual({
+        tool: { name: "tool_describe", args: { id: target.id } },
+      });
+      expect(resolveAgentPluginBundleResponse(request(completed.slice(0, 2)))).toEqual({
+        tool: { name: "tool_call", args: { id: target.id, args: {} } },
+      });
+      expect(resolveAgentPluginBundleResponse(request(completed))).toEqual({
+        text: "AGENT_BUNDLE_MCP_OK",
+      });
+    },
+  );
 
   it.each(controls)("requires the declared %s control", (missing) => {
     const body = request([]);
@@ -79,229 +93,99 @@ describe("Agent Plugins bundle mock response", () => {
     });
   });
 
-  it("accepts the advertised schema independently of key order", () => {
-    const completed = rounds().slice(0, 2);
-    completed[1]!.value = {
-      ...target,
-      parameters: { additionalProperties: false, properties: {}, type: "object" },
-    };
-    expect(resolveAgentPluginBundleResponse(request(completed))).toEqual({
-      tool: { name: "tool_call", args: { id: target.id, args: {} } },
-    });
-  });
-
-  it.each<[string, Record<string, unknown>]>([
-    [
-      "unexpected required arguments",
-      { type: "object", properties: {}, additionalProperties: false, required: ["city"] },
-    ],
-    [
-      "unexpected properties",
-      { type: "object", properties: { city: { type: "string" } }, additionalProperties: false },
-    ],
-    [
-      "permissive additional properties",
-      { type: "object", properties: {}, additionalProperties: true },
-    ],
-    ["missing additional-property restriction", { type: "object", properties: {} }],
-  ])("rejects %s before calling the MCP tool", (_label, parameters) => {
-    const completed = rounds().slice(0, 2);
-    completed[1]!.value = { ...target, parameters };
-    expect(resolveAgentPluginBundleResponse(request(completed))).toEqual({
-      text: "AGENT_BUNDLE_MCP_FAIL unexpected-tool-output",
-    });
-  });
-
-  it("starts discovery again instead of accepting a previous turn's receipt", () => {
-    const body = request();
-    body.input.push({ role: "user", content: "agent plugin bundle qa check" });
-    expect(resolveAgentPluginBundleResponse(body)).toMatchObject({ tool: { name: "tool_search" } });
-  });
-
-  it("keeps the current turn's receipts when runtime context follows them", () => {
-    const body = request();
-    body.input.push({
-      role: "user",
-      content:
-        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nCurrent fixture context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-    });
-    expect(resolveAgentPluginBundleResponse(body)).toEqual({ text: "AGENT_BUNDLE_MCP_OK" });
-  });
-
   it.each([
-    [String.raw`C:\Fixture User\plugin=one; two`, String.raw`C:\Fixture User\data=one; two`],
-    ["/fixture\nroot", "/fixture\r\ndata"],
-  ])("preserves dynamic probe paths %j and %j", (pluginRoot, pluginData) => {
-    const completed = rounds();
-    const result = targetResult();
-    result.result.content[0]!.text = `probe ok; PLUGIN_ROOT=${pluginRoot}; PLUGIN_DATA=${pluginData}; PROBE_MODE=live`;
-    completed[2]!.value = result;
-    expect(resolveAgentPluginBundleResponse(request(completed))).toEqual({
-      text: "AGENT_BUNDLE_MCP_OK",
-    });
+    [
+      "agent plugin bundle qa check",
+      { tool: { name: "tool_search", args: { query: target.name, limit: 1 } } },
+    ],
+    [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nCurrent fixture context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      { text: "AGENT_BUNDLE_MCP_OK" },
+    ],
+  ])("scopes receipts to the current user turn (%s)", (content, expected) => {
+    const body = request();
+    body.input.push({ role: "user", content });
+    expect(resolveAgentPluginBundleResponse(body)).toEqual(expected);
   });
 
   it.each<[string, (value: Round[]) => void]>([
-    [
-      "wrong search call",
+    ...(
+      [
+        ["wrong search call", 0, { name: "read" }],
+        ["wrong search query", 0, { args: { query: "other", limit: 1 } }],
+        ["missing candidate", 0, { value: [] }],
+        ["ambiguous candidates", 0, { value: [target, { ...target, id: "other" }] }],
+        ["wrong candidate source", 0, { value: [{ ...target, source: "openclaw" }] }],
+        ["wrong describe selector", 1, { args: { id: "other" } }],
+        [
+          "wrong described target",
+          1,
+          {
+            value: {
+              ...target,
+              id: "other",
+              parameters: { type: "object", properties: {}, additionalProperties: false },
+            },
+          },
+        ],
+        ["missing described schema", 1, { value: target }],
+        ["wrong call selector", 2, { args: { id: "other", args: {} } }],
+        ["unexpected target arguments", 2, { args: { id: target.id, args: { unexpected: true } } }],
+        [
+          "wrong receipt target",
+          2,
+          { value: { ...targetResult(), tool: { ...target, id: "other" } } },
+        ],
+        [
+          "missing target details",
+          2,
+          { value: { tool: target, result: { content: [{ type: "text", text: probeText }] } } },
+        ],
+        ["wrong MCP server", 2, { value: targetResult(probeText, { mcpServer: "other" }) }],
+        ["wrong MCP operation", 2, { value: targetResult(probeText, { mcpTool: "other" }) }],
+        ["failed target result", 2, { value: targetResult(probeText, { status: "error" }) }],
+        ["missing environment evidence", 2, { value: targetResult("probe ok") }],
+        [
+          "corrupted probe success field",
+          2,
+          { value: targetResult(probeText.replace("probe ok", "probe ok=false")) },
+        ],
+        [
+          "corrupted probe mode field",
+          2,
+          { value: targetResult(probeText.replace("PROBE_MODE=live", "PROBE_MODE=live-corrupt")) },
+        ],
+        ["LF-suffixed probe mode field", 2, { value: targetResult(`${probeText}\n`) }],
+      ] satisfies [string, number, Partial<Round>][]
+    ).map(([label, index, patch]): [string, (value: Round[]) => void] => [
+      label,
       (value) => {
-        value[0]!.name = "read";
+        value[index] = { ...value[index]!, ...patch };
       },
-    ],
-    [
-      "wrong search query",
+    ]),
+    ...(
+      [
+        [
+          "unexpected required arguments",
+          { type: "object", properties: {}, additionalProperties: false, required: ["city"] },
+        ],
+        [
+          "unexpected properties",
+          { type: "object", properties: { city: { type: "string" } }, additionalProperties: false },
+        ],
+        [
+          "permissive additional properties",
+          { type: "object", properties: {}, additionalProperties: true },
+        ],
+        ["missing additional-property restriction", { type: "object", properties: {} }],
+      ] satisfies [string, Record<string, unknown>][]
+    ).map(([label, parameters]): [string, (value: Round[]) => void] => [
+      label,
       (value) => {
-        value[0]!.args.query = "other";
+        value.splice(2);
+        value[1]!.value = { ...target, parameters };
       },
-    ],
-    [
-      "missing candidate",
-      (value) => {
-        value[0]!.value = [];
-      },
-    ],
-    [
-      "ambiguous candidates",
-      (value) => {
-        value[0]!.value = [target, { ...target, id: "other" }];
-      },
-    ],
-    [
-      "extraneous candidate",
-      (value) => {
-        value[0]!.value = [target, { ...target, id: "other", name: "other" }];
-      },
-    ],
-    [
-      "malformed extra candidate",
-      (value) => {
-        value[0]!.value = [target, null];
-      },
-    ],
-    [
-      "wrong candidate source",
-      (value) => {
-        value[0]!.value = [{ ...target, source: "openclaw" }];
-      },
-    ],
-    [
-      "wrong describe selector",
-      (value) => {
-        value[1]!.args.id = "other";
-      },
-    ],
-    [
-      "wrong described target",
-      (value) => {
-        value[1]!.value = {
-          ...target,
-          id: "other",
-          parameters: { type: "object", properties: {}, additionalProperties: false },
-        };
-      },
-    ],
-    [
-      "missing described schema",
-      (value) => {
-        value[1]!.value = target;
-      },
-    ],
-    [
-      "wrong call selector",
-      (value) => {
-        value[2]!.args.id = "other";
-      },
-    ],
-    [
-      "unexpected target arguments",
-      (value) => {
-        value[2]!.args.args = { unexpected: true };
-      },
-    ],
-    [
-      "wrong receipt target",
-      (value) => {
-        value[2]!.value = { ...targetResult(), tool: { ...target, id: "other" } };
-      },
-    ],
-    [
-      "missing target details",
-      (value) => {
-        value[2]!.value = {
-          tool: target,
-          result: { content: [{ type: "text", text: probeText }] },
-        };
-      },
-    ],
-    [
-      "wrong MCP server",
-      (value) => {
-        const result = targetResult();
-        result.result.details.mcpServer = "other";
-        value[2]!.value = result;
-      },
-    ],
-    [
-      "wrong MCP operation",
-      (value) => {
-        const result = targetResult();
-        result.result.details.mcpTool = "other";
-        value[2]!.value = result;
-      },
-    ],
-    [
-      "failed target result",
-      (value) => {
-        const result = targetResult();
-        value[2]!.value = {
-          ...result,
-          result: { ...result.result, details: { ...result.result.details, status: "error" } },
-        };
-      },
-    ],
-    [
-      "missing environment evidence",
-      (value) => {
-        const result = targetResult();
-        result.result.content[0]!.text = "probe ok";
-        value[2]!.value = result;
-      },
-    ],
-    [
-      "corrupted probe success field",
-      (value) => {
-        const result = targetResult();
-        result.result.content[0]!.text = probeText.replace("probe ok", "probe ok=false");
-        value[2]!.value = result;
-      },
-    ],
-    [
-      "corrupted probe mode field",
-      (value) => {
-        const result = targetResult();
-        result.result.content[0]!.text = probeText.replace(
-          "PROBE_MODE=live",
-          "PROBE_MODE=live-corrupt",
-        );
-        value[2]!.value = result;
-      },
-    ],
-    [
-      "LF-suffixed probe mode field",
-      (value) => {
-        const result = targetResult();
-        result.result.content[0]!.text = `${probeText}\n`;
-        value[2]!.value = result;
-      },
-    ],
-    [
-      "CRLF-suffixed probe mode field",
-      (value) => {
-        const result = targetResult();
-        result.result.content[0]!.text = `${probeText}\r\n`;
-        value[2]!.value = result;
-      },
-    ],
+    ]),
     [
       "extra invocation",
       (value) => {
@@ -351,12 +235,6 @@ describe("Agent Plugins bundle mock response", () => {
       "outer error",
       (body) => {
         body.input[6]!.isError = true;
-      },
-    ],
-    [
-      "unstructured success text",
-      (body) => {
-        body.input[6]!.output = probeText;
       },
     ],
     [

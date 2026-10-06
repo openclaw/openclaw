@@ -90,9 +90,6 @@ describe("parseObservationSegments", () => {
 });
 
 describe("parseCardsJson", () => {
-  const windowStartMs = dayMs("10:00:00");
-  const windowEndMs = dayMs("11:00:00");
-
   const card = (overrides: Record<string, unknown> = {}) => ({
     startTime: "10:00:00",
     endTime: "10:30:00",
@@ -104,7 +101,7 @@ describe("parseCardsJson", () => {
     appSites: { primary: "github.com" },
     ...overrides,
   });
-  const parse = (raw: string) => parseCardsJson({ raw, day: DAY, windowStartMs, windowEndMs });
+  const parse = (raw: string) => parseCardsJson({ raw, day: DAY });
 
   it("accepts a valid card array and normalizes fields", () => {
     expect(
@@ -148,6 +145,19 @@ describe("parseCardsJson", () => {
     );
     expect(rejected).toMatchObject({ ok: false, error: expect.stringContaining("overlap") });
   });
+
+  it.each(["10:30:10", "10:30:30"])(
+    "rejects an overlap that would leave no duration for a card ending at %s",
+    (endTime) => {
+      const result = parse(
+        JSON.stringify([
+          card({ startTime: "10:00:00", endTime: "10:30:30" }),
+          card({ startTime: "10:30:00", endTime, title: "Second" }),
+        ]),
+      );
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("endTime") });
+    },
+  );
 
   it("reports actionable errors for the correction round-trip", () => {
     expect(parse(JSON.stringify([card({ startTime: "13:05 pm" })]))).toMatchObject({

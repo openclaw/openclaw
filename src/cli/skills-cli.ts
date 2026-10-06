@@ -6,7 +6,6 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { SkillsCuratorCompatibleStatusResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveConfiguredAgentId,
@@ -68,6 +67,7 @@ import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js"
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -103,7 +103,6 @@ function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: stri
 
 type ResolveSkillsWorkspaceOptions = {
   agentId?: string;
-  cwd?: string;
   skipPluginValidation?: boolean;
 };
 
@@ -149,11 +148,7 @@ function normalizeExplicitAgentId(agentId?: string): string | undefined {
   return normalizedAgentId;
 }
 
-function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
-  config: ReturnType<typeof getRuntimeConfig>;
-  workspaceDir: string;
-  agentId: string;
-} {
+function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
   const config = getRuntimeConfig(
     options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
@@ -161,7 +156,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
-    : resolveAgentIdByWorkspacePath(config, options?.cwd ?? process.cwd());
+    : resolveAgentIdByWorkspacePath(config, process.cwd());
   const agentId = explicitAgentId
     ? resolveConfiguredAgentId(config, explicitAgentId)
     : (inferredAgentId ??
@@ -173,17 +168,8 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   };
 }
 
-function resolveAgentOption(
-  command: Command | undefined,
-  opts?: { agent?: string },
-): string | undefined {
-  return resolveOptionFromCommand<string>(command, "agent") ?? opts?.agent;
-}
-
-async function loadSkillsStatusReport(
-  options?: ResolveSkillsWorkspaceOptions,
-): Promise<SkillStatusReport> {
-  const resolved = resolveSkillsWorkspace({ ...options, skipPluginValidation: true });
+async function loadSkillsStatusReport(agentId: string | undefined): Promise<SkillStatusReport> {
+  const resolved = resolveSkillsWorkspace({ agentId, skipPluginValidation: true });
   try {
     return await callSkillsGateway<SkillStatusReport>({
       config: resolved.config,
@@ -211,20 +197,20 @@ async function loadSkillsStatusReport(
 
 async function runSkillsAction(
   render: (report: SkillStatusReport) => string,
-  options?: ResolveSkillsWorkspaceOptions,
+  agentId: string | undefined,
 ): Promise<void> {
   await runCommandWithRuntime(defaultRuntime, async () => {
-    const report = await loadSkillsStatusReport(options);
+    const report = await loadSkillsStatusReport(agentId);
     defaultRuntime.writeStdout(render(report));
   });
 }
 
 function resolveClawHubTargetWorkspace(
-  command: Command | undefined,
-  opts: { agent?: string; global?: boolean },
+  command: Command,
+  opts: { global?: boolean },
   reportError: (message: string) => void = defaultRuntime.error,
 ): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
-  const agentId = normalizeExplicitAgentId(resolveAgentOption(command, opts));
+  const agentId = normalizeExplicitAgentId(resolveOptionFromCommand<string>(command, "agent"));
   if (opts.global && agentId) {
     reportError("Use either --global or --agent, not both.");
     defaultRuntime.exit(1);
@@ -513,11 +499,7 @@ export function registerSkillsCli(program: Command) {
     .description("List and inspect available skills")
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--json", "Output as JSON", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/skills", "docs.openclaw.ai/cli/skills")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/skills"));
   const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
     Boolean(opts?.json || skills.opts<{ json?: boolean }>().json);
   setCommandJsonMode(skills, "output", ({ argv, command }) => isSkillsMachineOutput(argv, command));
@@ -889,7 +871,7 @@ export function registerSkillsCli(program: Command) {
   ): Promise<void> => {
     await runCommandWithRuntime(defaultRuntime, async () => {
       const result = await action(
-        resolveSkillsWorkspace({ agentId: resolveAgentOption(command, opts) }),
+        resolveSkillsWorkspace({ agentId: resolveOptionFromCommand<string>(command, "agent") }),
       );
       if (hasJsonOutput(opts)) {
         defaultRuntime.writeJson(result);
@@ -1150,9 +1132,7 @@ export function registerSkillsCli(program: Command) {
               ...opts,
               json: hasJsonOutput(opts),
             }),
-          {
-            agentId: resolveAgentOption(command, opts),
-          },
+          resolveOptionFromCommand<string>(command, "agent"),
         );
       },
     );
@@ -1173,9 +1153,7 @@ export function registerSkillsCli(program: Command) {
             json: hasJsonOutput(opts),
           });
         },
-        {
-          agentId: resolveAgentOption(command, opts),
-        },
+        resolveOptionFromCommand<string>(command, "agent"),
       );
       if (!skillFound) {
         defaultRuntime.exit(1);
@@ -1194,16 +1172,15 @@ export function registerSkillsCli(program: Command) {
             ...opts,
             json: hasJsonOutput(opts),
           }),
-        {
-          agentId: resolveAgentOption(command, opts),
-        },
+        resolveOptionFromCommand<string>(command, "agent"),
       );
     });
 
   skills.action(async (opts: { agent?: string; json?: boolean }, command: Command) => {
-    await runSkillsAction((report) => formatSkillsList(report, { json: hasJsonOutput(opts) }), {
-      agentId: resolveAgentOption(command, opts),
-    });
+    await runSkillsAction(
+      (report) => formatSkillsList(report, { json: hasJsonOutput(opts) }),
+      resolveOptionFromCommand<string>(command, "agent"),
+    );
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

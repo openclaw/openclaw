@@ -5,6 +5,7 @@ import type {
   Model,
   ProviderReplayState,
 } from "@openclaw/llm-core";
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
@@ -776,7 +777,7 @@ describe("OpenAI Responses compaction replay", () => {
       expect(input.filter((item) => item.type === "function_call_output")).toMatchObject([
         { call_id: "call_before", output: "before output" },
       ]);
-      expect(JSON.stringify(input)).not.toContain("No result provided");
+      expect(JSON.stringify(input)).not.toContain(DEFAULT_MISSING_TOOL_RESULT_TEXT);
       expect(JSON.stringify(input)).not.toContain("aborted");
       expect(owner.content).toEqual([
         expect.objectContaining({ type: "toolCall", id: "call_before|fc_before" }),
@@ -812,7 +813,7 @@ describe("OpenAI Responses compaction replay", () => {
         "function_call_output",
       ]);
       expect(input.filter((item) => item.type === "function_call_output")).toMatchObject([
-        { call_id: "call_after", output: "No result provided" },
+        { call_id: "call_after", output: "aborted" },
       ]);
       expect(input.filter((item) => item.type === "function_call_output")).toHaveLength(1);
       expect(JSON.stringify(input)).not.toContain("call_before");

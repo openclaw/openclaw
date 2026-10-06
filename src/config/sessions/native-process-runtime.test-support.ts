@@ -1,4 +1,9 @@
 export const sessionNativeProcessEntrypoints = {
+  walScheduler: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../infra/sqlite-wal-scheduler.test-support",
+    distWorkerPath: "infra/sqlite-wal-scheduler.test-support.js",
+  },
   accessor: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "session-accessor",

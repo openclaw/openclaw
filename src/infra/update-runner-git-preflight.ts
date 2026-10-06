@@ -8,9 +8,6 @@ import { readPackageManagerSpec } from "./package-json.js";
 import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
-  managerInstallArgs,
-  managerInstallIgnoreScriptsArgs,
-  managerScriptArgs,
   parsePnpmPackageManagerVersion,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
@@ -31,8 +28,8 @@ import {
   shouldInstallWithoutScriptsOnWindows,
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
-import { checkGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
-import { runGitCleanCheckStep } from "./update-runner-git-steps.js";
+import { prepareGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
+import { runClassifiedGitStep, runGitCleanCheckStep } from "./update-runner-git-steps.js";
 import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -79,34 +76,28 @@ async function resolveExplicitTarget(params: {
           ["git", "-C", params.gitRoot, "fetch", remote, `+${tagFetchRef}:${tagFetchRef}`],
           params.gitRoot,
         );
-        const fetchStep = await runStep({
-          ...options,
-          progress: { ...options.progress, onStepComplete: undefined },
+        const fetchOutcome = await runClassifiedGitStep(options, (fetchStep) => {
+          const interrupted =
+            fetchStep.termination === "signal" ||
+            fetchStep.exitCode === 130 ||
+            fetchStep.exitCode === 143;
+          const fetchedSuccessfully = fetchStep.exitCode === 0 && !isFailedUpdateStep(fetchStep);
+          if (!fetchedSuccessfully && !interrupted) {
+            fetchStep.advisory = {
+              kind: "recoverable-maintenance",
+              message: `Could not fetch the requested tag from ${remote}; trying another remote. ${fetchStep.stderrTail ?? ""}`,
+            };
+            warnings.push(fetchStep.advisory.message);
+          }
+          if (warnings.length > 0) {
+            fetchStep.warnings = [...warnings];
+          }
+          return { interrupted, fetchedSuccessfully };
         });
-        const interrupted =
-          fetchStep.termination === "signal" ||
-          fetchStep.exitCode === 130 ||
-          fetchStep.exitCode === 143;
-        const fetchedSuccessfully = fetchStep.exitCode === 0 && !isFailedUpdateStep(fetchStep);
-        if (!fetchedSuccessfully && !interrupted) {
-          fetchStep.advisory = {
-            kind: "recoverable-maintenance",
-            message: `Could not fetch the requested tag from ${remote}; trying another remote. ${fetchStep.stderrTail ?? ""}`,
-          };
-          warnings.push(fetchStep.advisory.message);
-        }
-        if (warnings.length > 0) {
-          fetchStep.warnings = [...warnings];
-        }
-        options.progress?.onStepComplete?.({
-          ...fetchStep,
-          index: options.stepIndex,
-          total: options.totalSteps,
-        });
-        if (interrupted) {
+        if (fetchOutcome.interrupted) {
           return null;
         }
-        if (fetchedSuccessfully) {
+        if (fetchOutcome.fetchedSuccessfully) {
           fetchedTag = true;
           break;
         }
@@ -315,9 +306,18 @@ async function testPreflightCandidate(
   // A local rebase can change package metadata from the fetched base revision.
   await params.beforeCandidate(candidateSha);
   await params.referenceSource?.copyBuildInputs(params.worktreeDir);
-  const nodeRuntimeStep = await checkGitCandidateNodeRuntime(params.worktreeDir);
-  if (nodeRuntimeStep) {
-    params.steps.push(nodeRuntimeStep);
+  if (
+    params.frozenLockfile &&
+    !parsePnpmPackageManagerVersion(await readPackageManagerSpec(params.worktreeDir))
+  ) {
+    return { status: "manager-unavailable", reason: "immutable-pnpm-pin-required" };
+  }
+  const nodeRuntime = await prepareGitCandidateNodeRuntime(
+    params.worktreeDir,
+    params.defaultCommandEnv,
+  );
+  if (nodeRuntime.step) {
+    params.steps.push(nodeRuntime.step);
     return { status: "node-runtime-incompatible" };
   }
   if (params.referenceSource) {
@@ -329,7 +329,7 @@ async function testPreflightCandidate(
         "preflight-package-manager",
         ["pnpm", "--version"],
         params.worktreeDir,
-        params.defaultCommandEnv,
+        nodeRuntime.env,
       ),
       runCommand: async (argv, options) => {
         const result = version
@@ -350,12 +350,12 @@ async function testPreflightCandidate(
     }
   }
   const manager: Awaited<ReturnType<typeof resolveUpdateBuildManager>> = params.referenceSource
-    ? { kind: "resolved", manager: "pnpm", preferred: "pnpm", fallback: false }
+    ? { kind: "resolved", manager: "pnpm", fallback: false }
     : await resolveUpdateBuildManager(
         params.runCommand,
         params.worktreeDir,
         params.timeoutMs,
-        params.defaultCommandEnv,
+        nodeRuntime.env,
         { timeoutMs: params.workTimeoutMs },
       );
   if (manager.kind === "missing-required") {
@@ -372,41 +372,41 @@ async function testPreflightCandidate(
   try {
     const preferIgnoreScripts =
       !params.referenceSource && shouldInstallWithoutScriptsOnWindows(manager.manager);
-    const installArgv = preferIgnoreScripts
-      ? managerInstallIgnoreScriptsArgs(manager.manager)
-      : managerInstallArgs(manager.manager, {
-          compatFallback: manager.fallback && manager.manager === "npm",
-        });
+    const installArgv = [
+      manager.manager,
+      "install",
+      ...(preferIgnoreScripts
+        ? ["--ignore-scripts"]
+        : manager.fallback && manager.manager === "npm"
+          ? ["--no-package-lock", "--legacy-peer-deps"]
+          : []),
+    ];
     const installName = preferIgnoreScripts ? "deps-install-ignore-scripts" : "deps-install";
-    if (params.referenceSource) {
+    if (params.referenceSource || params.frozenLockfile) {
       installArgv.push("--frozen-lockfile");
     }
     const candidateCommand = await prepareCandidateCommandEnv(
       manager.manager,
-      manager.env ?? params.defaultCommandEnv,
+      manager.env ?? nodeRuntime.env,
       params.worktreeDir,
       params.runCommand,
       params.timeoutMs,
     );
-    const buildArgs = managerScriptArgs(manager.manager, "build");
+    const scriptArgs = (script: string) =>
+      manager.manager === "pnpm" ? ["pnpm", script] : [manager.manager, "run", script];
     const buildEnv = resolveBuildEnv(
       candidateCommand.env,
       path.join(params.artifactRoot, ".artifacts", "build-all-cache"),
     );
     buildEnv.sourceRuntimePrepared = params.sourceRuntimePrepared?.toString();
-    const lintArgs = managerScriptArgs(manager.manager, "lint");
     let failure =
       (await runCandidateCheck(installName, installArgv, candidateCommand.env)) ??
-      (await runCandidateCheck("build", buildArgs, buildEnv));
+      (await runCandidateCheck("build", scriptArgs("build"), buildEnv));
     if (
       !failure &&
       (await resolveControlUiAssetHealth({ root: params.worktreeDir })).kind !== "ready"
     ) {
-      failure = await runCandidateCheck(
-        "ui-build",
-        managerScriptArgs(manager.manager, "ui:build"),
-        candidateCommand.env,
-      );
+      failure = await runCandidateCheck("ui-build", scriptArgs("ui:build"), candidateCommand.env);
     }
     if (
       !failure &&
@@ -425,7 +425,7 @@ async function testPreflightCandidate(
     if (!failure && params.runLint) {
       failure = await runCandidateCheck(
         "lint",
-        lintArgs,
+        scriptArgs("lint"),
         resolveDevPreflightLintEnv(candidateCommand.env),
       );
     }
@@ -482,10 +482,13 @@ export async function runGitCandidatePreflight(params: {
   };
   beforeRuntimeVerified: boolean;
   sourceRuntimePrepared?: boolean;
+  /** Immutable releases must build exactly the candidate's recorded dependency graph. */
+  frozenLockfile?: boolean;
   beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
+  retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;
   timeoutMs: number;
@@ -669,7 +672,10 @@ export async function runGitCandidatePreflight(params: {
     throw error;
   } finally {
     if (!cleanupUncertain) {
-      await cleanupGitPreflight(params, worktreeDir, preflightRoot);
+      const cleanup = () => cleanupGitPreflight(params, worktreeDir, preflightRoot);
+      if (tested?.status !== "ok" || !params.retainCleanup?.(cleanup)) {
+        await cleanup();
+      }
     }
   }
   if (tested?.status !== "ok") {

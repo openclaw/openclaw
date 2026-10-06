@@ -31,7 +31,6 @@ type TaskSuggestionOperation =
   | { action: "dismiss"; resolved: boolean }
   | {
       action: "accept";
-      resolved: boolean;
       suggestion: TaskSuggestion;
       mode: TaskSuggestionStartMode;
       cwd?: string;
@@ -185,7 +184,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       ]);
     } else {
       const operation = this.taskSuggestionOperations.get(event.taskId);
-      if (operation) {
+      if (operation?.action === "dismiss") {
         operation.resolved = true;
       }
       this.setTaskSuggestions(this.taskSuggestions.filter((item) => item.id !== event.taskId));
@@ -198,15 +197,6 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     // its request version prevents any older snapshot from overwriting either.
     void this.refreshTaskSuggestions({ automatic: true });
   }
-
-  protected readonly acceptTaskSuggestion = (
-    suggestion: TaskSuggestion,
-    mode: TaskSuggestionStartMode = "local",
-    cwd?: string,
-  ): Promise<void> => this.resolveTaskSuggestion(suggestion, "accept", mode, cwd);
-
-  protected readonly dismissTaskSuggestion = (suggestion: TaskSuggestion): Promise<void> =>
-    this.resolveTaskSuggestion(suggestion, "dismiss");
 
   // Copy is client-local and never gated on acceptance capability; a failed
   // copy must surface visibly instead of dissolving into silence.
@@ -318,12 +308,12 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         cwd?: string,
       ) => {
         return ownsDisplayedOperation(suggestion)
-          ? this.acceptTaskSuggestion(suggestion, mode, cwd)
+          ? this.resolveTaskSuggestion(suggestion, "accept", mode, cwd)
           : undefined;
       },
       onDismissTaskSuggestion: (suggestion: TaskSuggestion) => {
         return ownsDisplayedOperation(suggestion)
-          ? this.dismissTaskSuggestion(suggestion)
+          ? this.resolveTaskSuggestion(suggestion, "dismiss")
           : undefined;
       },
     };
@@ -398,7 +388,6 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       action === "accept"
         ? {
             action,
-            resolved: false,
             suggestion: previous?.suggestion ?? suggestion,
             mode: previous?.mode ?? mode,
             cwd: cwd ?? previous?.cwd,

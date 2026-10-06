@@ -34,6 +34,13 @@ The implementation owners are `subagent-registry-requester-yield.ts`,
 `subagent-announce.requester-settle-wake.ts`, and
 `agent-task-tracking.ts`. `adoptPausedSubagentRunForFollowUp` uses the existing
 registry replacement operation; it does not create a second delegated task.
+Adoption clears a child-only pause notice instead of carrying it into completion.
+Actual requester completion batches keep their frozen membership and generation.
+
+An explicit `waitFor: "message"` counts as continuation evidence after the
+registry accepts the wait. The attempt carries that fact into terminal reply
+presentation, so a registered message wait does not produce a missing-continuation
+warning. Refused or unregistered waits do not provide that evidence.
 
 Private child results wait for their spawning turn to settle before individual
 announcement admission. Normal settlement resumes each finished private child,
@@ -68,6 +75,26 @@ starting an independent requester-settle turn for the cron session would compete
 with its scheduler-owned continuation.
 
 ## Invariants
+
+The registry persistence owner serializes mutations per run, admitting multi-run
+batches in sorted order. A synchronous plan reads the current immutable published
+rows after admission and returns replacement rows or deletions. Asynchronous
+preparation happens first; the plan rechecks execution, cancellation, requester,
+and cohort ownership before committing.
+Callbacks retain their observed ownership and wake progress across waits. They
+advance those observations only from their own acknowledged publications.
+
+The SQLite worker compares row-version digests before writing. A foreign change
+refreshes the affected rows through the read worker and reruns the plan, up to
+three attempts. Only acknowledged commits publish resident rows and notify readers.
+An unknown write outcome fences those rows until canonical restoration. Terminal
+rows and their eligible session-state events commit together; equivalent duplicate
+terminal callbacks preserve in-flight cleanup authority. This changes no schema or
+update format.
+
+Process-local callback ownership survives metadata publication. Recovery under a
+replacement Gateway acquires a fresh runtime incarnation through the same row
+owner, so callbacks from the closed Gateway cannot settle the recovered wake.
 
 - **One completion owner.** Yield transfers ownership before closing the old
   execution. An existing visible-final receipt for the exact turn and child
@@ -111,6 +138,9 @@ with its scheduler-owned continuation.
   An explicit `mode: "followup"` keeps separate activity tracking and leaves the
   child's original result or pending yield intact. Explicit plugin follow-ups
   naming a new requester continue to create their own delivery obligation.
+  A default-delivery follow-up admitted before the pause publishes receives
+  the paused row's requester, completion custody, and settlement obligation
+  when the pause publishes; requester-bound follow-ups keep their own delivery.
 - **Deterministic batches.** Frozen run IDs are sorted. Findings use creation
   time, completion time, and child session identity as tie-breakers. Superseded
   child rows are excluded. Batch identity includes requester identity, child
@@ -126,7 +156,8 @@ with its scheduler-owned continuation.
   in flight, settlement observes the same request without spending failure
   attempts or discarding the child results. Gateway admission and execution
   retain their own timeouts; explicit cancellation still stops the turn.
-  Individual private announcements keep their existing delivery deadline.
+  Individual private announcements keep their delivery deadline until requester
+  execution starts; the Gateway's requester runtime budget then applies.
   Findings are capped at 4,096 characters, individual
   results at 512, and route notices at 1,024. Ambiguous replay reuses its attempt
   key; it does not assert global exactly-once delivery across Gateway restarts.
@@ -149,10 +180,17 @@ continuations do not send activity to an external channel. This
 activity signal does not change the configured message queue mode or restore
 individual tool-progress messages.
 
-The former Tasks-backed detached presenter and its notification policies are no
-longer available. A yielded turn does not start a separate task or flow projection
-to keep editing a channel progress message. Ordinary channel streaming still
-follows the channel's settings while its turn is active.
+On Telegram, a confirmed `progress` draft can stay with the yielding turn's
+announcing children instead of the waiting acknowledgment. Telegram keeps
+rendering, throttling and deleting it; the native registry only forwards child
+status and prepared operation names (never child prose, commands, arguments or
+results) and honors `streaming.progress.toolProgress`. A resumed parent that
+yields again keeps the same draft for its new children. The draft is deleted when
+the settle wake completes the last tracked cohort (final, `NO_REPLY` or terminal
+failure) or when stop or reset cancels the children. It is process-local: a
+Gateway restart does not revive it. Other channels keep the waiting
+acknowledgment. A yielded turn still does not start a separate task or flow
+projection.
 
 [Progress cards](/tools/progress-card) remain durable session state. The parent
 updates its own card as work advances and when child results return. Inspect

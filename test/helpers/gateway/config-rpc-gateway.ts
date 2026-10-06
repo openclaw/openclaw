@@ -344,15 +344,14 @@ export function installConfigWriteGatewayHooks(options: ConfigRpcGatewayOptions 
 }
 
 export function installSharedConfigWriteGatewayHooks({
-  configRelativePath,
   fixturePaths = [],
-}: {
-  configRelativePath?: string;
+  ...options
+}: ConfigRpcGatewayOptions & {
   fixturePaths?: string[];
 } = {}) {
   let original: Awaited<ReturnType<typeof getCurrentConfigObject>>;
   beforeAll(async () => {
-    await startConfigRpcGateway({ configRelativePath });
+    await startConfigRpcGateway(options);
     original = await getCurrentConfigObject();
   });
   beforeEach(() => {

@@ -39,8 +39,8 @@ import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   getLatestUpdateRestartSentinel,
-  refreshLatestUpdateRestartSentinel,
-} from "../server-restart-sentinel.js";
+  prepareLatestUpdateRestartSentinel,
+} from "../server-update-sentinel.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -59,20 +59,23 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       phase = next;
     };
     try {
-      let manager = await resolveOcmUpdateManager().catch((error: unknown) => {
-        if (!(error instanceof OcmUpdateCapabilitiesUnsupportedError)) {
-          throw error;
-        }
-        context?.logGateway?.warn(error.message);
-        return null;
-      });
+      const immutable = lifecycle.installStatus?.status.installKind === "immutable";
+      let manager = immutable
+        ? null
+        : await resolveOcmUpdateManager().catch((error: unknown) => {
+            if (!(error instanceof OcmUpdateCapabilitiesUnsupportedError)) {
+              throw error;
+            }
+            context?.logGateway?.warn(error.message);
+            return null;
+          });
       const managedRun = manager ? await manager.status() : null;
       if (manager && !manager.canStart && !managedRun) {
         manager = null;
       }
       let sentinel: RestartSentinelPayload | null;
       try {
-        sentinel = manager ? null : await refreshLatestUpdateRestartSentinel();
+        sentinel = manager ? null : await prepareLatestUpdateRestartSentinel(undefined, lifecycle);
       } catch (err) {
         context?.logGateway?.warn(
           `update.status sentinel refresh failed: ${formatErrorMessage(err)}`,
@@ -81,7 +84,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       }
       mark("checkout");
       const config = context?.getRuntimeConfig?.();
-      if (params.refreshCheckout === true && config) {
+      if ((params.refreshCheckout === true || immutable) && config) {
         try {
           await refreshGatewayUpdateStatus(config);
         } catch (err) {

@@ -43,27 +43,6 @@ export function capabilityAuthOperation(key: CapabilityContractKey): string | un
   return key === "mediaUnderstandingProviders" ? undefined : GENERATION_AUTH_CAPABILITIES[key];
 }
 
-function listCapabilityAuthSignals(params: {
-  plugin: PluginManifestRecord;
-  key: CapabilityContractKey;
-  providerId: string;
-}): Array<{
-  provider: string;
-  providerBaseUrl?: NonNullable<
-    NonNullable<PluginManifestRecord["imageGenerationProviderMetadata"]>[string]["authSignals"]
-  >[number]["providerBaseUrl"];
-}> {
-  const metadataKey = CAPABILITY_METADATA_KEYS[params.key];
-  const metadata = metadataKey ? params.plugin[metadataKey]?.[params.providerId] : undefined;
-  if (metadata?.authSignals?.length) {
-    return metadata.authSignals;
-  }
-  // Older manifests only declare provider ids; derive auth signals from aliases/providers.
-  return [params.providerId, ...(metadata?.aliases ?? []), ...(metadata?.authProviders ?? [])].map(
-    (provider) => ({ provider }),
-  );
-}
-
 function hasAvailableCapabilityPlugin(
   params: {
     snapshot: CapabilityMetadataSnapshot;
@@ -111,11 +90,13 @@ function hasConfiguredCapabilityProviderSignal(params: {
   ) {
     return true;
   }
-  for (const signal of listCapabilityAuthSignals({
-    plugin: params.plugin,
-    key: params.key,
-    providerId: params.providerId,
-  })) {
+  // Older manifests only declare provider ids; derive auth signals from aliases/providers.
+  const authSignals = metadata?.authSignals?.length
+    ? metadata.authSignals
+    : [params.providerId, ...(metadata?.aliases ?? []), ...(metadata?.authProviders ?? [])].map(
+        (provider) => ({ provider, providerBaseUrl: undefined }),
+      );
+  for (const signal of authSignals) {
     if (
       !manifestProviderBaseUrlGuardPasses({
         config: params.config,
@@ -204,7 +185,6 @@ export function loadCapabilityMetadataSnapshot(params: {
   });
 }
 
-/** Checks whether any available plugin has a configured provider for a capability contract. */
 export function hasSnapshotCapabilityAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   key: CapabilityContractKey;
@@ -213,18 +193,11 @@ export function hasSnapshotCapabilityAvailability(params: {
 }): boolean {
   return hasAvailableCapabilityPlugin(params, (plugin) =>
     (plugin.contracts?.[params.key] ?? []).some((providerId) =>
-      hasConfiguredCapabilityProviderSignal({
-        plugin,
-        key: params.key,
-        providerId,
-        config: params.config,
-        authStore: params.authStore,
-      }),
+      hasConfiguredCapabilityProviderSignal({ ...params, plugin, providerId }),
     ),
   );
 }
 
-/** Checks whether any available plugin exposes env-backed auth for a provider id. */
 export function hasSnapshotProviderEnvAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   providerId: string;
@@ -238,7 +211,6 @@ export function hasSnapshotProviderEnvAvailability(params: {
   );
 }
 
-/** Checks whether a specific provider id is available for a capability contract. */
 export function hasSnapshotCapabilityProviderAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   key: CapabilityContractKey;
@@ -250,12 +222,6 @@ export function hasSnapshotCapabilityProviderAvailability(params: {
     if (!plugin.contracts?.[params.key]?.includes(params.providerId)) {
       return false;
     }
-    return hasConfiguredCapabilityProviderSignal({
-      plugin,
-      key: params.key,
-      providerId: params.providerId,
-      config: params.config,
-      authStore: params.authStore,
-    });
+    return hasConfiguredCapabilityProviderSignal({ ...params, plugin });
   });
 }

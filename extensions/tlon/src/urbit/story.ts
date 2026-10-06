@@ -1,9 +1,3 @@
-/**
- * Tlon Story Format - Rich text converter
- *
- * Converts markdown-like text to Tlon's story format.
- */
-
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 
 type StoryInline =
@@ -141,10 +135,10 @@ function mergeAdjacentStrings(inlines: StoryInline[]): StoryInline[] {
   return result;
 }
 
-export function createImageBlock(src: string, alt = "", height = 0, width = 0): StoryVerse {
+export function createImageBlock(src: string, alt = ""): StoryVerse {
   return {
     block: {
-      image: { src, height, width, alt },
+      image: { src, height: 0, width: 0, alt },
     },
   };
 }
@@ -160,34 +154,14 @@ export function isImageUrl(url: string): boolean {
   return imageExtensions.test(path);
 }
 
-/**
- * Process inlines and extract any image markers into blocks
- */
-function processInlinesForImages(inlines: StoryInline[]): {
-  inlines: StoryInline[];
-  imageBlocks: StoryVerse[];
-} {
-  const cleanInlines: StoryInline[] = [];
-  const imageBlocks: StoryVerse[] = [];
-
-  for (const inline of inlines) {
-    if (typeof inline === "object" && "imageBlock" in inline) {
-      const img = inline.imageBlock;
-      imageBlocks.push(createImageBlock(img.src, img.alt));
-    } else {
-      cleanInlines.push(inline);
-    }
-  }
-
-  return { inlines: cleanInlines, imageBlocks };
-}
-
-function parseInlinesWithBreaks(text: string): {
-  inlines: StoryInline[];
-  imageBlocks: StoryVerse[];
-} {
+function parseInlinesWithBreaks(text: string) {
   const withBreaks: StoryInline[] = [];
+  const imageBlocks: StoryVerse[] = [];
   for (const inline of parseInlineMarkdown(text)) {
+    if (typeof inline === "object" && "imageBlock" in inline) {
+      imageBlocks.push(createImageBlock(inline.imageBlock.src, inline.imageBlock.alt));
+      continue;
+    }
     if (typeof inline !== "string" || !inline.includes("\n")) {
       withBreaks.push(inline);
       continue;
@@ -202,21 +176,10 @@ function parseInlinesWithBreaks(text: string): {
       }
     }
   }
-  return processInlinesForImages(withBreaks);
+  return { inlines: withBreaks, imageBlocks };
 }
 
-type MarkdownListItem = {
-  indent: number;
-  contentIndent: number;
-  markerType: Exclude<StoryListType, "tasklist">;
-  markerKey: string;
-  orderedStart?: number;
-  hasSourceBody: boolean;
-  hasBlockBody: boolean;
-  hasImages: boolean;
-  content: StoryInline[];
-  checked?: boolean;
-};
+type MarkdownListItem = NonNullable<ReturnType<typeof parseMarkdownListItem>>;
 
 const MARKDOWN_LIST_ITEM_PATTERN = /^([ \t]*)([-+*]|\d{1,9}[.)])(?:([ \t]+)(.*))?$/;
 
@@ -242,14 +205,16 @@ function whitespaceColumns(text: string, startColumn = 0): number {
   return column;
 }
 
-function parseMarkdownListItem(line: string): MarkdownListItem | undefined {
+function parseMarkdownListItem(line: string) {
   const match = line.match(MARKDOWN_LIST_ITEM_PATTERN);
   if (!match || isMarkdownThematicBreak(line.trim())) {
     return undefined;
   }
 
   const marker = expectDefined(match[2], "list marker capture");
-  const markerType = /^\d/.test(marker) ? "ordered" : "unordered";
+  const markerType: Exclude<StoryListType, "tasklist"> = /^\d/.test(marker)
+    ? "ordered"
+    : "unordered";
   const padding = match[3] ?? " ";
   const sourceBody = match[4] ?? "";
   let body = sourceBody;
@@ -493,7 +458,6 @@ export function markdownToStory(markdown: string): Story {
       preservedListMarkerKey = undefined;
     }
 
-    // Code block: ```lang\ncode\n```
     if (line.startsWith("```")) {
       const lang = line.slice(3).trim() || "plaintext";
       const codeLines: string[] = [];
@@ -518,7 +482,6 @@ export function markdownToStory(markdown: string): Story {
       continue;
     }
 
-    // Headers: # H1, ## H2, etc.
     const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (headerMatch) {
       const tag =
@@ -535,14 +498,12 @@ export function markdownToStory(markdown: string): Story {
       continue;
     }
 
-    // Horizontal rule: --- or ***
     if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
       story.push({ block: { rule: null } });
       i++;
       continue;
     }
 
-    // Blockquote: > text
     if (line.startsWith("> ")) {
       const quoteLines: string[] = [];
       while (true) {

@@ -20,8 +20,8 @@ import {
   isUpdateRehearsalReadOnlyPath,
   resolveUpdateRehearsalRoot,
 } from "../infra/update-rehearsal-paths.js";
-import { transitionPendingSkillProposalToStale } from "../skills/workshop/apply-transition.js";
 import { reconcileInterruptedSkillProposalApply } from "../skills/workshop/reconcile-transition.js";
+import { transitionPendingSkillProposalToStale } from "../skills/workshop/service-query.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   parseSkillProposalRow,
@@ -68,15 +68,6 @@ import {
   finishWorkshopWorkspaceRelocations,
   prepareWorkshopWorkspaceRelocation,
 } from "./doctor-skill-workshop-workspaces.js";
-
-type WorkshopRelocationResult = {
-  movedSkills: number;
-  retargetedProposals: number;
-  staleProposals: number;
-  migratedBackupRoots: number;
-  warnings: string[];
-  recoverableWarningCount: number;
-};
 
 export type LegacyWorkshopMigrationInspection = {
   externalProposalCount: number;
@@ -143,7 +134,7 @@ async function relocateLegacyWorkshopTargets(
   backupRoots: readonly LegacyCollectionBackupRoot[],
   assertCurrent: () => void,
   unavailableWorkspaceDirs: ReadonlyMap<string, string> = new Map(),
-): Promise<WorkshopRelocationResult> {
+) {
   assertCurrent();
   const database = openOpenClawStateDatabase({ env });
   const kysely = getNodeSqliteKysely<

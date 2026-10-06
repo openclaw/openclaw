@@ -67,14 +67,6 @@ actor PushRegistrationManager {
         topic: String,
         gatewayIdentity: PushRelayGatewayIdentity)
     async throws -> String {
-        guard self.buildConfig.distribution == .official else {
-            throw PushRelayError.relayMisconfigured(
-                "Relay transport requires an official push build mode")
-        }
-        try Self.validateRelayContract(
-            relayProfile: self.buildConfig.relayProfile,
-            apnsEnvironment: self.buildConfig.apnsEnvironment,
-            proofPolicy: self.buildConfig.proofPolicy)
         GatewayDiagnostics.pushRelay.stage(
             "contract validated apns=\(self.buildConfig.apnsEnvironment.rawValue) "
                 + "profile=\(self.buildConfig.relayProfile.rawValue) "
@@ -87,10 +79,7 @@ actor PushRegistrationManager {
         else {
             throw PushRelayError.relayMisconfigured("Missing bundle identifier for relay registration")
         }
-        guard let installationId = GatewaySettingsStore.loadStableInstanceID()?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !installationId.isEmpty
-        else {
+        guard let installationId = GatewaySettingsStore.loadStableInstanceID() else {
             throw PushRelayError.relayMisconfigured("Missing stable installation ID for relay registration")
         }
 
@@ -155,30 +144,6 @@ actor PushRegistrationManager {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         // Refresh shortly before expiry so reconnect-path republishes a live handle.
         return expiresAtMs <= nowMs + 60000
-    }
-
-    private static func validateRelayContract(
-        relayProfile: PushRelayProfile,
-        apnsEnvironment: PushAPNsEnvironment,
-        proofPolicy: PushProofPolicy)
-    throws {
-        switch relayProfile {
-        case .production:
-            guard apnsEnvironment == .production, proofPolicy == .appleStrict else {
-                throw PushRelayError.relayMisconfigured(
-                    "production relay profile requires production APNs and appleStrict proof")
-            }
-        case .deviceSandbox:
-            guard apnsEnvironment == .sandbox, proofPolicy == .appleDevelopment else {
-                throw PushRelayError.relayMisconfigured(
-                    "deviceSandbox relay profile requires sandbox APNs and appleDevelopment proof")
-            }
-        case .simulatorSandbox:
-            guard apnsEnvironment == .sandbox, proofPolicy == .internalSimulator else {
-                throw PushRelayError.relayMisconfigured(
-                    "simulatorSandbox relay profile requires sandbox APNs and internalSimulator proof")
-            }
-        }
     }
 
     private static func sha256Hex(_ value: String) -> String {

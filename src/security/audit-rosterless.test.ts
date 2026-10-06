@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 
 vi.unmock("../agents/agent-scope-config.js");
 
@@ -74,7 +75,7 @@ describe("security audit rosterless configs", () => {
 
   it("distinguishes an authored empty roster from an absent pre-roster source", async () => {
     const { stateDir, workspaceDir } = makeAuditPaths("authored-empty-roster");
-    const config = { agents: { entries: { main: { default: true } } } } as never;
+    const config = { agents: { entries: { main: {} } } };
     const baseOptions = {
       config,
       stateDir,
@@ -87,7 +88,7 @@ describe("security audit rosterless configs", () => {
 
     const authoredEmpty = await runSecurityAuditCore({
       ...baseOptions,
-      sourceConfig: { agents: { entries: {} } } as never,
+      sourceConfig: { agents: { entries: {} } },
     });
     expect(authoredEmpty.findings).toContainEqual(
       expect.objectContaining({
@@ -108,7 +109,7 @@ describe("security audit rosterless configs", () => {
     // `openclaw onboard` and `agents add` write markerless entries; runtime
     // resolves the sole agent as default, so the audit must not warn.
     const report = await runSecurityAuditCore({
-      config: { agents: { entries: { main: {} } } } as never,
+      config: { agents: { entries: { main: {} } } },
       stateDir,
       configPath: path.join(stateDir, "openclaw.json"),
       workspaceDir,
@@ -122,7 +123,11 @@ describe("security audit rosterless configs", () => {
     );
   });
 
-  it.each([
+  it.each<{
+    label: string;
+    entries: NonNullable<NonNullable<OpenClawConfigWithLegacyRoster["agents"]>["entries"]>;
+    expectedCount: number;
+  }>([
     {
       label: "an explicitly empty roster",
       entries: {},
@@ -142,9 +147,10 @@ describe("security audit rosterless configs", () => {
     "reports a malformed roster with $label without aborting",
     async ({ entries, expectedCount }) => {
       const { stateDir, workspaceDir } = makeAuditPaths("malformed-roster");
+      const config: OpenClawConfigWithLegacyRoster = { agents: { entries } };
 
       const report = await runSecurityAuditCore({
-        config: { agents: { entries } } as never,
+        config,
         stateDir,
         configPath: path.join(stateDir, "openclaw.json"),
         workspaceDir,
@@ -170,7 +176,7 @@ describe("security audit rosterless configs", () => {
           ownership: "explicit",
           entries: { alpha: {}, beta: {} },
         },
-      } as never,
+      },
       stateDir,
       configPath: path.join(stateDir, "openclaw.json"),
       workspaceDir,
@@ -186,13 +192,14 @@ describe("security audit rosterless configs", () => {
 
   it("still reports a legacy default marker on an explicit roster", async () => {
     const { stateDir, workspaceDir } = makeAuditPaths("explicit-roster-with-default");
+    const config: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        ownership: "explicit",
+        entries: { alpha: { default: true }, beta: {} },
+      },
+    };
     const report = await runSecurityAuditCore({
-      config: {
-        agents: {
-          ownership: "explicit",
-          entries: { alpha: { default: true }, beta: {} },
-        },
-      } as never,
+      config,
       stateDir,
       configPath: path.join(stateDir, "openclaw.json"),
       workspaceDir,
@@ -231,7 +238,7 @@ describe("security audit rosterless configs", () => {
             beta: { workspace: betaWorkspace },
           },
         },
-      } as never,
+      },
       stateDir,
       configPath: path.join(stateDir, "openclaw.json"),
       env: { HOME: rootDir },

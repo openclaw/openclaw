@@ -1,5 +1,6 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { nothing, ReactiveElement, render } from "lit";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import type {
   ControlUiLinkReaderDescriptor,
   ControlUiLinkReaderPreview,
@@ -77,14 +78,12 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
   private readonly subscriptions = new SubscriptionsController(this);
   constructor() {
     super();
-    this.subscriptions.watch(
+    this.subscriptions.watchStore(
       () => this.pagePreviewContext?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       () => this.retirePage(),
     );
-    this.subscriptions.watch(
+    this.subscriptions.watchStore(
       () => this.pagePreviewContext?.config,
-      (config, notify) => config.subscribe(notify),
       () => {
         if (this.client && !this.pagePreviewContext?.config.current.automaticallyFetchFavicons) {
           clearLinkPreviews(this.client);
@@ -734,13 +733,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
     };
     this.cache.set(key, entry);
     this.syncInlineStates();
-    while (this.cache.size > CACHE_LIMIT) {
-      const oldestKey = this.cache.keys().next().value;
-      if (!oldestKey) {
-        break;
-      }
-      this.cache.delete(oldestKey);
-    }
+    pruneMapToMaxSize(this.cache, CACHE_LIMIT);
     // Each visible transcript or popup owns its subscription, not the shared fetch.
     return subscribeToSharedRequest(entry, {}, signal);
   }

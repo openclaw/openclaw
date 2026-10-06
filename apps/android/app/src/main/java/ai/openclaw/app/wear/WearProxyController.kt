@@ -1,5 +1,7 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.parseGatewayModelCatalog
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.takeCodePoints
@@ -33,12 +35,6 @@ internal class WearProxyGatewayException(
   override val message: String,
 ) : IllegalStateException(message)
 
-internal data class WearProxyAgent(
-  val id: String,
-  val name: String?,
-  val emoji: String?,
-)
-
 internal class WearProxyController(
   private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
   private val isGatewayConnected: () -> Boolean,
@@ -49,7 +45,7 @@ internal class WearProxyController(
   private val activeAgentId: () -> String? = { null },
   private val activeSessionKey: () -> String? = { null },
   private val selectedModelRef: () -> String? = { null },
-  private val agents: () -> List<WearProxyAgent> = { emptyList() },
+  private val agents: () -> List<GatewayAgentSummary> = { emptyList() },
   private val selectGatewayAgent: suspend (agentId: String) -> Boolean = { false },
   private val selectSessionModel: suspend (sessionKey: String, modelRef: String) -> Boolean = { _, _ -> false },
   private val connectGateway: suspend () -> Unit = {},
@@ -202,11 +198,7 @@ internal class WearProxyController(
       .firstOrNull { (id) -> id == selected }
       ?.takeIf { selectedAgent -> boundedAgents.none { (id) -> id == selectedAgent.first } }
       ?.let { selectedAgent ->
-        if (boundedAgents.size == MAX_AGENT_COUNT) {
-          boundedAgents[boundedAgents.lastIndex] = selectedAgent
-        } else {
-          boundedAgents += selectedAgent
-        }
+        boundedAgents[boundedAgents.lastIndex] = selectedAgent
       }
     return buildJsonObject {
       put(
@@ -670,8 +662,6 @@ private fun JsonObject.optionalBooleanParam(name: String): Boolean? {
 }
 
 private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyGatewayException("invalid_response", "$method returned an invalid response")
-
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun JsonObject.stringOrNull(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 

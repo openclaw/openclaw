@@ -12,7 +12,7 @@ import {
 } from "./update-git-runtime.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { runStep } from "./update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import {
   readCurrentGitUpdateRecovery,
@@ -22,7 +22,6 @@ import {
   createGitRuntimeTransaction,
   prepareGitRuntimePromotion,
 } from "./update-runner-git-runtime.js";
-import { createGitUpdateSteps } from "./update-runner-git-step-policy.js";
 import {
   runGitActivationBranchCheckStep,
   runGitCleanCheckStep,
@@ -37,7 +36,12 @@ import {
   withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
 import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
-import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
+import type {
+  CommandRunner,
+  RunStepOptions,
+  UpdateRunResult,
+  UpdateRunnerOptions,
+} from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export async function updateGitCheckout(params: {
@@ -91,11 +95,34 @@ export async function updateGitCheckout(params: {
   const needsCheckoutMain = channel === "dev" && !hasDevTarget && branch !== DEV_BRANCH;
   const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 9;
   const steps: UpdateStepResult[] = [];
-  const { step, workStep, forRunner, recoveryStep } = createGitUpdateSteps({
+  // Work and probes share ordering, including commands in the private inspection clone.
+  let stepIndex = 0;
+  const forRunner =
+    (runner: CommandRunner, deadline: number | undefined) =>
+    (name: string, argv: string[], cwd: string, env?: NodeJS.ProcessEnv): RunStepOptions => ({
+      runCommand: runner,
+      name,
+      argv,
+      cwd,
+      timeoutMs: deadline,
+      env,
+      progress: opts.progress,
+      stepIndex: stepIndex++,
+      totalSteps,
+      results: steps,
+    });
+  const step = forRunner(runCommand, timeoutMs);
+  // Work can outlive an observation allowance. Only the caller may cap it.
+  const workStep = forRunner(runCommand, opts.timeoutMs);
+  const recoveryStep = (name: string, argv: string[], cwd: string): RunStepOptions => ({
     runCommand,
-    opts,
-    probeTimeoutMs: timeoutMs,
-    totalSteps,
+    name,
+    argv,
+    cwd,
+    // Recovery retains its finite settlement allowance after work has failed.
+    timeoutMs,
+    stepIndex: 0,
+    totalSteps: 1,
     results: steps,
   });
 
@@ -104,6 +131,29 @@ export async function updateGitCheckout(params: {
   let sourceMutationStarted = false;
   let runtimePromotion: Awaited<ReturnType<typeof prepareGitRuntimePromotion>> | undefined;
   let runtimeRetained = false;
+  let candidateCleanup: (() => Promise<boolean>) | undefined;
+  let inspectionCleanup: (() => Promise<boolean>) | undefined;
+  const cleanupCandidateRuntime = async (assertCurrent = () => {}) => {
+    assertCurrent();
+    if (candidateCleanup) {
+      const removed = await candidateCleanup();
+      assertCurrent();
+      if (!removed) {
+        return false;
+      }
+      candidateCleanup = undefined;
+    }
+    // The worktree still needs this private repository until its cleanup settles.
+    if (inspectionCleanup) {
+      const removed = await inspectionCleanup();
+      assertCurrent();
+      if (!removed) {
+        return false;
+      }
+      inspectionCleanup = undefined;
+    }
+    return true;
+  };
   let candidateTransfer:
     | Extract<Awaited<ReturnType<typeof prepareGitCandidateTransfer>>, { status: "ok" }>
     | undefined;
@@ -232,6 +282,9 @@ export async function updateGitCheckout(params: {
       });
     }
   };
+  if (beforeShaResult.code !== 0 || !beforeSha) {
+    return buildError("git-root-unresolved");
+  }
   const { result: statusCheck, dirty } = await runGitCleanCheckStep(
     step("clean-check", gitCleanCheckArgs(gitRoot), gitRoot),
   );
@@ -287,8 +340,8 @@ export async function updateGitCheckout(params: {
       runInspectionCommand: CommandRunner,
     ) => {
       let publishedCandidate = false;
-      const { step: inspectionStep, workStep: inspectionWorkStep } =
-        forRunner(runInspectionCommand);
+      const inspectionStep = forRunner(runInspectionCommand, timeoutMs);
+      const inspectionWorkStep = forRunner(runInspectionCommand, opts.timeoutMs);
       const importCandidate = async (candidateSha: string, upstreamRef?: string) => {
         // Close the pinned pack on every exit, including admission refusal,
         // before the surrounding inspection checkout is removed.
@@ -363,6 +416,10 @@ export async function updateGitCheckout(params: {
         beforeCandidate: inspectTarget,
         validateCandidate: opts.validateCandidate,
         prepareGitExposure: opts.prepareGitExposure,
+        retainCleanup: (cleanup) => {
+          candidateCleanup = cleanup;
+          return true;
+        },
         prepareCandidate: async (root, cleanupRoot) => {
           const candidate = await runInspectionCommand(["git", "-C", root, "rev-parse", "HEAD"], {
             cwd: root,
@@ -419,7 +476,14 @@ export async function updateGitCheckout(params: {
         work: { timeoutMs: opts.timeoutMs },
         onWarning: (warning) => {
           steps.push(warning);
-          opts.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
+          return reportUpdateStepCompletion(opts.progress, { ...warning, index: 0, total: 0 });
+        },
+        retainCleanup: (cleanup) => {
+          if (!candidateCleanup) {
+            return false;
+          }
+          inspectionCleanup = cleanup;
+          return true;
         },
       },
       inspectAndPrepare,
@@ -435,8 +499,8 @@ export async function updateGitCheckout(params: {
         ? await rollbackError(preflight.reason)
         : buildError(preflight.reason, preflight.status);
     }
-    // Candidate validation and cleanup attempts finish while the old gateway serves.
-    // Its exact build is retained on this filesystem; activation never installs or builds.
+    // Keep the runnable candidate for configuration rechecks until activation settles.
+    // Its exact build is staged on this filesystem; activation never installs or builds.
     const sourceChanged = await checkSourceUnchanged();
     if (sourceChanged) {
       return buildError(sourceChanged.reason, sourceChanged.status);
@@ -497,10 +561,24 @@ export async function updateGitCheckout(params: {
         }
       };
       runtimeRetained = true;
+      const promotion = runtimePromotion;
       await opts.onTransaction(
         createGitRuntimeTransaction({
           root: gitRoot,
-          promotion: runtimePromotion,
+          promotion: {
+            backupRoot: promotion.backupRoot,
+            cleanup: async (assertCurrent) => {
+              if (!(await cleanupCandidateRuntime(assertCurrent))) {
+                return steps.findLast(
+                  (cleanupStep) =>
+                    cleanupStep.advisory?.kind === "recoverable-maintenance" &&
+                    (cleanupStep.name === "preflight-cleanup" ||
+                      cleanupStep.name === "git-target-inspection-cleanup"),
+                );
+              }
+              return await promotion.cleanup(assertCurrent);
+            },
+          },
           assertRollbackSafe,
           restoreRuntime: async (assertCurrent) => {
             const rollbackStart = steps.length;
@@ -624,7 +702,7 @@ export async function updateGitCheckout(params: {
   } finally {
     if (!cleanupUncertain) {
       await candidateTransfer?.cleanup(step("git-update-pack-cleanup", [], gitRoot));
-      if (!runtimeRetained) {
+      if (!runtimeRetained && (await cleanupCandidateRuntime())) {
         await runtimePromotion?.cleanup();
       }
     }

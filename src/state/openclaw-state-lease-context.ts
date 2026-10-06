@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   OpenClawStateLeaseAcquisition,
   OpenClawStateLeaseIdentity,
-} from "./openclaw-state-lease-store.js";
+} from "./openclaw-state-lease.types.js";
 
 export type OpenClawStateLeaseContext = {
   signal: AbortSignal;
@@ -11,6 +11,8 @@ export type OpenClawStateLeaseContext = {
   renew?(): void;
   /** Verify that this exact owner holds a non-expired lease at this instant. */
   assertOwned(): void;
+  /** Worker-heartbeat leases can verify durable ownership without blocking the caller. */
+  assertOwnedAsync?(this: void): Promise<void>;
   /** Verify ownership using the caller's active write transaction. */
   assertOwnedInTransaction(database: DatabaseSync): void;
 };

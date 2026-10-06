@@ -363,11 +363,11 @@ describe("Bedrock prompt cache ownership", () => {
           {
             role: "user",
             content: [
-              { type: "text", text: "First request" },
+              { type: "text", text: "OpenClaw runtime context:\nFirst request" },
               { type: "text", text: "Retained context one" },
             ],
-            runtimeContextCarrier: true,
             timestamp: 0,
+            runtimeContext: {},
           },
           {
             role: "assistant",
@@ -389,11 +389,11 @@ describe("Bedrock prompt cache ownership", () => {
           {
             role: "user",
             content: [
-              { type: "text", text: "Second request" },
+              { type: "text", text: "OpenClaw runtime context:\nSecond request" },
               { type: "text", text: "Retained context two" },
             ],
-            runtimeContextCarrier: true,
             timestamp: 2,
+            runtimeContext: {},
           },
         ],
       };
@@ -421,7 +421,7 @@ describe("Bedrock prompt cache ownership", () => {
       );
       const second = await captureMessages(model, context, { cacheRetention: "short" });
       expect(second[2]?.content).toEqual([
-        { text: "Second request" },
+        { text: "OpenClaw runtime context:\nSecond request" },
         { text: "Retained context two" },
       ]);
       expect(second[4]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
@@ -494,45 +494,81 @@ describe("Bedrock prompt cache ownership", () => {
     ]);
   });
 
-  it("never includes a runtime-context carrier in the cached prefix of a later user turn", async () => {
+  it.each([
+    { label: "canonical", facts: { runtimeContext: {} } },
+    { label: "v2026.9.7", facts: { runtimeContextCarrier: true } },
+  ])(
+    "never includes a $label runtime-context carrier in a later cached prefix",
+    async ({ facts }) => {
+      const messages = await captureMessages(
+        model(),
+        {
+          messages: [
+            { role: "user", content: "stable operator request", timestamp: 0 },
+            {
+              role: "user",
+              content: "OpenClaw runtime context:\nvolatile current-turn metadata",
+              timestamp: 1,
+              ...facts,
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_follow_up",
+              toolName: "read",
+              content: [{ type: "text", text: "later stable tool output" }],
+              isError: false,
+              timestamp: 2,
+            },
+          ],
+        } as never,
+        { cacheRetention: "long" },
+      );
+
+      expect(messages[0]?.content).toEqual([
+        { text: "stable operator request" },
+        { cachePoint: { type: "default", ttl: "1h" } },
+      ]);
+      expect(messages[1]?.content).toEqual([
+        { text: "OpenClaw runtime context:\nvolatile current-turn metadata" },
+      ]);
+      expect(messages[2]?.content).toEqual([
+        {
+          toolResult: {
+            toolUseId: "call_follow_up",
+            content: [{ text: "later stable tool output" }],
+            status: "success",
+          },
+        },
+      ]);
+    },
+  );
+
+  it("does not cache a later stable turn after a mixed-media shipped carrier", async () => {
     const messages = await captureMessages(
-      model(),
+      bedrockModel({ input: ["text", "image"] }),
       {
         messages: [
-          { role: "user", content: "stable operator request", timestamp: 0 },
           {
             role: "user",
-            content: "volatile current-turn metadata",
+            content: [
+              { type: "text", text: "OpenClaw runtime context:\nvolatile current-turn metadata" },
+              { type: "image", mimeType: "image/png", data: "AA==" },
+            ],
+            timestamp: 0,
             runtimeContextCarrier: true,
-            timestamp: 1,
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_follow_up",
-            toolName: "read",
-            content: [{ type: "text", text: "later stable tool output" }],
-            isError: false,
-            timestamp: 2,
-          },
+          { role: "user", content: "later stable operator request", timestamp: 1 },
         ],
       } as never,
       { cacheRetention: "long" },
     );
 
-    expect(messages[0]?.content).toEqual([
-      { text: "stable operator request" },
-      { cachePoint: { type: "default", ttl: "1h" } },
-    ]);
-    expect(messages[1]?.content).toEqual([{ text: "volatile current-turn metadata" }]);
-    expect(messages[2]?.content).toEqual([
-      {
-        toolResult: {
-          toolUseId: "call_follow_up",
-          content: [{ text: "later stable tool output" }],
-          status: "success",
-        },
-      },
-    ]);
+    expect(messages).toHaveLength(2);
+    for (const message of messages) {
+      for (const block of message.content ?? []) {
+        expect(block).not.toHaveProperty("cachePoint");
+      }
+    }
   });
 
   it("does not cache a later stable turn when volatile context starts the prefix", async () => {
@@ -542,9 +578,9 @@ describe("Bedrock prompt cache ownership", () => {
         messages: [
           {
             role: "user",
-            content: "volatile current-turn metadata",
-            runtimeContextCarrier: true,
+            content: "OpenClaw runtime context:\nvolatile current-turn metadata",
             timestamp: 0,
+            runtimeContext: {},
           },
           { role: "user", content: "later stable operator request", timestamp: 1 },
         ],
@@ -553,7 +589,10 @@ describe("Bedrock prompt cache ownership", () => {
     );
 
     expect(messages).toEqual([
-      { role: ConversationRole.USER, content: [{ text: "volatile current-turn metadata" }] },
+      {
+        role: ConversationRole.USER,
+        content: [{ text: "OpenClaw runtime context:\nvolatile current-turn metadata" }],
+      },
       { role: ConversationRole.USER, content: [{ text: "later stable operator request" }] },
     ]);
   });

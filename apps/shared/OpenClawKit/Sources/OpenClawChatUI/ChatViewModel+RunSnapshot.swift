@@ -50,10 +50,9 @@ extension OpenClawChatViewModel {
         if replacedRun {
             // Gateway snapshots and live deltas are canonical for this session.
             // Replace stale local ownership so only that run consumes later events.
-            clearPendingRuns(reason: nil)
+            clearPendingRuns()
             self.pendingRuns.insert(runId)
-            self.turnToolCallsById = [:]
-            self.updateStreamingAssistantText(nil)
+            self.clearStreamingActivity()
         }
         if self.runMessageScopesByRunID[runId] == nil {
             self.runMessageScopesByRunID[runId] = currentRunMessageScope()

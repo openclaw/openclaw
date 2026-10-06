@@ -101,6 +101,21 @@ async function memoryHostEventSourceNeedsMigration(params: {
   );
 }
 
+async function moveLegacyMemoryHostEventFile(
+  source: ReadyLegacyMemoryHostEventSource,
+  target: string,
+) {
+  const { statRegularFileSync } = await import("openclaw/plugin-sdk/file-access-runtime");
+  return source.root.move(source.relativePath, target, {
+    assertBeforeMutation: () => {
+      // Discovery and reads precede awaited work; every move still requires a regular file.
+      if (statRegularFileSync(source.filePath).missing) {
+        throw new Error("Memory Core host event file no longer exists");
+      }
+    },
+  });
+}
+
 async function finalizeLegacyMemoryHostEventSource(params: {
   source: ReadyLegacyMemoryHostEventSource;
   changes: string[];
@@ -114,7 +129,7 @@ async function finalizeLegacyMemoryHostEventSource(params: {
     throw new Error(`Missing Memory Core host event archive path for ${params.source.filePath}`);
   }
   try {
-    await params.source.root.move(params.source.relativePath, archivedRelativePath);
+    await moveLegacyMemoryHostEventFile(params.source, archivedRelativePath);
     params.changes.push(
       `Archived Memory Core host events legacy source -> ${path.join(params.source.workspaceDir, archivedRelativePath)}`,
     );
@@ -137,7 +152,7 @@ async function restoreClaimedMemoryHostEventSource(params: {
       return;
     }
     if (!(await params.source.root.exists(params.activeRelativePath))) {
-      await params.source.root.move(params.source.relativePath, params.activeRelativePath);
+      await moveLegacyMemoryHostEventFile(params.source, params.activeRelativePath);
       return;
     }
     params.warnings.push(
@@ -167,7 +182,7 @@ async function migrateLegacyMemoryHostEventSource(params: {
   let claimFinalized = source.storage === "archive";
   if (source.storage === "active") {
     const generation = await resolveMemoryHostEventArchivePath(source);
-    await source.root.move(source.relativePath, generation.claimRelativePath);
+    await moveLegacyMemoryHostEventFile(source, generation.claimRelativePath);
     source = {
       ...source,
       filePath: path.join(source.workspaceDir, generation.claimRelativePath),

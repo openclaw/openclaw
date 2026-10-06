@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveEffectiveAgentSkillsLimits } from "../discovery/agent-filter.js";
 import { isSkillPromptVisible } from "../discovery/skill-index.js";
+import { resolveSkillFileHost } from "../skill-file-host.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
@@ -44,7 +45,9 @@ export async function buildSkillSnapshot(
     prompt: prepared.prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
-      gatewayFilePath: entry.skill.fileHost === "gateway" ? entry.skill.filePath : undefined,
+      source: { filePath: entry.skill.filePath, fileHost: resolveSkillFileHost(entry.skill) },
+      gatewayFilePath:
+        resolveSkillFileHost(entry.skill) === "gateway" ? entry.skill.filePath : undefined,
       skillKey: resolveSkillKey(entry.skill, entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
@@ -55,6 +58,7 @@ export async function buildSkillSnapshot(
       ? { nodeSkillsEligibility: opts.eligibility.nodeSkills }
       : {}),
     resolvedSkills: prepared.skills.map((skill) => byName.get(skill.name)!),
+    discoverySkills: resolvedSkills,
     version: opts?.snapshotVersion,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
   };

@@ -14,7 +14,7 @@ it("does not project the gateway's compatibility id as an explicit fleet default
       selectionRequired: true,
       agents: [{ id: "alpha" }, { id: "beta" }],
     });
-    expect(buildStatusAgentsValue({ agentStatus, formatTimeAgo: () => "now" })).toBe(
+    expect(buildStatusAgentsValue({ agentStatus })).toBe(
       "2 · no workspaces bootstrapping · sessions 0",
     );
   });

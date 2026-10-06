@@ -98,15 +98,9 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
 }
 
 /** Resolves the generic native-execution block for sandboxed or node-hosted sessions. */
-export function resolveCodexNativeExecutionBlock(params: {
-  config?: OpenClawConfig;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  sandbox?: Pick<SandboxContext, "enabled"> | null;
-  sandboxEnvironmentSelected?: boolean;
-  surface: string;
-}): string | undefined {
+export function resolveCodexNativeExecutionBlock(
+  params: Parameters<typeof resolveCodexNativeSandboxBlock>[0],
+): string | undefined {
   return resolveCodexNativeSandboxBlock(params) ?? resolveCodexNativeNodeExecBlock(params);
 }
 

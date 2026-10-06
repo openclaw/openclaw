@@ -1,19 +1,6 @@
 import type { WorkboardLifecycle } from "./types.ts";
 
-export type CardSessionState =
-  | "unlinked"
-  | "unknown"
-  | "unavailable"
-  | "ambiguous"
-  | "idle"
-  | "queued"
-  | "running"
-  | "stale"
-  | "succeeded"
-  | "failed"
-  | "timed_out"
-  | "cancelled"
-  | "stopped";
+export type CardSessionState = WorkboardLifecycle["state"] | "cancelled" | "timed_out" | "stopped";
 
 export function getCardSessionState(lifecycle: WorkboardLifecycle): CardSessionState {
   if (lifecycle.state === "failed") {

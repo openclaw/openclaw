@@ -4,20 +4,11 @@ import {
   createCronRegressionState,
   createDueIsolatedJob,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
+import { prepareCronRunAdmission } from "../../cron/run-admission.js";
 import { CronService } from "../../cron/service.js";
-import { assertServiceCronRunReceiptCurrent } from "../../cron/service/run-receipts.js";
 import { saveCronStore } from "../../cron/store.js";
-import {
-  finishCronRunReceiptAsync,
-  prepareCronRunReceiptClaim,
-} from "../../cron/store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../../cron/store/run-receipt-store.test-support.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -41,24 +32,19 @@ it("revalidates a scheduled Gateway caller while its child reservation holds the
       runCommandJob: runner,
     });
     await saveCronStore(storePath, { version: 1, jobs: [parent, target] });
-    const prepared = prepareCronRunReceiptClaim({
-      storePath,
-      job: parent,
+    const admission = prepareCronRunAdmission({
+      cfg: {},
+      runId: "scheduled-cron-caller",
       agentId: "main",
-      startedAtMs: now,
-      observed: undefined,
+      sessionKey: "cron:caller",
+      jobId: parent.id,
+      deliveryAttemptFence: null,
     });
-    const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabaseForTest({
-        database: db,
-        prepared,
-        resolveAgentId: () => "main",
-      }),
-    );
-    const operationalRunInstance = createOperationalRunInstanceRef("scheduled-cron-caller");
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance, () =>
-      assertServiceCronRunReceiptCurrent(state, receipt),
-    );
+    const admitted = await admission.preparedRunAdmission.admit("gateway");
+    const authority = getAdmittedRunDelegatedAuthority(admitted);
+    if (!authority) {
+      throw new Error("Scheduled caller was not admitted");
+    }
     const cron = new CronService(state.deps);
     const client = createSyntheticPluginRuntimeClient();
     client.internal = {
@@ -66,7 +52,7 @@ it("revalidates a scheduled Gateway caller while its child reservation holds the
         kind: "agentRuntime",
         agentId: "main",
         sessionKey: "agent:main:main",
-        operationalRunInstance,
+        operationalRunInstance: admitted.operationalRunInstance,
         delegatedAuthority: { ...authority, kind: "local" },
       },
     };
@@ -80,9 +66,13 @@ it("revalidates a scheduled Gateway caller while its child reservation holds the
       throw new Error("Scheduled Gateway caller did not retain its commit guard");
     }
     let checkedWhileWriting = false;
+    const sql = observeMainThreadSql();
+    sql.calibrate();
     const stopObserving = observeCronJobWrites(target.id, (written) => {
       if (written.queuedAtMs !== undefined) {
+        sql.clear();
         commitGuard();
+        sql.expectIdle();
         checkedWhileWriting = true;
       }
     });
@@ -93,13 +83,13 @@ it("revalidates a scheduled Gateway caller while its child reservation holds the
       });
       expect(checkedWhileWriting).toBe(true);
       expect(runner).toHaveBeenCalledOnce();
-      releaseAgentRunDelegatedAuthority(authority);
+      admission.close();
       expect(commitGuard).toThrow("agent runtime authority is no longer active");
     } finally {
+      sql.restore();
       stopObserving();
-      releaseAgentRunDelegatedAuthority(authority);
+      admission.close();
       cron.stop();
-      await finishCronRunReceiptAsync({ handle: receipt, status: "ok", finishedAtMs: now + 1 });
     }
   });
 });

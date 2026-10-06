@@ -8,11 +8,8 @@ import {
 import * as sessionMembers from "../config/sessions/session-sharing-store.native.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  setUserProfileRole,
-} from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
@@ -346,7 +343,7 @@ test("sessions.create revalidates parent participation before committing a fork 
 
 test("createGatewaySession rejects explicit and key-derived unconfigured creation owners", async () => {
   const { createGatewaySession } = await import("./session-create-service.js");
-  const cfg = { agents: { entries: { ops: { default: true } } } };
+  const cfg = { agents: { entries: { ops: {} } } };
   const prepareLifecycle = vi.fn();
 
   for (const { owner, message } of [
@@ -368,41 +365,58 @@ test("createGatewaySession rejects explicit and key-derived unconfigured creatio
   expect(prepareLifecycle).not.toHaveBeenCalled();
 });
 
-test("sessions.create gives plugin runtimes an owned root without linking operator sessions", async () => {
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: { main: sessionStoreEntry("operator-owned-main") },
-  });
-  const pluginClient = {
-    connect: { scopes: ["operator.write"] },
-    internal: { pluginRuntimeOwnerId: "memory-core" },
-  } as never;
+test.each([undefined, "agent:main:dashboard:memory-core-parent"])(
+  "sessions.create gives plugin runtimes owned sessions with parent %s",
+  async (parentSessionKey) => {
+    const { storePath } = await createSessionStoreDir();
+    await writeSessionStore({
+      entries: parentSessionKey
+        ? {
+            [parentSessionKey]: sessionStoreEntry("memory-core-parent", {
+              pluginOwnerId: "memory-core",
+            }),
+          }
+        : { main: sessionStoreEntry("operator-owned-main") },
+    });
+    const pluginClient = {
+      connect: { scopes: ["operator.write"] },
+      internal: { pluginRuntimeOwnerId: "memory-core" },
+    } as never;
 
-  const created = await directSessionReq<{
-    key: string;
-    entry: { parentSessionKey?: string; pluginOwnerId?: string };
-  }>("sessions.create", { agentId: "main" }, { client: pluginClient });
+    const created = await directSessionReq<{
+      key: string;
+      entry: { parentSessionKey?: string; pluginOwnerId?: string };
+    }>("sessions.create", parentSessionKey ? { parentSessionKey } : { agentId: "main" }, {
+      client: pluginClient,
+    });
 
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  const key = requireNonEmptyString(created.payload?.key, "plugin-owned root session key");
-  expect(created.payload?.entry).toMatchObject({ pluginOwnerId: "memory-core" });
-  expect(created.payload?.entry.parentSessionKey).toBeUndefined();
-  expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
-    pluginOwnerId: "memory-core",
-  });
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.entry.parentSessionKey).toBe(parentSessionKey);
+    if (parentSessionKey) {
+      expect(loadSessionEntry({ sessionKey: parentSessionKey, storePath })?.pluginOwnerId).toBe(
+        "memory-core",
+      );
+      return;
+    }
+    const key = requireNonEmptyString(created.payload?.key, "plugin-owned root session key");
+    expect(created.payload?.entry).toMatchObject({ pluginOwnerId: "memory-core" });
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+      pluginOwnerId: "memory-core",
+    });
 
-  const patched = await directSessionReq(
-    "sessions.patch",
-    { key, label: "Plugin-owned root" },
-    { client: pluginClient },
-  );
+    const patched = await directSessionReq(
+      "sessions.patch",
+      { key, label: "Plugin-owned root" },
+      { client: pluginClient },
+    );
 
-  expect(patched.ok, JSON.stringify(patched.error)).toBe(true);
-  expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
-    label: "Plugin-owned root",
-    pluginOwnerId: "memory-core",
-  });
-});
+    expect(patched.ok, JSON.stringify(patched.error)).toBe(true);
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+      label: "Plugin-owned root",
+      pluginOwnerId: "memory-core",
+    });
+  },
+);
 
 test("sessions.create prevents plugin runtimes from adopting, linking, or forking foreign sessions", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -462,33 +476,6 @@ test("sessions.create prevents plugin runtimes from adopting, linking, or forkin
   }
 });
 
-test("sessions.create allows plugin runtimes to link their own parent session", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const parentSessionKey = "agent:main:dashboard:memory-core-parent";
-  await writeSessionStore({
-    entries: {
-      [parentSessionKey]: sessionStoreEntry("memory-core-parent", {
-        pluginOwnerId: "memory-core",
-      }),
-    },
-  });
-  const pluginClient = {
-    connect: { scopes: ["operator.write"] },
-    internal: { pluginRuntimeOwnerId: "memory-core" },
-  } as never;
-
-  const created = await directSessionReq<{
-    key: string;
-    entry: { parentSessionKey?: string };
-  }>("sessions.create", { parentSessionKey }, { client: pluginClient });
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry.parentSessionKey).toBe(parentSessionKey);
-  expect(loadSessionEntry({ sessionKey: parentSessionKey, storePath })?.pluginOwnerId).toBe(
-    "memory-core",
-  );
-});
-
 test("public session mutations reserve agent harness-owned session keys", async () => {
   const { storePath } = await createSessionStoreDir();
 
@@ -526,55 +513,49 @@ test("public session mutations reserve agent harness-owned session keys", async 
   expect(loadSessionEntry({ sessionKey: "agent:main:ordinary-session", storePath })).toBeDefined();
 });
 
-test("sessions.create preserves a pre-existing unlocked harness-prefixed session", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const key = "agent:main:harness:legacy-notes";
-  await writeSessionStore({
-    entries: {
-      [key]: sessionStoreEntry("legacy-session", { label: "Legacy notes" }),
-    },
-  });
+test.each([false, true])(
+  "sessions.create adopts existing harness sessions only when unlocked (locked=%s)",
+  async (locked) => {
+    const { storePath } = await createSessionStoreDir();
+    const key = locked
+      ? "agent:main:harness:codex:supervision:native-thread"
+      : "agent:main:harness:legacy-notes";
+    await writeSessionStore({
+      entries: {
+        [key]: locked
+          ? sessionStoreEntry("locked-session", {
+              agentHarnessId: "codex",
+              modelSelectionLocked: true,
+            })
+          : sessionStoreEntry("legacy-session", { label: "Legacy notes" }),
+      },
+    });
 
-  const created = await directSessionReq<{
-    key: string;
-    sessionId: string;
-  }>("sessions.create", {
-    agentId: "main",
-    key,
-    label: "Updated notes",
-  });
+    const created = await directSessionReq<{
+      key: string;
+      sessionId: string;
+    }>("sessions.create", {
+      agentId: "main",
+      key,
+      ...(locked ? {} : { label: "Updated notes" }),
+    });
 
-  expect(created.ok).toBe(true);
-  expect(created.payload).toMatchObject({ key, sessionId: "legacy-session" });
-  expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
-    sessionId: "legacy-session",
-    label: "Updated notes",
-  });
-});
-
-test("sessions.create rejects a pre-existing locked harness session", async () => {
-  await createSessionStoreDir();
-  const key = "agent:main:harness:codex:supervision:native-thread";
-  await writeSessionStore({
-    entries: {
-      [key]: sessionStoreEntry("locked-session", {
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-      }),
-    },
-  });
-
-  const created = await directSessionReq("sessions.create", {
-    agentId: "main",
-    key,
-  });
-
-  expect(created.ok).toBe(false);
-  expect(created.error).toMatchObject({
-    code: "INVALID_REQUEST",
-    message: "Session key namespace is reserved for agent harness-owned sessions.",
-  });
-});
+    if (locked) {
+      expect(created.ok).toBe(false);
+      expect(created.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: "Session key namespace is reserved for agent harness-owned sessions.",
+      });
+      return;
+    }
+    expect(created.ok).toBe(true);
+    expect(created.payload).toMatchObject({ key, sessionId: "legacy-session" });
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+      sessionId: "legacy-session",
+      label: "Updated notes",
+    });
+  },
+);
 
 test("sessions.create rejects children of model-selection-locked sessions", async () => {
   const { dir } = await createSessionStoreDir();

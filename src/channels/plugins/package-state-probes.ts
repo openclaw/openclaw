@@ -30,9 +30,6 @@ type ChannelPackageStateMetadata = {
   };
 };
 
-/**
- * Metadata keys that can declare a lightweight package-state checker.
- */
 const CHANNEL_PACKAGE_STATE_METADATA_KEYS = ["configuredState", "persistedAuthState"] as const;
 type ChannelPackageStateMetadataKey = (typeof CHANNEL_PACKAGE_STATE_METADATA_KEYS)[number];
 
@@ -221,24 +218,16 @@ function resolveChannelPackageStateChecker(params: {
   return null;
 }
 
-function resolvePackageStateChannelId(entry: PluginChannelCatalogEntry): string | undefined {
-  return normalizeOptionalString(entry.channel.id);
-}
-
-/**
- * Lists bundled channel ids that declare the requested package-state metadata.
- */
 export function listBundledChannelIdsForPackageState(
   metadataKey: ChannelPackageStateMetadataKey,
   discovery?: PluginDiscoveryResult,
 ): string[] {
   return listChannelPackageStateCatalog(metadataKey, discovery)
-    .map((entry) => resolvePackageStateChannelId(entry))
+    .map((entry) => normalizeOptionalString(entry.channel.id))
     .filter((channelId): channelId is string => Boolean(channelId))
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-/** Reports declared bundled channel package-state modules that cannot load. */
 export function collectBundledChannelPackageStateLoadFailures(
   discovery?: PluginDiscoveryResult,
 ): ChannelPackageStateLoadFailure[] {
@@ -256,9 +245,6 @@ export function collectBundledChannelPackageStateLoadFailures(
   return failures;
 }
 
-/**
- * Returns whether a bundled channel reports configured/auth package state.
- */
 export function hasBundledChannelPackageState(params: {
   metadataKey: ChannelPackageStateMetadataKey;
   channelId: string;
@@ -268,7 +254,7 @@ export function hasBundledChannelPackageState(params: {
 }): boolean {
   const requestedChannelId = normalizeOptionalString(params.channelId);
   const entry = listChannelPackageStateCatalog(params.metadataKey, params.discovery).find(
-    (candidate) => resolvePackageStateChannelId(candidate) === requestedChannelId,
+    (candidate) => normalizeOptionalString(candidate.channel.id) === requestedChannelId,
   );
   if (!entry) {
     return false;

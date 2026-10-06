@@ -112,7 +112,6 @@ export type RankShortTermPromotionOptions = {
   maxAgeDays?: number;
   includePromoted?: boolean;
   recencyHalfLifeDays?: number;
-  weights?: Partial<PromotionWeights>;
   nowMs?: number;
 };
 

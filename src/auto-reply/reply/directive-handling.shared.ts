@@ -14,7 +14,6 @@ import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
 
 export const DIRECTIVE_ACK_MESSAGES = {
@@ -153,16 +152,6 @@ export function resolveDirectiveTouchedSessionFields(params: {
 }
 
 export type IgnoredSessionDirectiveFlag = Extract<keyof InlineDirectives, `has${string}Directive`>;
-
-export function rejectSessionDirectiveTransaction(
-  persistenceState: HandleDirectiveOnlyParams["persistenceState"],
-  errorText: string,
-): ReplyPayload {
-  if (persistenceState) {
-    persistenceState.outcome = { kind: "rejected", errorText };
-  }
-  return { text: errorText, isError: true };
-}
 
 /** Keeps the first informational/denied acknowledgement while validating the remaining hints. */
 export async function acknowledgeIgnoredSessionDirective(params: {
@@ -345,7 +334,7 @@ export async function persistSessionDirectiveSnapshot(params: {
   return { status: sessionChangesApplied && modelSelectionApplied ? "applied" : "conflict" };
 }
 
-const formatElevatedEvent = (level: ElevatedLevel) => {
+export const formatElevatedEvent = (level: SessionEntry["elevatedLevel"]) => {
   if (level === "full") {
     return "Elevated FULL - exec runs on host with auto-approval.";
   }
@@ -355,7 +344,7 @@ const formatElevatedEvent = (level: ElevatedLevel) => {
   return "Elevated OFF - exec stays in sandbox.";
 };
 
-const formatReasoningEvent = (level: ReasoningLevel) => {
+export const formatReasoningEvent = (level: SessionEntry["reasoningLevel"]) => {
   if (level === "stream") {
     return "Reasoning STREAM - emit live <think>.";
   }
@@ -364,29 +353,6 @@ const formatReasoningEvent = (level: ReasoningLevel) => {
   }
   return "Reasoning OFF - hide <think>.";
 };
-
-export function enqueueModeSwitchEvents(params: {
-  enqueueSystemEvent: (text: string, meta: { sessionKey: string; contextKey: string }) => void;
-  sessionEntry: { elevatedLevel?: string | null; reasoningLevel?: string | null };
-  sessionKey: string;
-  elevatedChanged?: boolean;
-  reasoningChanged?: boolean;
-}): void {
-  if (params.elevatedChanged) {
-    const nextElevated = (params.sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
-    params.enqueueSystemEvent(formatElevatedEvent(nextElevated), {
-      sessionKey: params.sessionKey,
-      contextKey: "mode:elevated",
-    });
-  }
-  if (params.reasoningChanged) {
-    const nextReasoning = (params.sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
-    params.enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
-      sessionKey: params.sessionKey,
-      contextKey: "mode:reasoning",
-    });
-  }
-}
 
 export function formatElevatedUnavailableText(params: {
   runtimeSandboxed: boolean;

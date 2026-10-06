@@ -8,10 +8,6 @@ import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 type ReactionDirection = "added" | "removed";
 
-/**
- * Create a handler for MS Teams reaction activities (reactionsAdded / reactionsRemoved).
- * The returned function accepts a turn context and a direction string.
- */
 export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
   const { cfg, log } = deps;
   const core = getMSTeamsRuntime();
@@ -23,7 +19,6 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
   ): Promise<void> {
     const activity = context.activity;
 
-    // Reactions are carried in reactionsAdded / reactionsRemoved on the activity.
     const rawReactions =
       direction === "added" ? activity.reactionsAdded : activity.reactionsRemoved;
     const reactions: Array<{ type?: string }> = Array.isArray(rawReactions) ? rawReactions : [];
@@ -78,7 +73,6 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
 
-    // Resolve the agent route for this conversation/sender.
     // Extract teamId for team-scoped routing bindings (channel/group reactions).
     const teamId = isDirectMessage ? undefined : activity.channelData?.team?.id;
     const route = core.channel.routing.resolveAgentRoute({

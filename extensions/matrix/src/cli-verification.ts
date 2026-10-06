@@ -8,17 +8,10 @@ function matrixCliVerificationDmLookupOptions(options: cli.MatrixCliVerification
   verificationDmRoomId?: string;
   verificationDmUserId?: string;
 } {
-  const lookup: {
-    verificationDmRoomId?: string;
-    verificationDmUserId?: string;
-  } = {};
-  if (options.roomId !== undefined) {
-    lookup.verificationDmRoomId = options.roomId;
-  }
-  if (options.userId !== undefined) {
-    lookup.verificationDmUserId = options.userId;
-  }
-  return lookup;
+  return {
+    ...(options.roomId !== undefined ? { verificationDmRoomId: options.roomId } : {}),
+    ...(options.userId !== undefined ? { verificationDmUserId: options.userId } : {}),
+  };
 }
 
 function formatMatrixVerificationDmFollowupParts(params: {
@@ -36,20 +29,14 @@ function formatMatrixVerificationDmFollowupParts(params: {
   ];
 }
 
-function formatMatrixVerificationSummaryDmFollowupParts(
-  summary: MatrixVerificationSummary,
-): string[] {
-  return formatMatrixVerificationDmFollowupParts({
-    roomId: summary.roomId,
-    userId: summary.otherUserId,
-  });
-}
-
 function formatMatrixVerificationPreferredDmFollowupParts(
   summary: MatrixVerificationSummary,
   options: cli.MatrixCliVerificationCommandOptions,
 ): string[] {
-  const summaryParts = formatMatrixVerificationSummaryDmFollowupParts(summary);
+  const summaryParts = formatMatrixVerificationDmFollowupParts({
+    roomId: summary.roomId,
+    userId: summary.otherUserId,
+  });
   return summaryParts.length ? summaryParts : formatMatrixVerificationDmFollowupParts(options);
 }
 
@@ -100,7 +87,10 @@ function printMatrixVerificationRequestGuidance(
   accountId?: string,
 ): void {
   const requestId = formatMatrixVerificationCommandId(summary);
-  const dmParts = formatMatrixVerificationSummaryDmFollowupParts(summary);
+  const dmParts = formatMatrixVerificationDmFollowupParts({
+    roomId: summary.roomId,
+    userId: summary.otherUserId,
+  });
   cli.printGuidance([
     `Accept the verification request in another Matrix client for this account.`,
     `Then run ${formatMatrixVerificationFollowupCommand({ action: "start", requestId, accountId, dmParts })} to start SAS verification.`,
@@ -197,9 +187,9 @@ async function runMatrixCliSelfVerificationCommand(
       cli.printMatrixVerificationSummary(summary);
       console.log(`Device verified by owner: ${summary.deviceOwnerVerified ? "yes" : "no"}`);
       cli.printVerificationTrustDiagnostics(summary.ownerVerification);
-      cli.printVerificationBackupSummary(summary.ownerVerification);
+      cli.printBackupSummary(summary.ownerVerification.backup);
       if (verbose) {
-        cli.printVerificationBackupStatus(summary.ownerVerification);
+        cli.printBackupStatus(summary.ownerVerification.backup);
       }
       console.log("Self-verification complete.");
     },

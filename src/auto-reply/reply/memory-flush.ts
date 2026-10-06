@@ -1,9 +1,12 @@
-// Builds memory flush prompts when conversation context exceeds model budget.
 import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anthropic";
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import {
   findConfiguredProviderModel,
@@ -19,12 +22,6 @@ export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | 
   return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
 }
 
-function resolvePositiveTokenCount(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
-
 export function resolveEffectivePromptTokens(
   basePromptTokens?: number,
   lastOutputTokens?: number,
@@ -38,7 +35,16 @@ export function resolveEffectivePromptTokens(
   return base + output + estimate;
 }
 
-/** Resolves the blocking threshold using the selected reserve and server floor. */
+export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
+  const trimmed = normalizeOptionalString(prompt);
+  if (!trimmed) {
+    return undefined;
+  }
+  const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
+  const tokens = asPositiveFiniteNumber(estimateMessagesTokens([message]));
+  return tokens === undefined ? undefined : Math.ceil(tokens);
+}
+
 export function resolveCompactionThreshold(params: {
   contextWindowTokens: number;
   reserveTokensFloor: number;
@@ -138,8 +144,11 @@ export function shouldRunPreflightCompaction(params: {
   if (!params.entry) {
     return false;
   }
+  const projectedTokens = asPositiveFiniteNumber(params.tokenCount);
   const totalTokens =
-    resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
+    projectedTokens === undefined
+      ? resolveFreshSessionTotalTokens(params.entry)
+      : Math.floor(projectedTokens);
   return (
     typeof totalTokens === "number" &&
     totalTokens > 0 &&

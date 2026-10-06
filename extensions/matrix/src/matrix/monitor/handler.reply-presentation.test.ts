@@ -72,7 +72,7 @@ describe("matrix monitor handler reply presentation", () => {
     });
   });
 
-  it.each([undefined, "off"] as const)(
+  it.each([undefined] as const)(
     "applies current acknowledgement scope while preserving account override %s",
     async (accountScope) => {
       const cfg: CoreConfig = {

@@ -132,34 +132,6 @@ export type TraceAttempt = {
   status?: number;
 };
 
-type ExecutionTrace = {
-  winnerProvider?: string;
-  winnerModel?: string;
-  attempts?: TraceAttempt[];
-  fallbackUsed?: boolean;
-  runner?: "embedded" | "cli";
-  providerPolicyRetry?: {
-    category: "cyber";
-    provider: string;
-    model: string;
-  };
-};
-
-type RequestShapingTrace = {
-  authMode?: string;
-  thinking?: string;
-  reasoning?: string;
-  verbose?: string;
-  trace?: string;
-  fallbackEligible?: boolean;
-  blockStreaming?: string;
-};
-
-type PromptSegmentTrace = {
-  key: string;
-  chars: number;
-};
-
 export type ToolSummaryTrace = {
   calls: number;
   tools: string[];
@@ -167,19 +139,6 @@ export type ToolSummaryTrace = {
   /** Latest tool failure not cleared by same-tool success, independent of reply presentation. */
   unresolvedError?: { toolName: string };
   totalToolTimeMs?: number;
-};
-
-type CompletionTrace = {
-  finishReason?: string;
-  stopReason?: string;
-  refusal?: boolean;
-};
-
-type ContextManagementTrace = {
-  sessionCompactions?: number;
-  lastTurnCompactions?: number;
-  preflightCompactionApplied?: boolean;
-  postCompactionContextInjected?: boolean;
 };
 
 export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
@@ -224,7 +183,10 @@ export type EmbeddedAgentRunMeta = {
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
-  /** A visible parent delegated its otherwise-empty result to completion children. */
+  /**
+   * A visible parent delegated its otherwise-empty result to completion children
+   * or a detached media run.
+   */
   continuationPending?: true;
   error?: {
     kind:
@@ -253,12 +215,43 @@ export type EmbeddedAgentRunMeta = {
     name: string;
     arguments: string;
   }>;
-  executionTrace?: ExecutionTrace;
-  requestShaping?: RequestShapingTrace;
-  promptSegments?: PromptSegmentTrace[];
+  executionTrace?: {
+    winnerProvider?: string;
+    winnerModel?: string;
+    attempts?: TraceAttempt[];
+    fallbackUsed?: boolean;
+    runner?: "embedded" | "cli";
+    providerPolicyRetry?: {
+      category: "cyber";
+      provider: string;
+      model: string;
+    };
+  };
+  requestShaping?: {
+    authMode?: string;
+    thinking?: string;
+    reasoning?: string;
+    verbose?: string;
+    trace?: string;
+    fallbackEligible?: boolean;
+    blockStreaming?: string;
+  };
+  promptSegments?: {
+    key: string;
+    chars: number;
+  }[];
   toolSummary?: ToolSummaryTrace;
-  completion?: CompletionTrace;
-  contextManagement?: ContextManagementTrace;
+  completion?: {
+    finishReason?: string;
+    stopReason?: string;
+    refusal?: boolean;
+  };
+  contextManagement?: {
+    sessionCompactions?: number;
+    lastTurnCompactions?: number;
+    preflightCompactionApplied?: boolean;
+    postCompactionContextInjected?: boolean;
+  };
 };
 
 export type EmbeddedAgentRunResult = {

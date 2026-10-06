@@ -10,12 +10,18 @@ import {
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../../code-mode.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
-import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
+import {
+  buildEmptyExplicitToolAllowlistError,
+  collectExplicitToolAllowlistSources,
+} from "../../tool-allowlist-guard.js";
 import {
   createToolExecutionMatcher,
   TOOL_EXECUTION_GATED_MESSAGE,
 } from "../../tool-policy-shared.js";
-import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
+import {
+  withRuntimeToolSchemaQuarantine,
+  type RuntimeToolSchemaQuarantineRecorder,
+} from "../../tool-schema-quarantine.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -27,7 +33,6 @@ import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
-import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
 import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
@@ -36,7 +41,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type PreparedToolBase = Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
 type PreparedBundleTools = Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
 
-export function prepareEmbeddedAttemptToolCatalog(input: {
+export async function prepareEmbeddedAttemptToolCatalog(input: {
   attempt: EmbeddedRunAttemptParams;
   setup: EmbeddedAttemptSetup;
   preparedToolBase: PreparedToolBase;
@@ -44,7 +49,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   abortSignal: AbortSignal;
   executeCodeModeTool: ToolSearchCatalogToolExecutor;
 }) {
-  const buildCatalog = () => {
+  const buildCatalog = (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
     const { attempt, preparedToolBase } = input;
     const {
       codeModeControlsEnabledForRun,
@@ -77,7 +82,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       },
     });
     const toolSearch = compacted.catalog;
-    logRuntimeToolSchemaQuarantine({
+    recordQuarantine({
       diagnostics: compacted.diagnostics,
       tools: compacted.projectedTools,
       runId: attempt.runId,
@@ -112,10 +117,37 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       toolSearchControlsEnabledForRun &&
       toolSearchConfig.mode === "directory" &&
       toolSearch.catalogRegistered;
-    const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
-      capabilityProfile: runtimeCapabilityProfile,
-      toolsAllow: attempt.toolsAllow,
-    });
+    // Use the same resolved policy that constructed and filtered the run's tools.
+    const {
+      agentId,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      groupPolicy,
+      sandboxPolicy,
+      subagentPolicy,
+      inheritedToolPolicy,
+    } = runtimeCapabilityProfile.policy;
+    const explicitToolAllowlistSources = collectExplicitToolAllowlistSources([
+      { label: "tools.allow", allow: globalPolicy?.allow },
+      { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
+      {
+        label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
+        allow: agentPolicy?.allow,
+      },
+      {
+        label: agentId
+          ? `agents.${agentId}.tools.byProvider.allow`
+          : "agent tools.byProvider.allow",
+        allow: agentProviderPolicy?.allow,
+      },
+      { label: "group tools.allow", allow: groupPolicy?.allow },
+      { label: "sandbox tools.allow", allow: sandboxPolicy?.allow },
+      { label: "subagent tools.allow", allow: subagentPolicy?.allow },
+      { label: "inherited tools.allow", allow: inheritedToolPolicy?.allow },
+      { label: "runtime toolsAllow", allow: attempt.toolsAllow, enforceWhenToolsDisabled: true },
+    ]);
     const toolSearchRunPlan = buildToolSearchRunPlan({
       visibleTools: effectiveTools,
       uncompactedTools: uncompactedEffectiveTools,
@@ -169,7 +201,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       toolSearchRunPlan,
     };
   };
-  const current = buildCatalog();
+  const current = await withRuntimeToolSchemaQuarantine(buildCatalog);
   const promptPlanKeys = [
     "visibleAllowedToolNames",
     "liveAllowedToolNames",
@@ -197,8 +229,8 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         }
       }
     },
-    refreshTools: () => {
-      const next = buildCatalog();
+    refreshTools: (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
+      const next = buildCatalog(recordQuarantine);
       current.effectiveTools.splice(0, current.effectiveTools.length, ...next.effectiveTools);
       for (const key of [
         "visibleAllowedToolNames",

@@ -26,31 +26,6 @@ import { authorizeAndResolveSlackSystemEventContext } from "./system-event-conte
 // workflows are uniform; the `gateway/channels/slack` subsystem renders as `[slack]`.
 const slackInboundLog = createSubsystemLogger("gateway/channels/slack").child("inbound");
 
-function formatSlackInboundLogLine(params: {
-  workspaceId: string;
-  channelId: string;
-  channelType: string;
-  userId: string;
-  botUserId: string;
-  bodyChars: number;
-}): string {
-  const from = `slack:${params.workspaceId}:channel:${params.channelId}:user:${params.userId}`;
-  return `Inbound app_mention ${from} -> bot:${params.botUserId} (${params.channelType}, ${params.bodyChars} chars)`;
-}
-
-type SlackAssistantMessageRecord = {
-  bot_id?: unknown;
-  user?: unknown;
-  text?: unknown;
-  ts?: unknown;
-  thread_ts?: unknown;
-  files?: unknown;
-  attachments?: unknown;
-  assistant_thread?: unknown;
-  metadata?: unknown;
-  blocks?: unknown;
-};
-
 function isBotAuthoredEnterpriseEvent(event: { bot_id?: unknown; subtype?: unknown }): boolean {
   return Boolean(asString(event.bot_id)) || event.subtype === "bot_message";
 }
@@ -59,30 +34,38 @@ async function resolveSlackAppMentionChannelType(params: {
   ctx: SlackMonitorContext;
   eventScope?: SlackEventScope;
   mention: SlackAppMentionEvent;
-}): Promise<SlackMessageEvent["channel_type"] | undefined> {
+}): Promise<{
+  type: SlackMessageEvent["channel_type"] | undefined;
+  lookupFailureCategory?: Awaited<
+    ReturnType<SlackMonitorContext["resolveChannelName"]>
+  >["lookupFailureCategory"];
+}> {
   const explicitType = asString(params.mention.channel_type);
   if (explicitType) {
-    return normalizeSlackChannelType(explicitType, params.mention.channel);
+    return { type: normalizeSlackChannelType(explicitType, params.mention.channel) };
   }
   const rememberedType = params.ctx.recallSlackChannelType(
     params.mention.channel,
     params.eventScope,
   );
   if (rememberedType) {
-    return normalizeSlackChannelType(rememberedType, params.mention.channel);
+    return { type: normalizeSlackChannelType(rememberedType, params.mention.channel) };
   }
   // app_mention omits channel_type, and Slack ID prefixes are not a type contract.
   // Only an authoritative event/cache/API type may choose this event's owner.
   const resolved = await params.ctx
     .resolveChannelName(params.mention.channel, params.eventScope)
-    .catch(() => ({ type: undefined }));
-  return resolved.type
-    ? normalizeSlackChannelType(resolved.type, params.mention.channel)
-    : undefined;
+    .catch(() => ({ type: undefined, lookupFailureCategory: "other" as const }));
+  return {
+    type: resolved.type
+      ? normalizeSlackChannelType(resolved.type, params.mention.channel)
+      : undefined,
+    lookupFailureCategory: resolved.lookupFailureCategory,
+  };
 }
 
 function resolveAssistantMessageChangedSender(params: {
-  message?: SlackAssistantMessageRecord;
+  message?: Record<string, unknown>;
   botUserId: string;
 }): string | undefined {
   const payload = asRecord(asRecord(params.message?.metadata)?.event_payload);
@@ -101,7 +84,7 @@ function resolveAssistantMessageChangedSender(params: {
 
 function isSelfAttributedMessageChange(params: {
   event: SlackMessageChangedEvent;
-  message?: SlackAssistantMessageRecord;
+  message?: Record<string, unknown>;
   ctx: SlackMonitorContext;
 }): boolean {
   const topUser = asString((params.event as SlackMessageChangedEvent & { user?: unknown }).user);
@@ -122,7 +105,7 @@ function resolveAssistantMessageChangedInbound(params: {
     return undefined;
   }
   const changed = params.event as SlackMessageChangedEvent;
-  const message = asRecord(changed.message) as SlackAssistantMessageRecord | undefined;
+  const message = asRecord(changed.message);
   if (!message || !isSelfAttributedMessageChange({ event: changed, message, ctx: params.ctx })) {
     return undefined;
   }
@@ -240,9 +223,7 @@ export function registerSlackMessageEvents(params: {
         message.subtype === "message_changed" &&
         isSelfAttributedMessageChange({
           event: message as SlackMessageChangedEvent,
-          message: asRecord((message as SlackMessageChangedEvent).message) as
-            | SlackAssistantMessageRecord
-            | undefined,
+          message: asRecord((message as SlackMessageChangedEvent).message),
           ctx,
         })
       ) {
@@ -324,16 +305,22 @@ export function registerSlackMessageEvents(params: {
 
         // DM and MPIM messages are owned by message.im/message.mpim. Resolve the
         // omitted type before this guard so event ordering cannot change ownership.
-        const channelType = await resolveSlackAppMentionChannelType({
-          ctx,
-          mention,
-          eventScope,
-        });
+        const { type: channelType, lookupFailureCategory } =
+          await resolveSlackAppMentionChannelType({
+            ctx,
+            mention,
+            eventScope,
+          });
         if (!channelType) {
           // OpenClaw manifests pair app_mention with message.channels/groups/im/mpim.
           // Never guess here: the canonical message event still owns delivery.
-          logVerbose(
-            `slack: drop typeless app_mention channel=${mention.channel} (conversation type unresolved; waiting for message event)`,
+          const channelId = /^[CDG][A-Z0-9]{1,32}$/.test(mention.channel)
+            ? mention.channel
+            : "unrecognized";
+          const category = lookupFailureCategory ?? "missing_type";
+          slackInboundLog.info(
+            `Slack app_mention skipped: conversation type unresolved; channelId=${channelId} lookupFailureCategory=${category}; waiting for message event`,
+            { channelId, lookupFailureCategory: category },
           );
           return;
         }
@@ -345,15 +332,9 @@ export function registerSlackMessageEvents(params: {
         // (e.g. router consumes it without a tool call) still leaves journal evidence,
         // matching the Telegram inbound log. Runs after the DM drop above, so duplicate
         // DM app_mention events (already handled via message.im) produce no line.
+        const from = `slack:${eventScope?.teamId ?? ctx.teamId}:channel:${mention.channel}:user:${asString(mention.user) ?? "unknown"}`;
         slackInboundLog.info(
-          formatSlackInboundLogLine({
-            workspaceId: eventScope?.teamId ?? ctx.teamId,
-            channelId: mention.channel,
-            channelType: channelType ?? "channel",
-            userId: asString(mention.user) ?? "unknown",
-            botUserId: ctx.botUserId,
-            bodyChars: asString(mention.text)?.length ?? 0,
-          }),
+          `Inbound app_mention ${from} -> bot:${ctx.botUserId} (${channelType}, ${asString(mention.text)?.length ?? 0} chars)`,
         );
 
         noteConversationMessage(mention, eventScope);

@@ -42,6 +42,63 @@ function sessionScope(store: TestStore) {
 }
 
 describe("runDoctorSessionSqlite", () => {
+  it("refuses retired room grouping without changing the source", async () => {
+    const store = createLegacyStore({
+      entryOverrides: { room: "legacy", groupChannel: undefined },
+    });
+    const originalStore = fs.readFileSync(store.storePath, "utf8");
+    const originalTranscript = fs.readFileSync(store.transcriptPath, "utf8");
+
+    await expect(importLegacyStore(store)).rejects.toThrow(
+      'Session field "room" predates July 2026 and is no longer supported',
+    );
+
+    expect(fs.readFileSync(store.storePath, "utf8")).toBe(originalStore);
+    expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(originalTranscript);
+    expect(loadExactSessionEntry(sessionScope(store))).toBeUndefined();
+  });
+
+  it.each(["provider", "lastProvider"])(
+    "imports supported July %s routing and archives original source bytes",
+    async (field) => {
+      const store = createLegacyStore({
+        entryOverrides: {
+          channel: undefined,
+          lastChannel: undefined,
+          [field]: "telegram",
+          lastTo: "123",
+          lastAccountId: "work",
+        },
+      });
+      const originalStore = fs.readFileSync(store.storePath, "utf8");
+      const originalTranscript = fs.readFileSync(store.transcriptPath, "utf8");
+
+      const report = await importLegacyStore(store);
+
+      expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
+      const imported = loadExactSessionEntry(sessionScope(store))?.entry;
+      expect(imported).toMatchObject({
+        delivery: {
+          kind: "external",
+          context: { channel: "telegram", to: "123", accountId: "work" },
+        },
+      });
+      expect(imported).not.toHaveProperty(field);
+      const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+      const target = expectDefined(manifest.targets[0], "imported target");
+      for (const [kind, original] of [
+        ["legacy-store", originalStore],
+        ["transcript", originalTranscript],
+      ] as const) {
+        const archived = expectDefined(
+          target.completedMoves.find((move) => move.kind === kind),
+          `archived ${kind}`,
+        );
+        expect(fs.readFileSync(archived.archivePath, "utf8")).toBe(original);
+      }
+    },
+  );
+
   it("repairs legacy transcript and route shapes at the import boundary", async () => {
     const store = createLegacyStore({
       entryOverrides: {
@@ -146,8 +203,22 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
-  it("preserves the legacy transcript mtime as the SQLite mutation watermark", async () => {
-    const store = createLegacyStore();
+  it("imports July-2026 session fields and preserves the transcript mutation watermark", async () => {
+    const store = createLegacyStore({
+      entryOverrides: {
+        channel: "telegram",
+        groupChannel: "July group",
+        lastChannel: "telegram",
+        lastTo: "123",
+        provider: "stale-provider",
+        lastProvider: "stale-last-provider",
+        room: "stale-room",
+      },
+      transcriptLines: [
+        '{"type":"session","version":3,"id":"session-1","timestamp":"2026-07-01T23:00:00.000Z","cwd":"/fixture"}',
+        '{"type":"message","id":"july-message","parentId":null,"message":{"role":"user","content":"July history"}}',
+      ],
+    });
     const transcriptMtimeMs = 1_700_000_000_000;
     const transcriptMtime = new Date(transcriptMtimeMs);
     fs.utimesSync(store.transcriptPath, transcriptMtime, transcriptMtime);
@@ -156,6 +227,14 @@ describe("runDoctorSessionSqlite", () => {
 
     expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
     expect(readTranscriptStatsSync(sessionScope(store)).lastMutationAtMs).toBe(transcriptMtimeMs);
+    expect(loadExactSessionEntry(sessionScope(store))?.entry).toMatchObject({
+      groupChannel: "July group",
+      delivery: { kind: "external", context: { channel: "telegram", to: "123" } },
+    });
+    expect(loadTranscriptEventsSync(sessionScope(store))[1]).toMatchObject({
+      id: "july-message",
+      message: { content: "July history" },
+    });
   });
 
   it("preserves a same-generation canonical harness owner during legacy import", async () => {

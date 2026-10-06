@@ -20,7 +20,7 @@ export function playLobsterPetChirp(
     }
     ctx ??= new Ctor();
     if (ctx.state === "suspended") {
-      void ctx.resume();
+      void ctx.resume().catch(() => {});
     }
     const at = ctx.currentTime;
     const osc = ctx.createOscillator();

@@ -1,3 +1,5 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { applyRemoteModelCatalogUpdate } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
@@ -95,9 +97,7 @@ export function createDeferredGatewayUpdateCheck(params: {
     void (async () => {
       if (params.waitForPostReadyWork) {
         await params.waitForPostReadyWork();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
       }
       if (stopped || params.isClosing?.()) {
         return;
@@ -107,6 +107,8 @@ export function createDeferredGatewayUpdateCheck(params: {
           owner = await params.createUpdateCheck({
             lifecycle,
             getConfig: params.getConfig,
+            applyRemoteCatalogUpdate: (signal) =>
+              applyRemoteModelCatalogUpdate(params.getConfig, signal),
             onUpdateRunCreated: wakeUpdateRunWatcher,
             log: params.log,
             isNixMode: params.isNixMode,
@@ -141,16 +143,19 @@ export function createDeferredGatewayUpdateCheck(params: {
           return;
         }
         const updateCheck = owner;
-        initialization = (async () => updateCheck.initialize())().catch((err: unknown) => {
+        initialization = (async () => {
+          const result = await updateCheck.initialize();
+          if (result.status.error) {
+            throw new Error(result.status.error.message);
+          }
+        })().catch((err: unknown) => {
           if (!stopped) {
             params.log.warn(`gateway update status failed to initialize: ${String(err)}`);
           }
         });
       })();
       await ownerReady;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       if (!stopped && !params.isClosing?.()) {
         await runWithGatewayIndependentRootWorkAdmission(async () => {
           if (stopped || params.isClosing?.()) {

@@ -1,450 +1,228 @@
+import assert from "node:assert/strict";
+import {
+  IncognitoSessionEndedError,
+  rethrowIncognitoSessionError,
+} from "openclaw/plugin-sdk/acp-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { getDiscordRuntime } from "../runtime.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
-  createNonSweepingTestManager,
-  expectFields,
+  bindTestThread,
+  createTestThreadBindingManager,
   hoisted,
   installThreadBindingLifecycleTestHooks,
-  requireBinding,
-  requireRecord,
 } from "./thread-bindings.lifecycle.test-support.js";
+import { THREAD_BINDINGS_MAX_ENTRIES, THREAD_BINDINGS_NAMESPACE } from "./thread-bindings.state.js";
+import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const { reconcileAcpThreadBindingsOnStartup } = await import("./thread-bindings.lifecycle.js");
+const reconcileOptions = { cfg: EMPTY_DISCORD_TEST_CONFIG, accountId: "default" };
+const sessionKey = (name: string) => `agent:codex:acp:${name}`;
+const session = (key: string) => ({
+  sessionKey: key,
+  storeSessionKey: key,
+  acp: {
+    backend: "acpx",
+    agent: "codex",
+    runtimeSessionName: `runtime:${key}`,
+    mode: "persistent",
+    state: "running",
+    lastActivityAt: 100,
+  },
+});
+
+async function bindAcp(
+  manager: Awaited<ReturnType<typeof createTestThreadBindingManager>>,
+  name: string,
+) {
+  return bindTestThread(manager, {
+    threadId: name,
+    targetKind: "acp",
+    targetSessionKey: sessionKey(name),
+    agentId: "codex",
+  });
+}
 
 describe("thread binding ACP startup reconciliation", () => {
   installThreadBindingLifecycleTestHooks();
 
-  it("removes stale ACP bindings during startup reconciliation", async () => {
-    const manager = await createNonSweepingTestManager({
-      accountId: "default",
-    });
-
-    await manager.bindTarget({
-      threadId: "thread-acp-healthy",
-      channelId: "parent-1",
+  it("removes missing ACP sessions while preserving valid and plugin-owned bindings", async () => {
+    const manager = await createTestThreadBindingManager();
+    await bindAcp(manager, "healthy");
+    await bindAcp(manager, "stale");
+    await bindTestThread(manager);
+    await bindTestThread(manager, {
+      threadId: "user:123",
+      channelId: "user:123",
       targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:healthy",
-      agentId: "codex",
-      webhookId: "wh-1",
-      webhookToken: "tok-1",
+      targetSessionKey: "plugin-binding:owner:dm",
+      metadata: { pluginBindingOwner: "plugin", pluginId: "owner" },
     });
-    await manager.bindTarget({
-      threadId: "thread-acp-stale",
-      channelId: "parent-1",
+    hoisted.readAcpSessionEntry.mockImplementation(
+      ({ sessionKey: key }: { sessionKey: string }) => {
+        const entry = session(key);
+        return key === sessionKey("healthy")
+          ? { ...entry, acp: { ...entry.acp, state: "error" } }
+          : { ...entry, acp: undefined };
+      },
+    );
+    expect(await reconcileAcpThreadBindingsOnStartup(reconcileOptions)).toEqual({
+      checked: 2,
+      removed: 1,
+      staleSessionKeys: [sessionKey("stale")],
+    });
+    expect(manager.getByThreadId("stale")).toBeUndefined();
+    expect(manager.getByThreadId("healthy")).toMatchObject({
       targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:stale",
-      agentId: "codex",
-      webhookId: "wh-1",
-      webhookToken: "tok-1",
+      targetSessionKey: sessionKey("healthy"),
     });
-    await manager.bindTarget({
-      threadId: "thread-subagent",
-      channelId: "parent-1",
+    expect(manager.getByThreadId("thread-1")).toMatchObject({
       targetKind: "subagent",
       targetSessionKey: "agent:main:subagent:child",
-      agentId: "main",
-      webhookId: "wh-1",
-      webhookToken: "tok-1",
     });
-
-    hoisted.readAcpSessionEntry.mockImplementation((paramsUnknown: unknown) => {
-      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
-      if (sessionKey === "agent:codex:acp:healthy") {
-        return {
-          sessionKey,
-          storeSessionKey: sessionKey,
-          acp: {
-            backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: "runtime:healthy",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: Date.now(),
-          },
-        };
-      }
-      return {
-        sessionKey,
-        storeSessionKey: sessionKey,
-        acp: undefined,
-      };
-    });
-
-    const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      accountId: "default",
-    });
-
-    expect(result.checked).toBe(2);
-    expect(result.removed).toBe(1);
-    expect(result.staleSessionKeys).toContain("agent:codex:acp:stale");
-    expectFields(requireBinding(manager, "thread-acp-healthy"), "healthy binding", {
-      threadId: "thread-acp-healthy",
-      targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:healthy",
-    });
-    expect(manager.getByThreadId("thread-acp-stale")).toBeUndefined();
-    expectFields(requireBinding(manager, "thread-subagent"), "subagent binding", {
-      threadId: "thread-subagent",
-      targetKind: "subagent",
-      targetSessionKey: "agent:main:subagent:child",
+    expect(manager.getByThreadId("user:123")).toMatchObject({
+      metadata: { pluginBindingOwner: "plugin", pluginId: "owner" },
     });
     expect(hoisted.sendMessageDiscord).not.toHaveBeenCalled();
     expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
   });
 
-  it("keeps ACP bindings when session store reads fail during startup reconciliation", async () => {
-    const manager = await createNonSweepingTestManager({
-      accountId: "default",
-    });
-
-    await manager.bindTarget({
-      threadId: "thread-acp-uncertain",
-      channelId: "parent-1",
-      targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:uncertain",
-      agentId: "codex",
-      webhookId: "wh-1",
-      webhookToken: "tok-1",
-    });
-
+  it("keeps bindings when their session store cannot be read", async () => {
+    const manager = await createTestThreadBindingManager();
+    await bindAcp(manager, "uncertain");
     hoisted.readAcpSessionEntry.mockReturnValue({
-      sessionKey: "agent:codex:acp:uncertain",
-      storeSessionKey: "agent:codex:acp:uncertain",
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      storePath: "/tmp/mock-sessions.json",
-      storeReadFailed: true,
-      entry: undefined,
+      ...session(sessionKey("uncertain")),
       acp: undefined,
+      storeReadFailed: true,
     });
-
-    const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      accountId: "default",
+    expect(await reconcileAcpThreadBindingsOnStartup(reconcileOptions)).toEqual({
+      checked: 1,
+      removed: 0,
+      staleSessionKeys: [],
     });
-
-    expect(result.checked).toBe(1);
-    expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toStrictEqual([]);
-    expectFields(requireBinding(manager, "thread-acp-uncertain"), "uncertain binding", {
-      threadId: "thread-acp-uncertain",
-      targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:uncertain",
-    });
+    expect(manager.getByThreadId("uncertain")?.targetSessionKey).toBe(sessionKey("uncertain"));
   });
 
-  it("does not reconcile plugin-owned direct bindings as stale ACP sessions", async () => {
-    const manager = await createNonSweepingTestManager({
-      accountId: "default",
+  it("propagates a refused session join without deleting its binding", async () => {
+    const manager = await createTestThreadBindingManager();
+    await bindAcp(manager, "refused");
+    const error = new IncognitoSessionEndedError();
+    hoisted.readAcpSessionEntry.mockImplementation(() => {
+      throw error;
     });
 
-    await manager.bindTarget({
-      threadId: "user:1177378744822943744",
-      channelId: "user:1177378744822943744",
-      targetKind: "acp",
-      targetSessionKey: "plugin-binding:openclaw-codex-app-server:dm",
-      agentId: "codex",
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      },
-    });
-
-    hoisted.readAcpSessionEntry.mockReturnValue(null);
-
-    const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      accountId: "default",
-    });
-
-    expect(result.checked).toBe(0);
-    expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toStrictEqual([]);
-    const binding = expectFields(
-      manager.getByThreadId("user:1177378744822943744"),
-      "plugin direct binding",
-      {
-        threadId: "user:1177378744822943744",
-      },
-    );
-    expectFields(requireRecord(binding.metadata, "binding metadata"), "binding metadata", {
-      pluginBindingOwner: "plugin",
-      pluginId: "openclaw-codex-app-server",
-    });
+    await expect(reconcileAcpThreadBindingsOnStartup(reconcileOptions)).rejects.toBe(error);
+    expect(manager.getByThreadId("refused")?.targetSessionKey).toBe(sessionKey("refused"));
   });
 
-  it("removes ACP bindings when health probe marks running session as stale", async () => {
-    const manager = await createNonSweepingTestManager({
-      accountId: "default",
-    });
-
-    await manager.bindTarget({
-      threadId: "thread-acp-running",
-      channelId: "parent-1",
-      targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:running",
-      agentId: "codex",
-      webhookId: "wh-1",
-      webhookToken: "tok-1",
-    });
-
-    hoisted.readAcpSessionEntry.mockReturnValue({
-      sessionKey: "agent:codex:acp:running",
-      storeSessionKey: "agent:codex:acp:running",
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "runtime:running",
-        mode: "persistent",
-        state: "running",
-        lastActivityAt: Date.now() - 5 * 60 * 1000,
-      },
-    });
-
-    const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      accountId: "default",
-      healthProbe: async () => ({ status: "stale", reason: "status-timeout-running-stale" }),
-    });
-
-    expect(result.checked).toBe(1);
-    expect(result.removed).toBe(1);
-    expect(result.staleSessionKeys).toContain("agent:codex:acp:running");
-    expect(manager.getByThreadId("thread-acp-running")).toBeUndefined();
+  it("removes a running binding after an explicit stale health verdict", async () => {
+    const manager = await createTestThreadBindingManager();
+    await bindAcp(manager, "running");
+    hoisted.readAcpSessionEntry.mockReturnValue(session(sessionKey("running")));
+    expect(
+      await reconcileAcpThreadBindingsOnStartup({
+        ...reconcileOptions,
+        healthProbe: async () => ({ status: "stale", reason: "status-timeout-running-stale" }),
+      }),
+    ).toEqual({ checked: 1, removed: 1, staleSessionKeys: [sessionKey("running")] });
+    expect(manager.getByThreadId("running")).toBeUndefined();
   });
 
-  it("keeps running ACP bindings when health probe is uncertain", async () => {
-    const manager = await createNonSweepingTestManager({
-      accountId: "default",
-    });
-
-    await manager.bindTarget({
-      threadId: "thread-acp-running-uncertain",
-      channelId: "parent-1",
-      targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:running-uncertain",
-      agentId: "codex",
-      webhookId: "wh-1",
-      webhookToken: "tok-1",
-    });
-
-    hoisted.readAcpSessionEntry.mockReturnValue({
-      sessionKey: "agent:codex:acp:running-uncertain",
-      storeSessionKey: "agent:codex:acp:running-uncertain",
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "runtime:running-uncertain",
-        mode: "persistent",
-        state: "running",
-        lastActivityAt: Date.now(),
-      },
-    });
-
-    const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      accountId: "default",
-      healthProbe: async () => ({ status: "uncertain", reason: "status-timeout" }),
-    });
-
-    expect(result.checked).toBe(1);
-    expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toStrictEqual([]);
-    expectFields(
-      requireBinding(manager, "thread-acp-running-uncertain"),
-      "running uncertain binding",
-      {
-        threadId: "thread-acp-running-uncertain",
-        targetKind: "acp",
-        targetSessionKey: "agent:codex:acp:running-uncertain",
-      },
-    );
-  });
-
-  it("keeps ACP bindings in stored error state when no explicit stale probe verdict exists", async () => {
-    const manager = await createNonSweepingTestManager({
-      accountId: "default",
-    });
-
-    await manager.bindTarget({
-      threadId: "thread-acp-error",
-      channelId: "parent-1",
-      targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:error",
-      agentId: "codex",
-      webhookId: "wh-1",
-      webhookToken: "tok-1",
-    });
-
-    hoisted.readAcpSessionEntry.mockReturnValue({
-      sessionKey: "agent:codex:acp:error",
-      storeSessionKey: "agent:codex:acp:error",
-      acp: {
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "runtime:error",
-        mode: "persistent",
-        state: "error",
-        lastActivityAt: Date.now(),
-      },
-    });
-
-    const result = await reconcileAcpThreadBindingsOnStartup({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      accountId: "default",
-    });
-
-    expect(result.checked).toBe(1);
-    expect(result.removed).toBe(0);
-    expect(result.staleSessionKeys).toStrictEqual([]);
-    expectFields(requireBinding(manager, "thread-acp-error"), "error binding", {
-      threadId: "thread-acp-error",
-      targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:error",
-    });
-  });
-
-  it("starts ACP health probes in parallel during startup reconciliation", async () => {
-    const manager = await createNonSweepingTestManager({
-      accountId: "default",
-    });
-
-    await manager.bindTarget({
-      threadId: "thread-acp-probe-1",
-      channelId: "parent-1",
-      targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:probe-1",
-      agentId: "codex",
-      webhookId: "wh-1",
-      webhookToken: "tok-1",
-    });
-    await manager.bindTarget({
-      threadId: "thread-acp-probe-2",
-      channelId: "parent-1",
-      targetKind: "acp",
-      targetSessionKey: "agent:codex:acp:probe-2",
-      agentId: "codex",
-      webhookId: "wh-1",
-      webhookToken: "tok-1",
-    });
-
-    hoisted.readAcpSessionEntry.mockImplementation((paramsUnknown: unknown) => {
-      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
-      return {
-        sessionKey,
-        storeSessionKey: sessionKey,
-        acp: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: `runtime:${sessionKey}`,
-          mode: "persistent",
-          state: "running",
-          lastActivityAt: Date.now(),
+  it("propagates a nested health-probe refusal and keeps the binding", async () => {
+    const manager = await createTestThreadBindingManager();
+    await bindAcp(manager, "probe-refused");
+    hoisted.readAcpSessionEntry.mockReturnValue(session(sessionKey("probe-refused")));
+    const error = new AggregateError([new IncognitoSessionEndedError()], "ACP probe failed");
+    await expect(
+      reconcileAcpThreadBindingsOnStartup({
+        ...reconcileOptions,
+        healthProbe: async () => {
+          throw error;
         },
-      };
-    });
-
-    let resolveFirstProbe: ((value: { status: "healthy" }) => void) | undefined;
-    const firstProbe = new Promise<{ status: "healthy" }>((resolve) => {
-      resolveFirstProbe = resolve;
-    });
-    let probeCallCount = 0;
-    let secondProbeStartedBeforeFirstResolved = false;
-
-    const reconcilePromise = reconcileAcpThreadBindingsOnStartup({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      accountId: "default",
-      healthProbe: async () => {
-        probeCallCount += 1;
-        if (probeCallCount === 1) {
-          return await firstProbe;
-        }
-        secondProbeStartedBeforeFirstResolved = true;
-        return { status: "healthy" as const };
-      },
-    });
-
-    await vi.waitFor(() => {
-      expect(probeCallCount).toBe(2);
-    });
-    const observedParallelStart = secondProbeStartedBeforeFirstResolved;
-
-    resolveFirstProbe?.({ status: "healthy" });
-    const result = await reconcilePromise;
-
-    expect(observedParallelStart).toBe(true);
-    expect(result.checked).toBe(2);
-    expect(result.removed).toBe(0);
+      }),
+    ).rejects.toBe(error);
+    expect(manager.getByThreadId("probe-refused")?.targetSessionKey).toBe(
+      sessionKey("probe-refused"),
+    );
   });
 
-  it("caps ACP startup health probe concurrency", async () => {
-    const manager = await createNonSweepingTestManager({
-      accountId: "default",
-    });
-
-    for (let index = 0; index < 12; index += 1) {
-      const key = `agent:codex:acp:cap-${index}`;
-      await manager.bindTarget({
-        threadId: `thread-acp-cap-${index}`,
-        channelId: "parent-1",
-        targetKind: "acp",
-        targetSessionKey: key,
-        agentId: "codex",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
+  it.each(["before-delete", "after-commit"] as const)(
+    "propagates prepared cleanup refusal at %s while preserving acknowledged deletion",
+    async (phase) => {
+      const manager = await createTestThreadBindingManager({ persist: true });
+      await bindAcp(manager, "prepared");
+      const runtime = getDiscordRuntime();
+      const open = runtime.state.openKeyedStore.bind(runtime.state);
+      const persisted = open<ThreadBindingRecord>({
+        namespace: THREAD_BINDINGS_NAMESPACE,
+        maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
       });
-    }
-
-    hoisted.readAcpSessionEntry.mockImplementation((paramsUnknown: unknown) => {
-      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
-      return {
-        sessionKey,
-        storeSessionKey: sessionKey,
-        acp: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: `runtime:${sessionKey}`,
-          mode: "persistent",
-          state: "running",
-          lastActivityAt: Date.now(),
-        },
-      };
-    });
-
-    const PROBE_LIMIT = 8;
-    let probeCalls = 0;
-    let inFlight = 0;
-    let maxInFlight = 0;
-    let releaseFirstWave: (() => void) | undefined;
-    const firstWaveGate = new Promise<void>((resolve) => {
-      releaseFirstWave = resolve;
-    });
-
-    const reconcilePromise = reconcileAcpThreadBindingsOnStartup({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      accountId: "default",
-      healthProbe: async () => {
-        probeCalls += 1;
-        inFlight += 1;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        if (probeCalls <= PROBE_LIMIT) {
-          await firstWaveGate;
+      const orphanKey = "zz-orphan";
+      if (phase === "after-commit") {
+        const binding = (await persisted.entries()).find(
+          ({ value }) => value.threadId === "prepared",
+        )?.value;
+        assert(binding);
+        await persisted.register(orphanKey, {
+          ...binding,
+          threadId: "orphan",
+          targetSessionKey: sessionKey("orphan"),
+        });
+      }
+      const error = new IncognitoSessionEndedError();
+      let current = true;
+      const opened = vi
+        .spyOn(runtime.state, "openKeyedStore")
+        .mockImplementation(<T>(options: Parameters<typeof open>[0]) => {
+          const store = open<T>(options);
+          const remove = store.delete.bind(store);
+          vi.spyOn(store, "delete").mockImplementation(async (...args) => {
+            if (phase === "before-delete") {
+              current = false;
+            } else if (args[0] === orphanKey) {
+              current = false;
+              throw new Error("Orphan cleanup failed after target deletion");
+            }
+            return remove(...args);
+          });
+          return store;
+        });
+      const release = vi.fn();
+      try {
+        const failure = await reconcileAcpThreadBindingsOnStartup({
+          ...reconcileOptions,
+          prepareSession: async ({ sessionKey: key }) => ({
+            session: {
+              cfg: EMPTY_DISCORD_TEST_CONFIG,
+              storePath: "/fixture",
+              ...session(key),
+              acp: undefined,
+            },
+            assertCurrent() {
+              if (!current) {
+                throw error;
+              }
+            },
+            release,
+          }),
+        }).then(
+          () => undefined,
+          (caught: unknown) => caught,
+        );
+        expect(() => rethrowIncognitoSessionError(failure)).toThrow();
+        const stored = (await persisted.entries()).map(({ value }) => value.targetSessionKey);
+        if (phase === "before-delete") {
+          expect(manager.getByThreadId("prepared")?.targetSessionKey).toBe(sessionKey("prepared"));
+          expect(stored).toContain(sessionKey("prepared"));
+        } else {
+          expect(manager.getByThreadId("prepared")).toBeUndefined();
+          expect(stored).toEqual([sessionKey("orphan")]);
         }
-        inFlight -= 1;
-        return { status: "healthy" as const };
-      },
-    });
-
-    await vi.waitFor(() => {
-      expect(probeCalls).toBe(PROBE_LIMIT);
-    });
-    expect(maxInFlight).toBe(PROBE_LIMIT);
-
-    releaseFirstWave?.();
-    const result = await reconcilePromise;
-    expect(result.checked).toBe(12);
-    expect(result.removed).toBe(0);
-    expect(maxInFlight).toBeLessThanOrEqual(PROBE_LIMIT);
-  });
+        expect(release).toHaveBeenCalledOnce();
+      } finally {
+        opened.mockRestore();
+        await manager.stop();
+      }
+    },
+  );
 });

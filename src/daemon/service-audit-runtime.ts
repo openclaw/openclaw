@@ -42,7 +42,7 @@ export async function auditGatewayRuntime(
             : SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeBun,
         message:
           runtime.status === "probe-failed"
-            ? "Gateway service Bun runtime probe failed."
+            ? "Gateway service Bun runtime check failed."
             : "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
         detail:
           runtime.status === "probe-failed"
@@ -69,16 +69,14 @@ export async function auditGatewayRuntime(
           : SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeNode,
       message:
         runtime.status === "probe-failed"
-          ? "Gateway service Node runtime probe failed."
-          : (runtime.capabilityError ?? "Gateway service Node failed its capability probe."),
+          ? "Gateway service Node runtime check failed."
+          : (runtime.capabilityError ?? "Gateway service Node failed its capability check."),
       detail: runtime.status === "probe-failed" ? runtime.error.message : execPath,
       level: "recommended",
     });
   }
 
-  const pinnedPath = command
-    ? readDaemonRuntimePin({ kind: "gateway", env }, command).pin?.path
-    : undefined;
+  const pinnedPath = readDaemonRuntimePin({ kind: "gateway", env }, command).pin?.path;
   const explicitlyPinned =
     pinnedPath &&
     normalizeServicePathEntry(pinnedPath, platform) ===

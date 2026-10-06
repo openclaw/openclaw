@@ -26,9 +26,8 @@ function isExpiredTalkRelaySession(
 export function closeExpiredTalkRelaySessions<TSession extends TalkRelayLifecycleSession>(params: {
   sessions: Iterable<TSession>;
   closeSession: CloseTalkRelaySession<TSession>;
-  nowMs?: number;
 }): void {
-  const validNowMs = asDateTimestampMs(params.nowMs ?? Date.now());
+  const validNowMs = asDateTimestampMs(Date.now());
   if (validNowMs === undefined) {
     return;
   }

@@ -15,10 +15,7 @@ class ControlUiPluginManager extends OpenClawLightDomContentsElement {
 
   constructor() {
     super();
-    new SubscriptionsController(this).watch(
-      () => this.context?.plugins,
-      (plugins, notify) => plugins.subscribe(notify),
-    );
+    new SubscriptionsController(this).watchStore(() => this.context?.plugins);
   }
 
   override render() {

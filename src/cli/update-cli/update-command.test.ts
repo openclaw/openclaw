@@ -5,11 +5,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
-import type { GatewayService } from "../../daemon/service.js";
+import * as gatewayService from "../../daemon/service.js";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import * as nativeLaunchAgentRecovery from "../daemon-cli/launchd-recovery.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as launchAgentRecovery from "./update-command-launch-agent-recovery.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
@@ -23,11 +26,11 @@ import {
   resolveUpdatedInstallCommandEnv,
 } from "./update-command-service-env.js";
 import {
-  resolvePostUpdateServiceStateReadEnv,
-  resolveUpdatedGatewayRestartPort,
-  shouldPrepareUpdatedInstallRestart,
-} from "./update-command-service.js";
-import { testing as updateCommandServiceTesting } from "./update-command-service.test-support.js";
+  formatPostUpdateGatewayRecoveryInstructions,
+  recoverLaunchAgentAndRecheckGatewayHealth,
+} from "./update-command-service-recovery.js";
+import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
+import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
 const tempDirs = createTempDirTracker();
 afterEach(() => {
@@ -102,65 +105,6 @@ describe("applyPostPluginConfigValidation", () => {
   });
 });
 
-describe("shouldPrepareUpdatedInstallRestart", () => {
-  it("prepares package update restarts when the service is installed but stopped", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "npm",
-        serviceInstalled: true,
-        serviceLoaded: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not install a new service for package updates when no service exists", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "npm",
-        serviceInstalled: false,
-        serviceLoaded: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps non-package updates tied to the matching loaded service state", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: false,
-      }),
-    ).toBe(false);
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: true,
-        serviceMatchesUpdateRoot: false,
-      }),
-    ).toBe(false);
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: true,
-        serviceMatchesUpdateRoot: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("prepares git restart when this update stopped the managed service", () => {
-    expect(
-      shouldPrepareUpdatedInstallRestart({
-        updateMode: "git",
-        serviceInstalled: true,
-        serviceLoaded: false,
-        serviceStoppedForUpdate: true,
-      }),
-    ).toBe(true);
-  });
-});
-
 describe("resolveUpdatedGatewayRestartPort", () => {
   it("uses the managed service port ahead of the caller environment", async () => {
     expect(
@@ -180,26 +124,6 @@ describe("resolveUpdatedGatewayRestartPort", () => {
         serviceEnv: {},
       }),
     ).toBe(19000);
-  });
-});
-
-describe("resolvePostUpdateServiceStateReadEnv", () => {
-  it.each(["git", "npm"] as const)(
-    "keeps %s restart preparation anchored to the pre-update service env",
-    (updateMode) => {
-      const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
-      const preManagedServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" };
-      expect(
-        resolvePostUpdateServiceStateReadEnv({ updateMode, processEnv, preManagedServiceEnv }),
-      ).toEqual(preManagedServiceEnv);
-    },
-  );
-
-  it("uses the caller environment when no managed service context was captured", () => {
-    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
-    expect(resolvePostUpdateServiceStateReadEnv({ updateMode: "git", processEnv })).toEqual(
-      processEnv,
-    );
   });
 });
 
@@ -538,14 +462,13 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
-  it("skips disabled tracked records when requested", async () => {
+  it("skips disabled nonofficial tracked records", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "missing");
     try {
       await expect(
         updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          skipDisabledPlugins: true,
           config: {
             plugins: {
               entries: {
@@ -569,15 +492,13 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
-  it("keeps disabled trusted official npm records eligible for payload repair when requested", async () => {
+  it("keeps disabled trusted official npm records eligible for payload repair", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "codex");
     try {
       await expect(
         updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          skipDisabledPlugins: true,
-          syncOfficialPluginInstalls: true,
           config: {
             plugins: {
               entries: {
@@ -609,15 +530,13 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
-  it("keeps disabled trusted official ClawHub records eligible for payload repair when requested", async () => {
+  it("keeps disabled trusted official ClawHub records eligible for payload repair", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const missingDir = path.join(tmpDir, "state", "clawhub", "diagnostics-otel");
     try {
       await expect(
         updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
-          skipDisabledPlugins: true,
-          syncOfficialPluginInstalls: true,
           config: {
             plugins: {
               entries: {
@@ -657,10 +576,7 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
   };
 
   it("uses systemd wording on Linux instead of macOS LaunchAgent instructions", () => {
-    const [line] = updateCommandServiceTesting.formatPostUpdateGatewayRecoveryInstructions(
-      result,
-      "linux",
-    );
+    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "linux");
 
     expect(line).toContain("the systemd user service");
     expect(line).toContain("openclaw gateway restart");
@@ -672,20 +588,14 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
   });
 
   it("keeps LaunchAgent recovery wording on macOS", () => {
-    const [line] = updateCommandServiceTesting.formatPostUpdateGatewayRecoveryInstructions(
-      result,
-      "darwin",
-    );
+    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "darwin");
 
     expect(line).toContain("the LaunchAgent is installed but not loaded");
     expect(line).toContain("logged-in macOS user session");
   });
 
   it("uses Windows service-manager wording on Windows", () => {
-    const [line] = updateCommandServiceTesting.formatPostUpdateGatewayRecoveryInstructions(
-      result,
-      "win32",
-    );
+    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "win32");
 
     expect(line).toContain("the gateway Scheduled Task or Windows login item");
     expect(line).not.toContain("LaunchAgent");
@@ -693,10 +603,7 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
   });
 
   it("uses generic service-manager wording for unsupported Node platforms", () => {
-    const [line] = updateCommandServiceTesting.formatPostUpdateGatewayRecoveryInstructions(
-      result,
-      "freebsd",
-    );
+    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "freebsd");
 
     expect(line).toContain("local service manager");
     expect(line).not.toContain("systemd");
@@ -706,35 +613,38 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
 });
 
 describe("recoverInstalledLaunchAgentAfterUpdate", () => {
+  beforeEach(() => mockProcessPlatform("darwin"));
+  afterEach(() => vi.restoreAllMocks());
   it.each(["recovered", "failed", "system owner"] as const)(
     "reports installed-but-not-loaded LaunchAgent recovery: %s",
     async (outcome) => {
-      const service = {} as never;
+      const service = createMockGatewayService();
       const serviceEnv = { OPENCLAW_PROFILE: "stomme" };
       const recoveredEnv = { ...serviceEnv, OPENCLAW_PORT: "18790" };
-      const readState = vi.fn(async () => ({
+      const readState = vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
         installed: true,
         loadState: { status: "not-loaded" },
         running: false,
         env: recoveredEnv,
         command: null,
         runtime: { status: "stopped" },
-      }));
+      });
       const message =
         "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
       const guidance = "System LaunchDaemon system/ai.openclaw.stomme owns this label";
-      const recover = vi.fn(async () => {
-        if (outcome === "system owner") {
-          throw new Error(guidance);
-        }
-        return outcome === "recovered" ? { result: "restarted", loaded: true, message } : null;
-      });
+      const recover = vi
+        .spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent")
+        .mockImplementation(async ({ result }) => {
+          if (outcome === "system owner") {
+            throw new Error(guidance);
+          }
+          return outcome === "recovered" ? { result, loaded: true, message } : null;
+        });
 
       await expect(
-        updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
+        launchAgentRecovery.recoverInstalledLaunchAgentAfterUpdate({
           service,
           env: serviceEnv,
-          deps: { platform: "darwin", readState: readState as never, recover: recover as never },
         }),
       ).resolves.toEqual(
         outcome === "recovered"
@@ -754,17 +664,13 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   );
 
   it("does not touch non-macOS service managers", async () => {
-    const readState = vi.fn();
-    const recover = vi.fn();
+    mockProcessPlatform("linux");
+    const readState = vi.spyOn(gatewayService, "readGatewayServiceState");
+    const recover = vi.spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent");
 
     await expect(
-      updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
-        service: {} as never,
-        deps: {
-          platform: "linux",
-          readState: readState as never,
-          recover: recover as never,
-        },
+      launchAgentRecovery.recoverInstalledLaunchAgentAfterUpdate({
+        service: createMockGatewayService(),
       }),
     ).resolves.toEqual({ attempted: false, recovered: false });
 
@@ -773,24 +679,19 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   });
 
   it("does not recover a loaded LaunchAgent", async () => {
-    const readState = vi.fn(async () => ({
+    vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
       installed: true,
       loadState: { status: "loaded" },
       running: true,
-      env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
+      env: { OPENCLAW_PROFILE: "stomme" },
       command: null,
       runtime: { status: "running" },
-    }));
-    const recover = vi.fn();
+    });
+    const recover = vi.spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent");
 
     await expect(
-      updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
-        service: {} as never,
-        deps: {
-          platform: "darwin",
-          readState: readState as never,
-          recover: recover as never,
-        },
+      launchAgentRecovery.recoverInstalledLaunchAgentAfterUpdate({
+        service: createMockGatewayService(),
       }),
     ).resolves.toEqual({ attempted: false, recovered: false });
 
@@ -850,7 +751,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       const startedAtMs = Date.now();
 
       await expect(
-        updateCommandServiceTesting.recoverLaunchAgentAndRecheckGatewayHealth({
+        recoverLaunchAgentAndRecheckGatewayHealth({
           updateRun: { runId, env },
           health: unhealthy,
           service,
@@ -872,6 +773,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
           expectedBuildId: "new-build",
           env,
           supervisorKeepsAlive: true,
+          requirePluginHealth: false,
           settle: { probes: 12 },
         });
       } else {
@@ -917,7 +819,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     });
     vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockResolvedValue(stillUnhealthy);
 
-    const result = await updateCommandServiceTesting.recoverLaunchAgentAndRecheckGatewayHealth({
+    const result = await recoverLaunchAgentAndRecheckGatewayHealth({
       health: unhealthy,
       service,
       port: 18790,
@@ -934,18 +836,16 @@ describe("hasLoadedLaunchdKeepAliveSupervisor", () => {
   it("requires a loaded LaunchAgent before extending restart health", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     const isLoaded = vi.fn().mockResolvedValue(false);
-    const service = { isLoaded } as unknown as GatewayService;
+    const service = createMockGatewayService({ isLoaded });
 
     await expect(
-      updateCommandServiceTesting.hasLoadedLaunchdKeepAliveSupervisor({
+      hasLoadedLaunchdKeepAliveSupervisor({
         service,
         env: { OPENCLAW_PROFILE: "work" },
       }),
     ).resolves.toBe(false);
     isLoaded.mockResolvedValue(true);
-    await expect(
-      updateCommandServiceTesting.hasLoadedLaunchdKeepAliveSupervisor({ service }),
-    ).resolves.toBe(true);
+    await expect(hasLoadedLaunchdKeepAliveSupervisor({ service })).resolves.toBe(true);
 
     platformSpy.mockRestore();
   });
@@ -955,8 +855,8 @@ describe("hasLoadedLaunchdKeepAliveSupervisor", () => {
     const isLoaded = vi.fn().mockResolvedValue(true);
 
     await expect(
-      updateCommandServiceTesting.hasLoadedLaunchdKeepAliveSupervisor({
-        service: { isLoaded } as unknown as GatewayService,
+      hasLoadedLaunchdKeepAliveSupervisor({
+        service: createMockGatewayService({ isLoaded }),
       }),
     ).resolves.toBe(false);
     expect(isLoaded).not.toHaveBeenCalled();

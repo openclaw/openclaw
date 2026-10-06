@@ -5,22 +5,23 @@ openclaw-agent-emoji-picker {
 .agent-emoji-picker__trigger {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--text);
+  background: transparent;
+  color: var(--muted);
 }
 
 .agent-emoji-picker__trigger:hover:not(:disabled) {
-  border-color: var(--accent);
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .agent-emoji-picker__trigger:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 .agent-emoji-picker__icon svg {

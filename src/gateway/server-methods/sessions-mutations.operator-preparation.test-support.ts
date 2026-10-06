@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import * as sessionFork from "../../auto-reply/reply/session-fork.js";
 import {
   createSessionEntryWithTranscript,
@@ -20,9 +20,9 @@ import {
   selectStoredProjectRegistry,
 } from "../../projects/project-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -30,6 +30,7 @@ import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-s
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import * as profileReader from "../../state/user-profile-list.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { initializeRepository } from "../server.sessions.create.projects.test-support.js";
 import { createGatewaySession } from "../session-create-service.js";
@@ -43,6 +44,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
   profileId: () => string;
   personClient: (profileId: string, scopes: string[]) => GatewayClient;
 }) {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-creation-shared-store-");
   const contextFor = (client: GatewayClient) => {
     const context = fixture.context();
     context.getClientConnIds = (filter) =>
@@ -86,9 +88,9 @@ export function registerSessionOperatorPreparationTests(fixture: {
           method === "sessions.patchMany"
             ? { targets: change === "duplicate" ? [target, { key }] : [target], patch }
             : change === "durable"
-              ? { ...patch }
+              ? { agentId: "main", ...patch }
               : change === "incognito"
-                ? { ...patch, incognito: true }
+                ? { agentId: "main", ...patch, incognito: true }
                 : change === "explicit-incognito"
                   ? {
                       key: key.replace(":prepare-", ":incognito-prepare-"),
@@ -227,7 +229,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
     it.each(["existing", "missing"] as const)(
       "creates a logical secondary agent session in the main agent's %s exact shared store",
       async (birth) => {
-        const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-creation-shared-store-"));
+        const root = sessionDirs.make();
         const storePath = path.join(root, "shared.sqlite");
         try {
           const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
@@ -287,8 +289,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
             expect(currentDatabase).toBe(physicalDatabase);
           }
         } finally {
-          disposeOpenClawAgentDatabaseByPath(storePath);
-          await fs.rm(root, { recursive: true, force: true });
+          await disposeOpenClawAgentDatabaseByPath(storePath);
         }
       },
     );
@@ -368,7 +369,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
       const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
       delete caller.authenticatedUserProfile;
       caller.internal = { operatorRoleActor: { kind: "system" } };
-      const params = { incognito: true, model: "openai/gpt-5.6-sol" };
+      const params = { agentId: "main", incognito: true, model: "openai/gpt-5.6-sol" };
       const responses: Parameters<RespondFn>[] = [];
       await sessionCreateHandlers["sessions.create"]!({
         req: { type: "req", id: "system-incognito", method: "sessions.create", params },

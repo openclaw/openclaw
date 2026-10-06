@@ -6,6 +6,7 @@ import { buildConfiguredModelCatalog } from "../../agents/model-selection-shared
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   createLlmCompleteError as completionError,
   createLlmOperatorAuthorizationError,
@@ -162,14 +163,6 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
     controller.abort(new Error(`Isolated completion timed out after ${timeoutMs}ms.`));
   }, timeoutMs);
   timer.unref?.();
-  let rejectOnAbort: (() => void) | undefined;
-  const abortPromise = new Promise<never>((_resolve, reject) => {
-    rejectOnAbort = () => {
-      const reason = controller.signal.reason;
-      reject(reason instanceof Error ? reason : new Error("Isolated completion was aborted."));
-    };
-    controller.signal.addEventListener("abort", rejectOnAbort, { once: true });
-  });
   try {
     const operation = (async () => {
       const { runIsolatedCompletion } = await import("../../agents/isolated-completion.js");
@@ -193,7 +186,11 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
         },
       });
     })();
-    return await Promise.race([operation, abortPromise]);
+    return await racePromiseWithAbortSignal(operation, controller.signal, (signal) =>
+      signal.reason instanceof Error
+        ? signal.reason
+        : new Error("Isolated completion was aborted."),
+    );
   } catch (error) {
     if (isLlmOperatorAuthorizationError(error)) {
       throw error;
@@ -226,9 +223,6 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
     throw completionError("LLM_COMPLETION_FAILED", "Plugin LLM completion failed.", error);
   } finally {
     clearTimeout(timer);
-    if (rejectOnAbort) {
-      controller.signal.removeEventListener("abort", rejectOnAbort);
-    }
     params.request.signal?.removeEventListener("abort", abortFromCaller);
   }
 }

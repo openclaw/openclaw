@@ -23,7 +23,10 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeStringifiedOptionalString,
+  normalizeUniqueStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildMatrixApprovalReactionHint,
   listMatrixApprovalReactionBindings,
@@ -124,11 +127,6 @@ function normalizeReactionTargetRef(params: ReactionTargetRef): ReactionTargetRe
   return { accountId, roomId, eventId };
 }
 
-function normalizeThreadId(value?: string | number | null): string | undefined {
-  const trimmed = value == null ? "" : String(value).trim();
-  return trimmed || undefined;
-}
-
 function isSingleMatrixMessageLimitError(error: unknown): boolean {
   return (
     error instanceof Error && error.message.includes("Matrix single-message text exceeds limit")
@@ -161,7 +159,7 @@ async function prepareTarget(
   if (!target) {
     return null;
   }
-  const threadId = normalizeThreadId(params.rawTarget.threadId);
+  const threadId = normalizeStringifiedOptionalString(params.rawTarget.threadId);
   if (target.kind === "user") {
     const accountConfig = resolveMatrixAccountConfig({
       cfg: params.cfg,

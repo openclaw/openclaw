@@ -19,6 +19,7 @@ import {
   setHeartbeatsEnabled,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 type RunnerOptions = Parameters<typeof startHeartbeatRunner>[0];
 type RunOnce = NonNullable<RunnerOptions["runOnce"]>;
@@ -49,9 +50,9 @@ const taskWake: Wake = {
 
 function config(
   every = "30m",
-  list?: NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>,
+  entries?: NonNullable<OpenClawConfig["agents"]>["entries"],
 ): OpenClawConfig {
-  return { agents: { defaults: { heartbeat: { every } }, ...(list ? { list } : {}) } };
+  return { agents: { defaults: { heartbeat: { every } }, ...(entries ? { entries } : {}) } };
 }
 
 function start(cfg = config(), options: Omit<RunnerOptions, "cfg"> = {}) {
@@ -94,6 +95,7 @@ afterEach(async () => {
   await vi.runAllTimersAsync();
   dispose();
   setHeartbeatsEnabled(true);
+  resetSystemEventsForTest();
   resetConfigRuntimeState();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -182,7 +184,7 @@ describe("startHeartbeatRunner", () => {
       }
       return { status: "ran", durationMs: 1 };
     });
-    start(config("30m", [{ id: "main" }, { id: "ops" }]));
+    start(config("30m", { main: {}, ops: {} }));
     await wake({ source: "manual", intent: "manual", reason: "manual" });
     expect(runSpy.mock.calls.map(([options]) => options.agentId)).toEqual(["main", "ops"]);
     pending.resolve();
@@ -214,7 +216,7 @@ describe("startHeartbeatRunner", () => {
 
   it("retains event follow-ups after a disabled heartbeat until the spacing floor", async () => {
     runSpy.mockResolvedValue({ status: "skipped", reason: "disabled" });
-    start(config("10m", [{ id: "main", heartbeat: { every: "10m" } }]));
+    start(config("10m", { main: { heartbeat: { every: "10m" } } }));
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     await interval("main", 10 * 60_000);
     expect(runSpy).toHaveBeenCalledOnce();
@@ -249,10 +251,9 @@ describe("startHeartbeatRunner", () => {
     "merges %s overrides with source-specific destination ownership",
     async (source) => {
       start(
-        config("30m", [
-          { id: "main" },
-          {
-            id: "ops",
+        config("30m", {
+          main: {},
+          ops: {
             heartbeat: {
               every: "15m",
               prompt: "Ops prompt",
@@ -262,7 +263,7 @@ describe("startHeartbeatRunner", () => {
               accountId: "ops-account",
             },
           },
-        ]),
+        }),
       );
       await wake({
         source,
@@ -299,6 +300,82 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(runSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it.each<{
+    owner: string;
+    fromConversationTurn: boolean;
+    commandMs: number;
+    runs: number;
+    beside?: { text: string; contextKey?: string };
+  }>([
+    { owner: "conversation", fromConversationTurn: true, commandMs: 0, runs: 20 },
+    { owner: "conversation", fromConversationTurn: true, commandMs: 40_000, runs: 14 },
+    { owner: "heartbeat", fromConversationTurn: false, commandMs: 40_000, runs: 1 },
+    {
+      owner: "conversation beside a reminder",
+      fromConversationTurn: true,
+      commandMs: 40_000,
+      runs: 1,
+      beside: { text: "Reminder: water the plants" },
+    },
+    {
+      owner: "conversation after a heartbeat delivery",
+      fromConversationTurn: true,
+      commandMs: 40_000,
+      runs: 14,
+      beside: {
+        text: "A heartbeat delivered this message to this channel:\nAll clear",
+        contextKey: "heartbeat-delivery:0:agent:main:main:heartbeat",
+      },
+    },
+  ])(
+    "spaces a $owner command taking $commandMs ms started in every completion turn",
+    async ({ fromConversationTurn, commandMs, runs, beside }) => {
+      if (beside) {
+        enqueueSystemEvent(beside.text, { sessionKey, contextKey: beside.contextKey });
+      }
+      const startCommand = () =>
+        setTimeout(() => {
+          enqueueSystemEvent("Exec completed (abcd1234, code 0) :: done", {
+            sessionKey,
+            fromConversationTurn,
+          });
+          requestHeartbeat({ ...execWake, coalesceMs: 0 });
+        }, commandMs);
+      const callTimes: number[] = [];
+      runSpy.mockImplementation(async () => {
+        callTimes.push(Date.now());
+        startCommand();
+        return { status: "ran", durationMs: 0 };
+      });
+      start();
+      startCommand();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      // Event turns keep the 30s spacing; only conversation completions skip the interval wait.
+      expect(callTimes).toHaveLength(runs);
+      for (const [index, time] of callTimes.slice(1).entries()) {
+        expect(time - callTimes[index]!).toBeGreaterThanOrEqual(Math.max(30_000, commandMs));
+      }
+    },
+  );
+
+  it("holds a conversation's completion turn behind the flood guard", async () => {
+    start();
+    for (let i = 0; i < 5; i++) {
+      await wake({ source: "manual", intent: "manual", reason: "manual", sessionKey });
+    }
+    await vi.advanceTimersByTimeAsync(40_000);
+    enqueueSystemEvent("Exec completed (abcd1234, code 0) :: done", {
+      sessionKey,
+      fromConversationTurn: true,
+    });
+    await wake(execWake);
+    await vi.advanceTimersByTimeAsync(19_900);
+    expect(runSpy).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(runSpy).toHaveBeenCalledTimes(6);
   });
 
   it("retains an event that collides with a task until the spacing floor", async () => {
@@ -355,15 +432,15 @@ describe("ambient owner resolution", () => {
 
 describe("targeted unscheduled wake dispatch", () => {
   it("runs a targeted manual next-heartbeat wake when recurring heartbeats are disabled", async () => {
-    start(config("0m", [{ id: "main" }]));
-    const enqueueSystemEvent = vi.fn();
+    start(config("0m", { main: {} }));
+    const enqueueEvent = vi.fn();
     const scheduler = new GatewayScheduler();
     const state = createCronServiceState({
       scheduler,
       storePath: "/unused/cron.json",
       cronEnabled: true,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      enqueueSystemEvent,
+      enqueueSystemEvent: enqueueEvent,
       requestHeartbeat: (request) => requestHeartbeat({ ...request, coalesceMs: 0 }),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
     });
@@ -375,7 +452,7 @@ describe("targeted unscheduled wake dispatch", () => {
         sessionKey,
       }),
     ).toEqual({ ok: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Operator requested a session update.", {
+    expect(enqueueEvent).toHaveBeenCalledWith("Operator requested a session update.", {
       agentId: "main",
       sessionKey,
     });
@@ -396,7 +473,7 @@ describe("targeted unscheduled wake dispatch", () => {
     { source: "hook", intent: "immediate", reason: "hook:job-123", agentId: "main" },
     { source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey },
   ] satisfies Wake[])("runs one targeted $source wake with disabled cadence", async (request) => {
-    start(config("0m", [{ id: "main" }]));
+    start(config("0m", { main: {} }));
     await wake(request);
     expect(runSpy).toHaveBeenCalledOnce();
     expectRun(0, request);
@@ -404,19 +481,19 @@ describe("targeted unscheduled wake dispatch", () => {
 
   it("keeps targeted cron wakes globally disabled", async () => {
     setHeartbeatsEnabled(false);
-    start(config("0m", [{ id: "main" }]));
+    start(config("0m", { main: {} }));
     await wake(cronWake);
     expect(runSpy).not.toHaveBeenCalled();
   });
 
   it("rejects targeted cron wakes for unconfigured agents", async () => {
-    start({ agents: { list: [{ id: "main" }] } });
+    start({ agents: { entries: { main: {} } } });
     await wake({ ...cronWake, agentId: "unknown", sessionKey: "agent:unknown:main" });
     expect(runSpy).not.toHaveBeenCalled();
   });
 
   it("retains the shared flood limit through reload with disabled cadence", async () => {
-    const cfg = config("0m", [{ id: "main" }]);
+    const cfg = config("0m", { main: {} });
     const callTimes: number[] = [];
     runSpy.mockImplementation(async () => {
       callTimes.push(Date.now());
@@ -436,7 +513,7 @@ describe("targeted unscheduled wake dispatch", () => {
   });
 
   it("preserves an in-flight start across a reload with disabled cadence", async () => {
-    const cfg = config("0m", [{ id: "main" }]);
+    const cfg = config("0m", { main: {} });
     const pending = createDeferred();
     const callTimes: number[] = [];
     runSpy.mockImplementation(async () => {
@@ -463,7 +540,7 @@ describe("targeted unscheduled wake dispatch", () => {
 
   it("keeps event spacing through enrollment changes without adding broadcast wakes", async () => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1m" } }] },
+      agents: { entries: { main: {}, ops: { heartbeat: { every: "1m" } } } },
     };
     const calls: { agentId: string | undefined; at: number }[] = [];
     runSpy.mockImplementation(async ({ agentId }) => {
@@ -474,10 +551,10 @@ describe("targeted unscheduled wake dispatch", () => {
     await wake(execWake);
     runner.updateConfig({
       agents: {
-        list: [
-          { id: "main", heartbeat: { every: "1m" } },
-          { id: "ops", heartbeat: { every: "1m" } },
-        ],
+        entries: {
+          main: { heartbeat: { every: "1m" } },
+          ops: { heartbeat: { every: "1m" } },
+        },
       },
     });
     runner.updateConfig(cfg);

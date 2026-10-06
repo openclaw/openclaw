@@ -203,10 +203,8 @@ export async function processDiscordMessage(
     draftPreview,
     resolvedBlockStreamingEnabled,
   } = replyRuntime;
-  let deliverThreadId = ctxPayload.MessageThreadId;
   activeThreadRoute.bindThreadAdoption(async (threadId) => {
     deliverTarget = `channel:${threadId}`;
-    deliverThreadId = threadId;
     await draftPreview.retarget(threadId);
   });
   const { lifecycle } = draftPreview;
@@ -265,7 +263,6 @@ export async function processDiscordMessage(
     info: DiscordProviderDeliveryInfo,
     options?: {
       allowFallbackOnlyToolWarning?: boolean;
-      allowProgressBlock?: boolean;
       deliverySession?: ReturnType<typeof getGroupThreadDeliverySession>;
     },
   ) => {
@@ -382,17 +379,6 @@ export async function processDiscordMessage(
       );
       return { visibleReplySent: false };
     }
-    if (
-      await draftPreview.adoptProgressContinuation(deliverablePayload, info, {
-        to: isDirectMessage
-          ? (ctxPayload.OriginatingTo ?? ctxPayload.To ?? deliverTarget)
-          : deliverTarget,
-        threadId: deliverThreadId,
-      })
-    ) {
-      replyReference.markSent();
-      return { visibleReplySent: true };
-    }
     if (isFinal && !replyLifecycleStarted && !isRoomEvent && configuredTypingMode !== "never") {
       // Fast replies can bypass the normal resolver lifecycle. Start feedback
       // only after a deliverable final survives every suppression boundary.
@@ -403,8 +389,7 @@ export async function processDiscordMessage(
       draftStream &&
       draftPreview.isProgressMode &&
       info.kind === "block" &&
-      !deliverablePayload.isCommentary &&
-      !options?.allowProgressBlock
+      !deliverablePayload.isCommentary
     ) {
       const reply = resolveSendableOutboundReplyParts(deliverablePayload);
       if (!reply.hasMedia && !deliverablePayload.isError) {
@@ -620,10 +605,6 @@ export async function processDiscordMessage(
     await draftPreview.cleanup({ failed: finalDeliveryFailed || dispatchError });
     await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
   }
-  if (dispatchAborted) {
-    return;
-  }
-
   const finalDispatchResult = dispatchResult;
   if (!finalDispatchResult || !hasFinalInboundReplyDispatch(finalDispatchResult)) {
     return;

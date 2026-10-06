@@ -1,4 +1,3 @@
-// Dispatches final reply payloads through visible senders and message tools.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
@@ -47,7 +46,6 @@ import {
   shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
-import { invokeReplyDispatcherObserver } from "./reply-dispatcher-observers.js";
 import {
   mapReplyDispatchCounts,
   type ReplyDispatchBeforeDeliver,
@@ -63,21 +61,6 @@ import {
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
-type ReplyDispatchErrorHandler = (
-  err: unknown,
-  info: ReplyDispatchRuntimeInfo,
-) => Promise<void> | void;
-
-type ReplyDispatchSkipHandler = (
-  payload: ReplyPayload,
-  info: ReplyDispatchRuntimeInfo & { reason: NormalizeReplySkipReason },
-) => void;
-
-type ReplyDispatchCancelHandler = (
-  payload: ReplyPayload,
-  info: ReplyDispatchRuntimeInfo,
-) => Promise<void> | void;
-
 export type { ReplyDispatchDeliveryOutcome };
 
 type ReplyDispatchDeliveryOutcomeTracker = {
@@ -88,10 +71,14 @@ type ReplyDispatchDeliveryOutcomeTracker = {
   deliveredPayload?: ReplyPayload;
 };
 
-type ReplyDispatchDeliverer = (
-  payload: ReplyPayload,
-  info: ReplyDispatchRuntimeInfo,
-) => Promise<unknown>;
+/** Invoke immediately without letting observer failures interrupt delivery bookkeeping. */
+function invokeReplyDispatcherObserver(observer: () => unknown): void {
+  try {
+    void Promise.resolve(observer()).catch(() => undefined);
+  } catch {
+    // Error reporting itself can throw synchronously, before returning a promise.
+  }
+}
 
 function replaceDispatchPayload(
   input: ReplyDispatchOperation,
@@ -173,7 +160,7 @@ function buildReplyDispatchRuntimeInfo(
 }
 
 export type ReplyDispatcherOptions = {
-  deliver: ReplyDispatchDeliverer;
+  deliver: (payload: ReplyPayload, info: ReplyDispatchRuntimeInfo) => Promise<unknown>;
   /**
    * Receives a fresh plan after normalization and modifiers. When omitted, prepared
    * sends fall back to deliver(payload, info), retaining that adapter's raw contract.
@@ -187,24 +174,28 @@ export type ReplyDispatcherOptions = {
   };
   responsePrefix?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
-  /** Static context for response prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
   /** Dynamic context provider for response prefix template interpolation.
    * Called at normalization time, after model selection is complete. */
   responsePrefixContextProvider?: () => ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
   onIdle?: () => Promise<void> | void;
-  onError?: ReplyDispatchErrorHandler;
+  onError?: (err: unknown, info: ReplyDispatchRuntimeInfo) => Promise<void> | void;
   /** Let ingress retry proven-unsent work only when outbound recovery holds no delivery. */
   propagateRetryableNoSendFailure?: boolean;
-  // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
-  onSkip?: ReplyDispatchSkipHandler;
-  /** Human-like delay between block replies for natural rhythm. */
+  /** Lets channels detect silent/empty drops for their empty-response fallback. */
+  onSkip?: (
+    payload: ReplyPayload,
+    info: ReplyDispatchRuntimeInfo & { reason: NormalizeReplySkipReason },
+  ) => void;
   humanDelay?: HumanDelayConfig;
   beforeDeliver?: ReplyDispatchBeforeDeliver;
   /** Owner-declared deadline for the constructor before-delivery callback. */
   beforeDeliverOptions?: ReplyDispatchBeforeDeliverOptions;
-  onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
+  onBeforeDeliverCancelled?: (
+    payload: ReplyPayload,
+    info: ReplyDispatchRuntimeInfo,
+  ) => Promise<void> | void;
   /** Observe each queued payload settling, including cancellation and delivery failure. */
   onDeliverySettled?: (info: ReplyDispatchRuntimeInfo) => void;
   /** Resolve an owner activity policy for holding queued follow-ups behind delivery. */
@@ -314,6 +305,16 @@ export function createReplyDispatcher(
   });
 
   const unregister = registerDispatcher(() => pending);
+  const releasePending = () => {
+    pending -= 1;
+    if (pending === 1 && completeCalled) {
+      pending -= 1;
+    }
+    if (pending === 0) {
+      unregister();
+      notifyIdle();
+    }
+  };
 
   const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
     invokeReplyDispatcherObserver(() => options.onError?.(err, info));
@@ -454,7 +455,7 @@ export function createReplyDispatcher(
           ? getReplyPayloadMetadata(deliveredPayload)?.progressContinuation
           : undefined;
       const deliveryInfo = continuation
-        ? { ...info, adoptProgressContinuation: continuation.adopt }
+        ? { ...info, adoptProgressDraft: continuation.adopt }
         : info;
       const result =
         deliveryInput.kind === "prepared" && options.deliverPrepared
@@ -563,7 +564,6 @@ export function createReplyDispatcher(
       deliveryOutcomeTracker.tracked = true;
     }
 
-    // Determine if we should add human-like delay (only for block replies after the first).
     const shouldDelay = kind === "block" && sentFirstBlock;
     if (kind === "block") {
       sentFirstBlock = true;
@@ -611,14 +611,7 @@ export function createReplyDispatcher(
         } catch (err: unknown) {
           reportObserverError(err, dispatchInfo);
         }
-        pending -= 1;
-        if (pending === 1 && completeCalled) {
-          pending -= 1;
-        }
-        if (pending === 0) {
-          unregister();
-          notifyIdle();
-        }
+        releasePending();
       }
     });
     return true;
@@ -633,13 +626,8 @@ export function createReplyDispatcher(
     // schedule clearing the reservation after current microtasks complete.
     // This gives any in-flight enqueue() calls a chance to increment pending.
     void Promise.resolve().then(() => {
-      if (pending === 1 && completeCalled) {
-        // Still just the reservation, no replies were enqueued
-        pending -= 1;
-        if (pending === 0) {
-          unregister();
-          notifyIdle();
-        }
+      if (pending === 1) {
+        releasePending();
       }
     });
   };

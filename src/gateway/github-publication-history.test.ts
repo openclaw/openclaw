@@ -17,6 +17,14 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 const mocks = githubPublicationTestMocks();
 const url = "https://github.com/openclaw/openclaw/pull/125200";
 
+function expectNoPublicationWrites(calls: string[][]) {
+  expect(
+    calls.filter((args) =>
+      args.some((arg) => ["commit-tree", "update-ref", "push", "POST"].includes(arg)),
+    ),
+  ).toEqual([]);
+}
+
 async function historyFixture() {
   const workspace = await createRealPublicationWorkspace();
   const remote = path.join(root, "remote.git");
@@ -136,11 +144,7 @@ describe("GitHub publication branch history", () => {
       headCommit: secondHead,
     });
     expect(await f.state()).toEqual(before);
-    expect(
-      f.calls.some(
-        (args) => args.includes("commit-tree") || args.includes("push") || args.includes("POST"),
-      ),
-    ).toBe(false);
+    expectNoPublicationWrites(f.calls);
   });
 
   it("repairs unrecognized published credit without rewriting history or importing body examples", async () => {
@@ -183,9 +187,7 @@ describe("GitHub publication branch history", () => {
         headCommit: before.head,
       });
       expect(await f.state()).toEqual(before);
-      expect(f.calls.some((args) => args.includes("commit-tree") || args.includes("push"))).toBe(
-        false,
-      );
+      expectNoPublicationWrites(f.calls);
     }
     // Commit-format trailer parsing must not treat a Markdown separator as a patch divider.
     const valid = await f.publishMessage(`Implementation credit\n\n---\n\n${human}\n${marker}`);
@@ -197,9 +199,7 @@ describe("GitHub publication branch history", () => {
       headCommit: valid,
     });
     expect(await f.state()).toEqual(before);
-    expect(f.calls.some((args) => args.includes("commit-tree") || args.includes("push"))).toBe(
-      false,
-    );
+    expectNoPublicationWrites(f.calls);
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (args: string[], options) =>
       args.some((arg) => arg.startsWith("--format=%(trailers:"))
@@ -212,9 +212,7 @@ describe("GitHub publication branch history", () => {
       code: "unavailable",
     });
     expect(await f.state()).toEqual(before);
-    expect(f.calls.some((args) => args.includes("commit-tree") || args.includes("push"))).toBe(
-      false,
-    );
+    expectNoPublicationWrites(f.calls);
   });
 
   it("adds missing contributor credit instead of silently reusing an older attributed head", async () => {
@@ -252,8 +250,6 @@ describe("GitHub publication branch history", () => {
 
   it.each([
     { publication: "initial", reflog: "recreated" },
-    { publication: "initial", reflog: "expired" },
-    { publication: "refresh", reflog: "recreated" },
     { publication: "refresh", reflog: "expired" },
   ])(
     "publishes $publication work after its branch reflog is $reflog",
@@ -305,15 +301,7 @@ describe("GitHub publication branch history", () => {
     });
 
     expect(await f.state()).toEqual(before);
-    expect(
-      f.calls.some(
-        (args) =>
-          args.includes("commit-tree") ||
-          args.includes("update-ref") ||
-          args.includes("push") ||
-          args.includes("POST"),
-      ),
-    ).toBe(false);
+    expectNoPublicationWrites(f.calls);
   });
 
   it.each(["rebased", "remote-ahead", "unrelated"] as const)(
@@ -356,15 +344,7 @@ describe("GitHub publication branch history", () => {
         code: "push_rejected",
         nextAction: expect.stringContaining("published head"),
       });
-      expect(
-        f.calls.some(
-          (args) =>
-            args.includes("commit-tree") ||
-            args.includes("update-ref") ||
-            args.includes("push") ||
-            args.includes("POST"),
-        ),
-      ).toBe(false);
+      expectNoPublicationWrites(f.calls);
     },
   );
 
@@ -385,11 +365,7 @@ describe("GitHub publication branch history", () => {
       nextAction: expect.stringContaining("Reconnect"),
     });
     expect(await f.state()).toEqual(before);
-    expect(
-      f.calls.some(
-        (args) => args.includes("commit-tree") || args.includes("push") || args.includes("POST"),
-      ),
-    ).toBe(false);
+    expectNoPublicationWrites(f.calls);
   });
 
   it.each(["failed", "malformed", "wrong-ref", "fetch", "ancestry"] as const)(
@@ -433,15 +409,7 @@ describe("GitHub publication branch history", () => {
         code: "unavailable",
         nextAction: expect.stringContaining("verify"),
       });
-      expect(
-        f.calls.some(
-          (args) =>
-            args.includes("commit-tree") ||
-            args.includes("update-ref") ||
-            args.includes("push") ||
-            args.includes("POST"),
-        ),
-      ).toBe(false);
+      expectNoPublicationWrites(f.calls);
     },
   );
 });

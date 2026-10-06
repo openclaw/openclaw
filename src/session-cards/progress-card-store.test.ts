@@ -1,9 +1,15 @@
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeSqliteReadSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL } from "../state/openclaw-agent-progress-card-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import {
@@ -41,7 +47,7 @@ describe("session progress card store", () => {
 
   beforeEach(() => {
     dbPath = path.join(tempDirs.make("progress-card-"), "agent.sqlite");
-    db = new DatabaseSync(dbPath);
+    db = openNodeSqliteDatabase(dbPath);
     db.exec("PRAGMA foreign_keys = ON;");
     db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
     db.prepare(
@@ -162,7 +168,7 @@ describe("session progress card store", () => {
       expect(resetRow).toEqual(expectedTombstone);
       clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();
-      db = new DatabaseSync(dbPath);
+      db = openNodeSqliteDatabase(dbPath);
       const reopenedRow = stored();
       expect(reopenedRow).toEqual(expectedTombstone);
       expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
@@ -185,6 +191,92 @@ describe("session progress card store", () => {
         .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
         .get("session_progress_cards"),
     ).toBeUndefined();
+  });
+
+  it("creates lazy storage once and retains admitted facts across warm writes and reads", () => {
+    db.exec("DROP TABLE session_progress_cards");
+    admitSqliteSchema(db);
+    expect(getAdmittedSqliteSchemaFacts(db)?.tables.has("session_progress_cards")).toBe(false);
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    writeSessionProgressCard(db, SESSION_KEY, { markdown: "First" });
+    expect(exec.mock.calls.filter(([sql]) => /CREATE TABLE/iu.test(sql))).toHaveLength(1);
+    const facts = getAdmittedSqliteSchemaFacts(db);
+    expect(facts?.tables.has("session_progress_cards")).toBe(true);
+    const sibling = openNodeSqliteDatabase(dbPath, { readOnly: true });
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      admitSqliteSchema(sibling);
+      const siblingFacts = getAdmittedSqliteSchemaFacts(sibling);
+      exec.mockClear();
+      reads.queries.length = 0;
+
+      writeSessionProgressCard(db, SESSION_KEY, { markdown: "Second" });
+      expect(readSessionProgressCard(db, SESSION_KEY)).toMatchObject({
+        markdown: "Second",
+        revision: 2,
+      });
+      expect(getAdmittedSqliteSchemaFacts(db)).toBe(facts);
+      expect(getAdmittedSqliteSchemaFacts(sibling)).toBe(siblingFacts);
+      writeSessionProgressCard(db, SESSION_KEY, {});
+      writeSessionProgressCard(db, SESSION_KEY, { markdown: "Next task" });
+      expect(clearSessionProgressCardForReset(db, SESSION_KEY)).toBe(true);
+      expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
+      expect(getAdmittedSqliteSchemaFacts(db)).toBe(facts);
+      expect(getAdmittedSqliteSchemaFacts(sibling)).toBe(siblingFacts);
+      expect(exec.mock.calls.filter(([sql]) => /CREATE/iu.test(sql))).toEqual([]);
+      expect(reads.queries.filter((sql) => /sqlite_schema|sqlite_master/iu.test(sql))).toEqual([]);
+    } finally {
+      reads.restore();
+      sibling.close();
+    }
+  });
+
+  it("recreates lazy storage after rolling back its first write", () => {
+    db.exec("DROP TABLE session_progress_cards");
+    admitSqliteSchema(db);
+    let transactionalFacts: ReturnType<typeof getAdmittedSqliteSchemaFacts>;
+    expect(() =>
+      runSqliteImmediateTransactionSync(db, () => {
+        writeSessionProgressCard(db, SESSION_KEY, { markdown: "Rolled back" });
+        transactionalFacts = getAdmittedSqliteSchemaFacts(db);
+        expect(transactionalFacts?.tables.has("session_progress_cards")).toBe(true);
+        throw new Error("synthetic rollback");
+      }),
+    ).toThrow("synthetic rollback");
+    const rolledBackFacts = getAdmittedSqliteSchemaFacts(db);
+    expect(rolledBackFacts).not.toBe(transactionalFacts);
+    expect(rolledBackFacts?.tables.has("session_progress_cards")).toBe(false);
+    expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
+    writeSessionProgressCard(db, SESSION_KEY, { markdown: "Retried" });
+    expect(readSessionProgressCard(db, SESSION_KEY)).toMatchObject({
+      markdown: "Retried",
+      revision: 1,
+    });
+  });
+
+  it("refreshes foreign schema changes at write admission before recreating lazy storage", () => {
+    admitSqliteSchema(db);
+    writeSessionProgressCard(db, SESSION_KEY, { markdown: "Before foreign DDL" });
+    const facts = getAdmittedSqliteSchemaFacts(db);
+    // An untracked connection models another isolate without local schema publication.
+    const foreign = new DatabaseSync(dbPath);
+    try {
+      foreign.exec("DROP TABLE session_progress_cards");
+    } finally {
+      foreign.close();
+    }
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      writeSessionProgressCard(db, SESSION_KEY, { markdown: "After foreign DDL" });
+      expect(readSessionProgressCard(db, SESSION_KEY)).toMatchObject({
+        markdown: "After foreign DDL",
+        revision: 1,
+      });
+      expect(getAdmittedSqliteSchemaFacts(db)).not.toBe(facts);
+      expect(reads.queries.some((sql) => /sqlite_schema/iu.test(sql))).toBe(true);
+    } finally {
+      reads.restore();
+    }
   });
 
   it("deletes the card when its owning session node is deleted", () => {

@@ -81,9 +81,7 @@ internal class MessageSpeechClient(
     if (bytes.isEmpty()) return null
     return TalkSpeakAudio(
       bytes = bytes,
-      provider = payload.provider,
       outputFormat = payload.outputFormat,
-      voiceCompatible = null,
       mimeType = payload.mimeType,
       fileExtension = payload.fileExtension,
     )

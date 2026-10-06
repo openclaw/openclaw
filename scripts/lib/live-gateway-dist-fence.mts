@@ -1,107 +1,28 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { LoadedLaunchAgentState } from "../../src/daemon/launchd-runtime.ts";
 import type { ManagedGatewayBinding } from "../../src/daemon/managed-gateway-bindings.ts";
-import type { GatewayServiceEnv, GatewayServiceState } from "../../src/daemon/service-types.ts";
+import type { GatewayServiceState } from "../../src/daemon/service-types.ts";
 import { hasErrnoCode } from "../../src/infra/errno.ts";
 import { hasCommandProcessCleanupError } from "../../src/process/exec-result.ts";
 
 type LiveGatewayDistFenceResult = { refuse: true; message: string } | { refuse: false };
-type LaunchAgentHint = { target: string; sourcePath: string };
-
-function normalizeFenceProfile(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed.toLowerCase() === "default") {
-    return "default";
-  }
-  return trimmed;
-}
-
-function bindingFromProcessEnv(env: NodeJS.ProcessEnv): ManagedGatewayBinding {
-  return {
-    profile: normalizeFenceProfile(env.OPENCLAW_PROFILE),
-    env: env as GatewayServiceEnv,
-  };
-}
-
-function bindingSelectorKey(binding: ManagedGatewayBinding): string {
-  return [
-    binding.profile,
-    binding.scope ?? binding.systemdReadTarget?.scope ?? "",
-    binding.systemdReadTarget?.unitPath ?? "",
-    binding.launchAgentPlistPath ?? "",
-    binding.windowsStartupEntry
-      ? path.win32.normalize(binding.windowsStartupEntry).toLowerCase()
-      : "",
-    binding.env.OPENCLAW_SYSTEMD_UNIT ?? "",
-    binding.env.OPENCLAW_LAUNCHD_LABEL ?? "",
-    binding.env.OPENCLAW_WINDOWS_TASK_NAME ?? "",
-  ].join("\0");
-}
-
-function dedupeBindings(bindings: readonly ManagedGatewayBinding[]): ManagedGatewayBinding[] {
-  const seen = new Set<string>();
-  const out: ManagedGatewayBinding[] = [];
-  for (const binding of bindings) {
-    const key = bindingSelectorKey(binding);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    out.push(binding);
-  }
-  return out;
-}
-
-function formatServiceHint(profile: string, action: "stop" | "start"): string {
-  return profile === "default"
-    ? `\`openclaw gateway ${action}\``
-    : `\`openclaw gateway ${action} --profile ${profile}\``;
-}
-
 function formatRefuseMessage(params: {
-  profiles: readonly string[];
+  owners: readonly string[];
+  showUpdateHint: boolean;
   entrypoint?: string;
   unit?: string;
-  serviceProfiles: readonly string[];
-  startupEntries: readonly string[];
-  launchAgents: readonly LaunchAgentHint[];
 }): string {
-  const profiles = [...new Set(params.profiles)].toSorted((left, right) =>
-    (left ?? "").localeCompare(right ?? ""),
-  );
-  const profileText =
-    profiles.length === 1 ? ` (profile ${profiles[0]})` : ` (profiles ${profiles.join(", ")})`;
+  const owners = [...new Set(params.owners)].join(", ");
   const entry = params.entrypoint ? ` (${params.entrypoint})` : "";
   const unit = params.unit ? ` unit ${params.unit}` : "";
-  const stopHints = [
-    ...new Set(params.serviceProfiles.map((profile) => formatServiceHint(profile, "stop"))),
-    ...new Set(
-      params.launchAgents.map(
-        (agent) =>
-          `stop launchd job ${JSON.stringify(agent.target)} loaded from ${JSON.stringify(agent.sourcePath)}`,
-      ),
-    ),
-    ...new Set(
-      params.startupEntries.map(
-        (startupPath) =>
-          `stop the process launched by Startup entry ${JSON.stringify(startupPath)}`,
-      ),
-    ),
-  ].join(", ");
-  const startHints = params.serviceProfiles
-    .map((profile) => formatServiceHint(profile, "start"))
-    .join(", ");
-  const recovery =
-    params.launchAgents.length > 0
-      ? `From an external terminal, stop every listed Gateway (${stopHints}), run \`pnpm build\` in this checkout, then after a successful build start the same listed services and Startup entries through their original owners.`
-      : params.startupEntries.length > 0
-        ? `From an external terminal, stop every listed Gateway (${stopHints}), run \`pnpm build\` in this checkout, then after a successful build start the same Startup entries and any listed services.`
-        : `From an external terminal, stop every listed Gateway (${stopHints} or the matching service stops), ` +
-          `run \`pnpm build\` in this checkout, then after a successful build start those services (${startHints} or the matching service starts). ` +
-          `\`openclaw update\` can apply an available update; an already-current result does not rebuild stale dist.`;
   return (
-    `[openclaw] Refusing to rebuild artifacts while a managed Gateway${profileText}${unit} is still using overlapping build outputs${entry}. ` +
-    recovery
+    `[openclaw] Refusing to rebuild artifacts while a managed Gateway (${owners}) is still using overlapping build outputs${unit}${entry}. ` +
+    "From an external terminal, stop every listed Gateway through its original native service or Startup owner, " +
+    "run `pnpm build` in this checkout, then after a successful build start those same services." +
+    (params.showUpdateHint
+      ? " `openclaw update` can apply an available update; an already-current result does not rebuild stale dist."
+      : "")
   );
 }
 
@@ -140,6 +61,7 @@ async function loadFenceRuntime() {
       summarizeGatewayServiceLayout: layout.summarizeGatewayServiceLayout,
       resolveServiceEntrypoint: layout.resolveServiceEntrypoint,
       readManagedGatewayBindingState: bindings.readManagedGatewayBindingState,
+      describeManagedGatewayBinding: bindings.describeManagedGatewayBinding,
       isPathInside: pathGuards.isPathInside,
       isGatewayServiceStateLive: serviceRuntime.isGatewayServiceStateLive,
     };
@@ -242,10 +164,11 @@ async function resolveFenceBindings(
   requireComplete?: boolean,
 ): Promise<readonly ManagedGatewayBinding[] | null> {
   try {
-    const current = bindingFromProcessEnv(env);
     const inspect = await import("../../src/daemon/managed-gateway-bindings.ts");
-    const discovered = await inspect.discoverManagedGatewayBindings(env, { requireComplete });
-    return dedupeBindings([current, ...discovered]);
+    return await inspect.discoverManagedGatewayBindings(env, {
+      requireComplete,
+      includeInvoking: true,
+    });
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;
@@ -279,10 +202,9 @@ export async function resolveLiveManagedGatewayDistFence(
 
   const root = path.resolve(checkoutRoot);
   const holds: Array<{
-    profile: string;
-    state: GatewayServiceState;
-    windowsStartupEntry?: string;
-    launchAgent?: LaunchAgentHint;
+    owner: string;
+    binding: ManagedGatewayBinding;
+    state: LoadedLaunchAgentState;
   }> = [];
   let unverified = false;
   for (const binding of bindings) {
@@ -329,33 +251,27 @@ export async function resolveLiveManagedGatewayDistFence(
         continue;
       }
       if (matches === null) {
+        // Native readers can prove absence without setting the optional missingUnit hint.
         unverified ||= Boolean(
           state.command ||
           state.installed ||
           state.loadState.status !== "not-loaded" ||
-          state.runtime?.missingUnit !== true,
+          state.runtime?.status !== "stopped" ||
+          runtime.isGatewayServiceStateLive(state),
         );
         continue;
       }
-      if (!runtime.isGatewayServiceStateLive(state)) {
+      // Scheduler occupancy can hold old argv or a pending launch without proving
+      // the current command is running. It fences overlapping outputs, not service control.
+      const occupiedWindowsTask =
+        process.platform === "win32" &&
+        !binding.windowsStartupEntry &&
+        (state.runtime?.state === "Running" || state.runtime?.state === "Queued");
+      if (!runtime.isGatewayServiceStateLive(state) && !occupiedWindowsTask) {
         unverified ||= state.runtime?.status !== "stopped" || state.loadState.status === "unknown";
         continue;
       }
-      holds.push({
-        profile: normalizeFenceProfile(binding.profile),
-        state,
-        ...(state.launchAgent
-          ? {
-              launchAgent: {
-                target: state.launchAgent.target,
-                sourcePath: state.launchAgent.sourcePath,
-              },
-            }
-          : {}),
-        ...(binding.windowsStartupEntry !== undefined
-          ? { windowsStartupEntry: binding.windowsStartupEntry }
-          : {}),
-      });
+      holds.push({ owner: runtime.describeManagedGatewayBinding(binding, state), binding, state });
     } catch (error) {
       if (hasCommandProcessCleanupError(error)) {
         throw error;
@@ -382,13 +298,9 @@ export async function resolveLiveManagedGatewayDistFence(
   return {
     refuse: true,
     message: formatRefuseMessage({
-      profiles: holds.map((hold) => hold.profile),
-      serviceProfiles: holds
-        .filter((hold) => hold.windowsStartupEntry === undefined && !hold.launchAgent)
-        .map((hold) => hold.profile),
-      launchAgents: holds.flatMap((hold) => (hold.launchAgent ? [hold.launchAgent] : [])),
-      startupEntries: holds.flatMap((hold) =>
-        hold.windowsStartupEntry === undefined ? [] : [hold.windowsStartupEntry],
+      owners: holds.map((hold) => hold.owner),
+      showUpdateHint: !holds.some(
+        (hold) => hold.binding.windowsStartupEntry || hold.state.launchAgent,
       ),
       ...(entrypoint ? { entrypoint } : {}),
       ...(unit ? { unit } : {}),

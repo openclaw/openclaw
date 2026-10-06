@@ -3,6 +3,7 @@ import {
   errorShape,
   validateSessionsCatalogArchiveParams,
   validateSessionsCatalogContinueParams,
+  validateSessionsCatalogImportParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,6 +14,7 @@ import type {
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { authorizeSessionCatalogThread } from "./session-catalog-authorization.js";
 import { continueAuthorizedSessionCatalog } from "./session-catalog-continue.js";
+import { importAuthorizedSessionCatalog } from "./session-catalog-import.js";
 import { retireSessionCatalogLists } from "./session-catalog-list-operations.js";
 import { listSessionCatalogHandler } from "./session-catalog-list.js";
 import {
@@ -120,7 +122,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.continue": defineValidatedGatewayHandler(
     "sessions.catalog.continue",
     validateSessionsCatalogContinueParams,
-    async ({ params: request, respond, client, context, sessionMutationCommitGuard }) => {
+    async ({ params: request, respond, client, context, sessionMutationCommitGuard, signal }) => {
       const registration = registrationOrRespond(request.catalogId, respond);
       if (!registration) {
         return;
@@ -159,6 +161,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           client,
           context,
           commitGuard: sessionMutationCommitGuard,
+          signal,
         });
         if (!continued.ok) {
           respond(false, undefined, continued.error);
@@ -172,6 +175,71 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
   ),
 
   "sessions.catalog.startTerminal": catalogStartHandler(resolveSessionCatalogProvider),
+
+  "sessions.catalog.import": defineValidatedGatewayHandler(
+    "sessions.catalog.import",
+    validateSessionsCatalogImportParams,
+    async ({ params: request, respond, client, context, sessionMutationCommitGuard }) => {
+      const provider = registrationOrRespond(request.catalogId, respond)?.provider;
+      if (!provider) {
+        return;
+      }
+      try {
+        const authorize = () =>
+          authorizeSessionCatalogThread({
+            access: "read",
+            request,
+            provider,
+            respond,
+            context,
+            client,
+          });
+        const authorization = await authorize();
+        if (!authorization) {
+          return;
+        }
+        const creationError = authorizeGatewaySessionCreation({
+          cfg: context.getRuntimeConfig(),
+          client,
+          agentId: authorization.agentId,
+        });
+        if (creationError) {
+          respond(false, undefined, creationError);
+          return;
+        }
+        const imported = await importAuthorizedSessionCatalog({
+          request,
+          provider,
+          ...authorization,
+          client,
+          context,
+          reauthorize: async () => {
+            const current = await authorize();
+            if (!current) {
+              return null;
+            }
+            if (
+              current.agentId !== authorization.agentId ||
+              current.allowProcessHomeFallback !== authorization.allowProcessHomeFallback
+            ) {
+              throw new Error("Session catalog source ownership changed; retry the import");
+            }
+            return current.sourceVisibility;
+          },
+          commitGuard: sessionMutationCommitGuard,
+        });
+        if (imported) {
+          if (imported.ok) {
+            respond(true, imported.result);
+          } else {
+            respond(false, undefined, imported.error);
+          }
+        }
+      } catch (error) {
+        respondCatalogError(error, respond);
+      }
+    },
+  ),
 
   "sessions.catalog.archive": defineValidatedGatewayHandler(
     "sessions.catalog.archive",

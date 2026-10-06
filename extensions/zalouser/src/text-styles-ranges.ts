@@ -189,17 +189,9 @@ function splitLines(
   range: { start: number; end: number },
   text: string,
 ): Array<{ start: number; end: number }> {
-  const lines: Array<{ start: number; end: number }> = [];
-  let start = range.start;
-  while (start < range.end) {
-    const newline = text.indexOf("\n", start);
-    const end = newline === -1 ? range.end : Math.min(newline, range.end);
-    if (end > start && text.slice(start, end).replace(/[ \t\r\n]/gu, "")) {
-      lines.push({ start, end });
-    }
-    start = end + 1;
-  }
-  return lines;
+  return splitStyledLines(range, text).filter(({ start, end }) =>
+    text.slice(start, end).replace(/[ \t\r\n]/gu, ""),
+  );
 }
 
 export function applyTextEdits(
@@ -236,13 +228,7 @@ export function applyTextEdits(
     .flatMap((style) =>
       style.style === TextStyle.Indent ? splitStyledLines(style, output) : [style],
     )
-    .filter((style) => style.end > style.start)
-    .toSorted(
-      (left, right) =>
-        left.start - right.start ||
-        left.priority - right.priority ||
-        left.sequence - right.sequence,
-    );
+    .filter((style) => style.end > style.start);
   for (const [editIndex, edit] of edits.entries()) {
     if ((!edit.indentSize && !edit.listStyle) || !edit.text) {
       continue;
@@ -366,9 +352,6 @@ function mapEditedOffset(
     }
     if (offset < edit.end) {
       return edit.start + delta + (preferEnd ? edit.text.length : 0);
-    }
-    if (offset === edit.end) {
-      return edit.start + delta + edit.text.length;
     }
   }
   return offset + delta;

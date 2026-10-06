@@ -81,13 +81,6 @@ internal data class WearAgent(
   val selected: Boolean,
 )
 
-internal data class WearAgentList(
-  val agents: List<WearAgent>,
-  val eventSequence: Long?,
-  val phoneNodeId: String,
-  val eventStreamId: String? = null,
-)
-
 internal data class WearSession(
   val key: String,
   val title: String?,
@@ -320,7 +313,7 @@ internal class WearGatewayRepository(
   suspend fun agents(
     expectedNodeId: String,
     capabilities: Set<WearProxyCapability>,
-  ): WearAgentList {
+  ): List<WearAgent> {
     capabilities.require(WearProxyCapability.AgentControls)
     val response =
       requester.request(
@@ -330,15 +323,7 @@ internal class WearGatewayRepository(
         requirePreferredNode = true,
       )
     val result = response.payload.asObject("agents.list")
-    return WearAgentList(
-      agents =
-        (result["agents"] as? JsonArray)
-          .orEmpty()
-          .mapNotNull(::parseAgent),
-      eventStreamId = response.eventStreamId,
-      eventSequence = response.eventSequence,
-      phoneNodeId = response.sourceNodeId,
-    )
+    return (result["agents"] as? JsonArray).orEmpty().mapNotNull(::parseAgent)
   }
 
   suspend fun selectAgent(
@@ -544,10 +529,7 @@ internal class WearGatewayRepository(
   }
 
   // True only for an explicit runless control completion, not ordinary send acceptance.
-  suspend fun send(
-    attempt: WearSendAttempt,
-    requirePreferredPhone: Boolean = false,
-  ): Boolean {
+  suspend fun send(attempt: WearSendAttempt): Boolean {
     val response =
       requester.request(
         WearRpcMethod.ChatSend,
@@ -557,7 +539,7 @@ internal class WearGatewayRepository(
           put("idempotencyKey", attempt.idempotencyKey)
         },
         attempt.phoneNodeId,
-        requirePreferredNode = requirePreferredPhone,
+        requirePreferredNode = true,
       )
     val ack = response.payload as? JsonObject ?: return false
     // Phone projectAck forwards the stop result as {aborted: false/true}; it

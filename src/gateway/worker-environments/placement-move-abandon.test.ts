@@ -23,10 +23,10 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { BUNDLE_ARTIFACT, createProvider } from "./service.test-support.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -226,6 +226,7 @@ describe("offline device placement abandonment", () => {
       expectRetainedDeviceCleanup(fixture);
       expect(fail).toHaveBeenCalledWith(
         expect.objectContaining({ recoveryError: FORCED_WORKER_ABANDONMENT_ERROR }),
+        undefined,
       );
       expect(transfer.close).toHaveBeenCalledWith(active.environmentId);
       expect(invoke).not.toHaveBeenCalled();
@@ -355,7 +356,7 @@ describe("offline device placement abandonment", () => {
   it.each(["before", "after"])(
     "retires stale worker authority with a result pending %s move admission",
     async (pendingAt) => {
-      let afterMoveBegin = () => {};
+      let afterMoveBegin: () => Promise<void> = async () => {};
       const beforeMoveBegin = vi.fn(async (abandoned: { runId: string } | undefined) => {
         expect(abandoned).toMatchObject({ runId: "offline-device-run" });
         expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active" });
@@ -380,9 +381,9 @@ describe("offline device placement abandonment", () => {
           ownerEpoch: active.activeOwnerEpoch,
         },
       });
-      placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      await placements.authorizeWorkerTurnTools(claim, ["sessions_send"]);
       if (pendingAt === "before") {
-        placements.markWorkspaceResultPending(claim);
+        await placements.markWorkspaceResultPending(claim);
       } else {
         afterMoveBegin = () => placements.markWorkspaceResultPending(claim);
       }
@@ -415,15 +416,15 @@ describe("offline device placement abandonment", () => {
       expect(harness.log.indexOf("teardown:destroy")).toBeLessThan(
         harness.log.indexOf("placement:local"),
       );
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.validateTurnClaim(claim)).toBe(false);
       expect(placements.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
-      expect(() => placements.acceptWorkspaceResult(claim)).toThrow(
+      await expect(placements.acceptWorkspaceResult(claim)).rejects.toThrow(
         "Cannot update stale worker workspace result",
       );
       expect(
-        placements.completeWorkerSessionToolOperation({
+        await placements.completeWorkerSessionToolOperation({
           sourceSessionId: claim.sessionId,
           sourceClaimId: claim.claimId,
           toolCallId: "late-tool-result",
@@ -453,14 +454,14 @@ describe("offline device placement abandonment", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    placements.markWorkspaceResultPending(claim);
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    await placements.markWorkspaceResultPending(claim);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
 
     await expect(harness.service.move(requestFor(active, false))).rejects.toThrow(
       `Cannot drain session ${active.sessionId} with a pending cloud workspace result`,
     );
 
-    expect(placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ claimId: claim.claimId, runId: claim.runId }),
     ]);
     expect(placements.validateTurnClaim(claim)).toBe(true);
@@ -504,16 +505,16 @@ describe("offline device placement abandonment", () => {
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(harness.log).not.toContain("workspace:reconcile");
     expect(placements.validateTurnClaim(claim)).toBe(false);
-    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
-    expect(() =>
+    await expect(
       placements.startReconcile({
         sessionId: active.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation + 1,
       }),
-    ).toThrow("Cannot reconcile stale worker placement");
+    ).rejects.toThrow("Cannot reconcile stale worker placement");
     await expect(placements.releaseTurn(claim)).rejects.toThrow(
       "turn claim changed before release",
     );
@@ -625,7 +626,7 @@ describe("offline device placement abandonment", () => {
           },
         });
       } else {
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: source.sessionId,
           environmentId: source.environmentId,
           ownerEpoch: source.activeOwnerEpoch,

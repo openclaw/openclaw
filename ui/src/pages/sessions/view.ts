@@ -1,9 +1,12 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
+  normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
+import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
+import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -22,7 +25,6 @@ import {
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
-import { formatAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
@@ -117,29 +119,6 @@ function getAgentIdentity(
   agentId: string,
 ): AgentIdentityResult | null {
   return Object.hasOwn(agentIdentityById, agentId) ? (agentIdentityById[agentId] ?? null) : null;
-}
-
-function resolveThinkLevelOptions(
-  row: GatewaySessionRow,
-  defaults?: SessionsListResult["defaults"],
-): readonly { value: string; label: string }[] {
-  const state = resolveChatThinkingSelectState({
-    catalog: [],
-    session: row,
-    defaults,
-    sessionKey: row.key,
-    sessionsResult: null,
-  });
-  return [{ value: "", label: state.inherited.displayLabel }, ...state.options];
-}
-
-function withCurrentLabeledOption(
-  options: readonly { value: string; label: string }[],
-  current: string,
-): Array<{ value: string; label: string }> {
-  return !current || options.some((option) => option.value === current)
-    ? [...options]
-    : [...options, { value: current, label: formatThinkingOverrideLabel(current) }];
 }
 
 function buildSessionLevelOptions(
@@ -306,7 +285,6 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   return formatDurationCompact(runtimeMs) ?? "0ms";
 }
 
-// Goal state is a dot + summary; the tooltip carries the objective detail.
 function renderSessionGoalStatus(goal: GatewaySessionRow["goal"]) {
   if (!goal) {
     return nothing;
@@ -324,11 +302,10 @@ function renderSessionGoalStatus(goal: GatewaySessionRow["goal"]) {
   `;
 }
 
-function sessionDetailItems(params: {
-  row: GatewaySessionRow;
-  updated: string;
-}): Array<{ label: string; value: string }> {
-  const { row, updated } = params;
+function sessionDetailItems(
+  row: GatewaySessionRow,
+  updated: string,
+): Array<{ label: string; value: string }> {
   const details: Array<{ label: string; value: string }> = [
     { label: t("sessionsView.key"), value: row.key },
     { label: t("sessionsView.kind"), value: resolveSessionDisplayKind(row) },
@@ -349,8 +326,6 @@ function sessionDetailItems(params: {
   add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
   add(t("sessionsView.model"), row.model);
   add(t("sessionsView.provider"), row.modelProvider);
-  // The roster dropped its Runtime column; the drawer is where agent runtime
-  // and run duration live now.
   add(t("sessionsView.runtime"), formatAgentRuntimeLabel(row.agentRuntime));
   add(t("sessionsView.runDuration"), formatRuntimeMs(row.runtimeMs));
   add(t("sessionsView.surface"), row.surface);
@@ -484,98 +459,10 @@ function isRowControlTarget(target: EventTarget | null): boolean {
   );
 }
 
-function renderOverrideSelect(params: {
-  label: string;
-  disabled: boolean;
-  disabledReason?: string;
-  options: readonly { value: string; label: string }[];
-  current: string;
-  onChange: (value: string) => void;
-}) {
-  return html`
-    <label class="session-override-field">
-      <span class="session-override-field__label">${params.label}</span>
-      <select
-        class="settings-select"
-        ?disabled=${params.disabled}
-        title=${params.disabledReason ?? nothing}
-        @change=${(e: Event) => params.onChange((e.target as HTMLSelectElement).value)}
-      >
-        ${params.options.map(
-          (option) =>
-            html`<option value=${option.value} ?selected=${params.current === option.value}>
-              ${option.label}
-            </option>`,
-        )}
-      </select>
-    </label>
-  `;
-}
-
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
-  const direction = props.sortDir === "asc" ? 1 : -1;
-  const sorted = rawRows.toSorted((a, b) => {
-    const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
-    if (pinnedDiff !== 0) {
-      return pinnedDiff;
-    }
-    const diff =
-      props.sortColumn === "kind"
-        ? resolveSessionDisplayKind(a).localeCompare(resolveSessionDisplayKind(b))
-        : props.sortColumn === "key"
-          ? a.key.localeCompare(b.key)
-          : props.sortColumn === "updated"
-            ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
-            : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
-              (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
-    return diff * direction;
-  });
-  const totalRows = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
-  const page = Math.min(props.page, totalPages - 1);
-  const groups =
-    props.groupBy !== "none"
-      ? groupSessionRows({
-          rows: sorted,
-          mode: props.groupBy,
-          knownCategories: props.knownCategories,
-        })
-      : null;
-  const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
-  const paginated = displayRows.slice(page * props.pageSize, (page + 1) * props.pageSize);
-  const emptyBecauseFiltered = rawRows.length === 0 && hasActiveFilters(props);
-  const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
+  const liveCount = rawRows.filter(isSessionRunActive).length;
   const archivedCount = rawRows.filter((row) => row.archived === true).length;
-  const emptyMessage =
-    props.statusFilter === "archived"
-      ? t("sessionsView.noArchivedSessions")
-      : props.statusFilter === "active"
-        ? t("sessionsView.noActiveSessions")
-        : t("sessionsView.noSessions");
-
-  const sortHeader = (
-    col: "key" | "kind" | "updated" | "tokens",
-    label: string,
-    extraClass = "",
-  ) => {
-    const isActive = props.sortColumn === col;
-    const nextDir = isActive && props.sortDir === "asc" ? ("desc" as const) : ("asc" as const);
-    return html`
-      <th
-        class=${extraClass}
-        data-sortable
-        data-sort-dir=${isActive ? props.sortDir : ""}
-        aria-sort=${isActive ? (props.sortDir === "asc" ? "ascending" : "descending") : nothing}
-        @click=${() => props.onSortChange(col, isActive ? nextDir : "desc")}
-      >
-        <button class="data-table-sort-button" type="button">
-          ${label}
-          <span class="data-table-sort-icon" aria-hidden="true">${icons.arrowUpDown}</span>
-        </button>
-      </th>
-    `;
-  };
 
   const sessionsTitle = html`
     ${t("sessionsView.title")}
@@ -626,40 +513,75 @@ export function renderSessions(props: SessionsProps) {
         title: sessionsTitle,
         actions: refreshAction,
       },
-      renderSessionsTable(props, {
-        paginated,
-        groups,
-        emptyBecauseFiltered,
-        emptyMessage,
-        totalRows,
-        totalPages,
-        page,
-        sortHeader,
-      }),
+      renderSessionsTable(props),
     ),
   ];
   return renderSettingsPage(children, { wide: true });
 }
 
-type SessionsTableContext = {
-  paginated: GatewaySessionRow[];
-  groups: SessionRowGroup[] | null;
-  emptyBecauseFiltered: boolean;
-  emptyMessage: string;
-  totalRows: number;
-  totalPages: number;
-  page: number;
-  sortHeader: (
+function renderSessionsTable(props: SessionsProps) {
+  const rawRows = props.result?.sessions ?? [];
+  const direction = props.sortDir === "asc" ? 1 : -1;
+  const sorted = rawRows.toSorted((a, b) => {
+    const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+    if (pinnedDiff !== 0) {
+      return pinnedDiff;
+    }
+    const diff =
+      props.sortColumn === "kind"
+        ? resolveSessionDisplayKind(a).localeCompare(resolveSessionDisplayKind(b))
+        : props.sortColumn === "key"
+          ? a.key.localeCompare(b.key)
+          : props.sortColumn === "updated"
+            ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
+            : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
+              (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
+    return diff * direction;
+  });
+  const totalRows = sorted.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
+  const page = Math.min(props.page, totalPages - 1);
+  const groups =
+    props.groupBy !== "none"
+      ? groupSessionRows({
+          rows: sorted,
+          mode: props.groupBy,
+          knownCategories: props.knownCategories,
+        })
+      : null;
+  const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
+  const paginated = displayRows.slice(page * props.pageSize, (page + 1) * props.pageSize);
+  const emptyBecauseFiltered = rawRows.length === 0 && hasActiveFilters(props);
+  const emptyMessage =
+    props.statusFilter === "archived"
+      ? t("sessionsView.noArchivedSessions")
+      : props.statusFilter === "active"
+        ? t("sessionsView.noActiveSessions")
+        : t("sessionsView.noSessions");
+
+  const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
     label: string,
-    extraClass?: string,
-  ) => unknown;
-};
+    extraClass = "",
+  ) => {
+    const isActive = props.sortColumn === col;
+    const nextDir = isActive && props.sortDir === "asc" ? ("desc" as const) : ("asc" as const);
+    return html`
+      <th
+        class=${extraClass}
+        data-sortable
+        data-sort-dir=${isActive ? props.sortDir : ""}
+        aria-sort=${isActive ? (props.sortDir === "asc" ? "ascending" : "descending") : nothing}
+        @click=${() => props.onSortChange(col, isActive ? nextDir : "desc")}
+      >
+        <button class="data-table-sort-button" type="button">
+          ${label}
+          <span class="data-table-sort-icon" aria-hidden="true">${icons.arrowUpDown}</span>
+        </button>
+      </th>
+    `;
+  };
 
-function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
-  const { paginated, groups, emptyBecauseFiltered, emptyMessage, totalRows, totalPages, page } =
-    ctx;
-  const sortHeader = ctx.sortHeader;
   const emptyStateMessage = emptyBecauseFiltered
     ? t("sessionsView.noSessionsMatchFilters")
     : emptyMessage;
@@ -728,10 +650,7 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
                 paginated.length > 0
                   ? html`<input
                       type="checkbox"
-                      .checked=${
-                        paginated.length > 0 &&
-                        paginated.every((r) => props.selectedKeys.has(r.key))
-                      }
+                      .checked=${paginated.every((r) => props.selectedKeys.has(r.key))}
                       .indeterminate=${
                         paginated.some((r) => props.selectedKeys.has(r.key)) &&
                         !paginated.every((r) => props.selectedKeys.has(r.key))
@@ -990,10 +909,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                           if (!shouldHandleNavigationClick(e)) {
                             return;
                           }
-                          if (props.onNavigateToChat) {
-                            e.preventDefault();
-                            props.onNavigateToChat(row.key);
-                          }
+                          e.preventDefault();
+                          props.onNavigateToChat(row.key);
                         }}
                         >${friendlyKeyLabel ?? row.key}</a
                       >`
@@ -1067,152 +984,134 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         </div>
       </td>
     </tr>`,
-    ...(isExpanded
-      ? [
-          renderSessionDetailsRow({
-            row,
-            props,
-            detailsId,
-            friendlyKeyLabel,
-            displayName,
-            showDisplayName,
-            kindClass,
-            updated,
+    ...(isExpanded ? [renderDetails()] : []),
+  ];
+
+  function renderDetails() {
+    const labelDisabledReason = props.labelDisabledReason?.(row);
+    const rawThinking = row.thinkingLevel ?? "";
+    const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
+    const fastMode = row.fastMode === undefined ? "" : formatFastModeValue(row.fastMode);
+    const thinkingState = resolveChatThinkingSelectState({
+      catalog: [],
+      session: row,
+      defaults: props.result?.defaults,
+      sessionKey: row.key,
+      sessionsResult: null,
+    });
+    const overrides = [
+      {
+        label: t("sessionsView.thinking"),
+        current: thinking,
+        options: [
+          { value: "", label: thinkingState.inherited.displayLabel },
+          ...thinkingState.options,
+        ],
+        onChange: (value: string) => props.onPatch(row.key, { thinkingLevel: value || null }),
+      },
+      {
+        label: t("sessionsView.fast"),
+        current: fastMode,
+        options: buildSessionLevelOptions(FAST_LEVEL_VALUES),
+        onChange: (value: string) =>
+          props.onPatch(row.key, {
+            fastMode: normalizeFastMode(value) ?? null,
           }),
-        ]
-      : []),
-  ];
-}
+      },
+      {
+        label: t("sessionsView.verbose"),
+        current: row.verboseLevel ?? "",
+        options: buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
+        onChange: (value: string) => props.onPatch(row.key, { verboseLevel: value || null }),
+      },
+      {
+        label: t("sessionsView.reasoning"),
+        current: row.reasoningLevel ?? "",
+        options: buildSessionLevelOptions(REASONING_LEVELS),
+        onChange: (value: string) => props.onPatch(row.key, { reasoningLevel: value || null }),
+      },
+    ];
 
-function renderSessionDetailsRow(params: {
-  row: GatewaySessionRow;
-  props: SessionsProps;
-  detailsId: string;
-  friendlyKeyLabel: string | null;
-  displayName: string | null;
-  showDisplayName: boolean;
-  kindClass: string;
-  updated: string;
-}) {
-  const {
-    row,
-    props,
-    detailsId,
-    friendlyKeyLabel,
-    displayName,
-    showDisplayName,
-    kindClass,
-    updated,
-  } = params;
-  const labelDisabledReason = props.labelDisabledReason?.(row);
-  const rawThinking = row.thinkingLevel ?? "";
-  const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
-  const fastMode =
-    row.fastMode === "auto"
-      ? "auto"
-      : row.fastMode === true
-        ? "on"
-        : row.fastMode === false
-          ? "off"
-          : "";
-  const overrides: Array<
-    Omit<Parameters<typeof renderOverrideSelect>[0], "disabled" | "disabledReason">
-  > = [
-    {
-      label: t("sessionsView.thinking"),
-      current: thinking,
-      options: resolveThinkLevelOptions(row, props.result?.defaults),
-      onChange: (value) => props.onPatch(row.key, { thinkingLevel: value || null }),
-    },
-    {
-      label: t("sessionsView.fast"),
-      current: fastMode,
-      options: buildSessionLevelOptions(FAST_LEVEL_VALUES),
-      onChange: (value) =>
-        props.onPatch(row.key, {
-          fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
-        }),
-    },
-    {
-      label: t("sessionsView.verbose"),
-      current: row.verboseLevel ?? "",
-      options: buildSessionLevelOptions(VERBOSE_LEVEL_VALUES, true),
-      onChange: (value) => props.onPatch(row.key, { verboseLevel: value || null }),
-    },
-    {
-      label: t("sessionsView.reasoning"),
-      current: row.reasoningLevel ?? "",
-      options: buildSessionLevelOptions(REASONING_LEVELS),
-      onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
-    },
-  ];
-  const sessionDetails = sessionDetailItems({
-    row,
-    updated,
-  });
-
-  return html`<tr id=${detailsId} class="session-details-row">
-    <td colspan=${sessionsTableColumnCount(props)}>
-      <div class="session-details-panel">
-        <div class="session-details-panel__hero">
-          <div>
-            <div class="session-details-panel__eyebrow">${t("sessionsView.sessionDetails")}</div>
-            <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
-            ${
-              showDisplayName
-                ? html`<div class="muted session-details-panel__subtitle">${displayName}</div>`
-                : nothing
-            }
+    return html`<tr id=${detailsId} class="session-details-row">
+      <td colspan=${sessionsTableColumnCount(props)}>
+        <div class="session-details-panel">
+          <div class="session-details-panel__hero">
+            <div>
+              <div class="session-details-panel__eyebrow">${t("sessionsView.sessionDetails")}</div>
+              <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
+              ${
+                showDisplayName
+                  ? html`<div class="muted session-details-panel__subtitle">${displayName}</div>`
+                  : nothing
+              }
+            </div>
+            <div class="session-details-panel__badges">
+              ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
+              <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
+            </div>
           </div>
-          <div class="session-details-panel__badges">
-            ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
-            <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
-          </div>
-        </div>
 
-        <div class="session-details-section">
-          <div class="session-details-panel__eyebrow">${t("sessionsView.overrides")}</div>
-          <div class="session-overrides-grid">
-            <label class="session-override-field">
-              <span class="session-override-field__label">${t("sessionsView.label")}</span>
-              <input
-                class="settings-input"
-                .value=${row.label ?? ""}
-                ?disabled=${props.loading || Boolean(labelDisabledReason)}
-                title=${labelDisabledReason ?? nothing}
-                placeholder=${t("sessionsView.optionalPlaceholder")}
-                @change=${(e: Event) => {
-                  const value =
-                    normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
-                  props.onPatch(row.key, { label: value }, { sessionScope: true });
-                }}
-              />
-            </label>
-            ${overrides.map((override) =>
-              renderOverrideSelect({
-                ...override,
-                options: withCurrentLabeledOption(override.options, override.current),
-                disabled: props.loading || Boolean(props.patchAdminDisabledReason),
-                disabledReason: props.patchAdminDisabledReason,
-              }),
+          <div class="session-details-section">
+            <div class="session-details-panel__eyebrow">${t("sessionsView.overrides")}</div>
+            <div class="session-overrides-grid">
+              <label class="session-override-field">
+                <span class="session-override-field__label">${t("sessionsView.label")}</span>
+                <input
+                  class="settings-input"
+                  .value=${row.label ?? ""}
+                  ?disabled=${props.loading || Boolean(labelDisabledReason)}
+                  title=${labelDisabledReason ?? nothing}
+                  placeholder=${t("sessionsView.optionalPlaceholder")}
+                  @change=${(e: Event) => {
+                    const value =
+                      normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
+                    props.onPatch(row.key, { label: value }, { sessionScope: true });
+                  }}
+                />
+              </label>
+              ${overrides.map(({ label, current, options, onChange }) => {
+                const choices =
+                  !current || options.some((option) => option.value === current)
+                    ? options
+                    : [...options, { value: current, label: formatThinkingOverrideLabel(current) }];
+                return html`
+                  <label class="session-override-field">
+                    <span class="session-override-field__label">${label}</span>
+                    <select
+                      class="settings-select"
+                      ?disabled=${props.loading || Boolean(props.patchAdminDisabledReason)}
+                      title=${props.patchAdminDisabledReason ?? nothing}
+                      @change=${(event: Event) => onChange((event.target as HTMLSelectElement).value)}
+                    >
+                      ${choices.map(
+                        (option) => html`
+                          <option value=${option.value} ?selected=${current === option.value}>
+                            ${option.label}
+                          </option>
+                        `,
+                      )}
+                    </select>
+                  </label>
+                `;
+              })}
+            </div>
+          </div>
+
+          <div class="session-details-grid">
+            ${sessionDetailItems(row, updated).map(
+              (item) => html`
+                <div class="session-detail-stat">
+                  <div class="session-detail-stat__label">${item.label}</div>
+                  <openclaw-tooltip .content=${item.value}>
+                    <div class="session-detail-stat__value">${item.value}</div>
+                  </openclaw-tooltip>
+                </div>
+              `,
             )}
           </div>
         </div>
-
-        <div class="session-details-grid">
-          ${sessionDetails.map(
-            (item) => html`
-              <div class="session-detail-stat">
-                <div class="session-detail-stat__label">${item.label}</div>
-                <openclaw-tooltip .content=${item.value}>
-                  <div class="session-detail-stat__value">${item.value}</div>
-                </openclaw-tooltip>
-              </div>
-            `,
-          )}
-        </div>
-      </div>
-    </td>
-  </tr>`;
+      </td>
+    </tr>`;
+  }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

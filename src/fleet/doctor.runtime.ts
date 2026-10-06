@@ -15,19 +15,9 @@ import {
   requireCell,
 } from "./service-support.runtime.js";
 
-type FleetDoctorFinding = {
-  check: string;
-  status: "pass" | "warn" | "fail";
-  detail: string;
-};
+type FleetDoctorFinding = ReturnType<typeof finding>;
 
-type FleetDoctorCellReport = { tenant: string; findings: FleetDoctorFinding[] };
-
-function finding(
-  check: string,
-  status: FleetDoctorFinding["status"],
-  detail: string,
-): FleetDoctorFinding {
+function finding(check: string, status: "pass" | "warn" | "fail", detail: string) {
   return { check, status, detail };
 }
 
@@ -110,9 +100,7 @@ export async function runFleetDoctor(params: {
   containers: FleetContainerRuntime;
   fetchImpl: typeof fetch;
   tenant?: string;
-  getuid?: () => number | undefined;
-  getgid?: () => number | undefined;
-}): Promise<FleetDoctorCellReport[]> {
+}) {
   const records = params.tenant
     ? [await requireCell(params.env, params.tenant)]
     : await listFleetCells(params.env);

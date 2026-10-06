@@ -75,20 +75,9 @@ type GroundedRemCandidate = GroundedRemPreviewItem & {
   lean: "likely_durable" | "unclear" | "likely_situational";
 };
 
-type GroundedRemFilePreview = {
-  path: string;
-  facts: GroundedRemPreviewItem[];
-  reflections: GroundedRemPreviewItem[];
-  memoryImplications: GroundedRemPreviewItem[];
-  candidates: GroundedRemCandidate[];
-  renderedMarkdown: string;
-};
+type GroundedRemFilePreview = ReturnType<typeof previewGroundedRemForFile>;
 
-export type GroundedRemPreviewResult = {
-  workspaceDir: string;
-  scannedFiles: number;
-  files: GroundedRemFilePreview[];
-};
+export type GroundedRemPreviewResult = Awaited<ReturnType<typeof previewGroundedRemMarkdown>>;
 
 type CandidateSnippetSummary = GroundedRemCandidate & {
   score: number;
@@ -106,32 +95,14 @@ type ParsedMarkdownSection = {
   lines: ParsedSectionLine[];
 };
 
-type SectionSnippet = ParsedSectionLine;
-
-type SectionSummary = {
-  title: string;
-  text: string;
-  refs: string[];
-  scores: {
-    preference: number;
-    build: number;
-    incident: number;
-    logistics: number;
-    tasks: number;
-    routing: number;
-    externalization: number;
-    retries: number;
-    overall: number;
-  };
-};
+type SectionSummary = NonNullable<ReturnType<typeof summarizeSection>>;
 
 function stripMarkdown(text: string): string {
   return normalizeWhitespace(
     text
       .replace(/!\[[^\]]*]\([^)]*\)/g, "")
       .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
-      .replace(/[`*_~>#]/g, "")
-      .replace(/\s+/g, " "),
+      .replace(/[`*_~>#]/g, ""),
   );
 }
 
@@ -155,12 +126,9 @@ function parseMarkdownSections(content: string): ParsedMarkdownSection[] {
     if (!current) {
       return;
     }
-    const meaningfulLines = current.lines.filter(
-      (entry) => normalizeWhitespace(entry.text).length > 0,
-    );
-    if (meaningfulLines.length > 0) {
-      const endLine = meaningfulLines[meaningfulLines.length - 1]?.line ?? current.endLine;
-      sections.push({ ...current, endLine, lines: meaningfulLines });
+    if (current.lines.length > 0) {
+      const endLine = current.lines[current.lines.length - 1]?.line ?? current.endLine;
+      sections.push({ ...current, endLine });
     }
     current = null;
   };
@@ -206,14 +174,11 @@ function parseMarkdownSections(content: string): ParsedMarkdownSection[] {
   return sections;
 }
 
-function sectionToSnippets(section: ParsedMarkdownSection): SectionSnippet[] {
-  const snippets: SectionSnippet[] = [];
+function sectionToSnippets(section: ParsedMarkdownSection): ParsedSectionLine[] {
+  const snippets: ParsedSectionLine[] = [];
   const seen = new Set<string>();
   for (const entry of section.lines) {
     const trimmed = entry.text.trim();
-    if (!trimmed) {
-      continue;
-    }
     const bulletMatch = trimmed.match(/^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s*)?(.*)$/);
     const candidateText = bulletMatch?.[1] ?? trimmed;
     const text = stripMarkdown(candidateText);
@@ -230,7 +195,7 @@ function sectionToSnippets(section: ParsedMarkdownSection): SectionSnippet[] {
   return snippets;
 }
 
-function scoreSection(section: ParsedMarkdownSection, snippets: SectionSnippet[]) {
+function scoreSection(section: ParsedMarkdownSection, snippets: ParsedSectionLine[]) {
   const title = section.title;
   const score = (pattern: RegExp) =>
     snippets.filter((snippet) => pattern.test(snippet.text)).length + Number(pattern.test(title));
@@ -287,8 +252,8 @@ function scoreSignals(signals: readonly (readonly [boolean, number])[], initial 
 
 function chooseSummarySnippets(
   section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
-): SectionSnippet[] {
+  snippets: ParsedSectionLine[],
+): ParsedSectionLine[] {
   const selectionLimit = REM_GENERIC_SECTION_RE.test(section.title) ? 2 : 3;
   return snippets
     .toSorted((left, right) => {
@@ -316,8 +281,8 @@ function joinSummaryParts(parts: string[]): string {
 function summarizeSection(
   pathValue: string,
   section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
-): SectionSummary | null {
+  snippets: ParsedSectionLine[],
+) {
   const selected = chooseSummarySnippets(section, snippets);
   if (selected.length === 0) {
     return null;
@@ -405,10 +370,10 @@ function scoreCandidateSnippet(text: string, title: string): number {
 
 function chooseScoredSnippets(
   section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
+  snippets: ParsedSectionLine[],
   scoreFor: (text: string, title: string) => number,
   minimumScore: number,
-): SectionSnippet[] {
+): ParsedSectionLine[] {
   return snippets
     .map((snippet) => {
       const text = compactCandidateSnippetText(snippet.text, section.title);
@@ -470,11 +435,11 @@ function findTopLevelDelimiter(text: string, delimiter: string): number {
   return -1;
 }
 
-function splitTopLevelClauses(text: string, delimiter: string): string[] {
+function splitTopLevelClauses(text: string): string[] {
   const parts: string[] = [];
   let rest = text;
   while (rest.length > 0) {
-    const splitAt = findTopLevelDelimiter(rest, delimiter);
+    const splitAt = findTopLevelDelimiter(rest, ";");
     if (splitAt < 0) {
       parts.push(rest);
       break;
@@ -517,10 +482,7 @@ function atomizeClaimText(text: string): string[] {
   if (!normalized) {
     return [];
   }
-  const atomic = splitTopLevelClauses(normalized, ";")
-    .flatMap((part) => splitSubjectLeadClaim(part))
-    .map((part) => normalizeWhitespace(part))
-    .filter(Boolean);
+  const atomic = splitTopLevelClauses(normalized).flatMap(splitSubjectLeadClaim);
   return uniqueStrings(atomic).slice(0, 3);
 }
 
@@ -582,7 +544,7 @@ export function previewGroundedRemForFile(params: {
   relPath: string;
   content: string;
   formatItem?: (line: string, refs: readonly string[]) => string;
-}): GroundedRemFilePreview {
+}) {
   const sections = parseMarkdownSections(params.content);
   const sectionScores = sections.map((section) => ({
     section,
@@ -647,7 +609,7 @@ export function previewGroundedRemForFile(params: {
       ),
   );
 
-  const candidates = coalesceGroundedRemItems(
+  const candidates: GroundedRemCandidate[] = coalesceGroundedRemItems(
     candidateSnippets.toSorted((left, right) => {
       const leanRank = { likely_durable: 0, unclear: 1, likely_situational: 2 };
       const leanDelta = leanRank[left.lean] - leanRank[right.lean];
@@ -886,7 +848,7 @@ export function previewGroundedRemForFile(params: {
 export async function previewGroundedRemMarkdown(params: {
   workspaceDir: string;
   inputPaths: string[];
-}): Promise<GroundedRemPreviewResult> {
+}) {
   const workspaceDir = params.workspaceDir.trim();
   const files = await collectMarkdownFiles(workspaceDir, params.inputPaths);
   const previews: GroundedRemFilePreview[] = [];

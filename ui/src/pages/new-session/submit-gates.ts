@@ -1,14 +1,14 @@
 // New-session submit gate table: the single owner of every reason submission
 // can be blocked. canSubmit, the Start tooltip, and blocked-Enter notices all
 // derive from this walk, so a gate cannot block silently.
-import type { HumanMention } from "@openclaw/gateway-protocol";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
-import type { SessionPlacementTarget } from "../../lib/sessions/session-placement-recovery.ts";
+import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { sessionPlacementDispatchParams } from "../../lib/sessions/session-placement-startup.ts";
 import * as catalog from "./catalog-target.ts";
 import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
@@ -72,7 +72,7 @@ export function readNewSessionSubmissionAccess(options: {
 }): SessionMethodAccess {
   const { gateway, place, pendingPlacement, hasInitialTurn, createParams } = options;
   const pendingPlacementActive = Boolean(pendingPlacement.sessionKey);
-  const target = resolveDraftSessionPlacement(pendingPlacement, place).target;
+  const target = resolveDraftSessionPlacement(pendingPlacement, place);
   const remoteProject = !target && !hasInitialTurn ? place.browser.remoteProject : null;
   if (!pendingPlacementActive && remoteProject && !remoteProject.projectId) {
     const projectAccess = readSessionMethodAccess(gateway, {
@@ -119,48 +119,41 @@ export function requiresNewSessionModelSetup(options: {
       place.remotePlacement ||
       Boolean(pendingPlacement.sessionKey),
     connected: gateway.connected,
-    agentsLoaded: Boolean(agents?.agentsList && !agents.agentsListCached),
+    agentsLoaded: Boolean(agents?.agentsList),
     selectedAgentFound: selectedAgent !== undefined,
     agentModel: selectedAgent?.model?.primary,
   });
 }
 
-/** Facts the gate walk reads from DraftSubmissionFlow, kept read-only. */
-type SubmitGateHost = {
-  readonly gatewayState: DraftGatewayState;
-  readonly placeState: DraftPlaceState;
+// The flow consumes these gates; keep their read contract independent of its class.
+type SubmitGateDraft = {
   readonly pendingPlacement: PendingSessionPlacementRecoveryState;
-  readonly submitting: boolean;
   readonly message: string;
   readonly submissionOutcomeUnknown: SubmissionOutcomeReason | null;
-  readonly pendingAttachmentReads: number;
-  readonly hasDraftAttachments: boolean;
-  readonly hasCapabilityOverrides: boolean;
   readonly mentions: readonly HumanMention[];
   readonly visibility: NewSessionVisibility;
-  submissionSnapshot(): DraftSubmissionSnapshot;
+  readonly attachmentDraft: {
+    readonly reads: { readonly pendingReads: number };
+    readonly attachments: readonly ChatAttachment[];
+  };
+  readonly capabilities: { readonly toolOverrides: SessionToolOverrides | null };
   requiresModelSetup(): boolean;
   submissionAccess(): SessionMethodAccess;
-  placementTargetForSubmission(): SessionPlacementTarget | null;
-  cloudRuntimeUnsupportedReason(): string | undefined;
 };
 
 export function resolveNewSessionSubmitBlock(
-  host: SubmitGateHost,
+  gateway: DraftGatewayState,
+  place: DraftPlaceState,
+  draft: SubmitGateDraft,
+  snapshot: DraftSubmissionSnapshot,
 ): NewSessionSubmitBlock | undefined {
-  const gateway = host.gatewayState;
-  const place = host.placeState;
-  const snapshot = host.submissionSnapshot();
   const kind = catalog.isTarget(snapshot.data) ? "terminal" : "session";
-  const pendingPlacementActive = Boolean(host.pendingPlacement.sessionKey);
-  if (host.submitting) {
-    return { gate: "submitting" };
-  }
+  const pendingPlacementActive = Boolean(draft.pendingPlacement.sessionKey);
   if (
-    host.mentions.length > 0 &&
+    draft.mentions.length > 0 &&
     (kind === "terminal" ||
-      host.visibility === "incognito" ||
-      host.message.trimStart().startsWith("/"))
+      draft.visibility === "incognito" ||
+      draft.message.trimStart().startsWith("/"))
   ) {
     return { gate: "mentions-unsupported", reason: t("chat.mentions.unsupported") };
   }
@@ -171,20 +164,20 @@ export function resolveNewSessionSubmitBlock(
   ) {
     return { gate: "preference-restore", reason: t("newSession.restoringPreferences") };
   }
-  if (kind === "session" && host.requiresModelSetup()) {
+  if (kind === "session" && draft.requiresModelSetup()) {
     return { gate: "model-setup", reason: t("modelSetup.required.title") };
   }
   if (catalog.isRoutePending(snapshot.data, snapshot.context?.sessions)) {
     return { gate: "route-pending", reason: t("newSession.catalogUnavailable") };
   }
-  if (host.pendingAttachmentReads > 0) {
+  if (draft.attachmentDraft.reads.pendingReads > 0) {
     return { gate: "attachment-reads", reason: t("newSession.readingAttachment") };
   }
-  if (!pendingPlacementActive && host.submissionOutcomeUnknown) {
+  if (!pendingPlacementActive && draft.submissionOutcomeUnknown) {
     return {
       gate: "outcome-unknown",
       reason: t(
-        host.submissionOutcomeUnknown === "gateway-changed"
+        draft.submissionOutcomeUnknown === "gateway-changed"
           ? "newSession.createOutcomeUnknown"
           : "newSession.placementSetupInterrupted",
       ),
@@ -201,7 +194,7 @@ export function resolveNewSessionSubmitBlock(
   const access =
     kind === "terminal"
       ? readNewSessionTerminalStartAccess(connection.snapshot, place.worktree)
-      : host.submissionAccess();
+      : draft.submissionAccess();
   if (!access.allowed) {
     return { gate: "access", reason: access.reason };
   }
@@ -217,17 +210,17 @@ export function resolveNewSessionSubmitBlock(
     ) {
       return { gate: "device", reason: t("newSession.terminalHostUnavailable") };
     }
-    if (host.hasDraftAttachments) {
+    if (draft.attachmentDraft.attachments.length > 0) {
       return {
         gate: "terminal-capabilities",
         reason: t("newSession.terminalAttachmentsUnsupported"),
       };
     }
-    if (place.remotePlacement || host.pendingPlacement.sessionKey) {
+    if (place.remotePlacement || draft.pendingPlacement.sessionKey) {
       return { gate: "device", reason: t("newSession.terminalPlacementUnsupported") };
     }
   }
-  if (kind === "terminal" && host.hasCapabilityOverrides) {
+  if (kind === "terminal" && draft.capabilities.toolOverrides !== null) {
     return {
       gate: "terminal-capabilities",
       reason: t("newSession.terminalCapabilityOverridesUnsupported"),
@@ -238,31 +231,35 @@ export function resolveNewSessionSubmitBlock(
   }
   if (pendingPlacementActive) {
     const retryReady = Boolean(
-      host.pendingPlacement.retryAllowed &&
+      draft.pendingPlacement.retryAllowed &&
       client.recoveryScopeReady &&
-      host.placementTargetForSubmission() &&
-      host.pendingPlacement.agentId &&
-      host.pendingPlacement.gatewayUrl === connection.connection.gatewayUrl &&
-      host.pendingPlacement.recoveryScope === client.recoveryScope,
+      resolveDraftSessionPlacement(draft.pendingPlacement, place) &&
+      draft.pendingPlacement.agentId &&
+      draft.pendingPlacement.gatewayUrl === connection.connection.gatewayUrl &&
+      draft.pendingPlacement.recoveryScope === client.recoveryScope,
     );
     // Recovery retries own the frozen request; the model and place gates
     // below intentionally do not apply to a restored placement draft.
     return retryReady
-      ? emptyDraftBlock(host, kind, pendingPlacementActive)
+      ? emptyDraftBlock(draft, kind, pendingPlacementActive)
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
-  if (snapshot.context?.agents.state.agentsListCached) {
+  if (!snapshot.context?.agents.state.agentsList) {
     return {
       gate: "agents",
       reason: t(
-        snapshot.context.agents.state.agentsError
+        snapshot.context?.agents.state.agentsError
           ? "newSession.agentDefaultsUnavailable"
           : "newSession.loadingAgentDefaults",
       ),
     };
   }
+  const placementTarget = resolveDraftSessionPlacement(draft.pendingPlacement, place);
+  const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
+  const cloudProfile = gateway.cloudProfiles.find((profile) => profile.id === cloudProfileId);
   const modelUnavailableMessage =
-    kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());
+    kind === "session" &&
+    place.modelControl.modelSelectionBlockedReason(place.selectedAgent(), cloudProfile?.inference);
   if (modelUnavailableMessage) {
     return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }
@@ -272,31 +269,30 @@ export function resolveNewSessionSubmitBlock(
   if (!catalog.allowsSelectedAgent(snapshot.data, place.selectedAgent())) {
     return { gate: "agent-not-allowed", reason: t("newSession.catalogUnavailable") };
   }
-  if (kind === "session" && !place.devicePlacementReady()) {
+  const devicePlacement = kind === "session" ? place.devicePlacement() : undefined;
+  if (devicePlacement && !devicePlacement.ready) {
     return {
       gate: "device",
-      reason: place.devicePlacementDisabledReason() ?? t("newSession.nodeUnavailable"),
+      reason: devicePlacement.disabledReason ?? t("newSession.nodeUnavailable"),
     };
   }
   const deviceRuntimeUnsupportedReason = place.modelControl.devicePlacementUnsupportedReason();
   if ((place.deviceId || place.autoDevice) && deviceRuntimeUnsupportedReason) {
     return { gate: "device-runtime", reason: deviceRuntimeUnsupportedReason };
   }
-  const placementTarget = host.placementTargetForSubmission();
   if (
     placementTarget &&
     (!client.recoveryScope || !client.recoveryScopeReady || gateway.cloudProfilesPending)
   ) {
     return { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
-  const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
+  const cloudRuntimeUnsupportedReason = () =>
+    place.modelControl.cloudRuntimeUnsupportedReason(cloudProfile);
   if (
     cloudProfileId &&
-    (!gateway.cloudProfilesReady ||
-      !gateway.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
-      Boolean(host.cloudRuntimeUnsupportedReason()))
+    (!gateway.cloudProfilesReady || !cloudProfile || Boolean(cloudRuntimeUnsupportedReason()))
   ) {
-    const reason = host.cloudRuntimeUnsupportedReason() ?? t("newSession.placementNotReady");
+    const reason = cloudRuntimeUnsupportedReason() ?? t("newSession.placementNotReady");
     return { gate: "cloud", reason };
   }
   if (place.worktree && !place.freshWorkspace && !place.worktreeAvailable()) {
@@ -307,7 +303,7 @@ export function resolveNewSessionSubmitBlock(
           ? t("newSession.checkingGit")
           : place.remotePlacement
             ? t("newSession.remoteSourceUnavailable")
-            : t("newSession.worktreeUnavailable"),
+            : t("newSession.gitCheckUnavailable"),
     };
   }
   if (place.worktree && !place.freshWorkspace && !isWorktreeNameValid(place.worktreeName)) {
@@ -319,21 +315,21 @@ export function resolveNewSessionSubmitBlock(
   ) {
     return { gate: "terminal-folder", reason: t("newSession.terminalNeedsFolder") };
   }
-  return emptyDraftBlock(host, kind, pendingPlacementActive);
+  return emptyDraftBlock(draft, kind, pendingPlacementActive);
 }
 
 // Last so an empty draft never masks a reasoned gate in the tooltip.
 function emptyDraftBlock(
-  host: SubmitGateHost,
+  draft: SubmitGateDraft,
   kind: "session" | "terminal",
   pendingPlacementActive: boolean,
 ): NewSessionSubmitBlock | undefined {
   if (kind !== "session") {
     return undefined;
   }
-  const message = pendingPlacementActive ? host.pendingPlacement.message : host.message.trim();
+  const message = pendingPlacementActive ? draft.pendingPlacement.message : draft.message.trim();
   const hasAttachments = pendingPlacementActive
-    ? Boolean(host.pendingPlacement.attachments?.length)
-    : host.hasDraftAttachments;
+    ? Boolean(draft.pendingPlacement.attachments?.length)
+    : draft.attachmentDraft.attachments.length > 0;
   return message || hasAttachments ? undefined : { gate: "empty-draft" };
 }

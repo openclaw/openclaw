@@ -19,10 +19,11 @@ import {
 } from "./user-channel-identities.js";
 import { prepareConfiguredCommandOwnerAuthority } from "./user-channel-identity-operations.js";
 import {
-  listUserProfilesSync,
+  readUserProfileSnapshotSync,
   readUserProfileEmailBindings,
 } from "./user-profile-identity.read.js";
 import { readUserProfileIdentity, retainUserProfileCatalog } from "./user-profile-list.js";
+import { setUserProfileRole } from "./user-profile-writes.worker.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import {
   ensureProfileForEmail,
@@ -30,7 +31,6 @@ import {
   getUserProfileListItem,
   getUserProfileRole,
   resolveUserProfileId,
-  setUserProfileRole,
 } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -172,7 +172,7 @@ describe("user profile role schema", () => {
         id: profile.id,
         hasAvatar: false,
       });
-      expect(listUserProfilesSync(options)[0]).not.toHaveProperty("role");
+      expect(readUserProfileSnapshotSync(options).profiles[0]).not.toHaveProperty("role");
       expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
       expect(getUserProfileRole(profile.id, options)).toBeNull();
       expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(versionBefore);
@@ -217,7 +217,7 @@ describe("user profile role schema", () => {
         expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
         expect(resolveUserProfileId(profile.id, options)).toBe(profile.id);
         expect(getUserProfileListItem(profile.id, options)).not.toHaveProperty("role");
-        expect(listUserProfilesSync(options)[0]).not.toHaveProperty("role");
+        expect(readUserProfileSnapshotSync(options).profiles[0]).not.toHaveProperty("role");
       };
       const rollBackRole = () =>
         runOpenClawStateWriteTransaction(() => {

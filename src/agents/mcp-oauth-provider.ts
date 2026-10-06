@@ -25,11 +25,6 @@ export type McpOAuthLoginLifecycle = {
   onTokensSaved: () => void;
 };
 
-type McpOAuthMutationAuthority = {
-  assertCurrent: () => void;
-  beforeCommit?: () => void;
-};
-
 function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
   const expiresIn = tokens.expires_in;
   return typeof expiresIn === "number" && Number.isFinite(expiresIn)
@@ -43,23 +38,6 @@ function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = 
     normalizeOptionalString(store.redirectUrl) ??
     MCP_OAUTH_DEFAULT_REDIRECT_URL
   );
-}
-
-function buildOAuthClientMetadata(
-  config: McpOAuthConfig,
-  store: McpOAuthStore = {},
-): OAuthClientMetadata {
-  const redirectUrl = resolveOAuthRedirectUrl(config, store);
-  return {
-    client_name: "OpenClaw MCP",
-    redirect_uris: [redirectUrl],
-    grant_types: ["authorization_code", "refresh_token"],
-    response_types: ["code"],
-    token_endpoint_auth_method: "none",
-    ...(normalizeOptionalString(config.scope)
-      ? { scope: normalizeOptionalString(config.scope) }
-      : {}),
-  };
 }
 
 /** Bind OAuth network work to the lease that fences its persisted side effects. */
@@ -127,7 +105,7 @@ export async function createMcpOAuthClientProvider(params: {
     params.login?.assertCurrent();
     preparation++;
     const write = ++nextWrite;
-    const authority: McpOAuthMutationAuthority | undefined = params.login
+    const authority = params.login
       ? { assertCurrent: params.login.assertCurrent, beforeCommit: options.beforeCommit }
       : undefined;
     try {
@@ -166,8 +144,17 @@ export async function createMcpOAuthClientProvider(params: {
       return resolveOAuthRedirectUrl(config, preparedStore());
     },
     clientMetadataUrl: normalizeOptionalString(config.clientMetadataUrl),
-    get clientMetadata() {
-      return buildOAuthClientMetadata(config, preparedStore());
+    get clientMetadata(): OAuthClientMetadata {
+      const redirectUrl = resolveOAuthRedirectUrl(config, preparedStore());
+      const scope = normalizeOptionalString(config.scope);
+      return {
+        client_name: "OpenClaw MCP",
+        redirect_uris: [redirectUrl],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+        ...(scope ? { scope } : {}),
+      };
     },
     async state() {
       assertAuthorizationRedirectAllowed();
@@ -190,7 +177,19 @@ export async function createMcpOAuthClientProvider(params: {
     async clientInformation() {
       const store = await readStore();
       params.login?.assertCurrent();
-      return store.clientInformation;
+      const clientInformation = store.clientInformation;
+      // Re-register an unused client when the callback changes. Saved tokens remain
+      // bound to their original client; metadata-document clients have no redirect list.
+      if (
+        !store.tokens &&
+        clientInformation &&
+        "redirect_uris" in clientInformation &&
+        Array.isArray(clientInformation.redirect_uris) &&
+        !clientInformation.redirect_uris.includes(resolveOAuthRedirectUrl(config, store))
+      ) {
+        return undefined;
+      }
+      return clientInformation;
     },
     async saveClientInformation(clientInformation) {
       await updateStore({ kind: "clientInformation", clientInformation });

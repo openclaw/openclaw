@@ -152,9 +152,6 @@ export function auditToolPolicyFilter(params: {
 }): void {
   const removedByRule = removedToolNamesByRule(params);
   for (const [ruleKind, removed] of removedByRule) {
-    if (removed.length === 0) {
-      continue;
-    }
     const rule = sanitizeAuditField(labelForRuleKind(params.stepLabel, ruleKind));
     const { toolNames, truncated } = boundedToolNames(removed);
     const matchedRuleSourceTools = removed.slice(0, MAX_AUDIT_TOOL_NAMES);

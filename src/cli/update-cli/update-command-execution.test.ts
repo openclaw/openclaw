@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -17,11 +17,186 @@ import { registerExecutionTimeoutTests } from "./update-command-execution-timeou
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as readiness from "./update-command-readiness.js";
+import { registerServiceCollectionTests } from "./update-command-service-collection.test-support.js";
+import * as publication from "./update-command-service-revalidation.js";
 
-const { executionParams, inspectOrStopService, mocks, successfulUpdate } =
+const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 describe("mutable update execution", () => {
+  registerServiceCollectionTests();
+  it.each(
+    (["root", "include"] as const).flatMap((source) =>
+      (["after-validation", "after-stop", "after-git-transfer"] as const).flatMap((phase) =>
+        [true, false].map((accepted) => ({ source, phase, accepted })),
+      ),
+    ),
+  )(
+    "revalidates a concurrent $source save $phase before activation (accepted=$accepted)",
+    async ({ source, phase, accepted }) => {
+      await withTestDir({ prefix: "update-latest-config-" }, async (dir) => {
+        const root = path.join(dir, "installed");
+        const stage = path.join(dir, "candidate");
+        await fs.mkdir(root);
+        await fs.mkdir(stage);
+        for (const [directory, version] of [
+          [root, "1.0.0"],
+          [stage, "1.0.1"],
+        ]) {
+          await fs.writeFile(
+            path.join(directory!, "package.json"),
+            JSON.stringify({ name: "openclaw", version }),
+          );
+        }
+        const configPath = path.join(dir, "openclaw.json");
+        const includePath = path.join(dir, "messages.json");
+        await fs.writeFile(includePath, JSON.stringify({ ackReaction: "before" }));
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({
+            messages:
+              source === "include" ? { $include: "messages.json" } : { ackReaction: "before" },
+          }),
+        );
+        const rootBefore = await fs.readFile(configPath, "utf8");
+        const observed: Array<string | undefined> = [];
+        const trackRun = phase === "after-stop" && source === "include" && accepted;
+        let runId: string | undefined;
+        let postStopPhase: string | undefined;
+        const env = {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: path.join(dir, "state"),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        };
+        mocks.captureManagedPreflight.mockResolvedValue(undefined);
+        mocks.maybeStopService.mockResolvedValue({
+          stopped: false,
+          inspected: true,
+          running: false,
+          serviceUpdateVerdict: { kind: "absent" },
+        });
+        mocks.validateCanary.mockImplementation(async ({ config }) => {
+          observed.push(config.messages?.ackReaction);
+          if (runId && config.messages?.ackReaction === "after") {
+            postStopPhase = getUpdateRun(runId, { env })?.phase;
+          }
+          const rejected = config.messages?.ackReaction === "after" && !accepted;
+          return {
+            status: rejected ? "error" : "ok",
+            ...(rejected ? { reason: "runtime-verification-failed" } : {}),
+            phase: "config",
+            durationMs: 0,
+            logTail: [],
+            steps: rejected
+              ? [
+                  {
+                    name: "candidate-config",
+                    command: "config validate",
+                    cwd: stage,
+                    durationMs: 0,
+                    exitCode: 1,
+                    stderrTail: "Candidate rejected the current configuration",
+                  },
+                ]
+              : [],
+          };
+        });
+        const save = () =>
+          fs.writeFile(
+            source === "include" ? includePath : configPath,
+            JSON.stringify(
+              source === "include"
+                ? { ackReaction: "after" }
+                : { messages: { ackReaction: "after" } },
+            ),
+          );
+        if (phase === "after-stop") {
+          const assertPublication = publication.assertManagedGatewayArtifactPublication;
+          let saved = false;
+          vi.spyOn(publication, "assertManagedGatewayArtifactPublication").mockImplementation(
+            async (params) => {
+              await assertPublication(params);
+              if (!params.phase && !saved) {
+                saved = true;
+                await save();
+              }
+            },
+          );
+        }
+        let activated = false;
+        const onActivation = vi.fn();
+        mocks.runPackageUpdate.mockImplementation(async ({ validateCandidate, beforeActivate }) => {
+          await validateCandidate(stage);
+          if (phase === "after-validation") {
+            await save();
+          }
+          await beforeActivate();
+          activated = true;
+          return successfulUpdate;
+        });
+        mocks.runGitUpdate.mockImplementation(
+          async (
+            options: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0],
+          ) => {
+            const target = { schemaVersions: { state: 15, agent: 19 } };
+            await options.inspectGitTarget?.(target);
+            await options.validateCandidate?.(stage);
+            await options.beforeGitMutation?.(target);
+            await save();
+            await options.inspectGitTarget?.(target);
+            activated = true;
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
+        const execution = await withEnvAsync(env, async () => {
+          const params = {
+            ...executionParams(phase === "after-git-transfer" ? "git" : "package"),
+            root,
+            shouldRestart: false,
+            onActivation,
+          };
+          if (!trackRun) {
+            return executeMutableUpdate(await bindExecutionGuards(params));
+          }
+          runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+          params.opts.run = { runId, env };
+          return withUpdateCommandExecutor(runId, async (executor) => {
+            mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+              admitExecutor(await executor.enter(root));
+            });
+            return executeMutableUpdate(await bindExecutionGuards(params));
+          });
+        });
+        if (trackRun) {
+          expect(postStopPhase).toBe("activating");
+        }
+        expect(observed).toEqual(["before", "after"]);
+        expect(activated).toBe(accepted);
+        if (phase === "after-stop" || phase === "after-git-transfer") {
+          expect(
+            mocks.maybeStopService.mock.calls.filter(([request]) => request.phase === "prepare"),
+          ).toHaveLength(1);
+        }
+        expect(onActivation).toHaveBeenCalledTimes(
+          phase === "after-git-transfer" || accepted ? 1 : 0,
+        );
+        expect(execution?.mutationStarted).toBe(phase === "after-git-transfer" || accepted);
+        expect(execution?.result.status).toBe(accepted ? "ok" : "error");
+        if (!accepted) {
+          expect(execution?.result.reason).toBe("runtime-verification-failed");
+        }
+        if (source === "include") {
+          expect(await fs.readFile(configPath, "utf8")).toBe(rootBefore);
+        }
+        expect(
+          JSON.parse(await fs.readFile(source === "include" ? includePath : configPath, "utf8")),
+        ).toMatchObject(
+          source === "include" ? { ackReaction: "after" } : { messages: { ackReaction: "after" } },
+        );
+      });
+    },
+  );
+
   registerExecutionTimeoutTests();
 
   registerNativeAdmissionTests({ executionParams, mocks, successfulUpdate });
@@ -68,12 +243,14 @@ describe("mutable update execution", () => {
             return { ...successfulUpdate, mode: "git" };
           },
         );
-        const execution = await executeMutableUpdate({
-          ...executionParams("git"),
-          root: targetRoot,
-          shouldRestart: false,
-          opts: { json: true, restart: false },
-        });
+        const execution = await executeMutableUpdate(
+          await bindExecutionGuards({
+            ...executionParams("git"),
+            root: targetRoot,
+            shouldRestart: false,
+            opts: { json: true, restart: false },
+          }),
+        );
         expect(await fs.readFile(artifact, "utf8")).toBe("retained serving runtime");
         expect(mocks.serviceStopped).toBe(false);
         if (destination === "disjoint") {
@@ -126,7 +303,7 @@ describe("mutable update execution", () => {
       });
       await withUpdateCommandExecutor(runId, async (executor) => {
         params.opts.run!.executorFence = await executor.enter(dir, { preflight: true });
-        const result = await executeMutableUpdate(params);
+        const result = await executeMutableUpdate(await bindExecutionGuards(params));
         expect(result?.result.status).toBe("error");
         expect(mocks.maybeRestartService).toHaveBeenCalledOnce();
         expect(recoveryRun).toBe(params.opts.run);
@@ -143,7 +320,9 @@ describe("mutable update execution", () => {
       }
       return inspectOrStopService(phase);
     });
-    const execution = await executeMutableUpdate(executionParams("package"));
+    const execution = await executeMutableUpdate(
+      await bindExecutionGuards(executionParams("package")),
+    );
     expect(execution).toMatchObject({
       mutationStarted: false,
       result: { status: "error", reason: "managed-service-preflight" },
@@ -178,11 +357,13 @@ describe("mutable update execution", () => {
             maintenance.maybeStopManagedServiceBeforeMutableUpdate,
           );
 
-          const execution = await executeMutableUpdate({
-            ...executionParams(kind),
-            shouldRestart,
-            opts: { json: true, restart: shouldRestart },
-          });
+          const execution = await executeMutableUpdate(
+            await bindExecutionGuards({
+              ...executionParams(kind),
+              shouldRestart,
+              opts: { json: true, restart: shouldRestart },
+            }),
+          );
 
           expect(execution?.result.status).toBe("ok");
           if (kind === "package") {
@@ -226,7 +407,9 @@ describe("mutable update execution", () => {
         }
         return inspectOrStopService("inspect");
       });
-      const execution = await executeMutableUpdate(executionParams("package"));
+      const execution = await executeMutableUpdate(
+        await bindExecutionGuards(executionParams("package")),
+      );
       expect(execution?.result.status).toBe("ok");
       expect(execution?.preManagedServiceStop?.serviceUpdateVerdict).toMatchObject({
         kind: "unavailable",
@@ -285,12 +468,14 @@ describe("mutable update execution", () => {
             return { ...successfulUpdate, status: "error", reason: "package-update-failed" };
           }
         });
-        const execution = await executeMutableUpdate({
-          ...executionParams("package"),
-          tag: "/tmp/candidate.tgz",
-          packageInstallSpec: "/tmp/candidate.tgz",
-          packageTargetVersion: undefined,
-        });
+        const execution = await executeMutableUpdate(
+          await bindExecutionGuards({
+            ...executionParams("package"),
+            tag: "/tmp/candidate.tgz",
+            packageInstallSpec: "/tmp/candidate.tgz",
+            packageTargetVersion: undefined,
+          }),
+        );
         expect(events).toEqual(
           outcome === "changed-owner"
             ? ["staged", "preflight"]
@@ -352,7 +537,7 @@ describe("mutable update execution", () => {
           params.packageTargetSchemaVersions = undefined;
         }
 
-        const execution = await executeMutableUpdate(params);
+        const execution = await executeMutableUpdate(await bindExecutionGuards(params));
 
         expect(mocks.validateCanary.mock.calls.length).toBe(0);
         expect(execution).toMatchObject({
@@ -403,12 +588,14 @@ describe("mutable update execution", () => {
           return successfulUpdate;
         });
 
-        const execution = await executeMutableUpdate({
-          ...executionParams("package"),
-          tag: "2026.9.2",
-          packageInstallSpec: "openclaw@2026.9.2",
-          packageTargetVersion: "2026.9.2",
-        });
+        const execution = await executeMutableUpdate(
+          await bindExecutionGuards({
+            ...executionParams("package"),
+            tag: "2026.9.2",
+            packageInstallSpec: "openclaw@2026.9.2",
+            packageTargetVersion: "2026.9.2",
+          }),
+        );
 
         expect(mocks.validateCanary.mock.calls.length).toBe(0);
         expect(execution).toMatchObject({
@@ -426,12 +613,14 @@ describe("mutable update execution", () => {
       status: "skipped",
       reason: "already-current",
     });
-    const execution = await executeMutableUpdate({
-      ...executionParams("package"),
-      tag: "/tmp/candidate.tgz",
-      packageInstallSpec: "/tmp/candidate.tgz",
-      packageTargetVersion: undefined,
-    });
+    const execution = await executeMutableUpdate(
+      await bindExecutionGuards({
+        ...executionParams("package"),
+        tag: "/tmp/candidate.tgz",
+        packageInstallSpec: "/tmp/candidate.tgz",
+        packageTargetVersion: undefined,
+      }),
+    );
     expect(execution?.result.reason).toBe("already-current");
     expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
     expect(mocks.pluginPreflight).not.toHaveBeenCalled();
@@ -485,7 +674,9 @@ describe("mutable update execution", () => {
         );
         mocks.pluginPreflight.mockImplementation(actual.preflightConfiguredNpmPluginTargets);
 
-        const execution = await executeMutableUpdate(executionParams("package"));
+        const execution = await executeMutableUpdate(
+          await bindExecutionGuards(executionParams("package")),
+        );
         const unclassifiedFailure = incompatible && failure === "throw";
 
         expect(execution?.result.status).toBe(unclassifiedFailure ? "error" : "ok");
@@ -529,7 +720,7 @@ describe("mutable update execution", () => {
   it("waits for plugin availability before preparing a package update", async () => {
     const available = createDeferred<[]>();
     mocks.pluginPreflight.mockImplementation(() => available.promise);
-    const execution = executeMutableUpdate(executionParams("package"));
+    const execution = executeMutableUpdate(await bindExecutionGuards(executionParams("package")));
     try {
       await vi.waitFor(() => expect(mocks.pluginPreflight).toHaveBeenCalledOnce());
       expect(mocks.serviceStopped).toBe(false);
@@ -555,7 +746,9 @@ describe("mutable update execution", () => {
       return context;
     });
 
-    const execution = await executeMutableUpdate(executionParams("package"));
+    const execution = await executeMutableUpdate(
+      await bindExecutionGuards(executionParams("package")),
+    );
 
     expect(execution?.result.reason).toBe("database-schema-preflight");
     expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
@@ -597,7 +790,7 @@ describe("mutable update execution", () => {
     });
 
     const params = executionParams("package");
-    const pendingExecution = executeMutableUpdate(params);
+    const pendingExecution = executeMutableUpdate(await bindExecutionGuards(params));
     try {
       await vi.waitFor(() => expect(events).toContain("schema-after-inspection"));
       expect(events.indexOf("schema-before-inspection")).toBeLessThan(
@@ -644,7 +837,9 @@ describe("mutable update execution", () => {
         indeterminate: [],
       }));
 
-      const execution = await executeMutableUpdate(executionParams("package"));
+      const execution = await executeMutableUpdate(
+        await bindExecutionGuards(executionParams("package")),
+      );
 
       expect(mocks.serviceStopped).toBe(false);
       expect(mocks.prepareMutableUpdate).toHaveBeenCalledTimes(phase === "after-prepare" ? 1 : 0);
@@ -742,7 +937,7 @@ describe("mutable update execution", () => {
             events.push("mutable-prepare");
             admitExecutor(await executor.enter(root));
           });
-          return executeMutableUpdate(params);
+          return executeMutableUpdate(await bindExecutionGuards(params));
         });
 
         expect(events).toEqual([

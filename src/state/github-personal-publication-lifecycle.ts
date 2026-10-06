@@ -1,9 +1,15 @@
+import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
+import { requestSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntryCurrentSource,
+} from "../config/sessions/session-entry-current.types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../infra/kysely-sync.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import type {
   GitHubSessionReceiptGeneration,
@@ -23,7 +29,13 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
   generations: readonly GitHubSessionReceiptGeneration[];
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
-}): Promise<(assertCurrent?: () => void) => Promise<void>> {
+}): Promise<
+  (options?: {
+    assertCurrent?: () => void;
+    sessionEntryCurrent?: SessionEntryCurrentCheck;
+    retainedSessionKeys?: ReadonlySet<string>;
+  }) => Promise<void>
+> {
   params.assertCurrent?.();
   const context = captureOpenClawStateWorkerContext({ env: params.env });
   const generations = params.generations.map((generation) => ({ ...generation }));
@@ -38,7 +50,11 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
     { assertCurrent: params.assertCurrent, existingOnly: true },
   )) ?? { personal: [], repository: [] };
   params.assertCurrent?.();
-  return async (assertCurrent) => {
+  return async ({ assertCurrent, sessionEntryCurrent, retainedSessionKeys } = {}) => {
+    const selectedKeys = new Set(input.sessionKeys.filter((key) => !retainedSessionKeys?.has(key)));
+    if (selectedKeys.size === 0) {
+      return;
+    }
     const assertAdmission = () => {
       context.admission.assertCurrent();
       assertCurrent?.();
@@ -48,13 +64,32 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
       (scope) =>
         scope.execute({
           type: "githubPublication.deleteSessionReceipts",
-          input: { ...input, generations, receipts },
+          input: {
+            agentId: input.agentId,
+            sessionKeys: [...selectedKeys],
+            generations: generations.filter((generation) =>
+              selectedKeys.has(generation.sessionKey),
+            ),
+            receipts: {
+              personal: receipts.personal.filter((receipt) =>
+                selectedKeys.has(receipt.session_key),
+              ),
+              repository: receipts.repository.filter((receipt) =>
+                selectedKeys.has(receipt.session_key),
+              ),
+            },
+            sessionEntryCurrentSource: sessionEntryCurrent?.source,
+          },
         }),
       {
         assertCurrent: assertAdmission,
-        createAdmission: createSqliteWorkerWriteAdmission(assertAdmission, [
-          context.admission.databasePath,
-        ]),
+        createAdmission: createSqliteWorkerWriteAdmission(
+          (request) => {
+            assertAdmission();
+            assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
+          },
+          [context.admission.databasePath],
+        ),
       },
     );
   };
@@ -74,7 +109,7 @@ export function readSessionReceiptDeletionIdentitiesInDatabase(
             .selectFrom(table)
             .select(["request_id", "session_id", "session_key", "created_at_ms"])
             .where("agent_id", "=", params.agentId)
-            .where("session_key", "in", params.sessionKeys),
+            .where("session_key", "in", sqliteStringSet(params.sessionKeys)),
         ).rows
       : [];
   return {
@@ -91,6 +126,7 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
     sessionKeys: readonly string[];
     generations: readonly GitHubSessionReceiptGeneration[];
     receipts: GitHubSessionReceiptIdentities;
+    sessionEntryCurrentSource?: SessionEntryCurrentSource;
   },
 ): void {
   const tables = [
@@ -101,9 +137,22 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
   if (existing.length === 0 || params.sessionKeys.length === 0) {
     return;
   }
+  // Repeated key/id pairs retain the first captured lifecycle revision.
+  const generations = new Map(
+    params.generations
+      .toReversed()
+      .map((generation) => [
+        JSON.stringify([generation.sessionKey, generation.sessionId]),
+        generation,
+      ]),
+  );
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      requestSessionEntryCurrentAdmission(
+        params.sessionEntryCurrentSource,
+        { stage: "transaction", facts: undefined },
+        { lookup: "logical" },
+      );
       const query = getNodeSqliteKysely<DB>(db);
       const hasLifecycles = tableExists(db, "github_publication_session_lifecycles");
       const current = readSessionReceiptDeletionIdentitiesInDatabase(database, params);
@@ -126,10 +175,8 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
             ) {
               return true;
             }
-            const generation = params.generations.find(
-              (candidate) =>
-                candidate.sessionKey === receipt.session_key &&
-                candidate.sessionId === receipt.session_id,
+            const generation = generations.get(
+              JSON.stringify([receipt.session_key, receipt.session_id]),
             );
             if (!generation) {
               return false;
@@ -178,7 +225,11 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
           executeSqliteQuerySync(db, query.deleteFrom(table).where("request_id", "=", requestId));
         }
       }
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      requestSessionEntryCurrentAdmission(
+        params.sessionEntryCurrentSource,
+        { stage: "commit", facts: undefined },
+        { lookup: "logical" },
+      );
     },
     { database },
     { operationLabel: "github-personal-publication.session-delete" },

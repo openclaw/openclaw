@@ -1,4 +1,3 @@
-/** Security warnings for gateway exposure, exec policy drift, channel DMs, and plaintext secrets. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
@@ -242,7 +241,6 @@ function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): SecurityAudi
   ];
 }
 
-/** Collects doctor security findings without emitting terminal notes. */
 export async function collectSecurityWarnings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -283,7 +281,7 @@ export async function collectSecurityWarnings(
     defaults: cfg.secrets?.defaults,
   }).ref;
   findings.push(
-    ...findSecretStoreRedactedValueFindings({ database: { env } }).map(
+    ...(await findSecretStoreRedactedValueFindings({ database: { env } })).map(
       (finding): SecurityAuditFinding => ({
         checkId: "doctor.secret_store_redacted_value",
         severity: "warn",
@@ -412,7 +410,6 @@ function renderSecurityFindingLines(finding: SecurityAuditFinding): string[] {
   return lines;
 }
 
-/** Emits security warnings plus the deep audit follow-up command. */
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const findings = await collectSecurityWarnings(cfg);
   if (findings.length > 0) {

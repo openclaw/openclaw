@@ -35,57 +35,39 @@ describe("fleet status runtime projection", () => {
     mocks.runtimeErrors.length = 0;
   });
 
-  it.each(["docker", "podman"] as const)("shows the recorded %s runtime", async (runtime) => {
-    mocks.status.mockResolvedValue(statusResult(runtime));
-    await runFleetStatusCommand({ tenant: "acme", json: false });
-    expect(mocks.status).toHaveBeenCalledExactlyOnceWith("acme");
-    expect(mocks.runtimeLogs).toEqual([
-      "Tenant: acme",
-      "Container: openclaw-cell-acme",
-      `Runtime: ${runtime}`,
-      "State: running",
-      "Port: 19100",
-      "Image: image",
-      "Created: 2026-01-01T00:00:00.000Z",
-      "Data: /tmp/acme",
-      "Health: ok (HTTP 200)",
-    ]);
-    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
-  });
+  it.each(["running", "unknown"] as const)(
+    "shows the recorded runtime independently of state %s",
+    async (state) => {
+      const result = statusResult("podman");
+      if (state === "unknown") {
+        result.container = { state, running: false, managed: false, error: "Runtime unavailable" };
+        result.health = { status: "skipped", url: result.health.url, reason: "No endpoint" };
+      }
+      mocks.status.mockResolvedValue(result);
+      await runFleetStatusCommand({ tenant: "acme", json: false });
+      expect(mocks.status).toHaveBeenCalledExactlyOnceWith("acme");
+      expect(mocks.runtimeLogs).toEqual([
+        "Tenant: acme",
+        "Container: openclaw-cell-acme",
+        "Runtime: podman",
+        `State: ${state}`,
+        "Port: 19100",
+        "Image: image",
+        "Created: 2026-01-01T00:00:00.000Z",
+        "Data: /tmp/acme",
+        state === "running" ? "Health: ok (HTTP 200)" : "Health: skipped (No endpoint)",
+      ]);
+      expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(["docker", "podman"] as const)("leaves %s JSON unchanged", async (runtime) => {
-    const result = statusResult(runtime);
+  it("leaves status JSON unchanged", async () => {
+    const result = statusResult("podman");
     const before = structuredClone(result);
     mocks.status.mockResolvedValue(result);
     await runFleetStatusCommand({ tenant: "acme", json: true });
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(before);
     expect(mocks.runtimeLogs).toEqual([JSON.stringify(before, null, 2)]);
     expect(result).toEqual(before);
-  });
-
-  it.each(["missing", "unknown"] as const)(
-    "does not confuse runtime identity with container state %s",
-    async (state) => {
-      const result = statusResult("podman");
-      result.container =
-        state === "unknown"
-          ? { state, running: false, managed: false, error: "Runtime unavailable" }
-          : { state, running: false, managed: false };
-      result.health = { status: "skipped", url: result.health.url, reason: "No endpoint" };
-      mocks.status.mockResolvedValue(result);
-      await runFleetStatusCommand({ tenant: "acme", json: false });
-      expect(mocks.runtimeLogs).toContain("Runtime: podman");
-      expect(mocks.runtimeLogs).toContain(`State: ${state}`);
-      expect(mocks.runtimeLogs).toContain("Health: skipped (No endpoint)");
-    },
-  );
-
-  it("preserves service errors without emitting a partial status", async () => {
-    mocks.status.mockRejectedValueOnce(new Error("Unknown fleet tenant"));
-    await expect(runFleetStatusCommand({ tenant: "acme", json: false })).rejects.toThrow(
-      "Unknown fleet tenant",
-    );
-    expect(mocks.runtimeLogs).toEqual([]);
-    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 });

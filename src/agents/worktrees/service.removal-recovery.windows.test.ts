@@ -45,7 +45,7 @@ it.each([
       now: Date.now(),
     });
     const repository = await resolveRepository(repo);
-    updateRegistryWorktree(env, record.id, {
+    await updateRegistryWorktree(env, record.id, {
       repositoryIdentity: { repoRoot: repo, repoFingerprint: repository.fingerprint },
     });
     const script = path.join(record.path, "tool.sh");

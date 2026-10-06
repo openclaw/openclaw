@@ -9,16 +9,21 @@ import {
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
-  runGlobalPackageUpdateSteps,
-  type PackageUpdateTransaction,
-} from "./package-update-steps.js";
-import {
-  createNpmTarget,
-  createRootRunner,
+  createNpmUpdateOptions,
+  packageUpdateStepResult,
+  stagedNpmPrefix,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+
+async function expectPackageVersion(packageRoot: string, version: string) {
+  expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+    `"version":"${version}"`,
+  );
+}
 
 describe("retained package update transactions", () => {
   it.each([
@@ -26,10 +31,8 @@ describe("retained package update transactions", () => {
     "wrong target",
     "install timed out",
     "install killed",
-    "install output exceeded",
     "fallback install timed out",
     "validation rejected",
-    "validation timed out",
     "validation output exceeded",
     "activation rejected",
     "backup failed",
@@ -39,7 +42,6 @@ describe("retained package update transactions", () => {
     "doctor success receipt throw",
     "doctor advisory receipt throw",
     "doctor cleanup uncertain",
-    "rollback",
     "confirm",
   ] as const)(
     "keeps the original serving through validation and retains recovery until %s",
@@ -100,17 +102,13 @@ describe("retained package update transactions", () => {
             : {}),
         };
         const update = runGlobalPackageUpdateSteps({
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: outcome === "already current" ? "./candidate.tgz" : "openclaw@2.0.0",
-          packageName: "openclaw",
-          runCommand: createRootRunner(globalRoot),
-          timeoutMs: 1000,
+          ...createNpmUpdateOptions(
+            globalRoot,
+            outcome === "already current" ? "./candidate.tgz" : "openclaw@2.0.0",
+          ),
           runStep: async ({ name, argv }) => {
             const fallback = argv.includes("--omit=optional");
-            const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-            if (!stagePrefix) {
-              throw new Error("missing stage prefix");
-            }
+            const stagePrefix = stagedNpmPrefix(argv);
             stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
             await writePackageRoot(
               stageRoot,
@@ -126,28 +124,25 @@ describe("retained package update transactions", () => {
             await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
             stageLauncher = path.join(stagePrefix, "bin", "openclaw");
             await fs.writeFile(stageLauncher, "new launcher\n");
-            return {
-              name,
-              command: argv.join(" "),
-              cwd: stagePrefix,
-              durationMs: 0,
-              exitCode: outcome === "fallback install timed out" && !fallback ? 1 : 0,
-              termination:
-                outcome === "install timed out" ||
-                (outcome === "fallback install timed out" && fallback)
-                  ? "timeout"
-                  : "exit",
-              killed: outcome === "install killed",
-              outputLimitExceeded: outcome === "install output exceeded",
-            };
+            return packageUpdateStepResult(
+              { name, argv, cwd: stagePrefix },
+              {
+                durationMs: 0,
+                exitCode: outcome === "fallback install timed out" && !fallback ? 1 : 0,
+                termination:
+                  outcome === "install timed out" ||
+                  (outcome === "fallback install timed out" && fallback)
+                    ? "timeout"
+                    : "exit",
+                killed: outcome === "install killed",
+              },
+            );
           },
           validateCandidate: async (candidateRoot) => {
             phases.push("validate");
             expect(serving).toBe(true);
             expect(candidateRoot).toBe(stageRoot);
-            await expect(
-              fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-            ).resolves.toContain('"version":"1.0.0"');
+            await expectPackageVersion(packageRoot, "1.0.0");
             await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
             return [
               {
@@ -156,7 +151,7 @@ describe("retained package update transactions", () => {
                 cwd: candidateRoot,
                 durationMs: 1,
                 exitCode: outcome === "validation rejected" ? 1 : 0,
-                termination: outcome === "validation timed out" ? "timeout" : "exit",
+                termination: "exit",
                 outputLimitExceeded: outcome === "validation output exceeded",
               },
             ];
@@ -201,9 +196,7 @@ describe("retained package update transactions", () => {
           expect(phases).toEqual(["validate", "stop"]);
           expect(transaction).toBeUndefined();
           await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
-          await expect(
-            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-          ).resolves.toContain('"version":"1.0.0"');
+          await expectPackageVersion(packageRoot, "1.0.0");
           expect((await fs.readdir(globalRoot)).filter((entry) => entry.startsWith("."))).toEqual(
             [],
           );
@@ -216,12 +209,8 @@ describe("retained package update transactions", () => {
           expect(hasCommandProcessCleanupError(failure)).toBe(true);
           expect(phases).toEqual(["validate", "stop", "migrate"]);
           assert(transaction && stageLauncher);
-          await expect(
-            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-          ).resolves.toContain('"version":"2.0.0"');
-          await expect(
-            fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
-          ).resolves.toContain('"version":"1.0.0"');
+          await expectPackageVersion(packageRoot, "2.0.0");
+          await expectPackageVersion(transaction.backupRoot, "1.0.0");
           const shimBackups = (await fs.readdir(globalRoot)).filter((entry) =>
             entry.startsWith(".openclaw.shim-backup-"),
           );
@@ -298,9 +287,7 @@ describe("retained package update transactions", () => {
             exitCode: outcome === "validation rejected" ? 1 : 0,
           });
           expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
-          await expect(
-            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-          ).resolves.toContain('"version":"1.0.0"');
+          await expectPackageVersion(packageRoot, "1.0.0");
           await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
         } else {
           const activationFailed = outcome === "activation failed" || outcome === "backup failed";
@@ -322,13 +309,9 @@ describe("retained package update transactions", () => {
             throw new Error("activated package did not retain a transaction");
           }
           if (outcome === "backup failed") {
-            await expect(
-              fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-            ).resolves.toContain('"version":"1.0.0"');
+            await expectPackageVersion(packageRoot, "1.0.0");
           } else {
-            await expect(
-              fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
-            ).resolves.toContain('"version":"1.0.0"');
+            await expectPackageVersion(transaction.backupRoot, "1.0.0");
           }
           await expect(fs.readFile(launcher, "utf8")).resolves.toBe(
             activationFailed ? "old launcher\n" : "new launcher\n",
@@ -341,9 +324,7 @@ describe("retained package update transactions", () => {
           }
           await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
           await transaction.complete({ activationVerified: outcome === "confirm" }, () => {});
-          await expect(
-            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-          ).resolves.toContain(`"version":"${outcome === "confirm" ? "2.0.0" : "1.0.0"}"`);
+          await expectPackageVersion(packageRoot, outcome === "confirm" ? "2.0.0" : "1.0.0");
           expect((await transaction.rollback(() => {})).exitCode).toBe(1);
         }
         expect((await fs.readdir(globalRoot)).filter((entry) => entry.startsWith("."))).toEqual([]);

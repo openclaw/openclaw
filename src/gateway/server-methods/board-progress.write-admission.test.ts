@@ -2,12 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -42,6 +44,13 @@ const cases = methods.flatMap((method) =>
 describe("board and progress-card database write admission", () => {
   it.each([
     ...cases,
+    ...methods
+      .filter((method) => method.startsWith("board."))
+      .map((method) => ({
+        method,
+        change: "allow-worker" as const,
+        cold: false,
+      })),
     ...methods.map((method) => ({ method, change: "abort" as const, cold: true })),
     { method: "progressCard.put" as const, change: "lifecycle" as const, cold: false },
   ])(
@@ -84,11 +93,9 @@ describe("board and progress-card database write admission", () => {
             : undefined;
         const previousSnapshot = previous ? await boardStore.getSnapshot(target) : undefined;
         const database = openOpenClawAgentDatabase({ agentId: target.agentId });
-        // The first-use schema transaction must respect the same reservation as its data write.
-        if (!previous) {
-          database.db.exec(
-            "DROP TABLE board_widgets; DROP TABLE board_tabs; DROP TABLE session_progress_cards;",
-          );
+        // Only progress cards remain optional; their first-use DDL shares write admission.
+        if (method === "progressCard.put") {
+          database.db.exec("DROP TABLE session_progress_cards;");
         }
         if (cold) {
           await closeOpenClawAgentDatabaseByPathAsync(database.path);
@@ -104,6 +111,17 @@ describe("board and progress-card database write admission", () => {
             database,
           );
         const previousTables = tables();
+        const boardRowCounts = () =>
+          withOpenClawAgentDatabaseReadOnly(
+            ({ db }) =>
+              db
+                .prepare(
+                  "SELECT (SELECT COUNT(*) FROM board_tabs WHERE session_key = ?) AS tabs, (SELECT COUNT(*) FROM board_widgets WHERE session_key = ?) AS widgets",
+                )
+                .get(target.sessionKey, target.sessionKey),
+            database,
+          );
+        const previousBoardRowCounts = boardRowCounts();
         const board = createBoardHarness(undefined, {}, boardStore, {
           getRuntimeConfig: () => cfg,
         });
@@ -140,6 +158,31 @@ describe("board and progress-card database write admission", () => {
                     : "putWidget",
               );
         let request: Promise<void> | undefined;
+        let inGrant = false;
+        const stages: string[] = [];
+        const grantReads: string[] = [];
+        const reads = observeHostDataSql((sql) => {
+          if (inGrant && /\b(?:session_nodes|session_members)\b/iu.test(sql)) {
+            grantReads.push(sql);
+          }
+        });
+        const createAdmission = admission.createSqliteWorkerOperationAdmission;
+        const grants = vi
+          .spyOn(admission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) =>
+            createAdmission((admissionRequest, grant) => {
+              inGrant =
+                admissionRequest.stage === "transaction" || admissionRequest.stage === "commit";
+              if (inGrant) {
+                stages.push(admissionRequest.stage);
+              }
+              try {
+                admit(admissionRequest, grant);
+              } finally {
+                inGrant = false;
+              }
+            }, attachment),
+          );
         const reservation = runOpenClawAgentWorkerWrite(database, async () => {
           request = handleGatewayRequest({
             req: { type: "req", id: "admission", method, params },
@@ -149,11 +192,14 @@ describe("board and progress-card database write admission", () => {
             isWebchatConnect: () => false,
             extraHandlers: { ...board.handlers, ...createProgressCardHandlers() },
             signal: controller.signal,
-            sessionMutationCommitGuard: () => {
-              if (!requestCurrent) {
-                throw new Error("request owner retired");
-              }
-            },
+            sessionMutationCommitGuard:
+              change === "allow-worker"
+                ? undefined
+                : () => {
+                    if (!requestCurrent) {
+                      throw new Error("request owner retired");
+                    }
+                  },
           });
           entered.resolve();
           await release.promise;
@@ -161,7 +207,8 @@ describe("board and progress-card database write admission", () => {
         try {
           await entered.promise;
           await setImmediate();
-          expect(tables()).toEqual(previous ? previousTables : { found: true, value: [] });
+          expect(tables()).toEqual(previousTables);
+          expect(boardRowCounts()).toEqual(previousBoardRowCounts);
           expect(respond).not.toHaveBeenCalled();
           expect(board.broadcast).not.toHaveBeenCalled();
           expect(mutation).toHaveBeenCalledOnce();
@@ -183,11 +230,19 @@ describe("board and progress-card database write admission", () => {
           await reservation;
           await request;
           mutation.mockRestore();
+          grants.mockRestore();
+          reads.restore();
         }
-        if (change !== "allow") {
+        if (change === "allow-worker") {
+          expect(stages).toContain("transaction");
+          expect(stages).toContain("commit");
+          expect(grantReads).toEqual([]);
+        }
+        if (change !== "allow" && change !== "allow-worker") {
           expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
           expect(board.broadcast).not.toHaveBeenCalled();
-          expect(tables()).toEqual(previous ? previousTables : { found: true, value: [] });
+          expect(tables()).toEqual(previousTables);
+          expect(boardRowCounts()).toEqual(previousBoardRowCounts);
           if (previousSnapshot) {
             const unchanged = withOpenClawAgentDatabaseReadOnly(
               ({ db }) =>

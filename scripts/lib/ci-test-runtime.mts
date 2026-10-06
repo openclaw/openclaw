@@ -1,18 +1,28 @@
-import { globSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { globSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
   matchesVitestCliSelection,
   matchesVitestGlob,
   relativizeScopedPatterns,
+  sharedVitestExcludePatterns,
 } from "../../test/vitest/vitest.pattern-file.ts";
 import { controlUiE2eTestGlobs, controlUiTestGlobs } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
   getUnitFastTestFiles,
+  getUnitFastTestFilesForIncludePatterns,
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
+import {
+  filterUnitConfigTestFiles,
+  unitTestAdditionalExcludePatterns,
+  unitTestIncludePatterns,
+} from "../../test/vitest/vitest.unit-paths.mjs";
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
+import nativeBunQualification from "./ci-test-native-bun-qualification.json" with { type: "json" };
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
 export type CiTestRuntimePolicy = "node" | "bun-compatible" | "dual";
@@ -25,13 +35,25 @@ type TestSelection = {
   vitestArgs?: readonly string[];
 };
 type TestShard = TestSelection & { groups?: readonly TestSelection[] };
-export type CiTestRuntimeSelection = {
+type VitestRuntimeSelection = {
   runtime: TestRuntime;
+  engine?: "vitest";
   configs?: string[];
   includePatterns?: string[];
   includeAfterShard?: true;
   env?: Readonly<Record<string, string>>;
 };
+export type CiTestRuntimeSelection =
+  | VitestRuntimeSelection
+  | {
+      runtime: "bun";
+      engine: "bun-test";
+      files: string[];
+      configs?: never;
+      includePatterns?: never;
+      includeAfterShard?: never;
+      env?: never;
+    };
 
 // Short-lived UI workers spend less time compiling their top JIT tier when it
 // starts later. Keep every tier enabled and share the producer/consumer policy.
@@ -44,39 +66,217 @@ export const BUN_UI_TEST_ENV = {
 
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
+const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
+const exactTestFilePattern = /^[\w./-]+\.test\.[cm]?[jt]sx?$/u;
+const nativeBunTestHashes: Readonly<Record<string, string>> = nativeBunQualification.tests;
+const nativeBunHelperHashes: Readonly<Record<string, Readonly<Record<string, string>>>> =
+  nativeBunQualification.helpers;
 const bunCompatibleConfigs = new Set([
   "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+  "test/vitest/vitest.unit-fast-isolated.config.ts",
   "test/vitest/vitest.extension-memory.config.ts",
   gatewayClientConfig,
 ]);
-// Measured whole-file admission; the rest of agents-support retains Node.
-const bunCompatibleAgentSupportFiles = ["src/agents/worktrees/service.removal-recovery.test.ts"];
-// TypeScript's synchronous native API uses Node child-process pipe handles.
-// Keep these compiler assertions on Node, including those in mixed runtime suites.
-const nativeCompilerTestFiles = [
-  "src/agents/agent-bundle-mcp-requester-connect.import-boundary.test.ts",
-  "src/agents/agent-model-discovery.imports.test.ts",
-  "src/agents/code-mode.auto-results.test.ts",
-  "src/agents/harness/native-hook-relay.imports.test.ts",
-  "src/cli/program/register.database.import-boundary.test.ts",
-  "src/plugin-sdk/provider-tools.test.ts",
-  "test/scripts/audit-control-ui-dead-css.test.ts",
-  "test/scripts/canvas-cli-import-closure.test.ts",
-  "test/scripts/check-session-accessor-boundary.test.ts",
-  "test/scripts/check-session-transcript-reader-boundary.test.ts",
-  "test/scripts/check-sqlite-transaction-boundary.test.ts",
-  "test/scripts/native-typescript.test.ts",
-  "test/scripts/nodes-cli-import-closure.test.ts",
-  "test/scripts/ts-topology.test.ts",
-  "test/scripts/typecheck-inert.test.ts",
-  "test/test-helper-extension-import-boundary.test.ts",
-];
-// Bun fork 3ff0efc82217775e04094a1d4402d7c6932ecb24 failed or added skips in these files.
-// Keep every case on Node while the canonical inventories own all other membership.
+const bunCompatibleGatewayFiles = ["src/gateway/worker-environments/workspace-hash-memo.test.ts"];
+// Whole-file qualification keeps mixed and broad scoped-owner envelopes on Node.
+const bunCompatibleScopedOwners = new Map([
+  [
+    "test/vitest/vitest.extension-database-workers.config.ts",
+    {
+      dir: "extensions",
+      files: [
+        "extensions/codex/src/session-catalog-native-performance.test.ts",
+        "extensions/team-reports/src/render/theme.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.extension-whatsapp.config.ts",
+    {
+      dir: "extensions",
+      files: ["extensions/whatsapp/src/session.media-upload.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.extension-slack.config.ts",
+    {
+      dir: "extensions",
+      files: [
+        "extensions/slack/src/monitor/ingress.auth-retry.test.ts",
+        "extensions/slack/src/monitor/ingress.deferred-stop.test.ts",
+        "extensions/slack/src/monitor/ingress.relay.test.ts",
+        "extensions/slack/src/monitor/message-handler.debounce-policy.test.ts",
+        "extensions/slack/src/monitor/provider.transport-credentials.test.ts",
+      ],
+    },
+  ],
+  [
+    agentVitestProjectOwners.support.config,
+    {
+      dir: agentVitestProjectOwners.support.dir,
+      files: ["src/agents/worktrees/service.removal-recovery.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.extension-provider-openai.config.ts",
+    {
+      dir: "extensions",
+      files: ["extensions/openai/realtime-quicksilver-peer-worker.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.plugins.config.ts",
+    {
+      dir: "src/plugins",
+      files: [
+        "src/plugins/plugin-module-generation.interop.test.ts",
+        "src/plugins/provider-discovery.capture-lifetime.test.ts",
+        "src/plugins/sdk-alias.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.tooling.config.ts",
+    {
+      dir: "",
+      files: [
+        "test/helpers/managed-handoff-isolation.test.ts",
+        "test/scripts-update-gateway-legacy.test.ts",
+        "test/scripts/bench-gateway-installed.test.ts",
+        "test/scripts/clawhub-bootstrap-artifact.test.ts",
+        "test/scripts/clawhub-fixture-server.test.ts",
+        "test/scripts/crabbox-untrusted-bootstrap.test.ts",
+        "test/scripts/oxlint-config.test.ts",
+        "test/scripts/pr-worktree-interruption.test.ts",
+        "test/scripts/pr-worktree-state.test.ts",
+        "test/scripts/pr-wrappers.test.ts",
+        "test/scripts/test-projects-empty-native.test.ts",
+        "test/scripts/test-projects.test.ts",
+        "test/scripts/upgrade-survivor-timeout-diagnostics.test.ts",
+        "test/scripts/watch-pr-ci-dependencies.test.ts",
+        "test/scripts/watch-pr-ci.test.ts",
+        "test/scripts/windows-repair-worker-probe.test.ts",
+        "test/vitest-pr-exempt-retention.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.tooling-isolated.config.ts",
+    {
+      dir: "",
+      files: [
+        "src/cli/update-cli/update-command-legacy-finalize.test.ts",
+        "test/scripts/control-ui-i18n.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.infra.config.ts",
+    {
+      dir: "",
+      files: [
+        "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+        "src/infra/update-managed-service-handoff-reclamation.test.ts",
+        "src/infra/worker-cpu.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.gateway-database-workers.config.ts",
+    {
+      dir: ".",
+      files: ["src/gateway/server-methods/session-catalog.performance.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.logging.config.ts",
+    {
+      dir: "src",
+      files: ["src/logging/diagnostic-memory.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.ui-e2e.config.ts",
+    {
+      dir: "",
+      files: [
+        "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
+        "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+        "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+        "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+        "ui/src/e2e/service-worker-update.e2e.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.cli-process.config.ts",
+    {
+      dir: "",
+      files: [
+        "src/cli/help-exit.process.test.ts",
+        "src/cli/update-cli/update-command-fresh-doctor-authority.test.ts",
+        "src/cli/update-cli/update-command-lease.test.ts",
+        "src/cli/update-cli/update-command-migrated.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.cli.config.ts",
+    {
+      dir: "src/cli",
+      files: [
+        "src/cli/update-cli/update-command-mutable-signals.test.ts",
+        "src/cli/update-cli/update-command-rollback-executor.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.commands.config.ts",
+    {
+      dir: "src/commands",
+      files: [
+        "src/commands/doctor-config-preflight.process.test.ts",
+        "src/commands/doctor-lint.native-capture.test.ts",
+        "src/commands/doctor-tools-md-migration.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.extension-qa.config.ts",
+    {
+      dir: "extensions",
+      files: ["extensions/qa-lab/src/multipass.runtime.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.gateway.config.ts",
+    {
+      dir: ".",
+      files: bunCompatibleGatewayFiles,
+    },
+  ],
+  [
+    gatewayCoreConfig,
+    {
+      dir: "src/gateway",
+      files: bunCompatibleGatewayFiles,
+    },
+  ],
+]);
+const embeddedRunOwner = agentVitestProjectOwners.embeddedRun;
+const bunCompatibleUnitFiles = new Set([
+  "packages/normalization-core/src/grapheme.test.ts",
+  "src/library.test.ts",
+  "src/node-host/node-worker-workspace-quiescence.acceptance.test.ts",
+  "src/worker/worker-connection-closing-window.test.ts",
+]);
+// src/state/openclaw-state-lease.retention.test.ts stays with its default Node owner:
+// cold fs-safe native initialization roots the caller's ALS through custom_gc.
+// The dependency initialization owner needs a fix; this is not V8-specific proof.
 const runtimePartitions = new Map<
   string,
   {
-    files: (cwd: string) => string[];
+    files: (cwd: string, includePatterns?: string[]) => string[];
     nodeRequired: ReadonlySet<string> | ((file: string) => boolean);
     includeAfterShard?: true;
   }
@@ -88,27 +288,24 @@ const runtimePartitions = new Map<
         globSync("src/process/**/*.test.ts", { cwd, exclude: databaseWorkerCoreTestFiles })
           .map((file) => file.replaceAll("\\", "/"))
           .toSorted(),
-      // Only this native-Bun contract is qualified; process siblings retain Node.
-      nodeRequired: (file) => file !== "src/process/terminal-pty-bun.test.ts",
+      // Only qualified complete process contracts run on Bun.
+      nodeRequired: (file) =>
+        ![
+          "src/process/spawn-broker/event-order.test.ts",
+          "src/process/spawn-broker/group-custody.test.ts",
+          "src/process/terminal-pty-bun.test.ts",
+        ].includes(file),
     },
   ],
   [
-    "test/vitest/vitest.unit-fast.config.ts",
+    unitFastConfig,
     {
-      files: unitFastFiles,
+      files: (_cwd, includePatterns) => unitFastFiles(includePatterns),
       nodeRequired: new Set([
-        ...nativeCompilerTestFiles,
-        "packages/markdown-core/src/render-aware-chunking.test.ts",
-        // Bun skips a sibling diagnostics subscriber when warm-worker cleanup unsubscribes.
-        "src/agents/code-mode-node.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
-        // Native heap accounting, GC, and Worker limits require V8.
-        "src/infra/worker-task-pool.memory.test.ts",
-        "src/plugins/runtime.retention.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",
-        "src/process/spawn-broker/proxy-retention.test.ts",
         "src/process/spawn-broker/relay.test.ts",
         "src/process/spawn-broker/startup.test.ts",
         "src/process/spawn-broker/stdin-handoff.test.ts",
@@ -120,10 +317,43 @@ const runtimePartitions = new Map<
     },
   ],
   [
-    "test/vitest/vitest.unit-fast-isolated.config.ts",
+    embeddedRunOwner.config,
     {
-      files: () => getUnitFastIsolatedTestFiles(),
-      nodeRequired: new Set(nativeCompilerTestFiles),
+      files: (cwd) =>
+        globSync(embeddedRunOwner.include, {
+          cwd,
+          exclude: [
+            ...sharedVitestExcludePatterns,
+            ...getUnitFastTestFilesForIncludePatterns(embeddedRunOwner.include),
+            ...embeddedRunOwner.exclude,
+          ],
+        })
+          .map((file) => file.replaceAll("\\", "/"))
+          .toSorted(),
+      // Only the runtime-neutral transcript lifecycle contract is qualified here.
+      nodeRequired: (file) =>
+        file !== "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle.test.ts",
+    },
+  ],
+  [
+    "test/vitest/vitest.unit.config.ts",
+    {
+      files: unitFiles,
+      // Preserve the shared qualification in aggregate and src-only unit owners.
+      nodeRequired: (file) => !bunCompatibleUnitFiles.has(file),
+    },
+  ],
+  [
+    "test/vitest/vitest.unit-src.config.ts",
+    {
+      files: (cwd) =>
+        unitFiles(cwd).filter(
+          (file) =>
+            file.startsWith("src/") &&
+            !file.startsWith("src/acp/") &&
+            !file.startsWith("src/security/"),
+        ),
+      nodeRequired: (file) => !bunCompatibleUnitFiles.has(file),
     },
   ],
   [
@@ -133,12 +363,7 @@ const runtimePartitions = new Map<
         globSync(controlUiTestGlobs, { cwd, exclude: controlUiE2eTestGlobs })
           .map((file) => file.replaceAll("\\", "/"))
           .toSorted(),
-      // Bun GC can retain released chat and overview payloads; keep their retention proof on Node.
-      nodeRequired: new Set([
-        "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
-        "ui/src/pages/chat/chat-thread.test.ts",
-        "ui/src/pages/usage/usage-page-details.test.ts",
-      ]),
+      nodeRequired: new Set<string>(),
       includeAfterShard: true,
     },
   ],
@@ -153,9 +378,59 @@ function partitionRequiresNode(
     : partition.nodeRequired.has(file);
 }
 
-function unitFastFiles(): string[] {
-  const otherOwners = new Set([...getUnitFastTimerTestFiles(), ...getUnitFastIsolatedTestFiles()]);
-  return getUnitFastTestFiles().filter((file) => !otherOwners.has(file));
+function unitFastFiles(includePatterns?: string[]): string[] {
+  const otherOwners = new Set([
+    ...getUnitFastTimerTestFiles(includePatterns),
+    ...getUnitFastIsolatedTestFiles(includePatterns),
+  ]);
+  return getUnitFastTestFiles(includePatterns).filter((file) => !otherOwners.has(file));
+}
+
+function matchesNativeBunSource(file: string, sha256: string, cwd: string): boolean {
+  try {
+    return (
+      createHash("sha256")
+        .update(readFileSync(path.join(cwd, file)))
+        .digest("hex") === sha256
+    );
+  } catch {
+    // Missing or unreadable qualification inputs retain the ordinary Vitest run.
+    return false;
+  }
+}
+
+function qualifiedNativeBunFiles(files: readonly string[], cwd: string): string[] {
+  const candidates = files.filter((file) => nativeBunTestHashes[file]);
+  if (
+    !candidates.length ||
+    !Object.entries(nativeBunQualification.setup).every(([file, sha256]) =>
+      matchesNativeBunSource(file, sha256, cwd),
+    )
+  ) {
+    return [];
+  }
+  // Native table argument semantics are qualified against test bytes, not the
+  // production code they exercise. Changed tests/helpers keep Vitest coverage.
+  return candidates.filter(
+    (file) =>
+      matchesNativeBunSource(file, nativeBunTestHashes[file]!, cwd) &&
+      Object.entries(nativeBunHelperHashes[file] ?? {}).every(([helper, sha256]) =>
+        matchesNativeBunSource(helper, sha256, cwd),
+      ),
+  );
+}
+
+function unitFiles(cwd: string): string[] {
+  const fastFiles = new Set(getUnitFastTestFiles());
+  return filterUnitConfigTestFiles(
+    globSync(unitTestIncludePatterns, {
+      cwd,
+      exclude: [...sharedVitestExcludePatterns, ...unitTestAdditionalExcludePatterns],
+    }),
+  )
+    .map((file) => file.replaceAll("\\", "/"))
+    .filter((file) => !fastFiles.has(file))
+    .toSorted();
 }
 
 function selectionVitestArgs(selection: TestSelection): string[] | undefined {
@@ -255,7 +530,7 @@ export function resolveCiTestRuntimeSelections(
   if (selection.targets?.length) {
     // Preserve exact target argv and its native owner; broad targets can carry
     // multiple process/filter contracts and stay on Node.
-    if (selection.targets.some((target) => !/^[\w./-]+\.test\.[cm]?[jt]sx?$/u.test(target))) {
+    if (selection.targets.some((target) => !exactTestFilePattern.test(target))) {
       return node;
     }
     const plans = selection.targets.flatMap((target) => buildVitestRunPlans([target], cwd));
@@ -265,13 +540,15 @@ export function resolveCiTestRuntimeSelections(
     if (plans.every((plan) => bunCompatibleConfigs.has(plan.config))) {
       return completeBun();
     }
+    const config = plans[0]!.config;
+    const scopedOwner = bunCompatibleScopedOwners.get(config);
     if (
-      plans.every((plan) => plan.config === agentVitestProjectOwners.support.config) &&
-      selection.targets.every((file) => bunCompatibleAgentSupportFiles.includes(file))
+      scopedOwner &&
+      plans.every((plan) => plan.config === config) &&
+      selection.targets.every((file) => scopedOwner.files.includes(file))
     ) {
       return completeBun();
     }
-    const config = plans[0]!.config;
     const partition = runtimePartitions.get(config);
     if (
       !partition ||
@@ -280,12 +557,25 @@ export function resolveCiTestRuntimeSelections(
     ) {
       return node;
     }
-    const files = new Set(partition.files(cwd));
-    return selection.targets.every(
-      (target) => files.has(target) && !partitionRequiresNode(partition, target),
-    )
-      ? completeBun()
-      : node;
+    const files = new Set(partition.files(cwd, [...selection.targets]));
+    if (
+      !selection.targets.every(
+        (target) => files.has(target) && !partitionRequiresNode(partition, target),
+      )
+    ) {
+      return node;
+    }
+    if (
+      config === unitFastConfig &&
+      args.length === 0 &&
+      qualifiedNativeBunFiles(selection.targets, cwd).length === selection.targets.length
+    ) {
+      return [
+        ...(policy === "dual" ? node : []),
+        { runtime: "bun", engine: "bun-test", files: [...selection.targets] },
+      ];
+    }
+    return completeBun();
   }
   if (
     selection.configs?.length === 2 &&
@@ -298,8 +588,20 @@ export function resolveCiTestRuntimeSelections(
     }
     // These leaf configs already run sequentially and intersect the shared
     // include envelope with their own inventories. Keep that ownership intact.
+    const coreSelections = resolveCiTestRuntimeSelections(
+      { ...selection, configs: [gatewayCoreConfig] },
+      policy,
+      cwd,
+    );
     return [
-      ...(policy === "dual" ? node : [{ runtime: "node" as const, configs: [gatewayCoreConfig] }]),
+      ...(policy === "dual" ? node : []),
+      ...coreSelections
+        .filter((entry) => policy !== "dual" || entry.runtime === "bun")
+        .map((entry) =>
+          entry.engine === "bun-test"
+            ? entry
+            : Object.assign({}, entry, { configs: [gatewayCoreConfig] }),
+        ),
       { runtime: "bun", configs: [gatewayClientConfig] },
     ];
   }
@@ -310,13 +612,13 @@ export function resolveCiTestRuntimeSelections(
   if (bunCompatibleConfigs.has(config)) {
     return completeBun();
   }
-  if (config === agentVitestProjectOwners.support.config) {
-    const owner = agentVitestProjectOwners.support;
+  const scopedOwner = bunCompatibleScopedOwners.get(config);
+  if (scopedOwner) {
     const includePatterns = selection.includePatterns?.length ? selection.includePatterns : null;
-    const qualifiedPatterns = relativizeScopedPatterns(bunCompatibleAgentSupportFiles, owner.dir);
+    const qualifiedPatterns = relativizeScopedPatterns(scopedOwner.files, scopedOwner.dir);
     if (
       includePatterns &&
-      relativizeScopedPatterns(includePatterns, owner.dir).every((pattern) =>
+      relativizeScopedPatterns(includePatterns, scopedOwner.dir).every((pattern) =>
         qualifiedPatterns.includes(pattern),
       )
     ) {
@@ -324,8 +626,15 @@ export function resolveCiTestRuntimeSelections(
     }
     const bunFiles =
       policy === "dual"
-        ? bunCompatibleAgentSupportFiles.filter((file) =>
-            matchesVitestCliSelection(file, owner.include, [], owner.dir, {}, includePatterns),
+        ? scopedOwner.files.filter((file) =>
+            matchesVitestCliSelection(
+              file,
+              scopedOwner.files,
+              [],
+              scopedOwner.dir,
+              {},
+              includePatterns,
+            ),
           )
         : [];
     return bunFiles.length ? [...node, { runtime: "bun", includePatterns: bunFiles }] : node;
@@ -334,7 +643,14 @@ export function resolveCiTestRuntimeSelections(
   if (!partition || (partition.includeAfterShard && !uiPartition)) {
     return node;
   }
-  const inventory = partition.files(cwd);
+  // Reuse canonical scoped analysis only for exact files; glob envelopes keep
+  // their full inventory and existing matcher semantics.
+  const exactSelection = selection.includePatterns?.every((pattern) =>
+    exactTestFilePattern.test(pattern),
+  )
+    ? [...selection.includePatterns]
+    : undefined;
+  const inventory = partition.files(cwd, exactSelection);
   const requested = new Set(selection.includePatterns ?? []);
   // Canonical file inventories should not reparse every file pair as a glob.
   const exactFiles = selection.includePatterns?.every(
@@ -352,6 +668,12 @@ export function resolveCiTestRuntimeSelections(
     return node;
   }
   const nodeFiles = files.filter((file) => partitionRequiresNode(partition, file));
+  // Ordinary CI passes no extra Vitest argv. Collection, filters and overrides
+  // keep Vitest's interpretation rather than silently changing native semantics.
+  const nativeFiles =
+    config === unitFastConfig && args.length === 0 ? qualifiedNativeBunFiles(bunFiles, cwd) : [];
+  const nativeSet = new Set(nativeFiles);
+  const vitestFiles = bunFiles.filter((file) => !nativeSet.has(file));
   return [
     ...(policy === "dual"
       ? node
@@ -364,12 +686,19 @@ export function resolveCiTestRuntimeSelections(
             },
           ]
         : []),
-    {
-      runtime: "bun",
-      includePatterns: bunFiles,
-      ...(partition.includeAfterShard ? { includeAfterShard: true } : {}),
-      ...(config === "ui/vitest.config.ts" ? { env: BUN_UI_TEST_ENV } : {}),
-    },
+    ...(vitestFiles.length
+      ? [
+          {
+            runtime: "bun" as const,
+            includePatterns: vitestFiles,
+            ...(partition.includeAfterShard ? { includeAfterShard: true as const } : {}),
+            ...(config === "ui/vitest.config.ts" ? { env: BUN_UI_TEST_ENV } : {}),
+          },
+        ]
+      : []),
+    ...(nativeFiles.length
+      ? [{ runtime: "bun" as const, engine: "bun-test" as const, files: nativeFiles }]
+      : []),
   ];
 }
 

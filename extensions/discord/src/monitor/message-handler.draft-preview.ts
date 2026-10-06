@@ -3,25 +3,21 @@ import {
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   createLivePreviewLifecycle,
+  resolveChannelDraftStreamingChunking,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingProgressNarration,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  resolveSendableOutboundReplyParts,
-  type ReplyPayload,
-} from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   stripInlineDirectiveTagsForDelivery,
   stripReasoningTagsFromText,
 } from "openclaw/plugin-sdk/text-chunking";
-import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
 import type { RequestClient } from "../internal/discord.js";
-import { withDiscordRequestAuthority } from "../internal/request-authority.js";
+import { DISCORD_TEXT_CHUNK_LIMIT } from "../outbound-adapter.js";
 import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
 
 type DraftReplyReference = {
@@ -82,7 +78,9 @@ export function createDiscordDraftPreviewController(params: {
     : undefined;
   const draftChunking =
     draftStream && discordStreamMode === "block"
-      ? resolveDiscordDraftStreamingChunking(params.cfg, params.accountId)
+      ? resolveChannelDraftStreamingChunking(params.cfg, "discord", params.accountId, {
+          fallbackLimit: DISCORD_TEXT_CHUNK_LIMIT,
+        })
       : undefined;
   const shouldSplitPreviewMessages = discordStreamMode === "block";
   const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;
@@ -145,8 +143,8 @@ export function createDiscordDraftPreviewController(params: {
     if (draftChunker?.hasBuffered()) {
       draftChunker.drain({
         force: true,
-        emit: (chunk) => {
-          draftText += chunk;
+        emit: (chunk, metadata) => {
+          draftText += metadata?.sourceText ?? chunk;
         },
       });
       draftChunker.reset();
@@ -233,70 +231,6 @@ export function createDiscordDraftPreviewController(params: {
       progressNarratorLifecycle = narratorLifecycle;
     },
     freezeProgress,
-    async adoptProgressContinuation(
-      payload: ReplyPayload,
-      info: ReplyDispatchRuntimeInfo,
-      target: { to: string; threadId?: string | number },
-    ) {
-      const adopt = info.adoptProgressContinuation;
-      if (
-        !draftStream ||
-        discordStreamMode !== "progress" ||
-        !adopt ||
-        info.kind !== "final" ||
-        payload.isError ||
-        payload.isCommentary ||
-        resolveSendableOutboundReplyParts(payload).hasMedia ||
-        payload.interactive !== undefined ||
-        payload.presentation !== undefined ||
-        payload.channelData !== undefined
-      ) {
-        return false;
-      }
-      const snapshot = progressDraft.getSnapshot();
-      if (!snapshot.statusHeadline && !snapshot.plan?.length && !snapshot.lines.length) {
-        return false;
-      }
-      const assertCurrent = () => {
-        params.abortSignal?.throwIfAborted();
-        info.assertPlatformSendAuthorized?.();
-      };
-      return await withDiscordRequestAuthority(assertCurrent, async () => {
-        assertCurrent();
-        // beforeDeliver has frozen the compositor. Its retained display data can
-        // still publish a delayed card, without reopening progress callbacks.
-        freezeProgress();
-        const text = progressDraft.getText().trimEnd();
-        draftStream.update(text, { complete: true });
-        await draftStream.flush();
-        assertCurrent();
-        const messageId = draftStream.messageId();
-        if (!messageId || !text || draftStream.lastDeliveredText() !== text) {
-          return false;
-        }
-        const adopted = await adopt({
-          channel: "discord",
-          accountId: params.accountId,
-          ...target,
-          messageId,
-          text,
-          snapshot,
-        });
-        if (!adopted) {
-          return false;
-        }
-        // Release the confirmed ID synchronously: core now owns it, including
-        // cancellation/restart cleanup. The next admitted turn gets a new draft.
-        if (draftStream.messageId() === messageId) {
-          lifecycle.retainPreview();
-          draftStream.forceNewMessage();
-          progressDraft.markFinalReplyDelivered();
-          resetProgressState();
-          await draftStream.discardPending();
-        }
-        return true;
-      });
-    },
     async retarget(channelId: string) {
       await draftStream?.retarget(channelId);
     },
@@ -372,8 +306,8 @@ export function createDiscordDraftPreviewController(params: {
       draftChunker.append(delta);
       draftChunker.drain({
         force: false,
-        emit: (chunk) => {
-          draftText += chunk;
+        emit: (chunk, metadata) => {
+          draftText += metadata?.sourceText ?? chunk;
           draftStream.update(draftText);
         },
       });

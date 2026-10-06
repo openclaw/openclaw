@@ -78,9 +78,6 @@ export function createGatewayNodeSessionRuntime(params: {
         { dropIfSlow: true },
       );
     }
-    if (change.availabilityChanged) {
-      params.broadcast("sessions.changed", { reason: "runner-availability" }, { dropIfSlow: true });
-    }
   });
   const sessionEventSubscribers = params.sessionEventSubscribers;
   const sessionMessageSubscribers = params.sessionMessageSubscribers;

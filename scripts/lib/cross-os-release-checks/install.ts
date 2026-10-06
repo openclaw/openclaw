@@ -10,16 +10,12 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
+import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { validatePackageSourceDir } from "../../package-source-preflight.mjs";
-import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mts";
 import type { CandidateBuild, LaneCommandParams, LaneState, PackageJson } from "./config.ts";
 import {
   CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES,
-  INSTALL_STAGE_DEBRIS_DIR_PATTERN,
-  OMITTED_QA_EXTENSION_PREFIXES,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   PUBLISHED_INSTALLER_BASE_URL,
   installTimeoutMs,
   resolvePackDestinationTarball,
@@ -81,242 +77,40 @@ export async function prepareCandidate(params: {
   const packDir = join(params.outputDir, "package");
   mkdirSync(packDir, { recursive: true });
   const packJsonPath = join(packDir, "pack.json");
-  const packCommand = resolvePackageCandidatePackCommand(params.sourceDir, packDir);
-  // Modern source helpers own inventory and bundled dependency preparation. A
-  // preliminary pnpm pack rejects their isolated workspace before that setup.
-  if (packCommand.kind === "pnpm-pack") {
-    logPhase("prepare", "package-dist-inventory");
-    await writePackageDistInventoryForCandidate({
-      sourceDir: params.sourceDir,
-      logPath: join(params.logsDir, "pnpm-pack-dry-run.log"),
-    });
-  }
-  logPhase("prepare", packCommand.phase);
-  const packResult = await runCommand(packCommand.command, packCommand.args, {
-    cwd: params.sourceDir,
-    logPath: join(params.logsDir, packCommand.logFileName),
-    timeoutMs: 15 * 60 * 1000,
-  });
-  const packedCandidate = resolvePackedCandidateFromOutput({
-    output: packResult.stdout,
+  // Supported source checkouts own inventory and bundled dependency preparation.
+  logPhase("prepare", "package-candidate");
+  const packResult = await runCommand(
+    process.execPath,
+    [
+      join(params.sourceDir, "scripts", "package-openclaw-for-docker.mjs"),
+      "--skip-build",
+      "--output-dir",
+      packDir,
+    ],
+    {
+      cwd: params.sourceDir,
+      logPath: join(params.logsDir, "package-candidate.log"),
+      timeoutMs: 15 * 60 * 1000,
+    },
+  );
+  const packedCandidate = resolvePackDestinationTarball(
+    packResult.stdout.trim().split(/\r?\n/u).findLast(Boolean),
     packDir,
-    packageJson,
-    packCommand,
-  });
-  writeFileSync(packJsonPath, packedCandidate.packJson, "utf8");
+    "package-openclaw-for-docker",
+  );
+  writeFileSync(
+    packJsonPath,
+    `${JSON.stringify({ filename: packedCandidate.fileName, path: packedCandidate.path, version: packageJson.version }, null, 2)}\n`,
+    "utf8",
+  );
 
   return {
     sourceDir: params.sourceDir,
     sourceSha,
-    candidateVersion: packedCandidate.version,
+    candidateVersion: (packageJson.version ?? "").trim(),
     candidateTgz: packedCandidate.path,
     candidateFileName: packedCandidate.fileName,
   };
-}
-
-export function resolvePackageCandidatePackCommand(sourceDir: string, packDir: string) {
-  const packageHelper = join(sourceDir, "scripts", "package-openclaw-for-docker.mjs");
-  if (existsSync(packageHelper)) {
-    return {
-      args: [packageHelper, "--skip-build", "--output-dir", packDir],
-      command: process.execPath,
-      kind: "docker-helper",
-      logFileName: "package-candidate.log",
-      phase: "package-candidate",
-    };
-  }
-
-  return {
-    args: ["pack", "--config.ignore-scripts=true", "--json", "--pack-destination", packDir],
-    command: pnpmCommand(),
-    kind: "pnpm-pack",
-    logFileName: "pnpm-pack.log",
-    phase: "pnpm-pack",
-  };
-}
-
-function resolvePackedCandidateFromOutput(params: {
-  output: string;
-  packDir: string;
-  packageJson: PackageJson;
-  packCommand: ReturnType<typeof resolvePackageCandidatePackCommand>;
-}) {
-  if (params.packCommand.kind === "docker-helper") {
-    const packOutputLines = params.output.trim().split(/\r?\n/u).filter(Boolean);
-    const packedTarball = resolvePackDestinationTarball(
-      packOutputLines.at(-1),
-      params.packDir,
-      "package-openclaw-for-docker",
-    );
-    return {
-      fileName: packedTarball.fileName,
-      packJson: `${JSON.stringify(
-        {
-          filename: packedTarball.fileName,
-          path: packedTarball.path,
-          version: params.packageJson.version,
-        },
-        null,
-        2,
-      )}\n`,
-      path: packedTarball.path,
-      version: (params.packageJson.version ?? "").trim(),
-    };
-  }
-
-  const parsedPack = JSON.parse(params.output) as
-    | { filename?: string; version?: string }
-    | Array<{ filename?: string; version?: string }>;
-  const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : parsedPack;
-  const packedTarball = resolvePackDestinationTarball(
-    lastPack?.filename,
-    params.packDir,
-    "pnpm pack",
-  );
-  return {
-    fileName: packedTarball.fileName,
-    packJson: params.output,
-    path: packedTarball.path,
-    version: (lastPack?.version ?? params.packageJson.version ?? "").trim(),
-  };
-}
-
-function normalizeRelativePath(value: string) {
-  return value.replace(/\\/gu, "/");
-}
-
-function isNotFoundError(error: unknown) {
-  return error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT";
-}
-
-function isInstallStageDirName(value: string) {
-  return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
-}
-
-function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot: string) {
-  const rootEntries = readdirSync(packageRoot, { withFileTypes: true });
-  const debris: string[] = [];
-  for (const rootEntry of rootEntries) {
-    if (!rootEntry.isDirectory() || rootEntry.name.toLowerCase() !== "dist") {
-      continue;
-    }
-    const distDir = join(packageRoot, rootEntry.name);
-    let distEntries;
-    try {
-      distEntries = readdirSync(distDir, { withFileTypes: true });
-    } catch (error) {
-      if (isNotFoundError(error)) {
-        continue;
-      }
-      throw error;
-    }
-    for (const distEntry of distEntries) {
-      if (!distEntry.isDirectory() || distEntry.name.toLowerCase() !== "extensions") {
-        continue;
-      }
-      const extensionsDir = join(distDir, distEntry.name);
-      let extensionEntries;
-      try {
-        extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
-      } catch (error) {
-        if (isNotFoundError(error)) {
-          continue;
-        }
-        throw error;
-      }
-
-      for (const extensionEntry of extensionEntries) {
-        if (!extensionEntry.isDirectory()) {
-          continue;
-        }
-        const extensionPath = join(extensionsDir, extensionEntry.name);
-        let stagingEntries;
-        try {
-          stagingEntries = readdirSync(extensionPath, { withFileTypes: true });
-        } catch (error) {
-          if (isNotFoundError(error)) {
-            continue;
-          }
-          throw error;
-        }
-        for (const stagingEntry of stagingEntries) {
-          if (isInstallStageDirName(stagingEntry.name)) {
-            debris.push(
-              normalizeRelativePath(relative(packageRoot, join(extensionPath, stagingEntry.name))),
-            );
-          }
-        }
-      }
-    }
-  }
-  return debris.toSorted((left, right) => left.localeCompare(right));
-}
-
-function assertNoLegacyPluginDependencyStagingDebris(packageRoot: string) {
-  const debris = collectLegacyPluginDependencyStagingDebrisPaths(packageRoot);
-  if (debris.length === 0) {
-    return;
-  }
-  throw new Error(
-    `unexpected legacy plugin dependency staging debris in package dist: ${debris.join(", ")}`,
-  );
-}
-
-function isPackagedDistPath(relativePath: string) {
-  if (!relativePath.startsWith("dist/")) {
-    return false;
-  }
-  if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
-    return false;
-  }
-  if (isLocalBuildMetadataDistPath(relativePath)) {
-    return false;
-  }
-  if (relativePath.endsWith(".map")) {
-    return false;
-  }
-  if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
-    return false;
-  }
-  if (OMITTED_QA_EXTENSION_PREFIXES.some((prefix) => relativePath.startsWith(prefix))) {
-    return false;
-  }
-  return true;
-}
-
-export async function writePackageDistInventoryForCandidate(params: {
-  sourceDir: string;
-  logPath: string;
-}) {
-  assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
-  const dryRun = await runCommand(
-    pnpmCommand(),
-    ["pack", "--dry-run", "--config.ignore-scripts=true", "--json"],
-    {
-      cwd: params.sourceDir,
-      logPath: params.logPath,
-      timeoutMs: 5 * 60 * 1000,
-    },
-  );
-  const parsedPack = JSON.parse(dryRun.stdout) as
-    | { files?: Array<{ path?: string }> }
-    | Array<{ files?: Array<{ path?: string }> }>;
-  const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : parsedPack;
-  const files = Array.isArray(lastPack?.files) ? lastPack.files : [];
-  if (files.length === 0) {
-    throw new Error(
-      "pnpm pack --dry-run did not report package files for dist inventory generation.",
-    );
-  }
-  const inventory = files
-    .flatMap((entry) => {
-      const relativePath = normalizeRelativePath((entry.path ?? "").trim());
-      return isPackagedDistPath(relativePath) ? [relativePath] : [];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
-  const inventoryPath = join(params.sourceDir, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  mkdirSync(dirname(inventoryPath), { recursive: true });
-  writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
 }
 
 export function readProvidedCandidate(params: {
@@ -367,7 +161,7 @@ export function normalizeWindowsInstalledCliPath(cliPath: string) {
   return normalizeWindowsCommandShimPath(cliPath);
 }
 
-export function normalizeWindowsCommandShimPath(commandPath: string) {
+function normalizeWindowsCommandShimPath(commandPath: string) {
   if (typeof commandPath !== "string") {
     return commandPath;
   }

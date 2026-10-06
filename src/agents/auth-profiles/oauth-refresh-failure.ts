@@ -131,13 +131,6 @@ function readProviderOAuthRefreshFailure(error: unknown): OAuthRefreshFailurePre
   };
 }
 
-type StructuredClaudeCliAuthFailure = {
-  provider?: unknown;
-  rawError?: unknown;
-  reason?: unknown;
-  status?: unknown;
-};
-
 /** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
   readonly errorType?: string;
@@ -189,13 +182,12 @@ function createOAuthRefreshUserFacingCause(cause: unknown): unknown {
   return cause;
 }
 
-/** Refresh failure that preserves a redacted refreshed store and credential. */
+/** Refresh failure with a redacted public cause and private refreshed store. */
 export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
   override readonly profileId: string;
   readonly code?: string;
   readonly lockPath?: string;
   readonly #refreshedStore: AuthProfileStore;
-  readonly #credential: OAuthCredential;
 
   constructor(params: {
     credential: OAuthCredential;
@@ -231,7 +223,6 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
         : undefined,
     });
     this.name = "OAuthManagerRefreshError";
-    this.#credential = params.credential;
     this.profileId = params.profileId;
     this.#refreshedStore = params.refreshedStore;
     if (isSettledOAuthRefreshFailure(params.cause)) {
@@ -254,10 +245,6 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
 
   getRefreshedStore(): AuthProfileStore {
     return this.#refreshedStore;
-  }
-
-  getCredential(): OAuthCredential {
-    return this.#credential;
   }
 
   toJSON(): { name: string; message: string; profileId: string; provider: string } {
@@ -320,27 +307,16 @@ function isClaudeCliExpiredOAuthMessage(message: string): boolean {
   return CLAUDE_CLI_AUTH_FAILURE_RE.test(message);
 }
 
-function readStructuredClaudeCliAuthFailure(err: unknown): StructuredClaudeCliAuthFailure | null {
-  if (!err || typeof err !== "object") {
-    return null;
-  }
-  const candidate = err as StructuredClaudeCliAuthFailure & { name?: unknown };
-  if (
-    candidate.name !== "FailoverError" ||
-    candidate.provider !== "claude-cli" ||
-    candidate.reason !== "auth" ||
-    candidate.status !== 401
-  ) {
-    return null;
-  }
-  return candidate;
-}
-
 function classifyStructuredClaudeCliOAuthFailureReason(
   err: unknown,
 ): OAuthRefreshFailureReason | null {
-  const failure = readStructuredClaudeCliAuthFailure(err);
-  if (!failure) {
+  const failure = asOptionalObjectRecord(err);
+  if (
+    failure?.name !== "FailoverError" ||
+    failure.provider !== "claude-cli" ||
+    failure.reason !== "auth" ||
+    failure.status !== 401
+  ) {
     return null;
   }
   const rawError = typeof failure.rawError === "string" ? failure.rawError : "";

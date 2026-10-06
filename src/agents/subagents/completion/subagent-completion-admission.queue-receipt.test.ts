@@ -29,7 +29,8 @@ import {
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { settleRequesterCompletionBatch } from "./subagent-completion-admission.store.js";
 import { admitCompletionFixtureDatabase } from "./subagent-completion-admission.test-helpers.js";
 import type { RequesterWakeCommittedWrite } from "./subagent-completion-mutation.types.js";
@@ -78,7 +79,7 @@ describe("committed requester outcome queue receipts", () => {
           batchRunIds: ["blocked-requester-outcome"],
         },
       });
-      upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(entry));
+      writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(entry)], []);
       subagentRuns.set(entry.runId, entry);
       const context = captureOpenClawStateWorkerContext();
       const clock = createGatewaySchedulerClock(Date.now());
@@ -99,7 +100,7 @@ describe("committed requester outcome queue receipts", () => {
           entries: [{ subagent: entry }],
           outcome: { delivered: false, path: "none", error: "Requester unavailable" },
           context,
-          isCurrent: () => subagentRuns.get(entry.runId) === entry,
+          isCurrent: () => isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
           committed,
           onCommitted: (receipt) => {
             committed = receipt;
@@ -121,7 +122,7 @@ describe("committed requester outcome queue receipts", () => {
           throw new Error("Blocked outcome did not retain a system-event intent");
         }
         expect(queued.text).toContain("Requester unavailable");
-        expect(entry.requesterSettleWake).toBeUndefined();
+        expect(subagentRuns.get(entry.runId)?.requesterSettleWake).toBeUndefined();
         expect(deliver).not.toHaveBeenCalled();
         const advanceToIntent = () =>
           clock.advanceBy(Math.max(0, (queued.availableAt ?? queued.enqueuedAt) - scheduler.now()));

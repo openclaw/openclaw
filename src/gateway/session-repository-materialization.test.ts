@@ -10,6 +10,7 @@ import {
   writeManagedGitHubProfileFiles,
 } from "../agents/github-tool-identity.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionEntries from "../config/sessions/session-accessor.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -35,24 +36,51 @@ const git = async (cwd: string, args: string[]) =>
 describe("explicit repository move to Gateway", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["system", "agent", "revoked", "reset", "auth failure"] as const)(
+  it.each([
+    "system",
+    "agent",
+    "enterprise",
+    "host mismatch",
+    "revoked",
+    "reset",
+    "auth failure",
+  ] as const)(
     "keeps the current shared GitHub identity and move authority at clone admission: %s",
     async (scenario) => {
       await withOpenClawTestState(
         {
           label: "repository-materialize-identity",
-          env: { GH_TOKEN: "synthetic-legacy-token", GITHUB_TOKEN: undefined },
+          env: {
+            GH_TOKEN: "synthetic-legacy-token",
+            GITHUB_TOKEN: undefined,
+            GH_ENTERPRISE_TOKEN:
+              scenario === "enterprise" ? "synthetic-enterprise-token" : undefined,
+            GITHUB_ENTERPRISE_TOKEN: undefined,
+            GH_HOST: scenario === "enterprise" ? "ghe.example.test" : undefined,
+          },
         },
         async (state) => {
           const systemProfileId = "ghp_11111111111111111111111111111111";
           const agentProfileId = "ghp_22222222222222222222222222222222";
           const cfg: OpenClawConfig = {
             agents: { entries: { main: { workspace: state.workspaceDir } } },
-            gateway: { controlUi: { github: { token: "synthetic-preview-token" } } },
+            gateway: {
+              controlUi: { github: { token: "synthetic-preview-token" } },
+              ...(["enterprise", "host mismatch"].includes(scenario)
+                ? {
+                    github: {
+                      host: "ghe.example.test",
+                      apiBaseUrl: "https://ghe.example.test/api/v3",
+                    },
+                  }
+                : {}),
+            },
           };
           const config: OpenClawConfig = {
             ...cfg,
-            tools: { github: { profileId: systemProfileId } },
+            ...(scenario === "enterprise"
+              ? {}
+              : { tools: { github: { profileId: systemProfileId } } }),
             agents: {
               entries: {
                 main: {
@@ -65,6 +93,7 @@ describe("explicit repository move to Gateway", () => {
             },
           };
           await state.writeConfig(config);
+          setRuntimeConfigSnapshot(config);
           vi.spyOn(secretsRuntime, "getActiveSecretsRuntimeConfigSnapshot").mockReturnValue({
             config,
             sourceConfig: config,
@@ -89,13 +118,13 @@ describe("explicit repository move to Gateway", () => {
           const scope = { agentId: "main", sessionKey: "agent:main:dashboard:private-move" };
           const sessionId = "private-materialization-session";
           const repositories = getSessionRepositoryWorkspaceStore();
-          const created = repositories.create({
+          const created = await repositories.create({
             ...scope,
-            url: "https://github.com/openclaw/private-materialization-fixture.git",
+            url: `https://${scenario === "enterprise" ? "ghe.example.test" : "github.com"}/openclaw/private-materialization-fixture.git`,
             runSetupScript: false,
             assertCurrent: () => {},
           });
-          const repository = repositories.bindBase({
+          const repository = await repositories.bindBase({
             workspaceId: created.workspaceId,
             expectedRevision: created.revision,
             baseCommit: "a".repeat(40),
@@ -141,7 +170,11 @@ describe("explicit repository move to Gateway", () => {
               }
             },
           });
-          if (scenario === "revoked" || scenario === "reset") {
+          if (scenario === "host mismatch") {
+            await expect(operation).rejects.toThrow("configured GitHub host (ghe.example.test)");
+            expect(verify).not.toHaveBeenCalled();
+            expect(clone).not.toHaveBeenCalled();
+          } else if (scenario === "revoked" || scenario === "reset") {
             await expect(operation).rejects.toThrow(
               scenario === "revoked" ? "move authority revoked" : "Repository workspace changed",
             );
@@ -155,8 +188,16 @@ describe("explicit repository move to Gateway", () => {
             } else {
               await expect(operation).rejects.toBe(cloneFailure);
             }
-            const token = `synthetic-${scenario === "agent" ? "agent" : "system"}-token`;
-            expect(verify).toHaveBeenCalledWith(token);
+            const token =
+              scenario === "enterprise"
+                ? "synthetic-enterprise-token"
+                : `synthetic-${scenario === "agent" ? "agent" : "system"}-token`;
+            expect(verify).toHaveBeenCalledWith(token, {
+              apiBaseUrl:
+                scenario === "enterprise"
+                  ? "https://ghe.example.test/api/v3"
+                  : "https://api.github.com",
+            });
             expect(clone).toHaveBeenCalledWith(
               { cfg, gitUrl: repository.url, requiredCommit: repository.baseCommit },
               expect.objectContaining({ token }),
@@ -170,7 +211,7 @@ describe("explicit repository move to Gateway", () => {
   );
 
   it.each([
-    "success",
+    "enterprise",
     "revoked",
     "postcommit failure",
     "publication unavailable",
@@ -178,10 +219,18 @@ describe("explicit repository move to Gateway", () => {
   ] as const)("retains only committed materialization: %s", async (outcome) => {
     await withOpenClawTestState({ label: "repository-materialize" }, async (state) => {
       const cfg = {
+        ...(outcome === "enterprise"
+          ? {
+              gateway: {
+                github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+              },
+            }
+          : {}),
         agents: { entries: { main: { workspace: state.workspaceDir } } },
         tools: { github: { profileId: "ghp_11111111111111111111111111111111" } },
       };
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const source = state.path("source");
       await fsp.mkdir(source);
       await git(source, ["init", "-b", "main"]);
@@ -194,7 +243,7 @@ describe("explicit repository move to Gateway", () => {
       await git(source, ["add", "."]);
       await git(source, ["commit", "-m", "base"]);
       const baseCommit = await git(source, ["rev-parse", "HEAD"]);
-      const url = "https://github.com/openclaw/materialization-fixture.git";
+      const url = `https://${outcome === "enterprise" ? "ghe.example.test" : "github.com"}/openclaw/materialization-fixture.git`;
       await registerClonedProjectRegistry({ path: source, name: "Fixture", originUrl: url });
       const base = await captureWorkspaceManifest({ root: source, baseCommit });
       const remote = state.path("remote");
@@ -221,14 +270,14 @@ describe("explicit repository move to Gateway", () => {
             ).stdout.trim();
       const scope = { agentId: "main", sessionKey: "agent:main:dashboard:materialization" };
       const repositories = getSessionRepositoryWorkspaceStore();
-      let repository = repositories.create({
+      let repository = await repositories.create({
         ...scope,
         url,
         requestedRef: outcome === "requested topic" ? "topic" : undefined,
         runSetupScript: false,
         assertCurrent: () => {},
       });
-      repository = repositories.bindBase({
+      repository = await repositories.bindBase({
         workspaceId: repository.workspaceId,
         expectedRevision: repository.revision,
         baseCommit,
@@ -335,7 +384,7 @@ describe("explicit repository move to Gateway", () => {
         expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)?.id).toBe(worktree.id);
       }
       // Retained publication may still need the original immutable source after the move.
-      expect(repositories.get(repository.workspaceId)).toEqual(repository);
+      expect(await repositories.get(repository.workspaceId)).toEqual(repository);
       expect(fs.existsSync(repositories.artifactPath(repository.workspaceId))).toBe(true);
       expect(await fsp.readFile(path.join(source, "edited.txt"), "utf8")).toBe("base\n");
     });

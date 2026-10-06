@@ -4,9 +4,14 @@ import path from "node:path";
 import { requestDiscord } from "@openclaw/discord/api.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { assertLiveScenarioReply as assertDiscordScenarioReply } from "../shared/live-scenario-reply.js";
 import {
-  discordQaScenarioSupport,
   type DiscordQaScenarioImplementation,
+  pollChannelMessages,
+  sendChannelMessage,
+  getCurrentDiscordVoiceState,
+  matchesDiscordScenarioReply,
+  waitForDiscordVoiceState,
 } from "./discord-live.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
@@ -63,7 +68,7 @@ async function waitForDiscordVoiceDisconnect(params: {
   let lastError: string | undefined;
   while (Date.now() - startedAt < params.timeoutMs) {
     try {
-      const state = await discordQaScenarioSupport.testing.getCurrentDiscordVoiceState({
+      const state = await getCurrentDiscordVoiceState({
         token: params.token,
         guildId: params.guildId,
       });
@@ -81,18 +86,6 @@ async function waitForDiscordVoiceDisconnect(params: {
     `SUT bot did not leave Discord voice channel ${params.channelId} (last channel=${lastChannelId ?? "none"}${
       lastError ? `; last error: ${lastError}` : ""
     })`,
-  );
-}
-
-async function deleteChannelMessage(params: {
-  channelId: string;
-  messageId: string;
-  token: string;
-}) {
-  await requestDiscord<void>(
-    `/channels/${params.channelId}/messages/${params.messageId}`,
-    params.token,
-    { method: "DELETE", timeoutMs: 15_000 },
   );
 }
 
@@ -139,15 +132,14 @@ async function sendPromptAndObserve(params: {
   prompt: string;
   timeoutMs: number;
 }) {
-  const testing = discordQaScenarioSupport.testing;
   const runtimeEnv = params.environment.runtimeEnv;
-  const sent = await testing.sendChannelMessage(
+  const sent = await sendChannelMessage(
     runtimeEnv.driverBotToken,
     runtimeEnv.channelId,
     params.prompt,
   );
   params.createdMessages.push({ messageId: sent.id, token: runtimeEnv.driverBotToken });
-  const matched = await testing.pollChannelMessages({
+  const matched = await pollChannelMessages({
     token: runtimeEnv.driverBotToken,
     channelId: runtimeEnv.channelId,
     afterSnowflake: sent.id,
@@ -158,7 +150,7 @@ async function sendPromptAndObserve(params: {
     triggerMessageId: sent.id,
     triggerTimestamp: sent.timestamp,
     predicate: (message) =>
-      testing.matchesDiscordScenarioReply({
+      matchesDiscordScenarioReply({
         channelId: runtimeEnv.channelId,
         matchText: params.marker,
         message,
@@ -169,7 +161,7 @@ async function sendPromptAndObserve(params: {
     messageId: matched.message.messageId,
     token: runtimeEnv.sutBotToken,
   });
-  testing.assertDiscordScenarioReply({
+  assertDiscordScenarioReply({
     expectedTextIncludes: [params.marker],
     message: matched.message,
   });
@@ -184,11 +176,11 @@ async function deleteScenarioMessages(params: {
   let failures = 0;
   for (const message of params.messages.toReversed()) {
     try {
-      await deleteChannelMessage({
-        token: message.token,
-        channelId: params.channelId,
-        messageId: message.messageId,
-      });
+      await requestDiscord<void>(
+        `/channels/${params.channelId}/messages/${message.messageId}`,
+        message.token,
+        { method: "DELETE", timeoutMs: 15_000 },
+      );
       deleted += 1;
     } catch {
       failures += 1;
@@ -241,7 +233,7 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
       voiceDisconnected: false,
     },
   };
-  let evidencePath: string | undefined;
+  let evidencePath: string;
 
   try {
     await waitForDiscordVoiceDisconnect({
@@ -268,7 +260,7 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
     if (!evidence.denied.visibleDenial) {
       throw new Error("Discord transcript denial was not visible in the SUT reply.");
     }
-    const deniedVoiceState = await discordQaScenarioSupport.testing.getCurrentDiscordVoiceState({
+    const deniedVoiceState = await getCurrentDiscordVoiceState({
       token: runtimeEnv.sutBotToken,
       guildId: runtimeEnv.guildId,
     });
@@ -292,7 +284,7 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
       timeoutMs: phaseTimeoutMs,
     });
     evidence.allowed.replyObserved = true;
-    await discordQaScenarioSupport.testing.waitForDiscordVoiceState({
+    await waitForDiscordVoiceState({
       token: runtimeEnv.sutBotToken,
       guildId: runtimeEnv.guildId,
       channelId: voiceChannel.id,
@@ -322,12 +314,10 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
     evidence.cleanup.voiceDisconnected = true;
   } finally {
     if (!evidence.cleanup.voiceDisconnected) {
-      const voiceState = await discordQaScenarioSupport.testing
-        .getCurrentDiscordVoiceState({
-          token: runtimeEnv.sutBotToken,
-          guildId: runtimeEnv.guildId,
-        })
-        .catch(() => undefined);
+      const voiceState = await getCurrentDiscordVoiceState({
+        token: runtimeEnv.sutBotToken,
+        guildId: runtimeEnv.guildId,
+      }).catch(() => undefined);
       if (voiceState !== undefined && voiceState?.channel_id !== voiceChannel.id) {
         evidence.cleanup.voiceDisconnected = true;
       } else {
@@ -378,6 +368,6 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
   }
   return {
     details: "visible denial, authorized transcript join, and verified stop/leave",
-    artifacts: evidencePath ? { transcriptAuthorization: evidencePath } : {},
+    artifacts: { transcriptAuthorization: evidencePath },
   };
 }

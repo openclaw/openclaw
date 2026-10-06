@@ -2,9 +2,9 @@ import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/index.js";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import {
   loadTranscriptEvents,
-  readLatestSessionTranscriptReport,
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -16,6 +16,16 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGitHubPublicationTranscriptReporter } from "./github-publication-transcript.js";
+
+const reportFault = useSqliteWorkerFault([
+  {
+    name: "reject_report",
+    match: /^insert into transcript_events /,
+    sql: `CREATE TEMP TRIGGER reject_report BEFORE INSERT ON main.transcript_events
+      WHEN json_extract(NEW.event_json, '$.type') = 'message'
+      BEGIN SELECT RAISE(ABORT, 'report insert failed'); END;`,
+  },
+]);
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -224,14 +234,6 @@ describe("GitHub publication transcript reporting", () => {
         nextAction: "Retry.",
       } satisfies SessionGitHubPublicationResult;
       const database = openOpenClawAgentDatabase({ agentId: identity.agentId });
-      // Admit the canonical schema first; inject this failure into the retained report writer.
-      await expect(readLatestSessionTranscriptReport(identity, [])).resolves.toEqual({
-        ok: true,
-        value: undefined,
-      });
-      database.db.exec(
-        "CREATE TRIGGER reject_report BEFORE INSERT ON transcript_events WHEN json_extract(NEW.event_json, '$.type') = 'message' BEGIN SELECT RAISE(ABORT, 'report insert failed'); END",
-      );
       const markReported = vi.fn(() => {
         const reader = new DatabaseSync(database.path, { readOnly: true });
         try {
@@ -248,10 +250,14 @@ describe("GitHub publication transcript reporting", () => {
         () => import("./session-utils.js"),
         { markReported },
       );
-      await expect(reporter({ ...identity, result })).rejects.toThrow("report insert failed");
-      expect(markReported).not.toHaveBeenCalled();
-      expect(await loadTranscriptEvents(identity)).toEqual([]);
-      database.db.exec("DROP TRIGGER reject_report");
+      reportFault.enable();
+      try {
+        await expect(reporter({ ...identity, result })).rejects.toThrow("report insert failed");
+        expect(markReported).not.toHaveBeenCalled();
+        expect(await loadTranscriptEvents(identity)).toEqual([]);
+      } finally {
+        reportFault.disable();
+      }
       await reporter({ ...identity, result });
       expect(markReported).toHaveBeenCalledOnce();
     });

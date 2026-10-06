@@ -1,6 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getNodeSqliteKysely, prepareSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
+import {
+  createSqliteQueryCache,
+  getNodeSqliteKysely,
+  prepareSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -19,7 +22,15 @@ type SessionEntryRevisionDatabase = {
   openclaw_session_nodes_cache_generation: { id: number; generation: unknown };
 };
 
-const generationQueries = new WeakMap<DatabaseSync, () => { generation: unknown } | undefined>();
+const generationQuery = createSqliteQueryCache((database) =>
+  prepareSqliteQueryTakeFirstSync<void, { generation: unknown }>(database, () =>
+    getNodeSqliteKysely<SessionEntryRevisionDatabase>(database)
+      .withSchema("temp")
+      .selectFrom("openclaw_session_nodes_cache_generation")
+      .select("generation")
+      .where("id", "=", 1),
+  ),
+);
 
 function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
   const schema = getAdmittedSqliteSchemaFacts(database);
@@ -39,30 +50,22 @@ function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
     CREATE TEMP TABLE IF NOT EXISTS openclaw_session_nodes_cache_generation (id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL) STRICT;
     INSERT OR IGNORE INTO openclaw_session_nodes_cache_generation (id, generation) VALUES (1, 0);
     ${trackedSchemaVersion === undefined ? "" : "UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1;"}
-    DROP TRIGGER IF EXISTS openclaw_session_nodes_cache_generation_insert;
-    DROP TRIGGER IF EXISTS openclaw_session_nodes_cache_generation_update;
-    DROP TRIGGER IF EXISTS openclaw_session_nodes_cache_generation_delete;
-    CREATE TEMP TRIGGER openclaw_session_nodes_cache_generation_insert
-      AFTER INSERT ON main.session_nodes BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
-    CREATE TEMP TRIGGER openclaw_session_nodes_cache_generation_update
-      AFTER UPDATE ON main.session_nodes BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
-    CREATE TEMP TRIGGER openclaw_session_nodes_cache_generation_delete
-      AFTER DELETE ON main.session_nodes BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
-    DROP TRIGGER IF EXISTS openclaw_session_participants_cache_generation_insert;
-    DROP TRIGGER IF EXISTS openclaw_session_participants_cache_generation_update;
-    DROP TRIGGER IF EXISTS openclaw_session_participants_cache_generation_delete;
-    ${
-      hasParticipants
-        ? `
-    CREATE TEMP TRIGGER openclaw_session_participants_cache_generation_insert
-      AFTER INSERT ON main.session_participants BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
-    CREATE TEMP TRIGGER openclaw_session_participants_cache_generation_update
-      AFTER UPDATE ON main.session_participants BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
-    CREATE TEMP TRIGGER openclaw_session_participants_cache_generation_delete
-      AFTER DELETE ON main.session_participants BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;
-    `
-        : ""
-    }
+    ${["session_nodes", "session_participants"]
+      .map((table) => {
+        const operations = ["insert", "update", "delete"];
+        const drop = operations.map(
+          (operation) => `DROP TRIGGER IF EXISTS openclaw_${table}_cache_generation_${operation};`,
+        );
+        const create =
+          table === "session_nodes" || hasParticipants
+            ? operations.map(
+                (operation) => `CREATE TEMP TRIGGER openclaw_${table}_cache_generation_${operation}
+              AFTER ${operation.toUpperCase()} ON main.${table} BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;`,
+              )
+            : [];
+        return [...drop, ...create].join("\n");
+      })
+      .join("\n")}
   `);
   // A rolled-back schema change can reuse its version on retry after SQLite removes the triggers.
   if (!database.isTransaction) {
@@ -78,18 +81,7 @@ function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
 
 export function readSessionNodesGeneration(database: DatabaseSync): number {
   ensureSessionNodesGenerationTracker(database);
-  let query = generationQueries.get(database);
-  if (!query) {
-    query = prepareSqliteQueryTakeFirstSync<void, { generation: unknown }>(database, () =>
-      getNodeSqliteKysely<SessionEntryRevisionDatabase>(database)
-        .withSchema("temp")
-        .selectFrom("openclaw_session_nodes_cache_generation")
-        .select("generation")
-        .where("id", "=", 1),
-    );
-    generationQueries.set(database, query);
-  }
-  const row = query();
+  const row = generationQuery(database)();
   if (typeof row?.generation !== "number") {
     throw new Error("SQLite session_nodes cache generation is unavailable");
   }
@@ -101,8 +93,7 @@ export function readSessionEntryCacheValidityToken(
   mode: "fresh" | "cached" = "fresh",
 ): SqliteSessionEntryRevision {
   return {
-    dataVersion:
-      mode === "cached" ? readSqliteCacheDataVersion(database) : readSqliteDataVersion(database),
+    dataVersion: readSqliteCacheDataVersion(database, mode),
     sessionNodesGeneration: readSessionNodesGeneration(database),
   };
 }
@@ -120,6 +111,8 @@ export function cacheValidityTokensEqual(
 class SessionEntryRevisionConflictError extends Error {
   readonly code = "invalid_state";
 }
+
+export class SessionEntryRevisionChangedError extends SessionEntryRevisionConflictError {}
 
 /** Reuse prepared facts until this connection observes a write, then compare only their predicate. */
 export function createSessionEntryRevisionGuard(
@@ -145,7 +138,7 @@ export function createSessionEntryRevisionGuard(
     assertSourceCurrent();
     // A foreign commit during the predicate must not be hidden by its later revision.
     if (!cacheValidityTokensEqual(before, after)) {
-      throw new SessionEntryRevisionConflictError(
+      throw new SessionEntryRevisionChangedError(
         "Session entry facts changed during their mutation check",
       );
     }

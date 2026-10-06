@@ -1,5 +1,14 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  MODEL_SELECTION_LOCKED_MESSAGE,
+  ModelSelectionLockedError,
+} from "./model-selection-error.js";
+
+export {
+  MODEL_SELECTION_LOCKED_MESSAGE,
+  ModelSelectionLockedError,
+} from "./model-selection-error.js";
 
 /** User or automatic model/provider override selection for a session entry. */
 export type ModelOverrideSelection = {
@@ -8,19 +17,10 @@ export type ModelOverrideSelection = {
   isDefault?: boolean;
 };
 
-export const MODEL_SELECTION_LOCKED_MESSAGE = "Model selection is locked for this session.";
 export const MODEL_SELECTION_LOCKED_RESET_MESSAGE =
   "This session cannot be reset while model selection is locked.";
 export const MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE =
   "Model-selection-locked sessions cannot create child sessions from parent context.";
-
-/** Raised when a caller attempts to mutate a locked session model selection. */
-export class ModelSelectionLockedError extends Error {
-  constructor(message = MODEL_SELECTION_LOCKED_MESSAGE) {
-    super(message);
-    this.name = "ModelSelectionLockedError";
-  }
-}
 
 export function isModelSelectionLocked(entry: SessionEntry | undefined): boolean {
   return entry?.modelSelectionLocked === true;
@@ -45,6 +45,18 @@ function clearDefinedFields(entry: SessionEntry, ...keys: (keyof SessionEntry)[]
     }
   }
   return updated;
+}
+
+function setField<K extends keyof SessionEntry>(
+  entry: SessionEntry,
+  key: K,
+  value: SessionEntry[K],
+): boolean {
+  if (entry[key] === value) {
+    return false;
+  }
+  entry[key] = value;
+  return true;
 }
 
 /** Applies a model/auth-profile override to a session entry and clears stale runtime fields. */
@@ -76,39 +88,22 @@ export function applyModelOverrideToSessionEntry(params: {
       updated = true;
       selectionUpdated = true;
     }
-    if (entry.providerOverride) {
-      delete entry.providerOverride;
-      updated = true;
-      selectionUpdated = true;
-    }
-    if (entry.modelOverride) {
-      delete entry.modelOverride;
-      updated = true;
-      selectionUpdated = true;
+    for (const key of ["providerOverride", "modelOverride"] as const) {
+      if (entry[key]) {
+        delete entry[key];
+        updated = true;
+        selectionUpdated = true;
+      }
     }
     if (entry.modelOverrideRouteResolution) {
       delete entry.modelOverrideRouteResolution;
       updated = true;
     }
   } else {
-    if (entry.providerOverride !== selection.provider) {
-      entry.providerOverride = selection.provider;
-      updated = true;
-      selectionUpdated = true;
-    }
-    if (entry.modelOverride !== selection.model) {
-      entry.modelOverride = selection.model;
-      updated = true;
-      selectionUpdated = true;
-    }
-    if (entry.modelOverrideSource !== selectionSource) {
-      entry.modelOverrideSource = selectionSource;
-      updated = true;
-    }
-    if (entry.modelOverrideRouteResolution !== "resolved") {
-      entry.modelOverrideRouteResolution = "resolved";
-      updated = true;
-    }
+    selectionUpdated = setField(entry, "providerOverride", selection.provider);
+    selectionUpdated = setField(entry, "modelOverride", selection.model) || selectionUpdated;
+    updated = setField(entry, "modelOverrideSource", selectionSource) || selectionUpdated;
+    updated = setField(entry, "modelOverrideRouteResolution", "resolved") || updated;
   }
   updated =
     clearDefinedFields(
@@ -130,10 +125,7 @@ export function applyModelOverrideToSessionEntry(params: {
     updated = clearDefinedFields(entry, "model", "modelProvider") || updated;
   }
 
-  // When switching back to the default model without override fields to delete
-  // (e.g. model comes from steering/fallback runtime fields), the isDefault
-  // branch at line 42 won't set selectionUpdated. Mark it here so that
-  // liveModelSwitchPending can still be set below when runtime is misaligned.
+  // Switching to the default may only replace steering/fallback runtime fields.
   if (selection.isDefault && runtimePresent && !runtimeAligned) {
     selectionUpdated = true;
   }
@@ -149,28 +141,18 @@ export function applyModelOverrideToSessionEntry(params: {
   }
 
   if (profileOverride) {
-    if (entry.authProfileOverride !== profileOverride) {
-      entry.authProfileOverride = profileOverride;
-      updated = true;
-      profileUpdated = true;
-    }
-    if (entry.authProfileOverrideSource !== profileOverrideSource) {
-      entry.authProfileOverrideSource = profileOverrideSource;
-      updated = true;
-      profileUpdated = true;
-    }
+    profileUpdated = setField(entry, "authProfileOverride", profileOverride);
+    profileUpdated =
+      setField(entry, "authProfileOverrideSource", profileOverrideSource) || profileUpdated;
   } else if (!params.preserveAuthProfileOverride) {
-    if (entry.authProfileOverride) {
-      delete entry.authProfileOverride;
-      updated = true;
-      profileUpdated = true;
-    }
-    if (entry.authProfileOverrideSource) {
-      delete entry.authProfileOverrideSource;
-      updated = true;
-      profileUpdated = true;
+    for (const key of ["authProfileOverride", "authProfileOverrideSource"] as const) {
+      if (entry[key]) {
+        delete entry[key];
+        profileUpdated = true;
+      }
     }
   }
+  updated = profileUpdated || updated;
   if (profileOverride || !params.preserveAuthProfileOverride) {
     updated = clearDefinedFields(entry, "authProfileOverrideCompactionCount") || updated;
   }

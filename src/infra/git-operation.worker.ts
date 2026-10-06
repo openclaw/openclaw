@@ -57,10 +57,20 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
               return import("../gateway/worker-environments/workspace-result-inventory.runtime.js").then(
                 ({ collectStagedWorkerArtifacts }) => collectStagedWorkerArtifacts(command.input),
               );
+            case "worktree.eviction-purge":
+              return control.runNativeSection(async () => {
+                const { executeGitWorktreeOperation } =
+                  await import("../agents/worktrees/git-worktree-operations.runtime.js");
+                return await executeGitWorktreeOperation(command);
+              });
             case "worktree.snapshot-verify-exact":
             case "worktree.snapshot":
             case "worktree.provisioning-inspection":
             case "worktree.cleanup-inspection":
+            case "worktree.cleanup-fingerprint":
+            case "worktree.eviction-classify":
+            case "worktree.eviction-source":
+            case "worktree.eviction-repositories":
             case "worktree.git-size":
             case "worktree.checkout-transition-size":
             case "worktree.directory-size":

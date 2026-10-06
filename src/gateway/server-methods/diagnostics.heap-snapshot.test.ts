@@ -70,6 +70,7 @@ function request(
 }
 
 beforeEach(() => {
+  vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: undefined } });
   stateDir = tempDirs.make("openclaw-heap-snapshot-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   setActivePluginRegistry(createEmptyPluginRegistry());
@@ -87,27 +88,51 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
 describe("diagnostics.heapSnapshot", () => {
-  it.each([
-    { scopes: [] },
-    { scopes: ["operator.read"] },
-    { scopes: ["operator.write"] },
-    { role: "node", scopes: ["operator.admin"] },
-  ])("rejects non-admin operators and node clients: %j", async (options) => {
-    const call = request(options);
-    await call.pending;
-    expect(native.write).not.toHaveBeenCalled();
-    expect(call.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: options.role === "node" ? "INVALID_REQUEST" : "FORBIDDEN" }),
-    );
-  });
+  it.each(["unsupported", "heap-too-large"] as const)(
+    "refuses %s capture before filesystem preparation",
+    async (reason) => {
+      if (reason === "unsupported") {
+        vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: "1.4.2" } });
+      } else {
+        vi.mocked(process.memoryUsage).mockReturnValue({ ...memory, heapUsed: 6 * 1024 ** 3 + 1 });
+      }
+      const call = request();
+      await call.pending;
+      expect(call.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          details: { reason, cleanupFailed: false },
+        }),
+      );
+      expect(native.write).not.toHaveBeenCalled();
+      expect(await fs.readdir(stateDir)).toEqual([]);
+    },
+  );
 
-  it.each([null, [], { reason: 1 }, { reason: "x".repeat(257) }, { path: "/tmp/override" }])(
+  it.each([{ scopes: ["operator.write"] }, { role: "node", scopes: ["operator.admin"] }])(
+    "rejects non-admin operators and node clients: %j",
+    async (options) => {
+      const call = request(options);
+      await call.pending;
+      expect(native.write).not.toHaveBeenCalled();
+      expect(call.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: options.role === "node" ? "INVALID_REQUEST" : "FORBIDDEN",
+        }),
+      );
+    },
+  );
+
+  it.each([null, { reason: 1 }, { reason: "x".repeat(257) }, { path: "/tmp/override" }])(
     "rejects malformed or path-controlling params %j",
     async (params) => {
       const call = request({ params });
@@ -149,22 +174,6 @@ describe("diagnostics.heapSnapshot", () => {
       }),
     );
     expect(native.write).toHaveBeenCalledTimes(1);
-  });
-
-  it("refuses heaps over 6 GiB before filesystem preparation", async () => {
-    vi.mocked(process.memoryUsage).mockReturnValue({ ...memory, heapUsed: 6 * 1024 ** 3 + 1 });
-    const call = request();
-    await call.pending;
-    expect(call.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        details: { reason: "heap-too-large", cleanupFailed: false },
-      }),
-    );
-    expect(native.write).not.toHaveBeenCalled();
-    expect(await fs.readdir(stateDir)).toEqual([]);
   });
 
   it.each(["authority", "heap"])(

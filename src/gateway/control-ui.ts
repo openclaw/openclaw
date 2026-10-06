@@ -30,9 +30,7 @@ import {
 import { extractOriginalFilename } from "../media/store.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
-import { escapeHtml } from "../shared/html-escape.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { escapeRegExp } from "../shared/regexp.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import {
@@ -54,47 +52,35 @@ import {
   type AssistantMediaSession,
   type AssistantMediaReader,
 } from "./assistant-media-policy.js";
+import { isControlUiPrecompressedAssetExtension } from "./control-ui-asset-manifest.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
-  buildControlUiRootAssetPath,
-  CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
-  CONTROL_UI_BUILD_ID_ATTRIBUTE,
-  CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
-  CONTROL_UI_ROOT_PUBLIC_ASSETS,
-  CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   isControlUiRootPublicAsset,
   isControlUiVersionedPublicAsset,
   parseControlUiResourcePath,
   type ControlUiBootstrapConfig,
-  type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
-import {
-  applyControlUiSecurityHeaders,
-  buildControlUiCspHeader,
-  computeInlineScriptHashes,
-} from "./control-ui-csp.js";
-import type { ControlUiRootAsset } from "./control-ui-file.js";
+import { applyControlUiSecurityHeaders } from "./control-ui-csp.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
+import { serveControlUiIndexHtml } from "./control-ui-index.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 import { isControlUiSharePath, serveControlUiShareDocument } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
   isControlUiFileUnmodified,
-  isControlUiPrecompressedAssetExtension,
   isControlUiStaticAssetExtension,
   resolveControlUiHtmlEncoding,
   resolveControlUiRepresentation,
   respondControlUiNotAcceptable,
   respondControlUiNotModified,
   respondHeadForControlUiFile,
-  sendControlUiHtmlBody,
   serveControlUiAsset,
 } from "./control-ui-static.js";
 import {
@@ -127,35 +113,12 @@ type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
   terminalEnabled?: boolean;
   agentId?: string;
   root?: ControlUiRootState;
+  /** Protected session-entry restores the canonical route before any app script runs. */
+  sessionEntryPath?: string;
+  isSessionEntryCurrent?: () => boolean;
 };
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
-/** Anchors bundled assets before deep-linked documents begin preloading. */
-function rewriteControlUiIndexHtmlAssetHrefs(
-  html: string,
-  basePath: string,
-  buildId?: string,
-): string {
-  const normalized = normalizeControlUiBasePath(basePath);
-  const replacements = new Map<string, string>([
-    ['src="./assets/', `src="${normalized}/assets/`],
-    ['href="./assets/', `href="${normalized}/assets/`],
-  ]);
-  for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
-    const version =
-      buildId && isControlUiVersionedPublicAsset(asset) ? `?v=${encodeURIComponent(buildId)}` : "";
-    const assetHref = `href="${buildControlUiRootAssetPath(normalized, asset)}${version}"`;
-    // Vite's portable ./ base emits relative hrefs, which the browser starts
-    // resolving against a nested route before the UI can correct them.
-    replacements.set(`href="./${asset}"`, assetHref);
-    replacements.set(`href="/${asset}"`, assetHref);
-    replacements.set(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
-  }
-  // Copy the document once instead of once per matching asset.
-  const pattern = new RegExp([...replacements.keys()].map(escapeRegExp).join("|"), "g");
-  return html.replace(pattern, (match) => replacements.get(match) ?? match);
-}
-
 type ControlUiAvatarMeta = {
   avatarUrl: string | null;
   avatarSource: string | null;
@@ -163,11 +126,9 @@ type ControlUiAvatarMeta = {
   avatarReason: string | null;
 };
 
-function controlUiAvatarResolutionMeta(resolved: AgentAvatarResolution | null): {
-  avatarSource: string | null;
-  avatarStatus: AgentAvatarResolution["kind"] | null;
-  avatarReason: string | null;
-} {
+function controlUiAvatarResolutionMeta(
+  resolved: AgentAvatarResolution | null,
+): Omit<ControlUiAvatarMeta, "avatarUrl"> {
   if (!resolved) {
     return { avatarSource: null, avatarStatus: null, avatarReason: null };
   }
@@ -693,15 +654,12 @@ export async function handleControlUiAvatarRequest(
     requestAuth.assertCurrent();
     const resolved = projection.resolution;
     if (url.searchParams.get("meta") === "1") {
-      const meta = controlUiAvatarResolutionMeta(resolved);
       const avatarUrl =
         gatewayAssistantAvatarUrl(projection, basePath, agentId) ??
         (resolved?.kind === "remote" ? resolved.url : null);
       sendJson(res, 200, {
         avatarUrl,
-        avatarSource: meta.avatarSource,
-        avatarStatus: meta.avatarStatus,
-        avatarReason: meta.avatarReason,
+        ...controlUiAvatarResolutionMeta(resolved),
       } satisfies ControlUiAvatarMeta);
       return true;
     }
@@ -751,54 +709,6 @@ export async function handleControlUiAvatarRequest(
   }
 }
 
-async function serveResolvedIndexHtml(
-  req: IncomingMessage,
-  res: ServerResponse,
-  body: string,
-  basePath?: string,
-  allowWasm?: boolean,
-  environment?: ControlUiEnvironment,
-  buildId?: string,
-) {
-  const normalizedBasePath = normalizeControlUiBasePath(basePath);
-  const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(body, normalizedBasePath, buildId);
-  // An empty base path is authoritative for Gateway resources even when the
-  // router infers a namespace. Always emit it so resources stay root-mounted.
-  const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtml(normalizedBasePath)}"`;
-  const environmentAttributes = environment
-    ? ` ${CONTROL_UI_ENVIRONMENT_ATTRIBUTE}="${escapeHtml(JSON.stringify(environment))}"`
-    : "";
-  // Let the app initialize fail-closed without guessing whether this document
-  // was served with the terminal's WASM CSP allowance.
-  // The lifecycle owns bundled identity. Strip the build stamp for custom roots,
-  // whose files may change independently and must keep revalidating.
-  const buildAttribute = buildId
-    ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${escapeHtml(buildId)}"`
-    : "";
-  const prepared = withBasePath.replace(/<html\b[^>]*>/i, (tag) =>
-    tag
-      .replace(new RegExp(`\\s${CONTROL_UI_BUILD_ID_ATTRIBUTE}="[^"]*"`, "g"), "")
-      .replace(
-        /<html\b/i,
-        `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}`,
-      ),
-  );
-  const hashes = computeInlineScriptHashes(prepared);
-  // Always set the document CSP here (the index carries inline scripts) so the
-  // terminal's WASM relaxation is applied to the page that loads ghostty-web.
-  res.setHeader(
-    "Content-Security-Policy",
-    buildControlUiCspHeader({
-      inlineScriptHashes: hashes,
-      allowWasm,
-      portalHost: req.headers.host,
-    }),
-  );
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache");
-  await sendControlUiHtmlBody(req, res, prepared);
-}
-
 function isExpectedSafePathError(error: unknown): boolean {
   const code =
     typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
@@ -810,16 +720,13 @@ function isSafeRelativePath(relPath: string) {
     return false;
   }
   const normalized = path.posix.normalize(relPath);
-  if (path.posix.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) {
-    return false;
-  }
-  if (normalized.startsWith("../") || normalized === "..") {
-    return false;
-  }
-  if (normalized.includes("\0")) {
-    return false;
-  }
-  return true;
+  return !(
+    path.posix.isAbsolute(normalized) ||
+    path.win32.isAbsolute(normalized) ||
+    normalized.startsWith("../") ||
+    normalized === ".." ||
+    normalized.includes("\0")
+  );
 }
 
 // The default SPA entry infers /__openclaw__ as its base path before bootstrap.
@@ -828,18 +735,11 @@ const CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH = `${CONTROL_UI_NAMESPA
   "",
 )}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
 
-// v2026.6.1 clients use this pre-#66946 bootstrap suffix, including under a base path.
-const LEGACY_CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw";
-const LEGACY_BOOTSTRAP_CONFIG_PATH = `${LEGACY_CONTROL_UI_NAMESPACE_PREFIX}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
-
 function matchesControlUiBootstrapConfigPath(pathname: string, basePath: string): boolean {
-  if (
+  return (
     pathname === `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}` ||
-    pathname === `${basePath}${LEGACY_BOOTSTRAP_CONFIG_PATH}`
-  ) {
-    return true;
-  }
-  return basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH;
+    (basePath === "" && pathname === CONTROL_UI_DEFAULT_NAMESPACE_BOOTSTRAP_CONFIG_PATH)
+  );
 }
 
 export async function handleControlUiHttpRequest(
@@ -961,19 +861,14 @@ export async function handleControlUiHttpRequest(
   }
 
   const root = rootState.path;
-  const rootReal = await (async () => {
-    if (rootState.realPath) {
-      return rootState.realPath;
-    }
-    try {
-      return await fs.promises.realpath(root);
-    } catch (error) {
+  const rootReal =
+    rootState.realPath ||
+    (await fs.promises.realpath(root).catch((error: unknown) => {
       if (isExpectedSafePathError(error)) {
         return null;
       }
       throw error;
-    }
-  })();
+    }));
   if (!rootReal) {
     respondControlUiAssetsUnavailable(res);
     return true;
@@ -1068,57 +963,56 @@ export async function handleControlUiHttpRequest(
     }
   }
 
-  const serve = async (prepared: ControlUiRootAsset | null): Promise<void> => {
-    if (!prepared) {
-      respondControlUiNotFound(res);
-      return;
-    }
+  while (asset) {
     // Both requested and physical index aliases retain document preparation.
     if (
       path.basename(fileRel) === "index.html" ||
-      path.basename(prepared.file.path) === "index.html"
+      path.basename(asset.file.path) === "index.html"
     ) {
       if (req.method === "HEAD") {
         const encoding = resolveControlUiHtmlEncoding(req);
         if (encoding === "not-acceptable") {
           respondControlUiNotAcceptable(res);
-          return;
+          return true;
         }
         respondHeadForControlUiFile(res, "index.html", {
           encoding: encoding === "identity" ? undefined : encoding,
         });
-        return;
+        return true;
       }
-      if (!prepared.file.body) {
-        return await serve(await readControlUiRootAsset(rootState, fileRel, true));
+      if (!asset.file.body) {
+        asset = await readControlUiRootAsset(rootState, fileRel, true);
+        continue;
       }
-      await serveResolvedIndexHtml(
+      await serveControlUiIndexHtml(
         req,
         res,
-        prepared.file.body.toString("utf8"),
+        asset.file.body.toString("utf8"),
+        uiPath,
         basePath,
         terminalEnabled,
         opts?.config?.gateway?.controlUi?.environment,
         publicAssetBuildId,
+        opts?.sessionEntryPath,
+        opts?.isSessionEntryCurrent,
       );
-      return;
+      return true;
     }
     const originatedAtMs = Date.now();
-    const lastModifiedMs =
-      Math.floor(Math.min(prepared.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
+    const lastModifiedMs = Math.floor(Math.min(asset.file.mtimeMs, originatedAtMs) / 1_000) * 1_000;
     const representation = resolveControlUiRepresentation({
       req,
-      asset: prepared,
+      asset,
       contentPath: fileRel,
       precompressed: fingerprintedAsset,
     });
     if (!representation) {
       respondControlUiNotAcceptable(res);
-      return;
+      return true;
     }
     if (isControlUiFileUnmodified(req, lastModifiedMs, originatedAtMs)) {
       respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
-      return;
+      return true;
     }
     const headers = {
       immutable: immutableAsset,
@@ -1133,10 +1027,12 @@ export async function handleControlUiHttpRequest(
     } else if (representation.file.body) {
       serveControlUiAsset(res, fileRel, representation.file.body, headers);
     } else {
-      await serve(await readControlUiRootAsset(rootState, fileRel, true));
+      asset = await readControlUiRootAsset(rootState, fileRel, true);
+      continue;
     }
-  };
-  await serve(asset);
+    return true;
+  }
+  respondControlUiNotFound(res);
   return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

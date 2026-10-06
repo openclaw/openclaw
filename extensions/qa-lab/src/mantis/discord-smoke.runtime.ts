@@ -5,8 +5,9 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
-import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+import { isTruthyOptIn } from "../mantis-options.runtime.js";
 
 export type MantisDiscordSmokeOptions = {
   channelId?: string;
@@ -94,13 +95,7 @@ const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 const DISCORD_API_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const MANTIS_DISCORD_TOKEN_FILE_MAX_BYTES = 4 * 1024;
 
-function assertDiscordSnowflake(value: string, label: string) {
-  if (!/^\d{17,20}$/u.test(value)) {
-    throw new Error(`${label} must be a Discord snowflake.`);
-  }
-}
-
-async function resolveMantisDiscordToken(opts: MantisDiscordSmokeOptions) {
+function resolveMantisDiscordToken(opts: MantisDiscordSmokeOptions) {
   const env = opts.env ?? process.env;
   const tokenEnv = trimToValue(opts.tokenEnv) ?? DEFAULT_MANTIS_TOKEN_ENV;
   const tokenFileEnv = trimToValue(opts.tokenFileEnv) ?? DEFAULT_MANTIS_TOKEN_FILE_ENV;
@@ -127,36 +122,19 @@ async function resolveMantisDiscordToken(opts: MantisDiscordSmokeOptions) {
   );
 }
 
-function resolveRequiredSnowflake(params: {
-  env: NodeJS.ProcessEnv;
-  envKey: string;
-  label: string;
-  value?: string;
-}) {
-  const resolved = trimToValue(params.value) ?? trimToValue(params.env[params.envKey]);
+function resolveRequiredSnowflake(
+  value: string | undefined,
+  env: NodeJS.ProcessEnv,
+  envKey: string,
+) {
+  const resolved = trimToValue(value) ?? trimToValue(env[envKey]);
   if (!resolved) {
-    throw new Error(`Missing ${params.envKey}.`);
+    throw new Error(`Missing ${envKey}.`);
   }
-  assertDiscordSnowflake(resolved, params.label);
+  if (!/^\d{17,20}$/u.test(resolved)) {
+    throw new Error(`${envKey} must be a Discord snowflake.`);
+  }
   return resolved;
-}
-
-function assertMantisDiscordChannelInGuild(params: {
-  channel: DiscordChannel;
-  guildChannels: readonly DiscordChannel[];
-  guildId: string;
-  channelId: string;
-}) {
-  if (!params.guildChannels.some((channel) => channel.id === params.channelId)) {
-    throw new Error(
-      `OPENCLAW_QA_DISCORD_CHANNEL_ID ${params.channelId} is not in guild ${params.guildId}.`,
-    );
-  }
-  if (params.channel.guild_id && params.channel.guild_id !== params.guildId) {
-    throw new Error(
-      `OPENCLAW_QA_DISCORD_CHANNEL_ID ${params.channelId} belongs to guild ${params.channel.guild_id}, not ${params.guildId}.`,
-    );
-  }
 }
 
 function defaultMantisDiscordSmokeOutputDir(repoRoot: string, startedAt: Date) {
@@ -314,18 +292,6 @@ function buildPublishedMantisDiscordSmokeSummary(
   };
 }
 
-async function writeMantisDiscordSmokeArtifacts(
-  summary: MantisDiscordSmokeSummary,
-  sensitiveValues: ReadonlySet<string>,
-) {
-  await fs.mkdir(summary.outputDir, { recursive: true });
-  const publishedSummary = buildPublishedMantisDiscordSmokeSummary(summary, sensitiveValues);
-  const report = renderMantisDiscordSmokeReport(publishedSummary);
-  const summaryJson = `${JSON.stringify(publishedSummary, null, 2)}\n`;
-  await fs.writeFile(summary.reportPath, report, "utf8");
-  await fs.writeFile(summary.summaryPath, summaryJson, "utf8");
-}
-
 export async function runMantisDiscordSmoke(
   opts: MantisDiscordSmokeOptions = {},
 ): Promise<MantisDiscordSmokeResult> {
@@ -362,20 +328,10 @@ export async function runMantisDiscordSmoke(
   };
 
   try {
-    const { source, token } = await resolveMantisDiscordToken(opts);
+    const { source, token } = resolveMantisDiscordToken(opts);
     summary.tokenSource = source;
-    const guildId = resolveRequiredSnowflake({
-      env,
-      envKey: DEFAULT_GUILD_ID_ENV,
-      label: DEFAULT_GUILD_ID_ENV,
-      value: opts.guildId,
-    });
-    const channelId = resolveRequiredSnowflake({
-      env,
-      envKey: DEFAULT_CHANNEL_ID_ENV,
-      label: DEFAULT_CHANNEL_ID_ENV,
-      value: opts.channelId,
-    });
+    const guildId = resolveRequiredSnowflake(opts.guildId, env, DEFAULT_GUILD_ID_ENV);
+    const channelId = resolveRequiredSnowflake(opts.channelId, env, DEFAULT_CHANNEL_ID_ENV);
     addSensitiveValues(sensitiveValues, guildId, channelId);
     const bot = await callDiscordApi<DiscordUser>({
       apiCalls,
@@ -412,12 +368,14 @@ export async function runMantisDiscordSmoke(
       token,
     });
     addSensitiveValues(sensitiveValues, channel.id, channel.guild_id, channel.name);
-    assertMantisDiscordChannelInGuild({
-      channel,
-      guildChannels,
-      guildId,
-      channelId,
-    });
+    if (!guildChannels.some((entry) => entry.id === channelId)) {
+      throw new Error(`OPENCLAW_QA_DISCORD_CHANNEL_ID ${channelId} is not in guild ${guildId}.`);
+    }
+    if (channel.guild_id && channel.guild_id !== guildId) {
+      throw new Error(
+        `OPENCLAW_QA_DISCORD_CHANNEL_ID ${channelId} belongs to guild ${channel.guild_id}, not ${guildId}.`,
+      );
+    }
     summary.bot = { id: bot.id, username: bot.username };
     summary.guild = { id: guild.id, name: guild.name };
     summary.channel = { id: channel.id, name: channel.name, type: channel.type };
@@ -466,7 +424,10 @@ export async function runMantisDiscordSmoke(
     );
   } finally {
     summary.finishedAt = new Date().toISOString();
-    await writeMantisDiscordSmokeArtifacts(summary, sensitiveValues);
+    await fs.mkdir(outputDir, { recursive: true });
+    const published = buildPublishedMantisDiscordSmokeSummary(summary, sensitiveValues);
+    await fs.writeFile(reportPath, renderMantisDiscordSmokeReport(published), "utf8");
+    await fs.writeFile(summaryPath, `${JSON.stringify(published, null, 2)}\n`, "utf8");
   }
 
   return {

@@ -14,10 +14,6 @@ enum class ChatSwarmDotStatus {
   Queued,
   Failed,
   Done,
-  ;
-
-  val label: String
-    get() = name
 }
 
 data class ChatSwarmDot(
@@ -195,10 +191,7 @@ internal class ChatSwarmActivityTracker {
     limit: Int,
   ) {
     if (key !in values && values.size >= limit) {
-      values.entries
-        .firstOrNull()
-        ?.key
-        ?.let(values::remove)
+      values.remove(values.keys.first())
     }
     values[key] = value
   }

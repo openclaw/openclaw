@@ -11,8 +11,11 @@ export const PREFLIGHT_CHECKS: CheckCommand[] = [
   { name: "conflict markers", args: ["check:no-conflict-markers"] },
   { name: "script TypeScript erasability", args: ["check:script-erasability"] },
   { name: "line-cap growth ratchet", args: ["check:line-cap-ratchet"], usesBase: true },
+  { name: "SQLite worker ratchet", args: ["check:database-worker-ratchet"], usesBase: true },
   { name: "max-lines suppression ratchet", args: ["check:max-lines-ratchet"], usesBase: true },
   { name: "assertion SAFETY comment ratchet", args: ["check:assertion-safety"], usesBase: true },
+  { name: "test timeout race ratchet", args: ["check:test-timeout-race-ratchet"], usesBase: true },
+  { name: "first-party mock export ratchet", args: ["check:test-mock-exports"], usesBase: true },
   { name: "changelog attributions", args: ["check:changelog-attributions"] },
   { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
   { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
@@ -40,9 +43,6 @@ export const PREFLIGHT_CHECKS: CheckCommand[] = [
   { name: "package patch guard", args: ["deps:patches:check"] },
 ];
 
-/**
- * Returns command usage text for the aggregate check runner.
- */
 export function usage() {
   return [
     "Usage: node --import tsx scripts/check.mts [--base <ref>] [--timed] [--include-architecture] [--include-test-types]",
@@ -58,9 +58,6 @@ export function usage() {
   ].join("\n");
 }
 
-/**
- * Parses aggregate check runner arguments.
- */
 function parseCheckArgs(argv: string[]) {
   return parseFlagArgs(
     argv,
@@ -82,9 +79,6 @@ function parseCheckArgs(argv: string[]) {
   );
 }
 
-/**
- * Runs selected repository check lanes.
- */
 export async function main(argv = process.argv.slice(2)) {
   let args;
   try {
@@ -195,9 +189,6 @@ async function runSerial(commands: CheckCommand[]) {
   return results;
 }
 
-/**
- * Runs one managed check command and returns timing/status details.
- */
 export async function runCommand(
   command: CheckCommand,
   runManagedCommandImpl: RunManagedCheck = runManagedCommand,

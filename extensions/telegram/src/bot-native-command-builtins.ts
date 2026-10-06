@@ -18,7 +18,6 @@ import {
   resolveStoredModelOverride,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   getSessionEntry,
   resolveStorePath,
@@ -32,10 +31,6 @@ import {
 } from "./bot-native-command-dispatch.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
-
-const loadTelegramLoginCommandExecutor = createLazyRuntimeModule(
-  () => import("./bot-native-command-login.js"),
-);
 
 type TelegramCommandMenuModelContext = {
   provider?: string;
@@ -254,7 +249,7 @@ export async function executeTelegramBuiltinCommand(
     return "handled";
   }
   if (commandDefinition.key === "login") {
-    const { executeTelegramLoginCommand } = await loadTelegramLoginCommandExecutor();
+    const { executeTelegramLoginCommand } = await import("./bot-native-command-login.js");
     const currentProvider =
       resolveTelegramCommandMenuModelContext({
         cfg: dispatch.runtimeCfg,

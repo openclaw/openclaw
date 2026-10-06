@@ -57,7 +57,6 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
     interaction: params.interaction,
     label: params.label,
     componentLabel: params.interactionComponentLabel,
-    defer: false,
   });
   if (!interactionCtx) {
     return;
@@ -67,7 +66,6 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
     user,
     username,
     userId,
-    replyOpts,
     rawGuildId,
     isDirectMessage,
     isGroupDm,
@@ -81,7 +79,6 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
     rawGuildId,
     memberRoleIds,
     user,
-    replyOpts,
     componentLabel: params.authorizationComponentLabel,
     unauthorizedReply: params.unauthorizedReply,
   });
@@ -111,7 +108,6 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
 
   await ackComponentInteraction({
     interaction: params.interaction,
-    replyOpts,
     label: params.label,
   });
 }

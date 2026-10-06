@@ -9,7 +9,7 @@ import { discardSessionPendingInput } from "../../config/sessions/session-pendin
 import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
-import { createChatAbortOps } from "../chat-abort-ops.js";
+import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
 import {
   abortChatRunById,
   isChatAbortControllerEntryAbortable,
@@ -21,13 +21,14 @@ import {
   type QueuedChatTurnEntry,
 } from "../chat-queued-turns.js";
 import { chatRunBelongsToAgent } from "../chat-run-owner.js";
+import { formatStopRequest } from "../control-plane-audit.js";
 import { pendingChatSendDedupeKey, type DedupeEntry } from "../server-shared.js";
 import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
-import { resolveWorkerInferenceTarget } from "../worker-environments/inference-control-internal.js";
+import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import {
   canRequesterAbortChatRun,
   canRequesterAbortPreRegisteredRun,
@@ -38,7 +39,6 @@ import {
 } from "./chat-abort-authorization.js";
 import {
   abortChatRunsForSessionKeyWithPartials,
-  captureWorkerInferenceForSession,
   abortControlledSubagents,
   descendantAbortError,
 } from "./chat-abort-runtime.js";
@@ -226,39 +226,22 @@ export async function handleChatAbortRequestWithLifecycle(
   }
   const normalizedAgentIdOverride = normalizeAgentId(abortAgentId);
   const authorizeRunTarget = (target: ChatAbortTarget): boolean => {
+    let error: string | undefined;
     if (
       discardPendingInput &&
       target.sessionKey !== rawSessionKey &&
       target.sessionKey !== canonicalAbortSessionKey
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "discarded input runId does not match sessionKey"),
-      );
-      return false;
-    }
-    if (narrow && target.sessionId !== requiredSessionId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match session incarnation"),
-      );
-      return false;
-    }
-    if (
+      error = "discarded input runId does not match sessionKey";
+    } else if (narrow && target.sessionId !== requiredSessionId) {
+      error = "runId does not match session incarnation";
+    } else if (
       target.sessionKey !== rawSessionKey &&
       target.sessionKey !== canonicalAbortSessionKey &&
       (narrow || !canRequesterAbortChatRun(target, requester, { requireOwnerMatch: true }))
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match sessionKey"),
-      );
-      return false;
-    }
-    if (
+      error = "runId does not match sessionKey";
+    } else if (
       !chatRunBelongsToAgent(
         {
           agentId: target.agentId,
@@ -268,18 +251,14 @@ export async function handleChatAbortRequestWithLifecycle(
         normalizedAgentIdOverride,
       )
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match agentId"),
-      );
-      return false;
+      error = "runId does not match agentId";
+    } else if (!canRequesterAbortChatRun(target, requester)) {
+      error = "unauthorized";
     }
-    if (!canRequesterAbortChatRun(target, requester)) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
-      return false;
+    if (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error));
     }
-    return true;
+    return error === undefined;
   };
 
   const active = context.chatAbortControllers.get(runId);
@@ -308,7 +287,9 @@ export async function handleChatAbortRequestWithLifecycle(
       return;
     }
   }
-  const workerTarget = resolveWorkerInferenceTarget(context.workerEnvironmentService, runId);
+  const workerTarget = getWorkerInferenceSessionControl(
+    context.workerEnvironmentService,
+  )?.resolveSessionTargetForRunId(runId);
   // Broad same-device Stop can name an active run on another session. Capture
   // that original producer's SID before descendant or transcript work yields.
   const workerCancellation = captureWorkerInferenceForSession({
@@ -431,7 +412,6 @@ export async function handleChatAbortRequestWithLifecycle(
           sessionKey,
           agentId: abortAgentId,
           defaultAgentId: compatibilityDefaultAgentId,
-          includeHidden: true,
           requiredSessionId,
         });
         if (payload) {
@@ -675,6 +655,11 @@ export async function handleChatAbortRequestWithLifecycle(
 }
 
 export async function handleChatAbortRequest(options: GatewayRequestHandlerOptions): Promise<void> {
+  if (validateChatAbortParams(options.params)) {
+    options.context.logGateway.info(
+      formatStopRequest("chat.abort", options.client, options.params),
+    );
+  }
   try {
     await handleChatAbortRequestWithLifecycle(options);
   } catch (error) {

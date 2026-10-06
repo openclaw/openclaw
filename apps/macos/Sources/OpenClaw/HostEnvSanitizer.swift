@@ -1,14 +1,6 @@
 import Foundation
 
 enum HostEnvSanitizer {
-    /// Generated from src/infra/host-env-security-policy.json via scripts/generate-host-env-security-policy-swift.mts.
-    /// Parity is validated by src/infra/host-env-security.policy-parity.test.ts.
-    private static let blockedInheritedKeys = HostEnvSecurityPolicy.blockedInheritedKeys
-    private static let blockedInheritedPrefixes = HostEnvSecurityPolicy.blockedInheritedPrefixes
-    private static let blockedKeys = HostEnvSecurityPolicy.blockedKeys
-    private static let blockedPrefixes = HostEnvSecurityPolicy.blockedPrefixes
-    private static let blockedOverrideKeys = HostEnvSecurityPolicy.blockedOverrideKeys
-    private static let blockedOverridePrefixes = HostEnvSecurityPolicy.blockedOverridePrefixes
     private static let shellWrapperAllowedOverrideKeys: Set<String> = [
         "TERM",
         "LANG",
@@ -37,24 +29,24 @@ enum HostEnvSanitizer {
     }
 
     private static func isBlocked(_ upperKey: String) -> Bool {
-        if self.blockedKeys.contains(upperKey) { return true }
-        return self.blockedPrefixes.contains(where: { upperKey.hasPrefix($0) })
+        if HostEnvSecurityPolicy.blockedKeys.contains(upperKey) { return true }
+        return HostEnvSecurityPolicy.blockedPrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func isBlockedInherited(_ upperKey: String) -> Bool {
-        if self.blockedInheritedKeys.contains(upperKey) { return true }
-        return self.blockedInheritedPrefixes.contains(where: { upperKey.hasPrefix($0) })
+        if HostEnvSecurityPolicy.blockedInheritedKeys.contains(upperKey) { return true }
+        return HostEnvSecurityPolicy.blockedInheritedPrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func isBlockedOverride(_ upperKey: String) -> Bool {
-        if self.blockedOverrideKeys.contains(upperKey) { return true }
+        if HostEnvSecurityPolicy.blockedOverrideKeys.contains(upperKey) { return true }
         if upperKey.range(
             of: self.cargoTargetExecutableOverridePattern,
             options: .regularExpression) != nil
         {
             return true
         }
-        return self.blockedOverridePrefixes.contains(where: { upperKey.hasPrefix($0) })
+        return HostEnvSecurityPolicy.blockedOverridePrefixes.contains(where: { upperKey.hasPrefix($0) })
     }
 
     private static func filterOverridesForShellWrapper(_ overrides: [String: String]?) -> [String: String]? {

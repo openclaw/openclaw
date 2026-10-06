@@ -32,7 +32,6 @@ type ProviderAttributionHook =
   | "user-agent-extra"
   | "custom-user-agent";
 
-/** Product attribution policy emitted for verified provider hooks. */
 export type ProviderAttributionPolicy = {
   provider: string;
   enabledByDefault: boolean;
@@ -45,12 +44,9 @@ export type ProviderAttributionPolicy = {
   headers?: Record<string, string>;
 };
 
-/** Transport family used when resolving provider-specific request policy. */
 export type ProviderRequestTransport = "stream" | "websocket" | "http" | "media-understanding";
-/** Capability family used when endpoint rules differ by media or LLM request type. */
 export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "other";
 
-/** Normalized endpoint class used by provider policy and SSRF/attribution decisions. */
 export type ProviderEndpointClass =
   | "default"
   | "anthropic-public"
@@ -81,14 +77,12 @@ export type ProviderEndpointClass =
   | "custom"
   | "invalid";
 
-/** Parsed endpoint facts derived from provider id and base URL. */
 export type ProviderEndpointResolution = {
   endpointClass: ProviderEndpointClass;
   hostname?: string;
   googleVertexRegion?: string;
 };
 
-/** Raw model/provider fields accepted by policy resolution. */
 export type ProviderRequestPolicyInput = {
   provider?: string | null;
   api?: string | null;
@@ -114,16 +108,13 @@ export type ProviderRequestPolicyResolution = {
   usesExplicitProxyLikeEndpoint: boolean;
 };
 
-/** Policy input plus model compatibility fields for feature-level capability resolution. */
 export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
   modelId?: string | null;
   compat?: unknown;
 };
 
-/** Known compatibility family that needs provider-specific request adjustments. */
 export type ProviderRequestCompatibilityFamily = "moonshot";
 
-/** Feature capability facts for one resolved provider/model request route. */
 export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   isKnownNativeEndpoint: boolean;
   allowsOpenAIServiceTier: boolean;
@@ -594,7 +585,7 @@ export function resolveProviderRequestCapabilities(
 
 function describeProviderRequestRoutingPolicy(
   policy: ProviderRequestPolicyResolution,
-): "hidden" | "documented" | "sdk-hook-only" | "none" {
+): "hidden" | "documented" | "none" {
   if (!policy.attributionProvider) {
     return "none";
   }
@@ -603,8 +594,6 @@ function describeProviderRequestRoutingPolicy(
       return "hidden";
     case "vendor-documented":
       return "documented";
-    case "vendor-sdk-hook-only":
-      return "sdk-hook-only";
     default:
       return "none";
   }

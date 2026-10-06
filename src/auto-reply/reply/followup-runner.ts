@@ -1,4 +1,3 @@
-/** Composes queued admission, canonical execution, accounting, and delivery. */
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -31,6 +30,10 @@ import {
 } from "./queue.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import {
+  isReplyOperationStalledBeforeOutput,
+  STALLED_TURN_NOTICE_TEXT,
+} from "./stalled-turn-recovery.js";
 
 type FollowupDrainDisposition =
   | { kind: "consumed" }
@@ -80,7 +83,6 @@ function resolveFollowupCompletion(
   return { kind: "completed", ...stopReason };
 }
 
-/** Creates the function that drains one queued follow-up run. */
 export function createFollowupRunner(
   initialDefaults: FollowupRunnerParams,
 ): (queued: FollowupRun) => Promise<void> {
@@ -98,13 +100,12 @@ export function createFollowupRunner(
     turn: AdmittedFollowupTurn,
     payloads: ReplyPayload[],
     kind: "tool" | "block",
-    runId = turn.runId,
   ) => {
     await deliverFollowupDecision({
       decision: { kind: "deliver", payloads },
       turn,
       defaults,
-      runId,
+      runId: turn.runId,
       runFollowup,
       kind,
     });
@@ -165,15 +166,19 @@ export function createFollowupRunner(
       const execution = await executeFollowupTurn({
         turn,
         defaults,
-        onToolResult: (payload, identity) =>
-          deliverProgress(turn, [payload], "tool", identity.runId),
-        onCompactionNoticePayload: (payload, identity) =>
-          deliverProgress(turn, [payload], "block", identity.runId),
+        onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
+        onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
       });
       // A closed execution result is terminal queue work. Commit consumption
       // before accounting/delivery so their failures cannot replay model or tool effects.
       disposition = { kind: "consumed" };
-      completion = resolveFollowupCompletion(execution.execution.outcome);
+      completion =
+        turn.queued.stalledTurnRecovery === true &&
+        isReplyOperationStalledBeforeOutput(turn.operation)
+          ? // A watchdog stall is a failure, not a user cancel: source owners
+            // surface its last-resort notice through their terminal error.
+            { kind: "failed", error: STALLED_TURN_NOTICE_TEXT }
+          : resolveFollowupCompletion(execution.execution.outcome);
       try {
         await execution.progress.drain();
       } catch (error) {
@@ -204,6 +209,7 @@ export function createFollowupRunner(
       const accounting = await accountFollowupTurn({ turn, defaults, execution });
       const deliveryOpts = {
         ...defaults.opts,
+        resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
       const decision = await resolveFollowupDeliveryDecision({

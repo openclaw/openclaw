@@ -7,9 +7,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import type { TestChatPane } from "./chat-pane.test-support.ts";
+import { createPaneHeaderWorkspaceFixture, type TestChatPane } from "./chat-pane.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -22,7 +21,7 @@ function parentBreadcrumb(pane: TestChatPane) {
   const container = document.createElement("div");
   render(
     pane.renderPaneHeader(
-      createSessionWorkspaceProps(pane.state),
+      createPaneHeaderWorkspaceFixture(pane.state),
       selectedChatSessionRow(pane.state),
       false,
       undefined,
@@ -99,103 +98,78 @@ describe("mounted pane parent session", () => {
     },
   );
 
-  it("ignores a late parent descriptor after the child lineage changes", async () => {
-    const parent: GatewaySessionRow = {
-      key: "agent:main:parent",
-      agentId: "main",
-      sessionId: "parent",
-      kind: "direct",
-      updatedAt: 1,
-      displayName: "Old parent",
-    };
-    const replacement: GatewaySessionRow = {
-      ...parent,
-      key: "agent:main:replacement",
-      sessionId: "replacement",
-      displayName: "Current parent",
-    };
-    const child: GatewaySessionRow = {
-      ...parent,
-      key: "agent:main:child",
-      sessionId: "child",
-      displayName: "Child",
-      parentSessionKey: parent.key,
-    };
-    const oldParent = createDeferred<{ session: GatewaySessionRow }>();
-    const parentRequested = createDeferred();
-    const { sessions, mount, emitGatewayEvent } = createMountedPanes([child], "main", undefined, {
-      "sessions.describe": async (_method, raw) => {
-        const key = asOptionalRecord(raw)?.key;
-        if (key === parent.key) {
-          parentRequested.resolve();
-          return oldParent.promise;
-        }
-        return { session: key === replacement.key ? replacement : child };
-      },
-    });
-    await sessions.refresh({ agentId: "main", force: true });
-    const pane = mount(child.key);
-    await refreshPane(pane);
-    await parentRequested.promise;
-    emitGatewayEvent("sessions.changed", {
-      sessionKey: child.key,
-      agentId: "main",
-      sessionId: child.sessionId,
-      reason: "update",
-      session: { ...child, updatedAt: 2, parentSessionKey: replacement.key },
-    });
-    oldParent.resolve({ session: parent });
-    await vi.dynamicImportSettled();
-    expect(parentBreadcrumb(pane)?.textContent).toContain("Current parent");
-    expect(parentBreadcrumb(pane)?.textContent).not.toContain("Old parent");
-  });
-
-  it("recovers a failed parent descriptor on the next roster refresh", async () => {
-    const parent: GatewaySessionRow = {
-      key: "agent:main:dashboard:incognito-parent",
-      agentId: "main",
-      sessionId: "parent",
-      kind: "direct",
-      updatedAt: 1,
-      displayName: "Recovered parent",
-      incognito: true,
-    };
-    const child: GatewaySessionRow = {
-      ...parent,
-      key: "agent:main:dashboard:incognito-child",
-      sessionId: "child",
-      displayName: "Child",
-      parentSessionKey: parent.key,
-    };
-    const firstParent = createDeferred<{ session: GatewaySessionRow }>();
-    const parentRequested = createDeferred();
-    let parentReads = 0;
-    const { sessions, mount } = createMountedPanes([child], "main", undefined, {
-      "sessions.describe": async (_method, raw) => {
-        if (asOptionalRecord(raw)?.key === parent.key) {
-          parentReads += 1;
-          if (parentReads === 1) {
-            parentRequested.resolve();
-            return firstParent.promise;
+  it.each(["lineage changes", "descriptor fails"] as const)(
+    "reconciles a pending parent when %s",
+    async (change) => {
+      const recovering = change === "descriptor fails";
+      const parent: GatewaySessionRow = {
+        key: recovering ? "agent:main:dashboard:incognito-parent" : "agent:main:parent",
+        agentId: "main",
+        sessionId: "parent",
+        kind: "direct",
+        updatedAt: 1,
+        displayName: recovering ? "Recovered parent" : "Old parent",
+        incognito: recovering || undefined,
+      };
+      const replacement: GatewaySessionRow = {
+        ...parent,
+        key: "agent:main:replacement",
+        sessionId: "replacement",
+        displayName: "Current parent",
+      };
+      const child: GatewaySessionRow = {
+        ...parent,
+        key: recovering ? "agent:main:dashboard:incognito-child" : "agent:main:child",
+        sessionId: "child",
+        displayName: "Child",
+        parentSessionKey: parent.key,
+      };
+      const oldParent = createDeferred<{ session: GatewaySessionRow }>();
+      const parentRequested = createDeferred();
+      let parentReads = 0;
+      const { sessions, mount, emitGatewayEvent } = createMountedPanes([child], "main", undefined, {
+        "sessions.describe": async (_method, raw) => {
+          const key = asOptionalRecord(raw)?.key;
+          if (key === parent.key) {
+            parentReads += 1;
+            if (parentReads === 1) {
+              parentRequested.resolve();
+              return oldParent.promise;
+            }
+            return { session: parent };
           }
-          return { session: parent };
-        }
-        return { session: child };
-      },
-    });
-    await sessions.refresh({ agentId: "main", force: true });
-    const pane = mount(child.key);
-    await refreshPane(pane);
-    await parentRequested.promise;
-    firstParent.reject(new Error("Temporary descriptor outage"));
-    await vi.dynamicImportSettled();
-    expect(parentBreadcrumb(pane)).toBeNull();
-    expect(parentReads).toBe(1);
-
-    await sessions.refresh({ agentId: "main", force: true });
-    await refreshPane(pane);
-    await vi.dynamicImportSettled();
-    expect(parentBreadcrumb(pane)?.textContent).toContain("Recovered parent");
-    expect(parentReads).toBe(2);
-  });
+          return { session: key === replacement.key ? replacement : child };
+        },
+      });
+      await sessions.refresh({ agentId: "main", force: true });
+      const pane = mount(child.key);
+      await refreshPane(pane);
+      await parentRequested.promise;
+      if (recovering) {
+        oldParent.reject(new Error("Temporary descriptor outage"));
+        await vi.dynamicImportSettled();
+        expect(parentBreadcrumb(pane)).toBeNull();
+        expect(parentReads).toBe(1);
+        await sessions.refresh({ agentId: "main", force: true });
+        await refreshPane(pane);
+      } else {
+        emitGatewayEvent("sessions.changed", {
+          sessionKey: child.key,
+          agentId: "main",
+          sessionId: child.sessionId,
+          reason: "update",
+          session: { ...child, updatedAt: 2, parentSessionKey: replacement.key },
+        });
+        oldParent.resolve({ session: parent });
+      }
+      await vi.dynamicImportSettled();
+      expect(parentBreadcrumb(pane)?.textContent).toContain(
+        recovering ? "Recovered parent" : "Current parent",
+      );
+      expect(parentBreadcrumb(pane)?.textContent).not.toContain("Old parent");
+      if (recovering) {
+        expect(parentReads).toBe(2);
+      }
+    },
+  );
 });

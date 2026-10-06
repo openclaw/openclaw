@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
-import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
+import { extractOriginalFilename } from "../../media/store.js";
 import { generateMusic } from "../../music-generation/runtime.js";
 import type {
   MusicGenerationOutputFormat,
@@ -16,7 +16,7 @@ import {
   sanitizeGeneratedMediaDisplayText,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
-import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
+import { persistGeneratedMediaBuffers } from "./generated-media-batch-persistence.js";
 import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
 import { musicGenerationTaskLifecycle } from "./media-generate-background.js";
 import {
@@ -45,7 +45,7 @@ type MusicGenerationTimeoutNormalization = {
 };
 
 export function normalizeMusicGenerationTimeoutMs(timeoutMs: number | undefined): {
-  timeoutMs?: number;
+  timeoutMs: number;
   normalization?: MusicGenerationTimeoutNormalization;
   message?: string;
 } {
@@ -87,7 +87,7 @@ export async function executeMusicGenerationJob(params: {
   loadedReferenceImages: LoadedMediaToolReference<MusicGenerationSourceImage>[];
   taskHandle?: MediaGenerationTaskHandle | null;
   autoProviderFallback?: boolean;
-  timeoutMs?: number;
+  timeoutMs: number;
   timeoutNormalization?: MusicGenerationTimeoutNormalization;
   providers?: MusicGenerationProvider[];
 }): Promise<MediaGenerateToolExecutionResult> {
@@ -119,20 +119,11 @@ export async function executeMusicGenerationJob(params: {
       progressSummary: "Saving generated music",
     });
   }
-  const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "audio");
-  const savedTracks = await persistGeneratedMediaBatch({
+  const savedTracks = await persistGeneratedMediaBuffers({
+    assets: result.tracks,
     subdir: GENERATED_MUSIC_MEDIA_SUBDIR,
-    mode: "concurrent",
-    saves: result.tracks.map((track) => async () => {
-      const savedMedia = await saveMediaBuffer(
-        track.buffer,
-        track.mimeType,
-        GENERATED_MUSIC_MEDIA_SUBDIR,
-        mediaMaxBytes,
-        params.filename || track.fileName,
-      );
-      return { value: savedMedia, savedMedia };
-    }),
+    maxBytes: resolveGeneratedMediaMaxBytes(params.effectiveCfg, "audio"),
+    filename: params.filename,
   });
   const ignoredOverrides = result.ignoredOverrides ?? [];
   const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
@@ -223,19 +214,14 @@ export async function executeMusicGenerationJob(params: {
         : {}),
       ...(!ignoredOverrideKeys.has("format") && params.format ? { format: params.format } : {}),
       ...(params.filename ? { filename: params.filename } : {}),
-      ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+      timeoutMs: params.timeoutMs,
       ...(params.timeoutNormalization
         ? {
             requestedTimeoutMs: params.timeoutNormalization.requested,
             timeoutNormalization: params.timeoutNormalization,
           }
         : {}),
-      ...buildMediaReferenceDetails({
-        entries: params.loadedReferenceImages,
-        singleKey: "image",
-        pluralKey: "images",
-        getResolvedInput: (entry) => entry.resolvedInput,
-      }),
+      ...buildMediaReferenceDetails(params.loadedReferenceImages, "image"),
       ...(result.lyrics?.length ? { lyrics: result.lyrics } : {}),
     },
   });

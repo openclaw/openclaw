@@ -5,24 +5,23 @@ import {
   type ErrorShape,
   type SessionWorkspaceRecoveryRequiredErrorDetails,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
-// Session-owned cancellation and authoritative lifecycle drains.
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunInProgress,
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
-import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
-  abortReplyRunBySessionId,
-  isReplyRunActiveForSessionId,
-  replyRunRegistry,
-  waitForReplyRunEndBySessionId,
+  clearSessionLifecycleQueues,
+  hasSessionLifecycleQueueWork,
+  type SessionLifecycleQueueTarget,
+} from "../../auto-reply/reply/queue/cleanup.js";
+import {
+  isReplyOperationForSession,
+  resolveReplyOperationsForSession,
+  waitForReplyOperationOwnerSettlement,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { withTimeout } from "../../infra/fs-safe.js";
-import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import {
   closeSessionWorkAdmissions,
   startSessionWorkAdmissionInterruption,
@@ -34,11 +33,10 @@ import { waitForChatAbortControllerRemoval } from "../chat-abort-lifecycle-inter
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import type { AgentTerminalSessionDrain } from "../terminal/session-manager.types.js";
 import {
-  reserveWorkerInferenceSessionDrain,
+  getWorkerInferenceSessionControl,
   type AcceptedWorkerInferenceSessionDrain,
   type WorkerInferenceSessionDrain,
 } from "../worker-environments/inference-control-internal.js";
-import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "../worker-environments/placement-workspace-result.js";
 import {
@@ -85,18 +83,14 @@ function hasAuthoritativeSessionWork(
   params: SessionLifecycleParams,
   workerDrain: WorkerInferenceSessionDrain | undefined,
   terminalDrain: AgentTerminalSessionDrain | undefined,
-  workIdentities: string[],
+  queueTarget: SessionLifecycleQueueTarget,
 ): boolean {
   const sessionId = params.sessionId;
   return (
     isCompetingSessionWorkAdmissionActive(params.storePath, params.lifecycleIdentities) ||
-    params.sessionKeys.some((key) => replyRunRegistry.isActive(key)) ||
-    Boolean(sessionId && isReplyRunActiveForSessionId(sessionId)) ||
+    resolveReplyOperationsForSession(params).length > 0 ||
     Boolean(sessionId && isEmbeddedAgentRunInProgress(sessionId)) ||
-    hasPendingFollowupQueueWork(workIdentities) ||
-    workIdentities.some(
-      (key) => getCommandLaneSnapshot(resolveEmbeddedSessionLane(key)).queuedCount > 0,
-    ) ||
+    hasSessionLifecycleQueueWork(queueTarget) ||
     hasGatewaySessionAbortOwner({
       context: params.context,
       sessionKeys: params.sessionKeys,
@@ -118,11 +112,13 @@ export async function prepareSessionLifecycleDrain(
   params: SessionLifecycleParams,
 ): Promise<SessionLifecycleDrain> {
   const timeoutMs = SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS;
-  const workIdentities = Array.from(
-    new Set([...params.sessionKeys, ...(params.sessionId ? [params.sessionId] : [])]),
-  );
+  const queueTarget: SessionLifecycleQueueTarget = {
+    keys: params.sessionKeys,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  };
   const workerService = params.context.workerEnvironmentService;
-  const workerControl = asWorkerInferenceControl(workerService);
   let workerDrain: AcceptedWorkerInferenceSessionDrain | undefined;
   let workerDrained: Promise<void> | undefined;
   let terminalDrain: AgentTerminalSessionDrain | undefined;
@@ -145,7 +141,7 @@ export async function prepareSessionLifecycleDrain(
     }
   };
   try {
-    const prepared = await runExclusiveSessionLifecycleMutation({
+    const prepared = await runExclusiveSessionLifecycleMutation("drain", {
       scope: params.storePath,
       identities: params.lifecycleIdentities,
       run: async () => {
@@ -160,7 +156,9 @@ export async function prepareSessionLifecycleDrain(
           reason: createAgentRunDirectAbortError(),
         });
         if (params.sessionId) {
-          const reservation = reserveWorkerInferenceSessionDrain(workerService, params.sessionId);
+          const reservation = getWorkerInferenceSessionControl(workerService)?.reserveSessionDrain(
+            params.sessionId,
+          );
           try {
             workerDrain = reservation?.accept();
           } catch (error) {
@@ -174,9 +172,6 @@ export async function prepareSessionLifecycleDrain(
               }
             }
             throw error;
-          }
-          if (!workerDrain && workerControl?.hasInferenceForSession(params.sessionId) === true) {
-            throw new Error("Worker inference drain is unavailable");
           }
           if (workerDrain) {
             workerDrained = workerDrain.drained;
@@ -197,6 +192,7 @@ export async function prepareSessionLifecycleDrain(
           void reclaimed.catch(() => {});
         }
         let controllerDrain = Promise.resolve(true);
+        const replyRuns = resolveReplyOperationsForSession(params);
         const cancellation = abortChatRunsForSessionKeyWithPartials({
           context: params.context,
           ops: createChatAbortOps(params.context),
@@ -217,13 +213,18 @@ export async function prepareSessionLifecycleDrain(
             });
           },
           onAuthorizedAfterQueuedAbort: () => {
-            const cleared = clearSessionQueues(workIdentities);
+            const cleared = clearSessionLifecycleQueues({
+              ...queueTarget,
+              assertCurrent: () => params.authorize?.(),
+            });
             let aborted = cleared.followupCleared > 0 || cleared.laneCleared > 0;
-            for (const key of params.sessionKeys) {
-              aborted = replyRunRegistry.abort(key) || aborted;
+            for (const operation of replyRuns) {
+              params.authorize?.();
+              if (isReplyOperationForSession(params, operation)) {
+                aborted = operation.abortByUser() || aborted;
+              }
             }
             if (params.sessionId) {
-              aborted = abortReplyRunBySessionId(params.sessionId) || aborted;
               aborted = abortEmbeddedAgentRun(params.sessionId) || aborted;
             }
             return aborted;
@@ -231,7 +232,7 @@ export async function prepareSessionLifecycleDrain(
         });
         // Observe failures immediately while the short mutation releases its queues.
         void cancellation.catch(() => {});
-        return { workerStop, cancellation, controllerDrain };
+        return { workerStop, cancellation, controllerDrain, replyRuns };
       },
     });
     const abortResult = await prepared.cancellation;
@@ -242,8 +243,9 @@ export async function prepareSessionLifecycleDrain(
     params.authorize?.();
     if (params.sessionId) {
       const placements = params.context.workerSessionPlacementService;
+      const pending = (await placements?.listPendingWorkspaceResultsAsync?.(params.sessionId))?.[0];
+      params.authorize?.();
       const placement = placements?.getMany([params.sessionId]).get(params.sessionId);
-      const pending = placements?.listPendingWorkspaceResults?.(params.sessionId)[0];
       if (
         pending &&
         pending.workspaceAcceptedAtMs === null &&
@@ -275,10 +277,11 @@ export async function prepareSessionLifecycleDrain(
       scope: params.storePath,
       identities: params.lifecycleIdentities,
     });
-    const replyWork = Promise.all([
-      ...params.sessionKeys.map((key) => replyRunRegistry.waitForIdle(key, timeoutMs)),
-      ...(params.sessionId ? [waitForReplyRunEndBySessionId(params.sessionId, timeoutMs)] : []),
-    ]).then((results) => results.every(Boolean));
+    const replyWork = Promise.all(
+      prepared.replyRuns.map((operation) =>
+        waitForReplyOperationOwnerSettlement(operation, timeoutMs),
+      ),
+    ).then((results) => results.every(Boolean));
     const embeddedWork = params.sessionId
       ? waitForEmbeddedAgentRunEnd(params.sessionId, timeoutMs)
       : Promise.resolve(true);
@@ -334,7 +337,7 @@ export async function prepareSessionLifecycleDrain(
         } catch {
           return true;
         }
-        return hasAuthoritativeSessionWork(params, workerDrain, terminalDrain, workIdentities);
+        return hasAuthoritativeSessionWork(params, workerDrain, terminalDrain, queueTarget);
       },
     };
   } catch (error) {

@@ -21,69 +21,48 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
 
-function cachedLifecycleDiffersFromRuntime(params: {
-  cachedAccount: ChannelHealthSummary | undefined;
-  runtimeSnapshot: ChannelAccountSnapshot;
-}): boolean {
-  for (const key of ["running", "connected", "lifecycle"] as const) {
-    const runtimeValue = params.runtimeSnapshot[key];
-    if (runtimeValue !== undefined && params.cachedAccount?.[key] !== runtimeValue) {
-      return true;
-    }
-  }
-  return params.cachedAccount === undefined;
+function cachedLifecycleDiffersFromRuntime(
+  cached: ChannelHealthSummary | undefined,
+  runtime: ChannelAccountSnapshot,
+): boolean {
+  return (
+    cached === undefined ||
+    (["running", "connected", "lifecycle"] as const).some(
+      (key) => runtime[key] !== undefined && cached[key] !== runtime[key],
+    )
+  );
 }
 
 function cachedHealthDiffersFromRuntime(
   cached: HealthSummary,
   runtime: ChannelRuntimeSnapshot,
 ): boolean {
-  for (const [channelId, runtimeSnapshot] of Object.entries(runtime.channels)) {
-    if (!runtimeSnapshot) {
-      continue;
-    }
-    const cachedChannel = cached.channels[channelId];
-    if (
-      cachedLifecycleDiffersFromRuntime({
-        cachedAccount: cachedChannel,
-        runtimeSnapshot,
-      })
-    ) {
-      return true;
-    }
-  }
-
-  for (const [channelId, accounts] of Object.entries(runtime.channelAccounts)) {
-    if (!accounts) {
-      continue;
-    }
-    const cachedChannel = cached.channels[channelId];
-    const cachedAccounts = cachedChannel?.accounts;
-    if (
-      Object.keys(cachedAccounts ?? {}).some((accountId) => !Object.hasOwn(accounts, accountId))
-    ) {
-      return true;
-    }
-    for (const [accountId, runtimeSnapshot] of Object.entries(accounts)) {
-      if (!runtimeSnapshot) {
-        continue;
+  return (
+    Object.entries(runtime.channels).some(
+      ([channelId, snapshot]) =>
+        snapshot && cachedLifecycleDiffersFromRuntime(cached.channels[channelId], snapshot),
+    ) ||
+    Object.entries(runtime.channelAccounts).some(([channelId, accounts]) => {
+      if (!accounts) {
+        return false;
       }
-      if (
-        cachedLifecycleDiffersFromRuntime({
-          cachedAccount: cachedAccounts?.[accountId],
-          runtimeSnapshot,
-        })
-      ) {
-        return true;
-      }
-    }
-  }
-
-  // Hot-unloaded plugins vanish from both runtime maps before cached health expires.
-  return Object.keys(cached.channels).some(
-    (channelId) =>
-      !Object.hasOwn(runtime.channels, channelId) &&
-      !Object.hasOwn(runtime.channelAccounts, channelId),
+      const cachedAccounts = cached.channels[channelId]?.accounts;
+      return (
+        Object.keys(cachedAccounts ?? {}).some(
+          (accountId) => !Object.hasOwn(accounts, accountId),
+        ) ||
+        Object.entries(accounts).some(
+          ([accountId, snapshot]) =>
+            snapshot && cachedLifecycleDiffersFromRuntime(cachedAccounts?.[accountId], snapshot),
+        )
+      );
+    }) ||
+    // Hot-unloaded plugins vanish from both runtime maps before cached health expires.
+    Object.keys(cached.channels).some(
+      (channelId) =>
+        !Object.hasOwn(runtime.channels, channelId) &&
+        !Object.hasOwn(runtime.channelAccounts, channelId),
+    )
   );
 }
 
@@ -103,7 +82,7 @@ async function mergeCachedHealthRuntimeState(params: {
   const deliveryQueues = await buildDeliveryQueueHealthSummary(
     _cachedDeliveryQueues?.ingressPressure ?? [],
   );
-  const contextEngines = buildContextEngineHealthSummary();
+  const contextEngines = await buildContextEngineHealthSummary();
   // A reset sampler has no current window; never revive the cached reading.
   const eventLoop = params.getEventLoopHealth?.();
   return {

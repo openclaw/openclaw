@@ -232,6 +232,7 @@ function scheduleDmTopicLabel(params: {
       const label = await generateTopicLabel({
         userMessage,
         prompt: autoTopicConfig.prompt,
+        maxLength: 128,
         cfg: params.cfg,
         agentId: context.route.agentId,
         agentDir: resolveAgentDir(params.cfg, context.route.agentId),
@@ -297,19 +298,14 @@ export const dispatchTelegramMessage = async (
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const turnConfig = {
     ...dispatchParams,
+    ...quote,
     allowProviderPreview,
     chunkMode: resolveChunkMode(cfg, "telegram", dispatchContext.route.accountId),
     context: dispatchContext,
     dispatchStartedAt,
-    draftReplyToMessageId: quote.draftReplyToMessageId,
     isSuperseded: isDispatchSuperseded,
     loadFreshSessionEntry,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, dispatchContext.route.agentId),
-    replyQuoteByMessageId: quote.replyQuoteByMessageId,
-    replyQuoteEntities: quote.replyQuoteEntities,
-    replyQuoteMessageId: quote.replyQuoteMessageId,
-    replyQuotePosition: quote.replyQuotePosition,
-    replyQuoteText: quote.replyQuoteText,
     resolvedReasoningLevel,
     richMessages,
     statusReactionController: status.controller,

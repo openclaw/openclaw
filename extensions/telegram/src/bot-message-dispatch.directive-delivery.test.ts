@@ -139,81 +139,34 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
     },
   );
 
-  it("keeps the complete longer preview and late transcript delivery intent", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    const context = createContext();
-    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    mockDefaultSessionEntry();
-    const prefix = "The recovered answer includes the remaining explanation after this opening";
-    const fullText = `${prefix} paragraph, together with the requested audio attachment.`;
-    const previewText = `${fullText} The preview also includes the last step.`;
-    readLatestAssistantTextByIdentity.mockResolvedValueOnce(undefined).mockResolvedValue({
-      text: `${fullText} [[reply_to:999]] [[audio_as_voice]]\nMEDIA:https://example.invalid/note.ogg`,
-      timestamp: Date.now() + 1_000,
-    });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: previewText });
-        const [plan] = createStructuredOutboundPayloadPlan([{ text: `${prefix}...` }]);
-        if (!plan || !dispatcherOptions.deliverPrepared) {
-          throw new Error("Prepared Telegram delivery operation missing");
-        }
-        await dispatcherOptions.deliverPrepared(plan, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-    await dispatchWithContext({ context, replyToMode: "all" });
-    expect(answerDraftStream.update).toHaveBeenCalledWith(previewText);
-    expectDeliveredReply(0, {
-      text: previewText,
-      mediaUrls: ["https://example.invalid/note.ogg"],
-      audioAsVoice: true,
-      replyToId: "999",
-      replyToTag: true,
-    });
-  });
-
-  it.each([
-    { lookup: "late", media: false },
-    { lookup: "initial", media: true },
-  ] as const)(
-    "resolves $lookup transcript reply-to-current intent before reusing an unthreaded preview (media: $media)",
-    async ({ lookup, media }) => {
+  it.each(["longer preview", "current-message target"] as const)(
+    "retains late transcript delivery intent with a %s",
+    async (recovery) => {
+      const current = recovery === "current-message target";
       const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
       const context = createContext();
       context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
       context.ctxPayload.MessageSid = "456";
       mockDefaultSessionEntry();
       const prefix = "The recovered answer includes the remaining explanation after this opening";
-      const fullText = `${prefix} paragraph and replies directly to the triggering message.`;
-      const aliasRecord = {
-        filePath: "/tmp/source-note.txt",
-        name: "PR146361-displayed-alias.txt",
-        mimeType: "text/plain",
-      };
-      const mediaUrls = ["/tmp/lead.txt", aliasRecord.filePath];
-      if (lookup === "late") {
-        readLatestAssistantTextByIdentity.mockResolvedValueOnce(undefined);
-      }
-      readLatestAssistantTextByIdentity.mockResolvedValue({
-        text: `${fullText} [[reply_to_current]]`,
+      const fullText = `${prefix} paragraph with the complete explanation.`;
+      const previewText = current ? prefix : `${fullText} The preview also includes the last step.`;
+      readLatestAssistantTextByIdentity.mockResolvedValueOnce(undefined).mockResolvedValue({
+        text: current
+          ? `${fullText} [[reply_to_current]]`
+          : `${fullText} [[reply_to:999]] [[audio_as_voice]]\nMEDIA:https://example.invalid/note.ogg`,
         timestamp: Date.now() + 1_000,
       });
-      deliverInboundReplyWithMessageSendContext.mockResolvedValue({
-        status: "handled_visible",
-        delivery: { messageIds: ["2002"], visibleReplySent: true },
-      });
+      if (current) {
+        deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+          status: "handled_visible",
+          delivery: { messageIds: ["2002"], visibleReplySent: true },
+        });
+      }
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
         async ({ dispatcherOptions, replyOptions }) => {
-          await replyOptions?.onPartialReply?.({ text: prefix });
-          const [plan] = createStructuredOutboundPayloadPlan([
-            {
-              text: `${prefix}...`,
-              ...(media
-                ? { mediaUrls, mediaUrl: aliasRecord.filePath, attachments: [aliasRecord] }
-                : {}),
-            },
-          ]);
+          await replyOptions?.onPartialReply?.({ text: previewText });
+          const [plan] = createStructuredOutboundPayloadPlan([{ text: `${prefix}...` }]);
           if (!plan || !dispatcherOptions.deliverPrepared) {
             throw new Error("Prepared Telegram delivery operation missing");
           }
@@ -221,26 +174,30 @@ describeTelegramDispatch("dispatchTelegramMessage directive delivery", () => {
           return { queuedFinal: true };
         },
       );
-      await dispatchWithContext({ context, replyToMode: "off" });
-      expectDraftStreamParams({ replyToMessageId: undefined, replyToMode: "off" });
-      expect(answerDraftStream.update).toHaveBeenCalledWith(prefix);
-      expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replyToMode: "off",
-          payload: expect.objectContaining({
-            text: fullText,
-            replyToId: "456",
-            replyToTag: true,
-            replyToCurrent: true,
+      await dispatchWithContext({ context, replyToMode: current ? "off" : "all" });
+      expect(answerDraftStream.update).toHaveBeenCalledWith(previewText);
+      if (current) {
+        expectDraftStreamParams({ replyToMessageId: undefined, replyToMode: "off" });
+        expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledWith(
+          expect.objectContaining({
+            replyToMode: "off",
+            payload: expect.objectContaining({
+              text: fullText,
+              replyToId: "456",
+              replyToTag: true,
+              replyToCurrent: true,
+            }),
           }),
-        }),
-      );
-      expect(answerDraftStream.update).not.toHaveBeenCalledWith(fullText);
-      if (media) {
-        const payload = deliverInboundReplyWithMessageSendContext.mock.calls[0]?.[0]?.payload;
-        expect(payload?.mediaUrls).toEqual(mediaUrls);
-        expect(payload?.attachments).toEqual([{}, aliasRecord]);
-        expect(payload?.mediaUrl).toBeUndefined();
+        );
+        expect(answerDraftStream.update).not.toHaveBeenCalledWith(fullText);
+      } else {
+        expectDeliveredReply(0, {
+          text: previewText,
+          mediaUrls: ["https://example.invalid/note.ogg"],
+          audioAsVoice: true,
+          replyToId: "999",
+          replyToTag: true,
+        });
       }
     },
   );

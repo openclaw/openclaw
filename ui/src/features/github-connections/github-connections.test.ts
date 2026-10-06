@@ -31,7 +31,6 @@ const disconnected = {
   pending: null,
 } as const;
 function mount(scopes: string[], profileId: string | null, request: ReturnType<typeof vi.fn>) {
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   const snapshot = {
     client: { request } as unknown as GatewayBrowserClient,
     phase: "connected",
@@ -64,10 +63,7 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
     navigate: vi.fn(),
     gateway: {
       snapshot,
-      subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
+      subscribe: () => () => undefined,
     },
     agents,
     settingsAgentSelection,
@@ -85,12 +81,6 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
   return {
     element,
     context,
-    update: (patch: Partial<ApplicationGatewaySnapshot>) => {
-      Object.assign(snapshot, patch);
-      for (const listener of listeners) {
-        listener({ ...snapshot });
-      }
-    },
   };
 }
 afterEach(() => {

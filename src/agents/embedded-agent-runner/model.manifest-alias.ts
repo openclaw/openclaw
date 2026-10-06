@@ -18,51 +18,26 @@ import {
 } from "../../plugins/manifest-registry.js";
 import { staticModelIdMatches } from "./model.static-id.js";
 
-function hasConfiguredModelCatalogProviderEndpointSurface(params: {
+function resolveConfiguredModelCatalogProviderRoute(params: {
   provider: string;
   modelId?: string;
   cfg?: OpenClawConfig;
-}): boolean {
-  const provider = normalizeProviderId(params.provider);
-  if (!provider) {
-    return false;
-  }
-  const config = findNormalizedProviderValue(params.cfg?.models?.providers, provider);
-  if (config?.baseUrl?.trim()) {
-    return true;
-  }
-  const modelId = params.modelId?.trim();
-  if (!modelId || !Array.isArray(config?.models)) {
-    return false;
-  }
-  return config.models.some(
-    (model) =>
-      Boolean(model.baseUrl?.trim()) &&
-      staticModelIdMatches({
-        candidateId: model.id,
-        provider,
-        modelId,
-      }),
-  );
-}
-
-function resolveConfiguredModelCatalogProviderApi(params: {
-  provider: string;
-  modelId?: string;
-  cfg?: OpenClawConfig;
-}): ModelCatalogAlias["api"] {
+}): { hasEndpoint: boolean; api: ModelCatalogAlias["api"] } {
   const provider = normalizeProviderId(params.provider);
   const config = provider
     ? findNormalizedProviderValue(params.cfg?.models?.providers, provider)
     : undefined;
-  const modelId = params.modelId?.trim();
-  const model =
-    provider && modelId && Array.isArray(config?.models)
-      ? config.models.find((candidate) =>
-          staticModelIdMatches({ candidateId: candidate.id, provider, modelId }),
-        )
-      : undefined;
-  return model?.api ?? config?.api;
+  const modelId = params.modelId?.trim() ?? "";
+  const models = config?.models ?? [];
+  const matches = (candidate: { id: string }) =>
+    Boolean(provider && modelId) &&
+    staticModelIdMatches({ candidateId: candidate.id, provider, modelId });
+  return {
+    hasEndpoint:
+      Boolean(config?.baseUrl?.trim()) ||
+      models.some((model) => Boolean(model.baseUrl?.trim()) && matches(model)),
+    api: models.find(matches)?.api ?? config?.api,
+  };
 }
 
 function hasUnconditionalManifestModelCatalogSuppression(params: {
@@ -102,37 +77,15 @@ export type ManifestModelCatalogProviderAliasMetadata = {
   readonly transport?: ManifestModelCatalogProviderTransport;
 };
 
-function listEligibleManifestModelCatalogAliasPlugins(params: {
-  cfg?: OpenClawConfig;
-  plugins: readonly ManifestModelCatalogAliasPlugin[];
-}): readonly ManifestModelCatalogAliasPlugin[] {
-  const normalizedConfig = normalizePluginsConfig(params.cfg?.plugins);
-  return params.plugins.filter((plugin) => {
-    if (
-      !isActivatedManifestOwner({
-        plugin,
-        normalizedConfig,
-        rootConfig: params.cfg,
-      })
-    ) {
-      return false;
-    }
-    return (
-      isBundledManifestOwner(plugin) ||
-      plugin.origin === "config" ||
-      hasExplicitManifestOwnerTrust({ plugin, normalizedConfig })
-    );
-  });
-}
-
 function resolveManifestAliasTargetApi(params: {
   plugin: ManifestModelCatalogAliasPlugin;
   provider: string;
   modelId?: string;
 }): ModelCatalogAlias["api"] {
-  const providerCatalog = Object.entries(params.plugin.modelCatalog?.providers ?? {}).find(
-    ([provider]) => normalizeProviderId(provider) === params.provider,
-  )?.[1];
+  const providerCatalog = findNormalizedProviderValue(
+    params.plugin.modelCatalog?.providers,
+    params.provider,
+  );
   if (!providerCatalog) {
     return undefined;
   }
@@ -160,11 +113,18 @@ function resolveManifestModelCatalogProviderAlias(params: {
     return { provider: params.provider };
   }
   const claims: ManifestModelCatalogProviderAliasMetadata[] = [];
-  const plugins = listEligibleManifestModelCatalogAliasPlugins({
-    cfg: params.cfg,
-    plugins: params.plugins,
-  });
-  for (const plugin of plugins) {
+  const normalizedConfig = normalizePluginsConfig(params.cfg?.plugins);
+  for (const plugin of params.plugins) {
+    if (
+      !isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.cfg }) ||
+      !(
+        isBundledManifestOwner(plugin) ||
+        plugin.origin === "config" ||
+        hasExplicitManifestOwnerTrust({ plugin, normalizedConfig })
+      )
+    ) {
+      continue;
+    }
     for (const [rawAlias, alias] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
       const normalizedAlias = normalizeProviderId(rawAlias);
       const normalizedTarget = normalizeProviderId(alias.provider);
@@ -183,19 +143,14 @@ function resolveManifestModelCatalogProviderAlias(params: {
           modelId: params.modelId,
           plugin,
         });
-      const hasEndpointSurface =
-        Boolean(alias.baseUrl?.trim()) ||
-        hasConfiguredModelCatalogProviderEndpointSurface({
-          provider,
-          modelId: params.modelId,
-          cfg: params.cfg,
-        });
+      const configuredRoute = resolveConfiguredModelCatalogProviderRoute({
+        provider,
+        modelId: params.modelId,
+        cfg: params.cfg,
+      });
+      const hasEndpointSurface = Boolean(alias.baseUrl?.trim()) || configuredRoute.hasEndpoint;
       const transportApi =
-        resolveConfiguredModelCatalogProviderApi({
-          provider,
-          modelId: params.modelId,
-          cfg: params.cfg,
-        }) ??
+        configuredRoute.api ??
         alias.api ??
         resolveManifestAliasTargetApi({
           plugin,
@@ -256,9 +211,7 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
       env,
     }).plugins;
   return resolveManifestModelCatalogProviderAlias({
-    provider: params.provider,
-    modelId: params.modelId,
-    cfg: params.cfg,
+    ...params,
     plugins,
   });
 }

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsCatalogListResult } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -18,6 +18,14 @@ import "./app-sidebar.ts";
 
 const page = (number: number, label = "Original", nextCursor = `page-${number + 1}`) =>
   catalogPage([{ threadId: `thread-${number}`, name: `${label} ${number}` }], nextCursor);
+
+function expandedRequest() {
+  return vi
+    .fn()
+    .mockResolvedValueOnce(page(1))
+    .mockResolvedValueOnce(page(2))
+    .mockResolvedValueOnce(page(3));
+}
 
 async function settle(sidebar: SidebarLifecycleState) {
   await vi.advanceTimersByTimeAsync(0);
@@ -38,6 +46,7 @@ async function mountExpanded(request: ReturnType<typeof vi.fn>) {
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
   gateway.publish({
     hello: {
+      auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
@@ -54,7 +63,6 @@ async function mountExpanded(request: ReturnType<typeof vi.fn>) {
 
 describe("AppSidebar expanded catalog refresh visibility", () => {
   let visibility: DocumentVisibilityState;
-  let restoreVisibility: () => void;
 
   const setVisibility = (next: DocumentVisibilityState) => {
     visibility = next;
@@ -64,174 +72,48 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     visibility = "visible";
-    const spy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-    restoreVisibility = () => spy.mockRestore();
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
   });
 
-  afterEach(() => {
-    restoreVisibility();
-    vi.useRealTimers();
-  });
-
-  it("holds expanded pending rows until an explicit fresh page is requested", async () => {
-    const pendingPage = catalogPage([]);
-    pendingPage.catalogs[0]!.hosts[0]!.pending = true;
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(page(1))
-      .mockResolvedValueOnce(page(2))
-      .mockResolvedValueOnce(page(3))
-      .mockResolvedValueOnce(pendingPage)
-      .mockResolvedValue(page(4, "Fresh", ""));
-    const { sidebar } = await mountExpanded(request);
-    await sidebar.sessionData.refreshSessionCatalogs();
-    await settle(sidebar);
-    expect(request).toHaveBeenCalledTimes(4);
-    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]).toMatchObject({
-      pending: true,
-      nextCursor: "page-4",
-      sessions: [
-        expect.objectContaining({ threadId: "thread-1" }),
-        expect.objectContaining({ threadId: "thread-2" }),
-        expect.objectContaining({ threadId: "thread-3" }),
-      ],
-    });
-    await loadMore(sidebar);
-    expect(request).toHaveBeenCalledTimes(5);
-    expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
-      agentId: "main",
-      catalogId: "codex",
-      hostIds: ["gateway:local"],
-      cursors: { "gateway:local": "page-4" },
-    });
-    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.pending).toBeUndefined();
-    expect(sidebar.textContent).toContain("Original 3");
-    expect(sidebar.textContent).toContain("Fresh 4");
-  });
-
-  it.each(["base", "expanded"] as const)(
-    "stops new automatic pages after hiding during the %s response and catches up once",
-    async (heldStage) => {
-      const pending = deferred<SessionsCatalogListResult>();
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(page(1))
-        .mockResolvedValueOnce(page(2))
-        .mockResolvedValueOnce(page(3));
-      if (heldStage === "base") {
-        request.mockReturnValueOnce(pending.promise);
-      } else {
-        request.mockResolvedValueOnce(page(1, "Refreshed"));
-        request.mockReturnValueOnce(pending.promise);
-      }
-      request.mockImplementation((_method, params: { cursors?: Record<string, string> }) => {
-        const cursor = params.cursors?.["gateway:local"];
-        return Promise.resolve(
-          page(cursor === "page-2" ? 2 : cursor === "page-3" ? 3 : 1, "Refreshed"),
-        );
-      });
-      const { sidebar, gateway } = await mountExpanded(request);
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(5_000);
-      const issuedBeforeHide = heldStage === "base" ? 4 : 5;
-      expect(request).toHaveBeenCalledTimes(issuedBeforeHide);
-
-      setVisibility("hidden");
-      pending.resolve(page(heldStage === "base" ? 1 : 2, "Refreshed"));
-      await settle(sidebar);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect.soft(request).toHaveBeenCalledTimes(issuedBeforeHide);
-      const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
-      expect(host?.sessions.map((row) => row.threadId)).toEqual([
-        "thread-1",
-        "thread-2",
-        "thread-3",
-      ]);
-      expect(host?.nextCursor).toBe("page-4");
-
-      const baseCallsBeforeShow = request.mock.calls.filter(([, params]) => !params.cursors).length;
-      const callsBeforeShow = request.mock.calls.length;
-      setVisibility("visible");
-      globalThis.dispatchEvent(new Event("focus"));
-      await vi.advanceTimersByTimeAsync(5_000);
-      await settle(sidebar);
-      expect(request.mock.calls.filter(([, params]) => !params.cursors)).toHaveLength(
-        baseCallsBeforeShow + 1,
+  it("stops automatic replay after hiding during an expanded response and catches up once", async () => {
+    const pending = deferred<SessionsCatalogListResult>();
+    const request = expandedRequest();
+    request.mockResolvedValueOnce(page(1, "Refreshed"));
+    request.mockReturnValueOnce(pending.promise);
+    request.mockImplementation((_method, params: { cursors?: Record<string, string> }) => {
+      const cursor = params.cursors?.["gateway:local"];
+      return Promise.resolve(
+        page(cursor === "page-2" ? 2 : cursor === "page-3" ? 3 : 1, "Refreshed"),
       );
-      expect(request).toHaveBeenCalledTimes(callsBeforeShow + 3);
-      expect(sidebar.textContent).toContain("Refreshed 1");
-      expect(sidebar.textContent).toContain("Refreshed 2");
-      expect(sidebar.textContent).toContain("Refreshed 3");
-    },
-  );
-
-  it("replays every loaded page while visible", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(page(1))
-      .mockResolvedValueOnce(page(2))
-      .mockResolvedValueOnce(page(3))
-      .mockResolvedValueOnce(page(1, "Refreshed"))
-      .mockResolvedValueOnce(page(2, "Refreshed"))
-      .mockResolvedValueOnce(page(3, "Refreshed"));
+    });
     const { sidebar, gateway } = await mountExpanded(request);
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
     await vi.advanceTimersByTimeAsync(5_000);
-    await settle(sidebar);
-    expect(request).toHaveBeenCalledTimes(6);
-    expect(sidebar.textContent).toContain("Refreshed 3");
-    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-4");
-  });
+    const issuedBeforeHide = 5;
+    expect(request).toHaveBeenCalledTimes(issuedBeforeHide);
 
-  it.each(["success", "error"] as const)(
-    "accepts an already-issued manual Load More %s while hidden",
-    async (outcome) => {
-      const pending = deferred<SessionsCatalogListResult>();
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(page(1))
-        .mockResolvedValueOnce(page(2))
-        .mockResolvedValueOnce(page(3))
-        .mockReturnValueOnce(pending.promise);
-      const { sidebar } = await mountExpanded(request);
-      await loadMore(sidebar);
-      expect(request).toHaveBeenCalledTimes(4);
-      setVisibility("hidden");
-      pending.resolve(
-        outcome === "success" ? page(4, "Manual", "") : catalogErrorPage("Page failed"),
-      );
-      await settle(sidebar);
-      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(0);
-      expect(request).toHaveBeenCalledTimes(4);
-      expect(sidebar.textContent).toContain("Original 3");
-      const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
-      if (outcome === "success") {
-        expect(sidebar.textContent).toContain("Manual 4");
-        expect(host?.nextCursor).toBeUndefined();
-      } else {
-        expect(host?.error?.message).toBe("Page failed");
-        expect(host?.nextCursor).toBe("page-4");
-      }
-    },
-  );
-
-  it("does not fetch another page after the sidebar unmounts", async () => {
-    const pending = deferred<SessionsCatalogListResult>();
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(page(1))
-      .mockResolvedValueOnce(page(2))
-      .mockResolvedValueOnce(page(3))
-      .mockReturnValueOnce(pending.promise);
-    const { sidebar, provider, gateway } = await mountExpanded(request);
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(request).toHaveBeenCalledTimes(4);
-    provider.remove();
-    pending.resolve(page(1, "Retired"));
+    setVisibility("hidden");
+    pending.resolve(page(2, "Refreshed"));
     await settle(sidebar);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(request).toHaveBeenCalledTimes(4);
+    expect.soft(request).toHaveBeenCalledTimes(issuedBeforeHide);
+    const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
+    expect(host?.sessions.map((row) => row.threadId)).toEqual(["thread-1", "thread-2", "thread-3"]);
+    expect(host?.nextCursor).toBe("page-4");
+
+    const baseCallsBeforeShow = request.mock.calls.filter(([, params]) => !params.cursors).length;
+    const callsBeforeShow = request.mock.calls.length;
+    setVisibility("visible");
+    globalThis.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settle(sidebar);
+    expect(request.mock.calls.filter(([, params]) => !params.cursors)).toHaveLength(
+      baseCallsBeforeShow + 1,
+    );
+    expect(request).toHaveBeenCalledTimes(callsBeforeShow + 3);
+    expect(sidebar.textContent).toContain("Refreshed 1");
+    expect(sidebar.textContent).toContain("Refreshed 2");
+    expect(sidebar.textContent).toContain("Refreshed 3");
   });
 
   it("keeps resources retired during a detached update and resumes on reconnect", async () => {
@@ -294,24 +176,62 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       vi.unstubAllGlobals();
     }
   });
-
-  it("accepts a complete exhausted first page while hidden", async () => {
-    const pending = deferred<SessionsCatalogListResult>();
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(page(1))
-      .mockResolvedValueOnce(page(2))
-      .mockResolvedValueOnce(page(3))
-      .mockReturnValueOnce(pending.promise);
-    const { sidebar, gateway } = await mountExpanded(request);
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    setVisibility("hidden");
-    pending.resolve(page(1, "Only remaining", ""));
+  it("holds expanded pending rows until an explicit fresh page is requested", async () => {
+    const pendingPage = catalogPage([]);
+    pendingPage.catalogs[0]!.hosts[0]!.pending = true;
+    const request = expandedRequest()
+      .mockResolvedValueOnce(pendingPage)
+      .mockResolvedValue(page(4, "Fresh", ""));
+    const { sidebar } = await mountExpanded(request);
+    await sidebar.sessionData.refreshSessionCatalogs();
     await settle(sidebar);
     expect(request).toHaveBeenCalledTimes(4);
-    expect(sidebar.textContent).toContain("Only remaining 1");
-    expect(sidebar.textContent).not.toContain("Original 3");
-    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBeUndefined();
+    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]).toMatchObject({
+      pending: true,
+      nextCursor: "page-4",
+      sessions: [
+        expect.objectContaining({ threadId: "thread-1" }),
+        expect.objectContaining({ threadId: "thread-2" }),
+        expect.objectContaining({ threadId: "thread-3" }),
+      ],
+    });
+    await loadMore(sidebar);
+    expect(request).toHaveBeenCalledTimes(5);
+    expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
+      agentId: "main",
+      catalogId: "codex",
+      hostIds: ["gateway:local"],
+      cursors: { "gateway:local": "page-4" },
+    });
+    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.pending).toBeUndefined();
+    expect(sidebar.textContent).toContain("Original 3");
+    expect(sidebar.textContent).toContain("Fresh 4");
   });
+
+  it.each(["success", "error"] as const)(
+    "accepts an already-issued manual Load More %s while hidden",
+    async (outcome) => {
+      const pending = deferred<SessionsCatalogListResult>();
+      const request = expandedRequest().mockReturnValueOnce(pending.promise);
+      const { sidebar } = await mountExpanded(request);
+      await loadMore(sidebar);
+      expect(request).toHaveBeenCalledTimes(4);
+      setVisibility("hidden");
+      pending.resolve(
+        outcome === "success" ? page(4, "Manual", "") : catalogErrorPage("Page failed"),
+      );
+      await settle(sidebar);
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.size).toBe(0);
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(sidebar.textContent).toContain("Original 3");
+      const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
+      if (outcome === "success") {
+        expect(sidebar.textContent).toContain("Manual 4");
+        expect(host?.nextCursor).toBeUndefined();
+      } else {
+        expect(host?.error?.message).toBe("Page failed");
+        expect(host?.nextCursor).toBe("page-4");
+      }
+    },
+  );
 });

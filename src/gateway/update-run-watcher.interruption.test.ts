@@ -6,6 +6,7 @@ import { noteStaleUpdateRuns } from "../commands/doctor-update-run.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type { InterruptedUpdateSettlement } from "../infra/update-run-interruption-contract.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
+import { readInterruptedUpdateCandidateAsync } from "../infra/update-run-interruption-worker.js";
 import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
 import {
   createUpdateRun,
@@ -50,13 +51,13 @@ vi.mock("../infra/update-run-interruption-worker.js", async () => {
   const { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } =
     await import("../state/openclaw-state-db-readonly.js");
   return {
-    readInterruptedUpdateCandidateAsync: async (
-      options: import("../infra/update-run-codec.js").UpdateRunLedgerOptions,
-    ) =>
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-        ({ db }) => readInterruptedUpdateCandidate(db),
-        options,
-      ),
+    readInterruptedUpdateCandidateAsync: vi.fn(
+      async (options: import("../infra/update-run-codec.js").UpdateRunLedgerOptions) =>
+        withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+          ({ db }) => readInterruptedUpdateCandidate(db),
+          options,
+        ),
+    ),
     persistInterruptedUpdateObservationAsync: async (
       context: OpenClawStateWorkerContext,
       input: InterruptedUpdateSettlement,
@@ -187,9 +188,19 @@ it.each([false, true])(
     if (abandoned) {
       reconcileUpdateRunsInNativeKernelForTest();
     }
-    const broadcast = vi.fn();
+    const published = createDeferredCore();
+    const broadcast = vi.fn((event, payload) => {
+      if (
+        event === "update.run.changed" &&
+        payload.runId === runId &&
+        payload.status === "succeeded"
+      ) {
+        published.resolve();
+      }
+    });
     watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
-    await vi.waitFor(() => expect(getUpdateRun(runId)?.status).toBe("succeeded"));
+    await published.promise;
+    expect(getUpdateRun(runId)?.status).toBe("succeeded");
     expect(getUpdateRun(runId)).toMatchObject({
       reason: null,
       after: { version: "2026.9.4", buildId: "candidate-build" },
@@ -202,23 +213,10 @@ it.each([false, true])(
     expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain(
       "Updater exited before recording completion",
     );
-    expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain("settle probe: settled");
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle probe: settled"));
+    expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain("settle check: settled");
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle check: settled"));
   },
 );
-
-it("explains an older abandoned run whose target identity was never recorded", async () => {
-  const runId = interruptedRun({ receipt: false });
-  reconcileUpdateRunsInNativeKernelForTest();
-  await noteStaleUpdateRuns({});
-  expect(note).toHaveBeenCalledWith(expect.stringContaining(runId), "Update history");
-  expect(note).toHaveBeenCalledWith(
-    expect.stringContaining("target build was not recorded"),
-    "Update history",
-  );
-  expect(getUpdateRun(runId)?.reason).toBe("abandoned");
-  expect(observation.inspect).not.toHaveBeenCalled();
-});
 
 it.each([
   "installed",
@@ -275,23 +273,32 @@ it.each([
   expect(getUpdateRun(runId)?.status).not.toBe("succeeded");
 });
 
-it.each(["driver-revived", "newer-completed-run"])(
-  "rechecks %s after awaited health probes",
-  async (race) => {
+it.each(["absent", "driver-revived", "newer-completed-run"])(
+  "honors a pre-read candidate that is %s without reading another",
+  async (candidateState) => {
     const runId = interruptedRun();
-    observation.inspect.mockImplementationOnce(async () => {
-      if (race === "driver-revived") {
-        observation.driver = "alive";
-      } else {
-        const newer = createUpdateRun({ trigger: "cli" });
-        finishUpdateRun(newer.runId, { status: "succeeded" });
-      }
-      return health();
-    });
-    await reconcileInterruptedUpdateRuns();
+    const candidate = candidateState === "absent" ? undefined : getUpdateRun(runId);
+    vi.mocked(readInterruptedUpdateCandidateAsync).mockClear();
+    if (candidateState !== "absent") {
+      observation.inspect.mockImplementationOnce(async () => {
+        if (candidateState === "driver-revived") {
+          observation.driver = "alive";
+        } else {
+          const newer = createUpdateRun({ trigger: "cli" });
+          finishUpdateRun(newer.runId, { status: "succeeded" });
+        }
+        return health();
+      });
+    }
+    expect(await reconcileInterruptedUpdateRuns({ candidate })).toEqual([]);
+    expect(readInterruptedUpdateCandidateAsync).not.toHaveBeenCalled();
     expect(getUpdateRun(runId)?.status).not.toBe("succeeded");
     expect(getUpdateRun(runId)?.steps.some((step) => step.step === "reconcile:settle")).toBe(false);
     expect(console.warn).not.toHaveBeenCalled();
+    if (candidateState === "absent") {
+      expect(observation.settle).not.toHaveBeenCalled();
+      expect(getUpdateRun(runId)?.status).toBe("running");
+    }
   },
 );
 
@@ -327,39 +334,48 @@ it("cancels pending verification at watcher shutdown without publishing a late s
   expect(console.warn).not.toHaveBeenCalled();
 });
 
-it.each([false, true])("Doctor respects read-only preflight: %s", async (readOnly) => {
-  const runId = interruptedRun();
-  reconcileUpdateRunsInNativeKernelForTest();
-  await noteStaleUpdateRuns({ migrateState: !readOnly });
-  expect(getUpdateRun(runId)?.status).toBe(readOnly ? "failed" : "succeeded");
-  if (readOnly) {
-    expect(observation.settle).not.toHaveBeenCalled();
-  } else {
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("recorded succeeded"),
-      "Update history",
-    );
-  }
-});
-
-it.each(["repair", "acknowledgement"])(
-  "does not attribute a later %s to the interrupted updater",
+it.each(["missing-receipt", "read-only", "settle", "repair", "acknowledgement"])(
+  "Doctor respects interrupted-update evidence: %s",
   async (evidence) => {
-    const runId = interruptedRun();
+    const runId = interruptedRun({ receipt: evidence !== "missing-receipt" });
     if (evidence === "repair") {
       recordUpdateRunRepairAttempt(runId, {
         attempt: 1,
         status: "succeeded",
         startedAtMs: Date.now(),
       });
-    } else {
+    } else if (evidence === "acknowledgement") {
       recordUpdateRunStep(runId, { step: "reconcile:acknowledged", status: "completed" });
     }
-    vi.setSystemTime(Date.now() + 31 * 60_000);
+    if (evidence === "repair" || evidence === "acknowledgement") {
+      vi.setSystemTime(Date.now() + 31 * 60_000);
+    }
     reconcileUpdateRunsInNativeKernelForTest();
-    await noteStaleUpdateRuns({});
-    expect(getUpdateRun(runId)).toMatchObject({ status: "failed", reason: "abandoned" });
-    expect(observation.settle).not.toHaveBeenCalled();
+    await noteStaleUpdateRuns(
+      evidence === "read-only" || evidence === "settle"
+        ? { migrateState: evidence === "settle" }
+        : {},
+    );
+    expect(getUpdateRun(runId)?.status).toBe(evidence === "settle" ? "succeeded" : "failed");
+    if (evidence === "settle") {
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining("recorded succeeded"),
+        "Update history",
+      );
+    } else if (evidence === "missing-receipt") {
+      expect(note).toHaveBeenCalledWith(expect.stringContaining(runId), "Update history");
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining("target build was not recorded"),
+        "Update history",
+      );
+      expect(getUpdateRun(runId)?.reason).toBe("abandoned");
+      expect(observation.inspect).not.toHaveBeenCalled();
+    } else {
+      expect(observation.settle).not.toHaveBeenCalled();
+      if (evidence === "repair" || evidence === "acknowledgement") {
+        expect(getUpdateRun(runId)).toMatchObject({ status: "failed", reason: "abandoned" });
+      }
+    }
   },
 );
 
@@ -387,10 +403,10 @@ it.each(["unverified", "timed-out"])(
     const diagnostic = pending.steps.find((step) => step.step === "reconcile:settle");
     expect(diagnostic).toMatchObject({
       status: "completed",
-      detail: expect.stringContaining(`settle probe: ${outcome}`),
+      detail: expect.stringContaining(`settle check: ${outcome}`),
     });
     expect(pending.status).toBe("running");
-    expect(renderUpdateRunReport(pending).markdown).toContain(`settle probe: ${outcome}`);
+    expect(renderUpdateRunReport(pending).markdown).toContain(`settle check: ${outcome}`);
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining(diagnostic!.detail!));
     if (outcome === "timed-out") {
       expect(diagnostic?.detail).toContain(
@@ -402,9 +418,9 @@ it.each(["unverified", "timed-out"])(
     const recovered = getUpdateRun(runId)!;
     expect(recovered).toMatchObject({ status: "succeeded", verification: { versionMatch: true } });
     expect(recovered.steps.filter((step) => step.step === "reconcile:settle")).toEqual([
-      expect.objectContaining({ detail: expect.stringContaining("settle probe: settled") }),
+      expect.objectContaining({ detail: expect.stringContaining("settle check: settled") }),
     ]);
-    expect(renderUpdateRunReport(recovered).markdown).not.toContain(`settle probe: ${outcome}`);
+    expect(renderUpdateRunReport(recovered).markdown).not.toContain(`settle check: ${outcome}`);
   },
 );
 

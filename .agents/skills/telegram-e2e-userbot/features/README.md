@@ -25,8 +25,11 @@ sees through the dedicated QA user account.
 
 - [Basic turns](./basic-turns.md): real-user group, DM, and native-command entry points.
 - [Delivery lifecycle](./delivery-lifecycle.md): messages, edits, typing, and finalization.
+- [Private yielded reply policy](./private-yield-reply-policy.md): real private-child settlement with tool-only and automatic delivery controls.
+- [Restart attribution](./restart-attribution.md): visible baseline, process replacement, and a distinct fresh reply.
 - [Reaction lifecycle](./reaction-lifecycle.md): acknowledgement and status reactions on the user's message.
-- Photo and album turns: pass `--photo PATH` to the canonical runner; repeat it for one Telegram media album and inspect `messagePhoto` events plus provider evidence.
+- Photo and album turns: pass `--photo PATH` to the canonical runner; repeat it for one Telegram media album and inspect `messagePhoto` events plus provider evidence. That album goes out when recording starts, before the Gateway's poller is long-polling, so Telegram hands every member back in one `getUpdates` response. For album delivery timing, send it from a scenario instead: `{ "type": "send", "atMs": 25000, "photos": ["/abs/a.png", "/abs/b.png"] }` (2–10 paths, one `sendMessageAlbum` call; `text` is the optional first caption). The action row carries every member in `messageIds`. Use distinct, small (tens of KB) photo files per album: reused files let TDLib resend cached uploads, and multi-MB photos uploaded too slowly to the Test DC for the 30 s send confirmation. Judge with `getUpdates` `updates` counts in `scenario.telegramApiRequestLog`, spool-to-spool gaps from the Gateway's `isolated polling update spooled` diagnostics, and one agent turn whose newest user message holds every image.
+- Forwarded bursts: use scenario action `{ "type": "forwardBurst", "text": "...", "photo": "/abs/path.png" }` with `--dm` (required). The SUT bot posts both into the DM via the direct Test Bot API, then the QA user forwards them back in one `forwardMessages` call so each carries `forward_origin` (the QA user's own Saved Messages posts lose it, verified live). Source messages appear as SUT rows before the action row; exclude them when judging replies. The summary/recording action row carries `messageIds` (forwarded) and `sourceMessageIds`. Count only `/v1/responses` requests whose latest user content contains the burst text and an image; recaps/embeddings do not count. Inspect `getUpdates` `updates` counts plus `getFile`/`file` latency (`doneAt - at`) in `scenario.telegramApiRequestLog`.
 
 ## Other branches
 
@@ -43,7 +46,7 @@ The audit lane exercises config the default path never uses:
 | `E2E_REQUIRE_MENTION=true`  | makes the test group mention-required; ack scope treats `group-mentions` as mention-_required_ groups, so reaction rows need it |
 | `E2E_TELEGRAM_PROVIDER_API` | `openai-completions` for commentary and preamble scenarios                                                                      |
 | `E2E_MOCK_SERVER_PATH`      | an alternate mock server for provider-shape controls                                                                            |
-| `--source-gateway`          | the exact TypeScript checkout without a build step                                                                              |
+| `--source-gateway`          | core and the Telegram plugin from TypeScript source; other plugins use built output when present                                |
 | `--pre-send '<text>'`       | posts as the QA user before the driven turn, for history-scoped rows                                                            |
 
 Scenario action `command` runs argv without an implicit shell in the leased
@@ -107,10 +110,13 @@ For flood control, add `retryAfter` (seconds): the proxy answers with Bot API
 429 `Too Many Requests` and `parameters.retry_after`. `times` (default 1)
 rejects that many consecutive matching requests before the control disarms.
 `retryAfter: 0` returns a bare 429 without `parameters.retry_after`. The summary's
-`scenario.telegramApiRequestLog` lists every proxied Bot API call except
-`getUpdates` as `{ method, at, status, chat }`, where `chat` is only
-`private` or `group` (never an id), so a run can show that no call reached Telegram
-inside a flood window.
+`scenario.telegramApiRequestLog` lists proxied Bot API calls as
+`{ method, at, doneAt, status, chat }`, where `doneAt` marks response completion
+and `chat` is only `private` or `group` (never an id). Nonempty `getUpdates`
+responses use `{ method, at, doneAt, status, updates }` with only the update count;
+empty long-poll responses stay unlogged. File downloads appear as log-only
+`file` rows without paths; hold/reject controls do not match them. The log can
+show that no call reached Telegram inside a flood window.
 
 ```json
 {

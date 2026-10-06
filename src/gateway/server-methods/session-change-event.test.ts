@@ -96,7 +96,7 @@ function createContext(
     getRuntimeConfig: () => config,
     ...bindSessionRowProjection({}, () => projection as unknown as SessionRowProjection),
     getSessionEventSubscriberConnIds: () => receivers,
-    mentionInbox: { invalidate: vi.fn() },
+    mentionInbox: { invalidateAsync: vi.fn() },
   } as unknown as GatewayRequestContext;
 }
 
@@ -145,7 +145,7 @@ function preparePlacementProjection(
   });
   bindSessionRowProjection(context, () => projection);
   onTestFinished(() => projection.dispose());
-  const snapshot = vi.spyOn(projection, "snapshot");
+  const present = vi.spyOn(projection, "present");
   const update = () => {
     const record = projection.describe({ key: sessionKey, agentId: "main" });
     if (!record) {
@@ -160,7 +160,7 @@ function preparePlacementProjection(
     }
   };
   update();
-  return { update, snapshot };
+  return { update, present };
 }
 
 let restorePerformanceClock: () => void;
@@ -198,7 +198,7 @@ describe("sessions.changed coalescing", () => {
 
     expect(changed).not.toHaveBeenCalled();
     expect(mocks.invalidate).not.toHaveBeenCalled();
-    expect(context.mentionInbox?.invalidate).not.toHaveBeenCalled();
+    expect(context.mentionInbox?.invalidateAsync).not.toHaveBeenCalled();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
@@ -211,7 +211,7 @@ describe("sessions.changed coalescing", () => {
     await emitAndSettleLeading(context, { reason: "groups" });
     expect(changed).toHaveBeenCalledWith({ all: true, scope: "sessions" });
     expect(mocks.invalidate).toHaveBeenCalledOnce();
-    expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+    expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 1);
   });
 
@@ -255,8 +255,10 @@ describe("sessions.changed coalescing", () => {
     expect(published).not.toHaveProperty("placement.turnClaim");
     expect(JSON.stringify(published)).not.toContain("private-turn-claim");
     expect(getMany).not.toHaveBeenCalled();
-    expect(resident.snapshot).toHaveBeenCalledTimes(2);
-    expect(resident.snapshot).toHaveBeenLastCalledWith({ key: sessionKey, agentId: "main" });
+    expect(resident.present).toHaveBeenCalledTimes(2);
+    expect(resident.present).toHaveBeenLastCalledWith(
+      expect.objectContaining({ key: sessionKey, agentId: "main" }),
+    );
 
     placements.clear();
     resident.update();
@@ -712,7 +714,7 @@ describe("sessions.changed coalescing", () => {
         prepared.resolve();
         await flushPendingSessionsChangedEvents(context);
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         projection.dispose();
       }
     });
@@ -789,7 +791,7 @@ describe("sessions.changed coalescing", () => {
       );
 
       expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
-      expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+      expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
       loadCachedSessionSharingSnapshot({ sessionKey, resolve });
       expect(resolve).toHaveBeenCalledTimes(2);
       if (receivesEvents) {
@@ -863,7 +865,7 @@ describe("sessions.changed coalescing", () => {
     const config = retainLegacyDefaultAgentId(
       {
         agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      },
+      } satisfies OpenClawConfig,
       "ops",
     );
     const sessionId = "agent:research:shared-session-id";
@@ -1030,9 +1032,9 @@ describe("sessions.changed coalescing", () => {
     await emitAndSettleLeading(context, { reason: "update", sessionKey: "agent:main:chat" });
 
     expect(mocks.invalidate).toHaveBeenCalledOnce();
-    expect(context.mentionInbox?.invalidate).toHaveBeenCalledOnce();
+    expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
     expect(mocks.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(context.mentionInbox!.invalidate).mock.invocationCallOrder[0]!,
+      vi.mocked(context.mentionInbox!.invalidateAsync).mock.invocationCallOrder[0]!,
     );
     expect(mocks.loadRow).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();

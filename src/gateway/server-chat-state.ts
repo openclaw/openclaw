@@ -1,6 +1,4 @@
 import type { AgentPlanStep } from "../channels/streaming.js";
-// Gateway chat run state registries.
-// Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { mergeAssistantText, type AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
@@ -11,6 +9,10 @@ import {
 } from "./live-chat-projector.js";
 import type { ChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
 import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
+import {
+  createToolEventRecipientRegistry,
+  type ChatRunToolRecipientState,
+} from "./server-chat-tool-recipients.js";
 
 export type ChatRunTiming = {
   ackedAtMs: number;
@@ -35,14 +37,9 @@ export type ChatAbortMarker = { abortedAtMs: number; sequence: number };
 
 let chatRunOrderingSequence = 0;
 
-function nextChatRunOrderingSequence(): number {
-  chatRunOrderingSequence += 1;
-  return chatRunOrderingSequence;
-}
-
 /** Create an abort marker ordered against chat run registrations, using a shared monotonic sequence. */
 export function createChatAbortMarker(now = Date.now()): ChatAbortMarker {
-  return { abortedAtMs: now, sequence: nextChatRunOrderingSequence() };
+  return { abortedAtMs: now, sequence: ++chatRunOrderingSequence };
 }
 
 /** Return the wall-clock timestamp used by maintenance TTL pruning. */
@@ -84,12 +81,6 @@ type ChatRunAgentTextState = {
   snapshot?: { text: string; itemId?: string };
 };
 
-type ChatRunToolRecipientState = {
-  connIds: Set<string>;
-  updatedAt: number;
-  finalizedAt?: number;
-};
-
 type PendingLiveTextFlush = {
   timer: NodeJS.Timeout;
   flush: () => void;
@@ -129,13 +120,9 @@ type ChatRunRecord = {
   pendingTextFlushes?: Partial<Record<"chat" | "agent", PendingLiveTextFlush>>;
 };
 
-type ChatRunRecordStore = {
-  runs: Map<string, ChatRunRecord>;
-  getOrCreate: (runId: string) => ChatRunRecord;
-  releaseIfEmpty: (runId: string) => void;
-};
+type ChatRunRecordStore = ReturnType<typeof createChatRunRecordStore>;
 
-function createChatRunRecordStore(): ChatRunRecordStore {
+function createChatRunRecordStore() {
   const runs = new Map<string, ChatRunRecord>();
   const getOrCreate = (runId: string) => {
     const existing = runs.get(runId);
@@ -165,7 +152,7 @@ function clearPendingLiveTextFlushes(record: ChatRunRecord): void {
   delete record.pendingTextFlushes;
 }
 
-export type ChatRunRegistry = {
+type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunRegistration) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
   shift: (sessionId: string) => ChatRunEntry | undefined;
@@ -174,7 +161,7 @@ export type ChatRunRegistry = {
 
 function createChatRunRegistryForStore(store: ChatRunRecordStore): ChatRunRegistry {
   const add = (sessionId: string, entry: ChatRunRegistration) => {
-    const registeredEntry = { ...entry, registeredSequence: nextChatRunOrderingSequence() };
+    const registeredEntry = { ...entry, registeredSequence: ++chatRunOrderingSequence };
     const record = store.getOrCreate(sessionId);
     (record.registrations ??= []).push(registeredEntry);
   };
@@ -211,34 +198,13 @@ function createChatRunRegistryForStore(store: ChatRunRecordStore): ChatRunRegist
   return { add, peek, shift: (sessionId) => takeRegistration(sessionId), remove: takeRegistration };
 }
 
-export type ChatRunState = {
-  runs: Map<string, ChatRunRecord>;
-  registry: ChatRunRegistry;
-  toolEventRecipients: ToolEventRecipientRegistry;
-  /** Acquire mutable state and record activity; readers use runs.get. */
-  getOrCreate: (runId: string) => ChatRunRecord;
-  resolveBuffer: (
-    runId: string,
-    options?: { final?: boolean },
-  ) => { text: string; suppress: boolean };
-  updateBuffer: (runId: string, input: Parameters<typeof mergeAssistantText>[1]) => string;
-  takeBufferDelta: (
-    runId: string,
-    text: string,
-  ) => { deltaText: string; replace?: true } | undefined;
-  flushPendingText: (runId: string) => void;
-  hasAbortMarker: (runId: string) => boolean;
-  deleteAbortMarker: (runId: string) => void;
-  recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
-  clearRun: (runId: string) => void;
-  clear: () => void;
-};
+export type ChatRunState = ReturnType<typeof createChatRunState>;
 
 /** Create the single record map used by Gateway chat-run runtime state. */
-export function createChatRunState(): ChatRunState {
+export function createChatRunState(isConnectionActive?: (connId: string) => boolean) {
   const store = createChatRunRecordStore();
   const registry = createChatRunRegistryForStore(store);
-  const toolEventRecipients = createToolEventRecipientRegistryForStore(store);
+  const toolEventRecipients = createToolEventRecipientRegistry(store, isConnectionActive);
 
   const recordProgressEvent = (
     runId: string,
@@ -401,11 +367,12 @@ export function createChatRunState(): ChatRunState {
     runs: store.runs,
     registry,
     toolEventRecipients,
+    /** Acquire mutable state and record activity; readers use runs.get. */
     getOrCreate: store.getOrCreate,
     resolveBuffer,
     updateBuffer,
     takeBufferDelta,
-    flushPendingText: (runId) => {
+    flushPendingText: (runId: string) => {
       const record = store.runs.get(runId);
       if (!record) {
         return;
@@ -416,8 +383,8 @@ export function createChatRunState(): ChatRunState {
         flush.flush();
       }
     },
-    hasAbortMarker: (runId) => store.runs.get(runId)?.abortMarker !== undefined,
-    deleteAbortMarker: (runId) => {
+    hasAbortMarker: (runId: string) => store.runs.get(runId)?.abortMarker !== undefined,
+    deleteAbortMarker: (runId: string) => {
       const record = store.runs.get(runId);
       if (!record) {
         return;
@@ -430,13 +397,6 @@ export function createChatRunState(): ChatRunState {
     clear,
   };
 }
-
-export type ToolEventRecipientRegistry = {
-  add: (runId: string, connId: string) => void;
-  get: (runId: string) => ReadonlySet<string> | undefined;
-  markFinal: (runId: string) => void;
-  pruneExpired: (now?: number) => void;
-};
 
 export type SessionEventSubscriberRegistry = {
   subscribe: (connId: string) => void;
@@ -476,9 +436,6 @@ type ProvisionalSubscriptionState = {
 };
 
 type SessionMessageSubscriptionOwners = Map<string | undefined, ProvisionalSubscriptionState>;
-
-const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
-const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 
 /** Create the broad sessions.changed subscriber registry. */
 export function createSessionEventSubscriberRegistry(
@@ -697,78 +654,4 @@ export function createSessionMessageSubscriberRegistry(
     },
   };
   return registry;
-}
-
-function createToolEventRecipientRegistryForStore(
-  store: ChatRunRecordStore,
-): ToolEventRecipientRegistry {
-  let nextPruneAt = Infinity;
-  const pruneExpired = (now = Date.now()) => {
-    if (now < nextPruneAt) {
-      return;
-    }
-    nextPruneAt = Infinity;
-    for (const [runId, record] of store.runs) {
-      const entry = record.toolRecipient;
-      if (!entry) {
-        continue;
-      }
-      const cutoff = entry.finalizedAt
-        ? entry.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
-        : entry.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS;
-      if (now >= cutoff) {
-        delete record.toolRecipient;
-        store.releaseIfEmpty(runId);
-      } else {
-        nextPruneAt = Math.min(nextPruneAt, cutoff);
-      }
-    }
-  };
-
-  const prune = (updated: ChatRunToolRecipientState) => {
-    // Refreshes can move expiry later; a conservative lower bound avoids a
-    // full run scan on each tool event while retaining exact expiry cleanup.
-    nextPruneAt = Math.min(
-      nextPruneAt,
-      updated.finalizedAt
-        ? updated.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
-        : updated.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS,
-    );
-    pruneExpired();
-  };
-
-  const add = (runId: string, connId: string) => {
-    if (!runId || !connId) {
-      return;
-    }
-    const now = Date.now();
-    const entry = (store.getOrCreate(runId).toolRecipient ??= {
-      connIds: new Set<string>(),
-      updatedAt: now,
-    });
-    entry.connIds.add(connId);
-    entry.updatedAt = now;
-    prune(entry);
-  };
-
-  const get = (runId: string) => {
-    const entry = store.runs.get(runId)?.toolRecipient;
-    if (entry) {
-      entry.updatedAt = Date.now();
-      prune(entry);
-    }
-    // Pruning may retire this finalized run; never return its former audience.
-    return store.runs.get(runId)?.toolRecipient?.connIds;
-  };
-
-  const markFinal = (runId: string) => {
-    const entry = store.runs.get(runId)?.toolRecipient;
-    if (!entry) {
-      return;
-    }
-    entry.finalizedAt = Date.now();
-    prune(entry);
-  };
-
-  return { add, get, markFinal, pruneExpired };
 }

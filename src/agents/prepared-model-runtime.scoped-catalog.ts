@@ -5,7 +5,7 @@ import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
-import { loadPersistedPluginModelCatalogsReadOnly } from "./plugin-model-catalog.js";
+import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
 import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogSource,
@@ -138,7 +138,7 @@ export async function prepareAgentCatalogSource(
     // publish a different workspace generation before full-catalog parsing begins.
     return {
       modelsJsonContents: captureModelsJsonContents(input.agentDir),
-      pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(input.agentDir),
+      pluginCatalogs: await loadPersistedPluginModelCatalogs(input.agentDir, undefined, env),
       providerOutcomes: resultOutcomes(),
     };
   };

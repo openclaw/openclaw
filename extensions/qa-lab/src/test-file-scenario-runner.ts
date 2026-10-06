@@ -21,11 +21,7 @@ import {
 } from "./evidence-summary.js";
 import { sanitizeQaProgressValue } from "./progress-format.js";
 import type { QaProviderMode } from "./providers/index.js";
-import type {
-  QaSeedScenarioWithSource,
-  QaTestFileExecutionKind,
-  QaTestFileScenario,
-} from "./scenario-catalog.js";
+import type { QaSeedScenarioWithSource, QaTestFileScenario } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
 import {
@@ -75,6 +71,15 @@ type QaTestFileScenarioRunParams = {
 };
 
 type QaScenarioCommandRunner = typeof runQaScenarioCommandLifecycle;
+type QaScenarioCommandRunParams = Pick<
+  QaTestFileScenarioRunParams,
+  "onCommandOutput" | "outputDir" | "repoRoot"
+> & {
+  env: NodeJS.ProcessEnv;
+  commandTimeoutMs: number;
+  runCommand: QaScenarioCommandRunner;
+  scenario: QaTestFileScenario;
+};
 
 type QaTestFileScenarioResult = {
   evidenceOccurrenceId?: string;
@@ -102,13 +107,7 @@ type QaTestFileExecutionUnit =
       timeoutMs: number;
     };
 
-export type QaTestFileScenarioRunResult = {
-  evidence: QaEvidenceSummaryJson;
-  evidencePath: string;
-  executionKind: QaTestFileExecutionKind;
-  outputDir: string;
-  results: QaTestFileScenarioResult[];
-};
+export type QaTestFileScenarioRunResult = Awaited<ReturnType<typeof runQaTestFileScenarios>>;
 
 const DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS = 30 * 60_000;
 export function isQaTestFileScenario(
@@ -155,16 +154,9 @@ function withScenarioCoverage<T extends QaEvidenceSummaryJson["entries"][number]
   };
 }
 
-async function runScenarioCommandSteps(params: {
-  commandTimeoutMs: number;
-  env: NodeJS.ProcessEnv;
-  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
-  outputDir: string;
-  repoRoot: string;
-  runCommand: QaScenarioCommandRunner;
-  scenario: QaTestFileScenario;
-  steps: readonly QaScenarioCommandStep[];
-}): Promise<QaTestFileScenarioResult> {
+async function runScenarioCommandSteps(
+  params: QaScenarioCommandRunParams & { steps: readonly QaScenarioCommandStep[] },
+): Promise<QaTestFileScenarioResult> {
   const startedAt = Date.now();
   const logPath = path.join(params.outputDir, `${params.scenario.id}.log`);
   const logChunks: string[] = [];
@@ -224,15 +216,7 @@ async function runScenarioCommandSteps(params: {
   };
 }
 
-async function runQaTestFileScenario(params: {
-  env: NodeJS.ProcessEnv;
-  commandTimeoutMs: number;
-  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
-  outputDir: string;
-  repoRoot: string;
-  runCommand: QaScenarioCommandRunner;
-  scenario: QaTestFileScenario;
-}) {
+async function runQaTestFileScenario(params: QaScenarioCommandRunParams) {
   const requiresProducerEvidence =
     params.scenario.execution.kind === "script" && !isDockerE2eScenario(params.scenario);
   if (requiresProducerEvidence) {
@@ -362,9 +346,7 @@ function resolveTestFileExecutionKind(scenarios: readonly QaTestFileScenario[]) 
   return kind;
 }
 
-export async function runQaTestFileScenarios(
-  params: QaTestFileScenarioRunParams,
-): Promise<QaTestFileScenarioRunResult> {
+export async function runQaTestFileScenarios(params: QaTestFileScenarioRunParams) {
   // Each scheduled instance owns its own object identity, even for repeated ids.
   const scenarios = params.scenarios
     .filter(isQaTestFileScenario)

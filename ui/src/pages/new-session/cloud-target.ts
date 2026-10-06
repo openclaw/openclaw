@@ -1,17 +1,17 @@
 import { html, nothing, type TemplateResult } from "lit";
 import "../../components/tooltip.ts";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  WorkerMachineOption,
+  WorkerOperatingSystem,
+} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { compareCloudProfiles, resolveCloudProfileIcon } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import type {
-  DraftCloudProfile,
-  DraftEnvironment,
-  DraftMachineOption,
-  DraftOperatingSystem,
-} from "./discovery.ts";
+import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
+import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import {
   cloudMachinesForOs,
   defaultCloudMachine,
@@ -21,6 +21,7 @@ import {
 } from "./discovery.ts";
 
 registerNewSessionSetupEnglish();
+registerSessionPlacementEnglish();
 
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
@@ -294,8 +295,15 @@ export function renderCloudProfileMenuItems(params: {
         hasSubmenu,
         selectedSummary:
           params.compact && selected
-            ? [os?.label, machine?.label].filter(Boolean).join(" · ")
+            ? [
+                os?.label,
+                machine?.label,
+                profile.inference === "worker" ? t("sessionsView.inferenceWorker") : undefined,
+              ]
+                .filter(Boolean)
+                .join(" · ")
             : undefined,
+        description: profile.inference === "worker" ? t("sessionsView.inferenceWorker") : undefined,
         icon: presentation.icon,
         accessibleProvider: presentation.label,
         compact: params.compact,
@@ -362,7 +370,7 @@ export function renderCloudProfileMenuItems(params: {
 }
 
 /** Machine shape as a picker sub-line; providers may report neither, one, or both numbers. */
-function machineShapeText(machine: DraftMachineOption): string | undefined {
+function machineShapeText(machine: WorkerMachineOption): string | undefined {
   const cpu = machine.cpu === undefined ? undefined : String(machine.cpu);
   const memory = machine.memoryGb === undefined ? undefined : String(machine.memoryGb);
   if (cpu && memory) {
@@ -377,8 +385,8 @@ function machineShapeText(machine: DraftMachineOption): string | undefined {
 function renderCloudConfiguration(params: {
   profile: DraftCloudProfile;
   suggested?: boolean;
-  operatingSystems: readonly DraftOperatingSystem[];
-  machines: readonly DraftMachineOption[];
+  operatingSystems: readonly WorkerOperatingSystem[];
+  machines: readonly WorkerMachineOption[];
   selectedOs: string;
   selectedMachine: string;
   submitting: boolean;
@@ -437,7 +445,7 @@ function renderCloudConfiguration(params: {
   </section>`;
 }
 
-function renderFixedMachine(machine: DraftMachineOption) {
+function renderFixedMachine(machine: WorkerMachineOption) {
   const shape = machineShapeText(machine);
   return html`<span class="new-session-page__fixed-machine" data-value=${`machine:${machine.id}`}>
     <span>${machine.label}</span>${shape ? html`<span>${shape}</span>` : nothing}
@@ -446,7 +454,7 @@ function renderFixedMachine(machine: DraftMachineOption) {
 
 // The move-session dialog retains its existing menu-based choices.
 export function renderCloudMachineMenuItems(params: {
-  machines: readonly DraftMachineOption[];
+  machines: readonly WorkerMachineOption[];
   selectedId: string;
   suggestedId?: string;
   submitting: boolean;
@@ -471,7 +479,7 @@ export function renderCloudMachineMenuItems(params: {
 }
 
 export function renderCloudOsMenuItems(params: {
-  operatingSystems: readonly DraftOperatingSystem[];
+  operatingSystems: readonly WorkerOperatingSystem[];
   selectedId: string;
   suggestedId?: string;
   submitting: boolean;

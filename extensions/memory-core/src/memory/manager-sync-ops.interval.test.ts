@@ -94,10 +94,7 @@ class IntervalSyncHarness extends MemorySyncTestHarness {
 
   protected assertRequiredProviderAvailable(): void {}
 
-  protected async indexFile(
-    _entry: MemoryIndexEntry,
-    _options: { source: MemorySource; content?: string },
-  ): Promise<void> {}
+  protected async indexFile(_entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {}
 }
 
 describe("MemoryManagerSyncOps interval sync", () => {

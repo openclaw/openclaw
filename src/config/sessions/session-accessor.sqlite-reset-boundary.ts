@@ -8,7 +8,7 @@ import type { SessionResetBoundaryWrite } from "./session-accessor.lifecycle-typ
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
 import { resolveResetBoundaryHeaderCwd } from "./transcript-header.js";
 import type { InternalSessionEntry } from "./types.js";
@@ -19,12 +19,17 @@ export function appendSessionResetBoundary(
   scope: ResolvedTranscriptScope,
   previousEntry: InternalSessionEntry,
   boundary: SessionResetBoundaryWrite,
-): void {
+  projection?: {
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
+  },
+): boolean {
   // Reset may be the first append; a headerless window cannot be read on the next turn.
   ensureTranscriptHeader(
     database,
     scope,
     resolveResetBoundaryHeaderCwd(previousEntry, boundary.cwd),
+    projection,
   );
   const event = buildSessionResetBoundaryEvent({
     events: loadTranscriptEventsFromDatabase(database, scope.sessionId, {
@@ -32,7 +37,7 @@ export function appendSessionResetBoundary(
     }),
     ...boundary,
   });
-  if (appendTranscriptEventsInTransaction(database, scope, [event]) !== 1) {
+  if (appendTranscriptEventInTransaction(database, scope, event, projection) === false) {
     throw new Error("Failed to append reset boundary for " + scope.sessionKey);
   }
   if (
@@ -43,5 +48,7 @@ export function appendSessionResetBoundary(
     deferOpenClawAgentPostCommitPublication(database, () => {
       emitSessionLifecycleEvent({ agentId, sessionKey, reason: "progress-card-reset" });
     });
+    return true;
   }
+  return false;
 }

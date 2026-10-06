@@ -7,8 +7,6 @@ import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
   createWorkboardCardMutations,
-  redactedCardResult,
-  requireScopedCard,
   claimTokenField,
   strictObject,
   workspaceField,
@@ -31,7 +29,7 @@ export function createWorkboardOrchestrationTools(params: {
   ownerId: string;
 }): AnyAgentTool[] {
   const { store, ownerId } = params;
-  const { readScopedCardToolParams, readClaimedCardToolParams, runScopedCardMutation } =
+  const { readScopedCardToolParams, scopedCardMutation, claimedCardMutation } =
     createWorkboardCardMutations(store, ownerId);
   return [
     {
@@ -44,9 +42,15 @@ export function createWorkboardOrchestrationTools(params: {
     {
       name: "workboard_board_create",
       label: "Workboard Board Create",
-      description: "Create or update a Workboard board namespace with persisted SQLite metadata.",
+      description:
+        "Create or update a Workboard board with persisted SQLite metadata. Choose kind sessions on creation for columns with rules over Gateway-owned session facts; card tools do not apply to Sessions boards. Board kind cannot change after creation.",
       parameters: strictObject({
         id: Type.String({ description: "Board id." }),
+        kind: Type.Optional(
+          Type.Union([Type.Literal("cards"), Type.Literal("sessions")], {
+            description: "Board kind, set only at creation. Default cards.",
+          }),
+        ),
         name: Type.Optional(Type.String({ description: "Display name." })),
         description: Type.Optional(Type.String({ description: "Board description." })),
         icon: Type.Optional(Type.String({ description: "Short icon or label." })),
@@ -145,13 +149,8 @@ export function createWorkboardOrchestrationTools(params: {
         token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
       }),
       execute: async (_toolCallId, rawParams) => {
-        const record = asNonArrayRecord(rawParams);
-        const id = readStringParam(record, "id", { required: true });
-        const token = typeof record.token === "string" ? record.token : undefined;
-        await requireScopedCard(store, id, ownerId, token);
-        return jsonResult({
-          card: redactClaimToken(await store.specify(id, record, { ownerId, token: record.token })),
-        });
+        const { record, id, scope } = await readScopedCardToolParams(asNonArrayRecord(rawParams));
+        return jsonResult({ card: redactClaimToken(await store.specify(id, record, scope)) });
       },
     },
     {
@@ -186,11 +185,8 @@ export function createWorkboardOrchestrationTools(params: {
         ),
       }),
       execute: async (_toolCallId, rawParams) => {
-        const record = asNonArrayRecord(rawParams);
-        const id = readStringParam(record, "id", { required: true });
-        const token = typeof record.token === "string" ? record.token : undefined;
-        await requireScopedCard(store, id, ownerId, token);
-        const result = await store.decompose(id, record, { ownerId, token: record.token });
+        const { record, id, scope } = await readScopedCardToolParams(asNonArrayRecord(rawParams));
+        const result = await store.decompose(id, record, scope);
         return jsonResult({
           parent: redactClaimToken(result.parent),
           children: result.children.map(redactClaimToken),
@@ -272,11 +268,7 @@ export function createWorkboardOrchestrationTools(params: {
         force: Type.Optional(Type.Boolean({ description: "Bypass dependency or schedule holds." })),
         reason: OptionalOperatorNoteField,
       }),
-      execute: async (_toolCallId, rawParams) => {
-        return runScopedCardMutation(rawParams, (id, record, scope) =>
-          store.promote(id, record, scope),
-        );
-      },
+      execute: scopedCardMutation((id, record, scope) => store.promote(id, record, scope)),
     },
     {
       name: "workboard_reassign",
@@ -290,11 +282,7 @@ export function createWorkboardOrchestrationTools(params: {
         resetFailures: Type.Optional(Type.Boolean({ description: "Reset failure count." })),
         reason: OptionalOperatorNoteField,
       }),
-      execute: async (_toolCallId, rawParams) => {
-        return runScopedCardMutation(rawParams, (id, record, scope) =>
-          store.reassign(id, record, scope),
-        );
-      },
+      execute: scopedCardMutation((id, record, scope) => store.reassign(id, record, scope)),
     },
     {
       name: "workboard_reclaim",
@@ -307,11 +295,7 @@ export function createWorkboardOrchestrationTools(params: {
         status: OptionalNextStatusField,
         reason: OptionalOperatorNoteField,
       }),
-      execute: async (_toolCallId, rawParams) => {
-        return runScopedCardMutation(rawParams, (id, record, scope) =>
-          store.reclaim(id, record, scope),
-        );
-      },
+      execute: scopedCardMutation((id, record, scope) => store.reclaim(id, record, scope)),
     },
     {
       name: "workboard_dispatch",
@@ -339,10 +323,7 @@ export function createWorkboardOrchestrationTools(params: {
         runId: Type.Optional(Type.String({ description: "Linked run id." })),
         token: ScopedClaimTokenField,
       }),
-      execute: async (_toolCallId, rawParams) => {
-        const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedCardResult(await store.addWorkerLog(id, record, scope));
-      },
+      execute: scopedCardMutation((id, record, scope) => store.addWorkerLog(id, record, scope)),
     },
     {
       name: "workboard_protocol_violation",
@@ -356,10 +337,9 @@ export function createWorkboardOrchestrationTools(params: {
         runId: Type.Optional(Type.String({ description: "Linked run id." })),
         token: ScopedClaimTokenField,
       }),
-      execute: async (_toolCallId, rawParams) => {
-        const { record, id, scope } = await readClaimedCardToolParams(rawParams);
-        return redactedCardResult(await store.recordProtocolViolation(id, record, scope));
-      },
+      execute: claimedCardMutation((id, record, scope) =>
+        store.recordProtocolViolation(id, record, scope),
+      ),
     },
   ];
 }

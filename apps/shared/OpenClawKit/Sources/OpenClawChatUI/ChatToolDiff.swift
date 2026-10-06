@@ -81,11 +81,12 @@ enum ChatToolDiff {
     private static func parseDetailsDiffResult(_ diff: String) -> ParsedDetailsDiff? {
         guard !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
+        let rawLines = diff.components(separatedBy: "\n")
         var lines: [ChatToolDiffLine] = []
-        var truncated = diff.components(separatedBy: "\n").contains { raw in
+        var truncated = rawLines.contains { raw in
             raw.trimmingCharacters(in: .whitespacesAndNewlines) == "...(truncated)..."
         }
-        for raw in diff.components(separatedBy: "\n") {
+        for raw in rawLines {
             guard !raw.isEmpty else { continue }
             let marker = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             let line: ChatToolDiffLine
@@ -382,30 +383,17 @@ enum ChatToolDiff {
         storedRows: inout Int,
         clipped: inout Bool)
     {
-        let kind: ChatToolDiffLineKind
-        let lineNo: Int?
-        if raw.hasPrefix("+") {
-            kind = .add
-            lineNo = hunk.newLine
-            if let newLine = hunk.newLine {
-                hunk.newLine = newLine + 1
-            }
-        } else if raw.hasPrefix("-") {
-            kind = .del
-            lineNo = hunk.oldLine
-            if let oldLine = hunk.oldLine {
-                hunk.oldLine = oldLine + 1
-            }
-        } else {
-            kind = .ctx
-            lineNo = hunk.newLine
-            if let oldLine = hunk.oldLine, let newLine = hunk.newLine {
-                hunk.oldLine = oldLine + 1
-                hunk.newLine = newLine + 1
-            }
+        let kind: ChatToolDiffLineKind = raw.hasPrefix("+") ? .add : raw.hasPrefix("-") ? .del : .ctx
+        let lineNo = kind == .del ? hunk.oldLine : hunk.newLine
+        // Hunk coordinates come from tool output; an unrepresentable next line has no display number.
+        if kind != .add {
+            hunk.oldLine = hunk.oldLine.flatMap { $0 == .max ? nil : $0 + 1 }
+        }
+        if kind != .del {
+            hunk.newLine = hunk.newLine.flatMap { $0 == .max ? nil : $0 + 1 }
         }
         self.pushPatchLine(
-            ChatToolDiffLine(kind: kind, lineNo: lineNo, text: raw.isEmpty ? "" : String(raw.dropFirst())),
+            ChatToolDiffLine(kind: kind, lineNo: lineNo, text: String(raw.dropFirst())),
             section: &section,
             storedRows: &storedRows,
             clipped: &clipped)
@@ -601,41 +589,24 @@ enum ChatToolDiff {
     private static func readEditPairs(
         _ arguments: [String: AnyCodable]) -> (pairs: [EditPair], truncated: Bool)
     {
+        let edits = arguments["edits"]?.arrayValue
+        let records = edits?.prefix(self.maxLocalPairs).map(\.dictionaryValue) ?? [arguments]
         var pairs: [EditPair] = []
         var inputCharacters = 0
-        var truncated = false
+        var truncated = (edits?.count ?? 0) > self.maxLocalPairs
 
-        func appendPair(oldValue: AnyCodable?, newValue: AnyCodable?) {
-            guard let oldText = oldValue?.stringValue, let newText = newValue?.stringValue else { return }
+        for record in records {
+            guard let record,
+                  let oldText = self.string(in: record, keys: ["oldText", "old_string", "oldString", "old_str"]),
+                  let newText = self.string(in: record, keys: ["newText", "new_string", "newString", "new_str"])
+            else { continue }
             let pairCharacters = oldText.utf16.count + newText.utf16.count
             guard pairCharacters <= self.maxLocalInputCharacters - inputCharacters else {
                 truncated = true
-                return
+                break
             }
             inputCharacters += pairCharacters
             pairs.append(EditPair(oldText: oldText, newText: newText))
-        }
-
-        if let edits = arguments["edits"]?.arrayValue {
-            for (index, edit) in edits.enumerated() {
-                guard index < self.maxLocalPairs else {
-                    truncated = true
-                    break
-                }
-                guard let record = edit.dictionaryValue else { continue }
-                appendPair(
-                    oldValue: self.firstValue(in: record, keys: ["oldText", "old_string", "oldString", "old_str"]),
-                    newValue: self.firstValue(in: record, keys: ["newText", "new_string", "newString", "new_str"]))
-                if truncated { break }
-            }
-        } else {
-            appendPair(
-                oldValue: self.firstValue(
-                    in: arguments,
-                    keys: ["oldText", "old_string", "oldString", "old_str"]),
-                newValue: self.firstValue(
-                    in: arguments,
-                    keys: ["newText", "new_string", "newString", "new_str"]))
         }
         return (pairs, truncated)
     }
@@ -669,39 +640,21 @@ enum ChatToolDiff {
     }
 
     private static func stat(for lines: [ChatToolDiffLine]) -> ChatToolDiffStat {
-        lines.reduce(ChatToolDiffStat(added: 0, removed: 0)) { stat, line in
-            switch line.kind {
-            case .add:
-                ChatToolDiffStat(added: stat.added + 1, removed: stat.removed)
-            case .del:
-                ChatToolDiffStat(added: stat.added, removed: stat.removed + 1)
-            case .ctx, .file, .skip:
-                stat
-            }
-        }
+        ChatToolDiffStat(
+            added: lines.count { $0.kind == .add },
+            removed: lines.count { $0.kind == .del })
     }
 
     private static func firstNonBlankString(
         in record: [String: AnyCodable]?,
         keys: [String]) -> String?
     {
-        guard let record else { return nil }
-        for key in keys {
-            if let value = record[key]?.stringValue,
-               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            {
-                return value
-            }
-        }
-        return nil
+        keys.lazy.compactMap { record?[$0]?.stringValue }
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     private static func string(in record: [String: AnyCodable]?, keys: [String]) -> String? {
         guard let record else { return nil }
-        return self.firstValue(in: record, keys: keys)?.stringValue
-    }
-
-    private static func firstValue(in record: [String: AnyCodable], keys: [String]) -> AnyCodable? {
-        keys.lazy.compactMap { record[$0] }.first
+        return keys.lazy.compactMap { record[$0] }.first?.stringValue
     }
 }

@@ -1,3 +1,4 @@
+import { resolveNonNegativeIntegerOption as readCount } from "openclaw/plugin-sdk/number-runtime";
 import {
   compareToolCallShape,
   compareToolResultShape,
@@ -16,10 +17,6 @@ type HarnessVariant = {
   id: string;
   label: string;
   runtime?: RuntimeId;
-  model?: string;
-  configPatch?: Record<string, unknown>;
-  systemPromptOverlay?: string;
-  toolDescriptionOverlay?: Record<string, string>;
 };
 
 export type HarnessParityDrift =
@@ -28,15 +25,7 @@ export type HarnessParityDrift =
   | "tool-description"
   | "tool-schema";
 
-type HarnessParityPromptStats = {
-  systemPromptChars: number;
-  projectContextChars: number;
-  nonProjectContextChars: number;
-  skillPromptChars: number;
-  toolSummaryChars: number;
-  toolSchemaChars: number;
-  toolCount: number;
-};
+type HarnessParityPromptStats = ReturnType<typeof buildPromptStats>;
 
 export type RuntimeParitySystemPromptReport = {
   systemPrompt?: {
@@ -73,15 +62,7 @@ export type HarnessRuntimeParityCell = RuntimeParityCell & {
   systemPromptReport?: RuntimeParitySystemPromptReport;
 };
 
-type HarnessParityCell = HarnessRuntimeParityCell & {
-  variant: HarnessVariant;
-  promptStats: HarnessParityPromptStats;
-  systemPromptHash: string;
-  toolDescriptionHash: string;
-  toolSchemaHash: string;
-  tokenUsage: RuntimeParityUsage;
-  tokenUsageSource: "live-usage" | "mock-estimate";
-};
+type HarnessParityCell = ReturnType<typeof buildHarnessParityCell>;
 
 type HarnessParityResult = {
   scenarioId: string;
@@ -126,22 +107,15 @@ function countComparableTranscriptRecords(transcriptBytes: string) {
   return count;
 }
 
-function readPositiveNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
 function buildPromptStats(report: RuntimeParitySystemPromptReport | undefined) {
   const toolEntries = Array.isArray(report?.tools?.entries) ? report.tools.entries : [];
   return {
-    systemPromptChars: readPositiveNumber(report?.systemPrompt?.chars),
-    projectContextChars: readPositiveNumber(report?.systemPrompt?.projectContextChars),
-    nonProjectContextChars: readPositiveNumber(report?.systemPrompt?.nonProjectContextChars),
-    skillPromptChars: readPositiveNumber(report?.skills?.promptChars),
-    toolSummaryChars: toolEntries.reduce(
-      (sum, entry) => sum + readPositiveNumber(entry.summaryChars),
-      0,
-    ),
-    toolSchemaChars: readPositiveNumber(report?.tools?.schemaChars),
+    systemPromptChars: readCount(report?.systemPrompt?.chars, 0),
+    projectContextChars: readCount(report?.systemPrompt?.projectContextChars, 0),
+    nonProjectContextChars: readCount(report?.systemPrompt?.nonProjectContextChars, 0),
+    skillPromptChars: readCount(report?.skills?.promptChars, 0),
+    toolSummaryChars: toolEntries.reduce((sum, entry) => sum + readCount(entry.summaryChars, 0), 0),
+    toolSchemaChars: readCount(report?.tools?.schemaChars, 0),
     toolCount: toolEntries.length,
   };
 }
@@ -181,8 +155,8 @@ function firstDriftTurn(leftTranscript: string, rightTranscript: string): number
 export function buildHarnessParityCell(params: {
   variant: HarnessVariant;
   cell: HarnessRuntimeParityCell;
-  tokenUsageSource: HarnessParityCell["tokenUsageSource"];
-}): HarnessParityCell {
+  tokenUsageSource: "live-usage" | "mock-estimate";
+}) {
   const report = params.cell.systemPromptReport;
   const promptStats = buildPromptStats(report);
   const toolEntries = report?.tools?.entries ?? [];
@@ -193,7 +167,6 @@ export function buildHarnessParityCell(params: {
   return {
     ...params.cell,
     variant: params.variant,
-    ...(report ? { systemPromptReport: report } : {}),
     promptStats,
     systemPromptHash: stableHash({
       systemPrompt: report?.systemPrompt ?? null,

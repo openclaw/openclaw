@@ -1,9 +1,10 @@
 // Runs the full live Vitest suite with live-test env and heartbeat output.
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
+import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { resolveVitestNoOutputTimeoutMs } from "./lib/vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
-import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
+import { resolveVitestTestCommand } from "./lib/vitest-test-runtime.mts";
 import {
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
@@ -96,23 +97,8 @@ export function resolveTestLiveHeartbeatMs(baseEnv = process.env) {
   return parsed;
 }
 
-export function buildTestLivePnpmArgs(args: TestLiveArgs) {
-  return [
-    "exec",
-    "vitest",
-    "run",
-    "--config",
-    "test/vitest/vitest.live.config.ts",
-    ...args.forwardedArgs,
-  ];
-}
-
-export function buildTestLiveSpawnParams(env: NodeJS.ProcessEnv, platform = process.platform) {
-  return {
-    detached: shouldUseDetachedVitestProcessGroup(platform),
-    env,
-    stdio: ["inherit", "pipe", "pipe"],
-  } satisfies Pick<PnpmRunnerParams, "detached" | "env" | "stdio">;
+export function buildTestLiveVitestArgs(args: TestLiveArgs) {
+  return ["run", "--config", "test/vitest/vitest.live.config.ts", ...args.forwardedArgs];
 }
 
 export function main(argv = process.argv.slice(2), baseEnv = process.env) {
@@ -130,14 +116,19 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   let lastHeartbeatAt = startedAt;
   let timedOut = false;
 
-  const spawnParams = buildTestLiveSpawnParams(env);
-  const pnpmArgs = buildTestLivePnpmArgs(args);
+  const vitestArgs = buildTestLiveVitestArgs(args);
+  const testCommand = resolveVitestTestCommand(
+    [resolveVitestCliEntry({ env }), ...vitestArgs],
+    env,
+  );
   const { child, completion } = spawnOwnedVitestProcess({
-    ...createPnpmRunnerSpawnSpec({
-      pnpmArgs,
-      ...spawnParams,
-    }),
-    homeMode: resolveVitestHomeSelection(pnpmArgs, { env }),
+    ...testCommand,
+    options: {
+      detached: shouldUseDetachedVitestProcessGroup(),
+      env: { ...env, ...testCommand.envOverrides },
+      stdio: ["inherit", "pipe", "pipe"],
+    },
+    homeMode: resolveVitestHomeSelection(vitestArgs, { env }),
   });
   const childCleanup = installVitestProcessGroupCleanup({
     child,

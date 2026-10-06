@@ -308,35 +308,74 @@ describe("plugins marketplace refresh", () => {
     });
   });
 
-  it("reports unpinned fallback without applying it to the Gateway", async () => {
-    loadFeed.mockResolvedValue({
-      source: "bundled-fallback",
-      entries: [{ name: "@openclaw/acpx" }],
-      error: "hosted catalog feed returned HTTP 503",
-      metadata: { url: "https://clawhub.ai/v1/feeds/plugins", status: 503 },
-    });
-    await refresh({});
-    expect(output()).toContain("bundled fallback");
-    expect(output()).toContain("hosted catalog feed returned HTTP 503");
-    expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "reports fallback and rejects it only when pinned (pinned=%s)",
+    async (pinned) => {
+      const error = pinned
+        ? "hosted catalog feed checksum mismatch: expected sha256:expected"
+        : "hosted catalog feed returned HTTP 503";
+      loadFeed.mockResolvedValue({
+        source: "bundled-fallback",
+        entries: [{ name: "@openclaw/acpx" }],
+        error,
+        metadata: {
+          url: "https://clawhub.ai/v1/feeds/plugins",
+          status: pinned ? 200 : 503,
+          ...(pinned ? { checksum: "sha256:actual" } : {}),
+        },
+      });
+      if (pinned) {
+        await expect(refresh({ expectedSha256: "sha256:expected", json: true })).rejects.toThrow(
+          "exit 1",
+        );
+        expect(runtime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({ source: "bundled-fallback" }),
+        );
+        expect(runtime.error).toHaveBeenCalledWith(
+          "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: bundled-fallback).",
+        );
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+      } else {
+        await refresh({});
+        expect(output()).toContain("bundled fallback");
+        expect(output()).toContain(error);
+        expect(runtime.exit).not.toHaveBeenCalled();
+      }
+      expect(mocks.pluginLifecycleGateway).not.toHaveBeenCalled();
+    },
+  );
 
-  it("reports both pinned snapshot and Gateway application failures without corrupting JSON", async () => {
-    loadFeed.mockResolvedValue(feed({ source: "hosted-snapshot" }));
-    mocks.pluginLifecycleGateway.mockRejectedValue(new Error("runtime unavailable"));
-    await expect(refresh({ expectedSha256: "sha256:expected", json: true })).rejects.toThrow(
-      "exit 1",
-    );
-    expect(mocks.pluginLifecycleGateway).toHaveBeenCalledWith("plugins.refresh", {});
-    expect(runtime.writeJson).toHaveBeenCalledOnce();
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.error.mock.calls.map(([message]) => message)).toEqual([
-      expect.stringContaining("Gateway runtime application failed: runtime unavailable"),
-      "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: hosted-snapshot).",
-    ]);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
+  it.each(["snapshot", "receipt"])(
+    "reports a failed %s application without corrupting JSON",
+    async (failure) => {
+      const snapshot = failure === "snapshot";
+      loadFeed.mockResolvedValue(feed({ source: snapshot ? "hosted-snapshot" : "hosted" }));
+      if (snapshot) {
+        mocks.pluginLifecycleGateway.mockRejectedValue(new Error("runtime unavailable"));
+      } else {
+        mocks.pluginLifecycleGateway.mockResolvedValue({ ok: true });
+      }
+      await expect(
+        refresh({ json: true, ...(snapshot ? { expectedSha256: "sha256:expected" } : {}) }),
+      ).rejects.toThrow("exit 1");
+      expect(mocks.pluginLifecycleGateway).toHaveBeenCalledExactlyOnceWith("plugins.refresh", {});
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ source: snapshot ? "hosted-snapshot" : "hosted" }),
+      );
+      expect(runtime.log).not.toHaveBeenCalled();
+      if (snapshot) {
+        expect(runtime.error.mock.calls.map(([message]) => message)).toEqual([
+          expect.stringContaining("Gateway runtime application failed: runtime unavailable"),
+          "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: hosted-snapshot).",
+        ]);
+      } else {
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Gateway runtime application failed"),
+        );
+      }
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
 
   it("keeps offline refresh successful and next-start notices off JSON stdout", async () => {
     loadFeed.mockResolvedValue(feed());
@@ -348,41 +387,6 @@ describe("plugins marketplace refresh", () => {
       expect.stringContaining("Marketplace catalog saved for the next Gateway start."),
     );
     expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("rejects a Gateway response without an application receipt", async () => {
-    loadFeed.mockResolvedValue(feed());
-    mocks.pluginLifecycleGateway.mockResolvedValue({ ok: true });
-    await expect(refresh({ json: true })).rejects.toThrow("exit 1");
-    expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ source: "hosted" }));
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway runtime application failed"),
-    );
-    expect(mocks.pluginLifecycleGateway).toHaveBeenCalledOnce();
-  });
-
-  it("rejects checksum-pinned fallback", async () => {
-    loadFeed.mockResolvedValue({
-      source: "bundled-fallback",
-      entries: [{ name: "@openclaw/acpx" }],
-      error: "hosted catalog feed checksum mismatch: expected sha256:expected",
-      metadata: {
-        url: "https://clawhub.ai/v1/feeds/plugins",
-        status: 200,
-        checksum: "sha256:actual",
-      },
-    });
-    await expect(refresh({ expectedSha256: "sha256:expected", json: true })).rejects.toThrow(
-      "exit 1",
-    );
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "bundled-fallback" }),
-    );
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: bundled-fallback).",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });
 
@@ -409,26 +413,28 @@ describe("plugins marketplace list", () => {
       },
     );
   }
-  it("keeps remote progress out of JSON output", async () => {
-    result();
-    await list(source, { json: true });
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ source, ...manifest });
-  });
-  it("prints remote progress and preserves version prefixes", async () => {
-    result();
-    await list(source, {});
-    expect(runtime.log.mock.calls.map(([line]) => String(line))).toEqual([
-      `Cloning marketplace source ${source}...`,
-      expect.stringContaining("QA Marketplace"),
-      "numeric v1.2.3",
-      "prefixed v1.2.3",
-      "missing",
-    ]);
-    expect(runtime.writeJson).not.toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "renders marketplace versions and routes progress (json=%s)",
+    async (json) => {
+      result();
+      await list(source, { json });
+      if (json) {
+        expect(runtime.log).not.toHaveBeenCalled();
+        expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ source, ...manifest });
+      } else {
+        expect(runtime.log.mock.calls.map(([line]) => String(line))).toEqual([
+          `Cloning marketplace source ${source}...`,
+          expect.stringContaining("QA Marketplace"),
+          "numeric v1.2.3",
+          "prefixed v1.2.3",
+          "missing",
+        ]);
+        expect(runtime.writeJson).not.toHaveBeenCalled();
+      }
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
+
   it("hands quiet failures to the canonical JSON error renderer", async () => {
     const message = "mock git remote unavailable";
     result(message);

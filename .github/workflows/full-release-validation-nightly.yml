@@ -47,7 +47,8 @@ jobs:
       # Full Release Validation dispatches its children from its own workflow ref and
       # refuses when that ref moved. Mutable main moves on a busy day, so the helper
       # pins one scheduled main SHA as both Validation and Tooling SHA and dispatches
-      # from an immutable release-ci/<sha12>-<id> transport ref instead.
+      # from an immutable release-ci/<sha12>-<id> transport ref instead. Keep the
+      # explicit trusted-main route: scheduled bots do not attest candidate admission.
       - name: Run Full Release Validation for the scheduled main SHA
         env:
           GH_TOKEN: ${{ github.token }}
@@ -56,6 +57,7 @@ jobs:
           pnpm ci:full-release \
             --sha "$VALIDATION_SHA" \
             --workflow-sha "$VALIDATION_SHA" \
+            --trusted-workflow-ref main \
             -f validation_purpose=main-qualification \
             -f release_profile=stable \
             -f run_release_soak=true \

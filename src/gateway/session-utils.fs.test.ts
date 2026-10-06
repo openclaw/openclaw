@@ -11,6 +11,7 @@ import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
+import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
 import {
   readLatestSessionUsageFromTranscriptFileAsync,
   resolveSessionTranscriptCandidates,
@@ -69,9 +70,20 @@ function reader(sessionId: string, sessionFile?: string, selectedStore = storePa
 }
 
 async function full(sessionId: string, sessionFile?: string, selectedStore = storePath) {
-  return (
-    await reader(sessionId, sessionFile, selectedStore).read({ mode: "full", reason: "test" })
-  ).messages;
+  const archiveReader = reader(sessionId, sessionFile, selectedStore);
+  return collectSessionTranscriptMessages(
+    (_scope, options) =>
+      archiveReader.readSourcePage(options, {
+        indexedSeq: -1,
+        activeEventCount: 0,
+        totalMessages: 0,
+        generation: undefined,
+        tailEventSeq: undefined,
+        resetSeq: null,
+      }),
+    { sessionId },
+    { mode: "full", reason: "archive selection" },
+  );
 }
 
 function contents(messages: unknown[]) {
@@ -184,9 +196,10 @@ describe("archive selection", () => {
       },
     ]);
     expect(contents(await full(id))).toEqual(["linear root", "linear answer"]);
-    expect(contents((await reader(id).read({ mode: "recent", maxMessages: 10 })).messages)).toEqual(
-      ["linear root", "linear answer"],
-    );
+    expect(contents((await reader(id).readRecentWithStats({ maxMessages: 10 })).messages)).toEqual([
+      "linear root",
+      "linear answer",
+    ]);
   });
 
   test("keeps async rows when imported parent links are incomplete without leaf control", async () => {
@@ -224,7 +237,7 @@ describe("archive selection", () => {
     });
   });
 
-  test("chooses the newest reset archive across candidate roots", async () => {
+  test("ignores retired global reset archives when reading the selected store", async () => {
     const id = "cross-root";
     archive(id, [{ message: { role: "assistant", content: "older store archive" } }], {
       timestamp: "2026-02-16T22-26-33.000Z",
@@ -235,7 +248,7 @@ describe("archive selection", () => {
       dir: legacy,
     });
     await withEnvAsync({ OPENCLAW_HOME: tmpDir }, async () => {
-      expect(contents(await full(id))).toEqual(["newer legacy archive"]);
+      expect(contents(await full(id))).toEqual(["older store archive"]);
     });
   });
 
@@ -438,7 +451,7 @@ describe("oversized transcript records", () => {
   const suffix = { type: "text", text: "keep suffix text" };
 
   async function recent(id: string) {
-    return (await reader(id).read({ mode: "recent", maxMessages: 10 })).messages;
+    return (await reader(id).readRecentWithStats({ maxMessages: 10 })).messages;
   }
 
   async function expectOversized(id: string) {
@@ -647,7 +660,7 @@ describe("oversized transcript records", () => {
     ]);
     const readFile = vi.spyOn(fs, "readFileSync");
     expect(
-      (await reader(id).read({ mode: "recent", maxMessages: 10, maxBytes: 1024, maxLines: 10 }))
+      (await reader(id).readRecentWithStats({ maxMessages: 10, maxBytes: 1024, maxLines: 10 }))
         .messages,
     ).toEqual([]);
     expect(readFile).not.toHaveBeenCalled();
@@ -702,7 +715,7 @@ test("readRecentSessionMessagesAsync survives 16-byte tail read caps", async () 
       },
     })),
   );
-  const read = () => reader(id).read({ mode: "recent", maxMessages: 20, maxBytes: 8192 });
+  const read = () => reader(id).readRecentWithStats({ maxMessages: 20, maxBytes: 8192 });
   const expected = await read();
   const calls = installShortReads(16);
   expect(await read()).toEqual(expected);

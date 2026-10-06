@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseToml, type TomlTable } from "smol-toml";
 import type { CodexAppServerManagedApprovalPolicy, OpenClawExecMode } from "./config-contracts.js";
 import { resolveApprovalPolicy, resolveApprovalsReviewer } from "./config-exec-policy.js";
@@ -39,40 +40,24 @@ function resolveCodexRequirementsPath(env: NodeJS.ProcessEnv, platform: NodeJS.P
   return UNIX_CODEX_REQUIREMENTS_PATH;
 }
 
-export function parseAllowedSandboxModesFromCodexRequirements(
-  content: string,
-  hostName: string,
-): Set<CodexSandboxMode> | undefined {
-  const requirements = parseCodexRequirements(content);
-  const remoteSandboxModes = parseMatchingRemoteSandboxModesFromCodexRequirements(
-    requirements,
-    hostName,
-  );
-  if (remoteSandboxModes !== undefined) {
-    return remoteSandboxModes;
-  }
-  return parseRequirementsValues(
-    requirements?.allowed_sandbox_modes,
-    normalizeRequirementsSandboxMode,
-  );
-}
-
-export function parseAllowedApprovalPoliciesFromCodexRequirements(
-  content: string,
-): Set<CodexAppServerManagedApprovalPolicy> | undefined {
-  return parseRequirementsValues(
-    parseCodexRequirements(content)?.allowed_approval_policies,
-    normalizeRequirementsApprovalPolicy,
-  );
-}
-
-export function parseAllowedApprovalsReviewersFromCodexRequirements(
-  content: string,
-): Set<CodexApprovalsReviewer> | undefined {
-  return parseRequirementsValues(
-    parseCodexRequirements(content)?.allowed_approvals_reviewers,
-    (value) => resolveApprovalsReviewer(value.trim().toLowerCase()),
-  );
+export function parseCodexRequirementsPolicy(content: string | undefined, hostName = "") {
+  const requirements = content === undefined ? undefined : parseCodexRequirements(content);
+  return {
+    allowedSandboxModes:
+      parseMatchingRemoteSandboxModesFromCodexRequirements(requirements, hostName) ??
+      parseRequirementsValues(
+        requirements?.allowed_sandbox_modes,
+        normalizeRequirementsSandboxMode,
+      ),
+    allowedApprovalPolicies: parseRequirementsValues(
+      requirements?.allowed_approval_policies,
+      normalizeRequirementsApprovalPolicy,
+    ),
+    allowedApprovalsReviewers: parseRequirementsValues(
+      requirements?.allowed_approvals_reviewers,
+      (value) => resolveApprovalsReviewer(value.trim().toLowerCase()),
+    ),
+  };
 }
 
 function parseMatchingRemoteSandboxModesFromCodexRequirements(
@@ -148,29 +133,14 @@ function requirementsHostNameMatchesAnyPattern(hostName: string, patterns: strin
 }
 
 function globPatternMatches(value: string, pattern: string): boolean {
-  let regex = "^";
-  for (const char of pattern) {
-    if (char === "*") {
-      regex += ".*";
-    } else if (char === "?") {
-      regex += ".";
-    } else {
-      regex += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
-  }
-  regex += "$";
-  return new RegExp(regex).test(value);
+  const regex = escapeRegExp(pattern).replaceAll("\\*", ".*").replaceAll("\\?", ".");
+  return new RegExp(`^${regex}$`).test(value);
 }
 
 function normalizeRequirementsApprovalPolicy(
   value: string,
 ): CodexAppServerManagedApprovalPolicy | undefined {
   const normalized = value.trim().toLowerCase();
-  // Codex still accepts this alias in persisted requirements, while its
-  // app-server exposes only the canonical on-request value.
-  if (normalized === "on-failure") {
-    return "on-request";
-  }
   if (normalized === "untrusted") {
     return normalized;
   }

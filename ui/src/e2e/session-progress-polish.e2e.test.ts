@@ -47,7 +47,7 @@ suite.define(() => {
     { width: 390, touch: true },
     { width: 1440, touch: true },
   ])(
-    "shows the handle by hover capability at $width px, touch=$touch",
+    "aligns checklist icons and shows the handle by hover capability at $width px, touch=$touch",
     async ({ width, touch }) => {
       const context = await suite.newBrowserContext({
         viewport: { width, height: 900 },
@@ -58,6 +58,27 @@ suite.define(() => {
       try {
         const page = await context.newPage();
         await openProgress(page);
+        if (!touch) {
+          const measurements = await page
+            .locator(".session-progress-card__step")
+            .evaluateAll((rows) =>
+              rows.map((row) => {
+                const marker = row.querySelector(".session-progress-card__step-marker > *")!;
+                const text = row.querySelector(".session-progress-card__step-text")!;
+                const icon = marker.getBoundingClientRect();
+                const bounds = text.getBoundingClientRect();
+                const line = Number.parseFloat(getComputedStyle(text).lineHeight);
+                return {
+                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + line / 2)),
+                  lines: bounds.height / line,
+                };
+              }),
+            );
+          expect(measurements.some(({ lines }) => lines > 1.5)).toBe(true);
+          for (const { delta } of measurements) {
+            expect(delta).toBeLessThanOrEqual(1);
+          }
+        }
         const summary = page.locator(".session-progress-card__summary");
         const opacity = () => summary.evaluate((el) => getComputedStyle(el, "::before").opacity);
         await page.mouse.move(0, 0);
@@ -145,36 +166,6 @@ suite.define(() => {
       await page.locator(".session-progress-card__summary").click();
       await page.locator(".session-progress-card__summary").click();
       await expect.poll(mask).not.toBe("none");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it.each([1440, 390])("centers checklist icons on their first line at %i px", async (width) => {
-    const context = await suite.newBrowserContext({
-      viewport: { width, height: 900 },
-      deviceScaleFactor: 2,
-    });
-    try {
-      const page = await context.newPage();
-      await openProgress(page);
-      const measurements = await page.locator(".session-progress-card__step").evaluateAll((rows) =>
-        rows.map((row) => {
-          const marker = row.querySelector(".session-progress-card__step-marker > *")!;
-          const text = row.querySelector(".session-progress-card__step-text")!;
-          const icon = marker.getBoundingClientRect();
-          const bounds = text.getBoundingClientRect();
-          const line = Number.parseFloat(getComputedStyle(text).lineHeight);
-          return {
-            delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + line / 2)),
-            lines: bounds.height / line,
-          };
-        }),
-      );
-      expect(measurements.some(({ lines }) => lines > 1.5)).toBe(true);
-      for (const { delta } of measurements) {
-        expect(delta).toBeLessThanOrEqual(1);
-      }
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import {
   admitMediaHandle,
   resetGeneratedMediaTaskActivityForTests,
@@ -61,7 +62,6 @@ import {
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
 } from "./media-generate-background-shared.js";
-import { imageMediaLifecycleOptions } from "./media-generate-background.test-support.js";
 
 describe("createDefaultMediaGenerateBackgroundScheduler", () => {
   it("runs genuinely detached work outside request-scoped async context", async () => {
@@ -102,7 +102,7 @@ beforeEach(() => {
 });
 
 function createImageMediaLifecycle() {
-  return createMediaGenerationTaskLifecycle({ ...imageMediaLifecycleOptions });
+  return createMediaGenerationTaskLifecycle("image");
 }
 
 type ScheduleOptions = Parameters<typeof scheduleMediaGenerationTaskCompletion>[0];
@@ -368,6 +368,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     });
     const lifecycle = createImageMediaLifecycle();
     const handle = await lifecycle.createTaskRun({ sessionKey, prompt: "proof image" });
+    assert(handle);
 
     scheduleImageCompletion({
       lifecycle,
@@ -408,6 +409,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       requesterOrigin: { channel: "discord", to: "channel:123" },
       prompt: "proof image",
     });
+    assert(handle);
 
     scheduleImageCompletion({
       lifecycle,
@@ -452,6 +454,7 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
         sessionKey,
         prompt: "proof image",
       });
+      assert(handle);
 
       scheduleImageCompletion({
         lifecycle,
@@ -938,17 +941,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: true,
     });
-    const lifecycle = createMediaGenerationTaskLifecycle({
-      toolName: "music_generate",
-      taskKind: "music_generation",
-      label: "Music generation",
-      queuedProgressSummary: "Queued music generation",
-      generatedLabel: "track",
-      failureProgressSummary: "Music generation failed",
-      eventSource: "music_generation",
-      announceType: "music generation task",
-      completionLabel: "music",
-    });
+    const lifecycle = createMediaGenerationTaskLifecycle("music");
 
     await expect(
       lifecycle.wakeTaskCompletion({

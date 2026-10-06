@@ -8,10 +8,16 @@ import {
 import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractToolAuthoredSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../../embedded-agent-messaging-extraction.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
-import { readToolResultDetails } from "../../tool-result-error.js";
+import {
+  getInternalToolTurnCompletion,
+  setInternalToolTurnCompletion,
+} from "../../runtime/internal-hooks.js";
+import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
+import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
 
 type MessageToolTerminalRoute = Omit<
   Parameters<typeof isDeliveredMessagingToolSendToCurrentSource>[0],
@@ -43,15 +49,7 @@ function isDeliveredMessageToolOnlySourceReply(
     typeof toolArgs.channel !== "string"
       ? { ...toolArgs, provider: params.currentProvider }
       : toolArgs;
-  const pendingSend = extractMessagingToolSend(toolName, extractionArgs, {
-    config: params.config,
-    currentChannelId: params.currentChannelId,
-    currentMessagingTarget: params.currentMessagingTarget,
-    currentThreadId: params.currentThreadId,
-    currentMessageId: params.currentMessageId,
-    replyToMode: params.replyToMode,
-    hasRepliedRef: params.hasRepliedRef,
-  });
+  const pendingSend = extractMessagingToolSend(toolName, extractionArgs, params);
   const confirmedSend =
     pendingSend && extractMessagingToolSendResult(pendingSend, params.context.result);
   const deliveryFact = readEmbeddedMessageDeliveryFact(
@@ -67,14 +65,8 @@ function isDeliveredMessageToolOnlySourceReply(
     hookResult: params.context.result,
     isError,
     allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+      ...params,
       send: confirmedSend,
-      config: params.config,
-      currentProvider: params.currentProvider,
-      currentAccountId: params.currentAccountId,
-      currentChannelId: params.currentChannelId,
-      currentMessagingTarget: params.currentMessagingTarget,
-      currentThreadId: params.currentThreadId,
-      sessionKey: params.sessionKey,
       deliveredPayload: params.context.result,
     }),
     ...(deliveryFact
@@ -84,6 +76,37 @@ function isDeliveredMessageToolOnlySourceReply(
         }
       : {}),
   });
+}
+
+/**
+ * Ends the turn after a tool batch settles in which a `canDeliverSourceReply` tool
+ * authored a final source reply. The host delivers that reply itself, so another
+ * model turn would only restate it. The decision runs once per assistant message,
+ * after every call (capable or not, executed or rejected) has settled, so no sibling
+ * outcome can reopen the turn. It admits exactly what the tool completion handler
+ * captures: a direct, non-error result with a deliverable final reply.
+ */
+export function installToolAuthoredSourceReplyTerminalHook(params: {
+  agent: Agent;
+  sourceReplyCapableToolNames?: ReadonlySet<string>;
+}): void {
+  const capableToolNames = params.sourceReplyCapableToolNames;
+  if (!capableToolNames?.size) {
+    return;
+  }
+  const previous = getInternalToolTurnCompletion(params.agent);
+  setInternalToolTurnCompletion(
+    params.agent,
+    (context) =>
+      previous?.(context) === true ||
+      context.toolResults.some(
+        (toolResult) =>
+          !toolResult.isError &&
+          !isToolResultError(toolResult) &&
+          capableToolNames.has(normalizeToolPolicyName(toolResult.toolName)) &&
+          extractToolAuthoredSourceReplyPayload(toolResult) !== undefined,
+      ),
+  );
 }
 
 export function installMessageToolOnlyTerminalHook(

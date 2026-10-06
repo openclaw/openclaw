@@ -80,73 +80,73 @@ function operatorApprovalPolicyRefs(record: OperatorApprovalRecord): string[] {
 
 function operatorApprovalRemediation(
   record: OperatorApprovalRecord,
-): DecisionReceiptV1["remediation"] {
-  if (record.status === "allowed") {
-    return [];
-  }
+): DecisionReceiptV1["remediation"][number] {
   switch (record.terminalReason) {
     case "timeout":
-      return [
-        {
-          code: "request_approval_again",
-          text: "Request the action again and resolve the new approval before its deadline.",
-        },
-      ];
+      return {
+        code: "request_approval_again",
+        text: "Request the action again and resolve the new approval before its deadline.",
+      };
     case "no-route":
-      return [
-        {
-          code: "restore_approval_route",
-          text: "Connect an eligible approval client or configure an approval delivery route, then request the action again.",
-        },
-      ];
+      return {
+        code: "restore_approval_route",
+        text: "Connect an eligible approval client or configure an approval delivery route, then request the action again.",
+      };
     case "run-aborted":
       if (
         record.resolver?.kind === "system" &&
         (record.resolver.id === "permission-change" ||
           record.resolver.id === "approval-scope-closed")
       ) {
-        return [
-          {
-            code: "request_approval_again",
-            text: "Request the action again under the current permissions if it is still needed.",
-          },
-        ];
+        return {
+          code: "request_approval_again",
+          text: "Request the action again under the current permissions if it is still needed.",
+        };
       }
-      return [
-        {
-          code: "start_new_run",
-          text: "Start a new run and request the action again if it is still needed.",
-        },
-      ];
+      return {
+        code: "start_new_run",
+        text: "Start a new run and request the action again if it is still needed.",
+      };
     case "gateway-restart":
-      return [
-        {
-          code: "request_after_restart",
-          text: "After the Gateway is available, request the action again to create a current approval.",
-        },
-      ];
+      return {
+        code: "request_after_restart",
+        text: "After the Gateway is available, request the action again to create a current approval.",
+      };
     case "malformed-verdict":
-      return [
-        {
-          code: "submit_supported_decision",
-          text: "Request the action again and resolve it with one of the decisions shown by the approval prompt.",
-        },
-      ];
+      return {
+        code: "submit_supported_decision",
+        text: "Request the action again and resolve it with one of the decisions shown by the approval prompt.",
+      };
     case "storage-corrupt":
-      return [
-        {
-          code: "inspect_state_integrity",
-          text: "Run openclaw doctor and inspect the shared state database before requesting the action again.",
-        },
-      ];
+      return {
+        code: "inspect_state_integrity",
+        text: "Run openclaw doctor and inspect the shared state database before requesting the action again.",
+      };
     default:
-      return [
-        {
-          code: "review_and_request_again",
-          text: "Review the denial, then request the action again only if an eligible reviewer should reconsider it.",
-        },
-      ];
+      return {
+        code: "review_and_request_again",
+        text: "Review the denial, then request the action again only if an eligible reviewer should reconsider it.",
+      };
   }
+}
+
+function operatorApprovalReceiptIdentity(
+  sourceRef: string,
+  context: OperatorApprovalReceiptContext,
+) {
+  return {
+    schemaVersion: 1 as const,
+    receiptId: `approval:${sourceRef}`,
+    contextId: context.contextId,
+    executionId: context.executionId,
+    runId: context.runId,
+    actionId: sourceRef,
+    source: {
+      owner: "operator_approvals" as const,
+      recordRef: sourceRef,
+      decisionBoundary: "gateway.operator-approval.first-answer",
+    },
+  };
 }
 
 function projectOperatorApprovalReceipt(
@@ -156,12 +156,7 @@ function projectOperatorApprovalReceipt(
   const allowed = record.status === "allowed";
   const sourceRef = record.resolutionRef;
   return {
-    schemaVersion: 1,
-    receiptId: `approval:${sourceRef}`,
-    contextId: context.contextId,
-    executionId: context.executionId,
-    runId: context.runId,
-    actionId: sourceRef,
+    ...operatorApprovalReceiptIdentity(sourceRef, context),
     occurredAt: record.resolvedAtMs ?? record.updatedAtMs,
     action: {
       family: record.kind,
@@ -181,13 +176,8 @@ function projectOperatorApprovalReceipt(
       grantRefs: allowed ? [`operator-approval-grant:${sourceRef}`] : [],
       contextFieldsUsed: ["contextId", "executionId", "runId"],
     },
-    source: {
-      owner: "operator_approvals",
-      recordRef: sourceRef,
-      decisionBoundary: "gateway.operator-approval.first-answer",
-    },
     missingEvidence: [],
-    remediation: operatorApprovalRemediation(record),
+    remediation: allowed ? [] : [operatorApprovalRemediation(record)],
   };
 }
 
@@ -203,12 +193,8 @@ function projectUnlinkedOperatorApprovalReceipt(
     .update(context.contextId, "utf8")
     .digest("base64url")}`;
   return {
-    schemaVersion: 1,
+    ...operatorApprovalReceiptIdentity(sourceRef, context),
     receiptId,
-    contextId: context.contextId,
-    executionId: context.executionId,
-    runId: context.runId,
-    actionId: sourceRef,
     occurredAt: record.resolvedAtMs ?? record.updatedAtMs,
     action: {
       family: record.kind,
@@ -224,11 +210,6 @@ function projectUnlinkedOperatorApprovalReceipt(
       policyRefs: operatorApprovalPolicyRefs(record),
       grantRefs: [],
       contextFieldsUsed: ["contextId", "executionId", "runId"],
-    },
-    source: {
-      owner: "operator_approvals",
-      recordRef: sourceRef,
-      decisionBoundary: "gateway.operator-approval.first-answer",
     },
     missingEvidence: ["decision.execution_link"],
     remediation: [
@@ -257,12 +238,7 @@ function projectCorruptOperatorApprovalReceipt(
       ? row.updated_at_ms
       : 0;
   return {
-    schemaVersion: 1,
-    receiptId: `approval:${sourceRef}`,
-    contextId: context.contextId,
-    executionId: context.executionId,
-    runId: context.runId,
-    actionId: sourceRef,
+    ...operatorApprovalReceiptIdentity(sourceRef, context),
     occurredAt,
     action: { family: kind, operation: "approval" },
     decision: { outcome: "unknown", reasonCode: "operator_approval_record_corrupt" },
@@ -271,11 +247,6 @@ function projectCorruptOperatorApprovalReceipt(
       policyRefs: [],
       grantRefs: [],
       contextFieldsUsed: ["runId"],
-    },
-    source: {
-      owner: "operator_approvals",
-      recordRef: sourceRef,
-      decisionBoundary: "gateway.operator-approval.first-answer",
     },
     missingEvidence: ["operator_approval.valid"],
     remediation: [
@@ -478,12 +449,10 @@ function terminalApprovalReceiptPageRows(params: {
   if (rows.length === 1 && rows[0]?.page_present === 0) {
     return [];
   }
-  return rows.map((row) => {
-    if (row.page_present !== 1) {
-      throw new Error("operator approval page snapshot is malformed");
-    }
-    return row;
-  });
+  if (rows.some((row) => row.page_present !== 1)) {
+    throw new Error("operator approval page snapshot is malformed");
+  }
+  return rows;
 }
 
 function materializeBoundedOperatorApprovalRow(

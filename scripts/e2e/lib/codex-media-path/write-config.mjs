@@ -57,7 +57,6 @@ const config = {
     },
     entries: {
       main: {
-        default: true,
         model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
         models: {
           "openai/gpt-5.6-luna": {

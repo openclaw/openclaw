@@ -33,6 +33,11 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import {
+  hasSessionsYieldCall,
+  pendingSessionsYield,
+  projectSessionsYieldItems,
+} from "./chat-sessions-yield.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
@@ -96,9 +101,15 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   runWorking?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
+  /** Set while a run that handed off is idle and its subagents are still running. */
+  subagentWait?: { startedAt: number; runId: string };
   questionPrompts?: readonly QuestionPrompt[];
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
+  /** People the session row lists, loaded or not, keyed by `sessionParticipantIdentityKey`. */
+  replyPeople?: readonly string[];
+  /** Key of the signed-in viewer, who authors local user messages without a sender. */
+  replyLocalPerson?: string;
 };
 
 function canvasAssistantItemKey(
@@ -130,15 +141,24 @@ export function buildChatItems(
   const queuedSends = props.queue ?? [];
   const segments = props.streamSegments;
   let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
-  const resolveProgress = () =>
-    (progress ??= resolveWorkingProgress(
+  const resolveProgress = () => {
+    if (progress) {
+      return progress;
+    }
+    // A run that handed off has ended, but its live rows stay until the next
+    // run starts. The status that follows must not take that run's identity or
+    // count from its first tool call.
+    const handedOff = props.runId ? undefined : pendingSessionsYield(props.messages)?.runId;
+    progress = resolveWorkingProgress(
       props.sessionKey,
       props.runId ?? null,
       props.streamStartedAt,
       queuedSends,
-      segments,
-      tools,
-    ));
+      handedOff ? segments.filter((segment) => segment.runId !== handedOff) : segments,
+      handedOff ? tools.filter((message) => message.runId !== handedOff) : tools,
+    );
+    return progress;
+  };
   // Retention and live status share the same explicit or inferred run ownership.
   const activeCommentaryRunId =
     props.persistCommentary === false && (props.runWorking || props.runActive)
@@ -269,7 +289,7 @@ export function buildChatItems(
       });
     }
 
-    if (!props.showToolCalls && isToolResult) {
+    if (!props.showToolCalls && isToolResult && !hasSessionsYieldCall(msg)) {
       continue;
     }
 
@@ -295,9 +315,7 @@ export function buildChatItems(
     (props.stream !== null || queuedSends.some(shouldRenderQueuedSendInThread)
       ? resolveProgress().runId
       : null);
-  const historyTurnBounds = findCurrentTurnBounds(
-    items.filter((item) => !hiddenHistoryKeys.has(item.key)),
-  );
+  const historyTurnBounds = findCurrentTurnBounds(items);
   const { pendingKeys, historicalKeys, hiddenKeys, activeInputKey } = placeChatInputs(
     items,
     history,
@@ -305,7 +323,6 @@ export function buildChatItems(
     inputOrder,
     currentRunId,
   );
-  items = items.filter((item) => !hiddenHistoryKeys.has(item.key) && !hiddenKeys.has(item.key));
   const executionItems = () => items.filter((item) => !historicalKeys.has(item.key));
   const canvasRunBounds = createRunTurnLookup(executionItems());
   const currentTurnBounds =
@@ -510,9 +527,13 @@ export function buildChatItems(
       }
     }
     const tool = toolItems[i];
-    if (tool && props.showToolCalls) {
-      const before = toolBeforeBoundaries.get(tool.runId, tool.callId);
-      const after = toolAfterBoundaries.get(tool.runId, tool.callId);
+    if (tool && (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message))) {
+      const before =
+        normalizeOptionalString(tool.projection.item.message.boundaryRunId) ??
+        toolBeforeBoundaries.get(tool.runId, tool.callId);
+      const after =
+        normalizeOptionalString(tool.projection.item.message.afterBoundaryRunId) ??
+        toolAfterBoundaries.get(tool.runId, tool.callId);
       tool.projection.bounds = resolveProjectionBounds(tool.runId, before, after);
       projections.push(tool.projection);
     }
@@ -627,6 +648,30 @@ export function buildChatItems(
       ...optionalRunIdentity(workingRunId),
       ...optionalBoundaryIdentity(activeBoundaryRunId ?? workingRunId),
     });
+  } else if (props.subagentWait && !initialHistoryLoad) {
+    // The handoff ended the parent's run, not its work. Carrying that run's
+    // identity keeps the claw in the same frame instead of opening another row.
+    appendActiveRunItem({
+      kind: "reading-indicator",
+      key: `waiting-subagents:${props.sessionKey}`,
+      startedAt: props.subagentWait.startedAt,
+      waitingOn: "subagents",
+      runId: props.subagentWait.runId,
+    });
   }
-  return groupMessages(coalesceToolActivityMessages(items));
+  // Place output against the complete transcript before search hides any rows.
+  // Pending/local inputs contribute people and turn boundaries just like history;
+  // queued future inputs must remain after the live output they do not own.
+  const hidden =
+    hiddenHistoryKeys.size > 0 || hiddenKeys.size > 0
+      ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
+      : undefined;
+  const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
+    projectSessionsYieldItems(source, props.showToolCalls, complete);
+  const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
+  return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden), complete), {
+    items: complete,
+    people: props.replyPeople,
+    localPerson: props.replyLocalPerson,
+  });
 }

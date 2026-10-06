@@ -1,5 +1,8 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.node.asArrayOrNull
+import ai.openclaw.app.node.asObjectOrNull
+import ai.openclaw.app.node.asStringOrNull
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -34,7 +37,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -76,6 +78,18 @@ data class GatewayClientInfo(
   val deviceFamily: String?,
   val modelIdentifier: String?,
 )
+
+internal fun GatewayClientInfo.toJsonObject(): JsonObject =
+  buildJsonObject {
+    put("id", JsonPrimitive(id))
+    displayName?.let { put("displayName", JsonPrimitive(it)) }
+    put("version", JsonPrimitive(version))
+    put("platform", JsonPrimitive(platform))
+    put("mode", JsonPrimitive(mode))
+    instanceId?.let { put("instanceId", JsonPrimitive(it)) }
+    deviceFamily?.let { put("deviceFamily", JsonPrimitive(it)) }
+    modelIdentifier?.let { put("modelIdentifier", JsonPrimitive(it)) }
+  }
 
 data class GatewayLoadedImage(
   val bytes: ByteArray,
@@ -229,6 +243,7 @@ data class GatewayHelloSummary(
   val updateAvailable: GatewayUpdateAvailableSummary?,
   val authRole: String? = null,
   val authScopes: List<String> = emptyList(),
+  val authSessionCap: String? = null,
   val methods: Set<String>? = null,
   val capabilities: Set<String>? = null,
 )
@@ -328,7 +343,7 @@ class GatewaySession(
   private val onDisconnected: (message: String) -> Unit,
   private val onConnectFailure: (error: ErrorShape, pauseReconnect: Boolean) -> Unit = { _, _ -> },
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
-  private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
+  private val onInvoke: (suspend (GatewayNodeInvokeRequest) -> InvokeResult)? = null,
   private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
   private val customHeadersProvider: ((stableId: String) -> Map<String, String>)? = null,
   private val connectTimeoutMs: Long = GATEWAY_CONNECT_TIMEOUT_MS,
@@ -340,17 +355,6 @@ class GatewaySession(
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
     private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
   }
-
-  /**
-   * Gateway node.invoke request routed to Android command handlers.
-   */
-  data class InvokeRequest(
-    val id: String,
-    val nodeId: String,
-    val command: String,
-    val paramsJson: String?,
-    val timeoutMs: Long?,
-  )
 
   data class InvokeResult(
     val ok: Boolean,
@@ -621,8 +625,7 @@ class GatewaySession(
       val fingerprint =
         connection.tlsConfig
           ?.effectiveFingerprintSha256
-          ?.let(::normalizeGatewayTlsFingerprint)
-          ?.takeIf { it.length == 64 }
+          ?.let(::normalizeGatewayTlsFingerprintInput)
       GatewayCanvasHostRoute(
         url = url,
         tlsFingerprintSha256 =
@@ -776,12 +779,12 @@ class GatewaySession(
   private fun buildNodeEventParams(
     event: String,
     payloadJson: String?,
-  ): JsonObject =
+  ): JsonElement =
     json
       .encodeToJsonElement(
         GatewayNodeEventParams.serializer(),
         GatewayNodeEventParams(event = event, payloadJson = payloadJson ?: "{}"),
-      ).asObjectOrNull() ?: error("GatewayNodeEventParams must encode as an object")
+      )
 
   /** Sends an RPC request and throws a code-prefixed exception when the gateway returns an error. */
   suspend fun request(
@@ -1228,7 +1231,6 @@ class GatewaySession(
       playbackRendition: Boolean,
     ): GatewayLoadedMedia.Buffered? =
       withContext(Dispatchers.IO) {
-        if (kind == GatewayMediaKind.Video) return@withContext null
         val resolved = resolveTicketedMediaRequest(ticketedPath, playbackRendition) ?: return@withContext null
         val request = Request.Builder().url(resolved.url).header("Accept", "${kind.wireValue}/*")
         for ((name, value) in resolved.headers) {
@@ -1369,7 +1371,7 @@ class GatewaySession(
     }
 
     suspend fun sendJson(
-      obj: JsonObject,
+      obj: JsonElement,
       withEnqueue: (() -> Unit) -> Unit = { it() },
     ) {
       val jsonString = obj.toString()
@@ -1388,12 +1390,12 @@ class GatewaySession(
       id: String,
       method: String,
       params: JsonElement?,
-    ): JsonObject =
+    ): JsonElement =
       json
         .encodeToJsonElement(
           GatewayRequestFrame.serializer(),
           GatewayRequestFrame(id = id, method = method, params = params),
-        ).asObjectOrNull() ?: error("GatewayRequestFrame must encode as an object")
+        )
 
     suspend fun awaitClose() = closedDeferred.await()
 
@@ -1424,9 +1426,7 @@ class GatewaySession(
         if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
           retireIngressRequests()
           incomingMessages.close()
-          if (!connectDeferred.isCompleted) {
-            connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
-          }
+          connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
         }
         if (socket == null && !socketCreationPending) closedDeferred.complete(Unit)
         socket
@@ -1490,7 +1490,7 @@ class GatewaySession(
     }
 
     private fun finalizeTransport(connectError: Throwable) {
-      if (!connectDeferred.isCompleted) connectDeferred.completeExceptionally(connectError)
+      connectDeferred.completeExceptionally(connectError)
       synchronized(lifecycleLock) {
         transportFinished = true
         socket = null
@@ -1691,7 +1691,7 @@ class GatewaySession(
           target.deviceTokenRetryBudgetUsed = true
         } else if (
           selectedAuth.attemptedDeviceTokenRetry &&
-          shouldClearStoredDeviceTokenAfterRetry(error)
+          error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH"
         ) {
           deviceAuthStore.clearToken(target.endpoint.stableId, identity.deviceId, target.options.role, onlyIfToken = storedToken)
         }
@@ -1801,6 +1801,7 @@ class GatewaySession(
         }
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: target.options.role
+      val authSessionCap = authObj?.get("sessionCap").asStringOrNull()
       controlUiReadCredentials =
         listOfNotNull(deviceToken, selectedAuth.authDeviceToken, selectedAuth.authToken, selectedAuth.authPassword)
           .map(String::trim)
@@ -1895,6 +1896,7 @@ class GatewaySession(
             updateAvailable = parseGatewayUpdateAvailableSummary(snapshot?.get("updateAvailable").asObjectOrNull()),
             authRole = authRole,
             authScopes = authScopes,
+            authSessionCap = authSessionCap,
             methods = methods,
             capabilities = capabilities,
           ),
@@ -1908,18 +1910,6 @@ class GatewaySession(
     ): JsonObject {
       val client = target.options.client
       val locale = Locale.getDefault().toLanguageTag()
-      val clientObj =
-        buildJsonObject {
-          put("id", JsonPrimitive(client.id))
-          client.displayName?.let { put("displayName", JsonPrimitive(it)) }
-          put("version", JsonPrimitive(client.version))
-          put("platform", JsonPrimitive(client.platform))
-          put("mode", JsonPrimitive(client.mode))
-          client.instanceId?.let { put("instanceId", JsonPrimitive(it)) }
-          client.deviceFamily?.let { put("deviceFamily", JsonPrimitive(it)) }
-          client.modelIdentifier?.let { put("modelIdentifier", JsonPrimitive(it)) }
-        }
-
       val authJson =
         when {
           selectedAuth.authToken != null -> {
@@ -1981,7 +1971,7 @@ class GatewaySession(
       return buildJsonObject {
         put("minProtocol", JsonPrimitive(GATEWAY_MIN_PROTOCOL_VERSION))
         put("maxProtocol", JsonPrimitive(GATEWAY_PROTOCOL_VERSION))
-        put("client", clientObj)
+        put("client", client.toJsonObject())
         if (target.options.caps.isNotEmpty()) put("caps", JsonArray(target.options.caps.map(::JsonPrimitive)))
         if (target.options.commands.isNotEmpty()) put("commands", JsonArray(target.options.commands.map(::JsonPrimitive)))
         if (target.options.permissions.isNotEmpty()) {
@@ -2070,8 +2060,7 @@ class GatewaySession(
           json.decodeFromJsonElement(GatewayEventFrame.serializer(), frame)
         }.getOrNull() ?: return
       val event = gatewayEvent.event
-      val payloadJson =
-        frame["payload"]?.toString() ?: frame["payloadJSON"].asStringOrNull()
+      val payloadJson = frame["payload"]?.toString()
       if (event == GatewayEvent.ConnectChallenge.rawValue) {
         if (!connectChallengeDeferred.isCompleted) {
           val challenge = extractConnectChallenge(payloadJson)
@@ -2091,7 +2080,7 @@ class GatewaySession(
         val previous = lastEventSequence
         if (previous != null && sequence > previous + 1) {
           if (event == "chat" && payloadJson != null) {
-            val payload = frame["payload"].asObjectOrNull() ?: parseJsonOrNull(payloadJson).asObjectOrNull()
+            val payload = frame["payload"].asObjectOrNull()
             if (payload != null && payload["state"].asStringOrNull() in listOf("final", "error", "aborted")) {
               liveTextProjection.project(event, payload)
               onEvent(event, payloadJson)
@@ -2109,7 +2098,7 @@ class GatewaySession(
       }
       val projectedPayload =
         if ((event == "chat" || event == "agent") && payloadJson != null) {
-          val payload = frame["payload"].asObjectOrNull() ?: parseJsonOrNull(payloadJson).asObjectOrNull()
+          val payload = frame["payload"].asObjectOrNull()
           if (payload == null) {
             payloadJson
           } else {
@@ -2155,28 +2144,13 @@ class GatewaySession(
         runCatching {
           json.decodeFromString(GatewayNodeInvokeRequest.serializer(), payloadJson)
         }.getOrNull() ?: return
-      // Older gateways sent structured `params`; keep accepting that shipped wire shape while
-      // generated models follow the canonical `paramsJSON` schema.
-      val paramsJson =
-        payload.paramsJson
-          ?: runCatching {
-            json.parseToJsonElement(payloadJson).asObjectOrNull()?.get("params")
-          }.getOrNull()?.let { value -> if (value is JsonNull) null else value.toString() }
       connectionScope.launch {
-        val request =
-          InvokeRequest(
-            id = payload.id,
-            nodeId = payload.nodeId,
-            command = payload.command,
-            paramsJson = paramsJson,
-            timeoutMs = payload.timeoutMs,
-          )
-        val result = executeInvokeRequest(request)
+        val result = executeInvokeRequest(payload)
         sendInvokeResult(payload.id, payload.nodeId, result, payload.timeoutMs)
       }
     }
 
-    private suspend fun executeInvokeRequest(request: InvokeRequest): InvokeResult {
+    private suspend fun executeInvokeRequest(request: GatewayNodeInvokeRequest): InvokeResult {
       val handler = onInvoke ?: return InvokeResult.error("UNAVAILABLE", "invoke handler missing")
       return try {
         val timeoutMs = resolveInvokeExecutionTimeoutMs(request.timeoutMs)
@@ -2202,7 +2176,8 @@ class GatewaySession(
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
-        invokeErrorFromThrowable(err)
+        val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = err::class.java.simpleName)
+        InvokeResult.error(code = parsed.code, message = parsed.message)
       }
     }
 
@@ -2228,7 +2203,7 @@ class GatewaySession(
                   GatewayNodeInvokeResultParamsError(code = err.code, message = err.message)
                 },
             ),
-          ).asObjectOrNull() ?: error("GatewayNodeInvokeResultParams must encode as an object")
+          )
       val ackTimeoutMs = resolveInvokeResultAckTimeoutMs(invokeTimeoutMs)
       try {
         request(GatewayMethod.NodeInvokeResult.rawValue, params, timeoutMs = ackTimeoutMs)
@@ -2238,11 +2213,6 @@ class GatewaySession(
           "node.invoke.result failed (ackTimeoutMs=$ackTimeoutMs): ${err.message ?: err::class.java.simpleName}",
         )
       }
-    }
-
-    private fun invokeErrorFromThrowable(err: Throwable): InvokeResult {
-      val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = err::class.java.simpleName)
-      return InvokeResult.error(code = parsed.code, message = parsed.message)
     }
 
     private fun failPending() {
@@ -2518,12 +2488,7 @@ class GatewaySession(
     if (attemptedDeviceTokenRetry) return false
     if (explicitGatewayToken == null || storedToken == null) return false
     if (!isTrustedDeviceRetryEndpoint(target.endpoint, target.tls)) return false
-    val detailCode = error.details?.code
-    val recommendedNextStep = error.details?.recommendedNextStep
-    // New gateways set canRetryWithDeviceToken; older builds expose equivalent string codes.
-    return error.details?.canRetryWithDeviceToken == true ||
-      recommendedNextStep == "retry_with_device_token" ||
-      detailCode == "AUTH_TOKEN_MISMATCH"
+    return error.details?.canRetryWithDeviceToken == true
   }
 
   private fun shouldPauseReconnectAfterAuthFailure(
@@ -2541,8 +2506,6 @@ class GatewaySession(
             pendingDeviceTokenRetry = target.pendingDeviceTokenRetry,
           )
       )
-
-  private fun shouldClearStoredDeviceTokenAfterRetry(error: ErrorShape): Boolean = error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH"
 
   private fun isTrustedDeviceRetryEndpoint(
     endpoint: GatewayEndpoint,
@@ -2712,17 +2675,6 @@ private fun formatGatewayAuthorityHost(host: String): String {
   val normalizedHost = host.trim().trim('[', ']')
   return if (normalizedHost.contains(":")) "[$normalizedHost]" else normalizedHost
 }
-
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
-
-private fun JsonElement?.asStringOrNull(): String? =
-  when (this) {
-    is JsonNull -> null
-    is JsonPrimitive -> content
-    else -> null
-  }
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? =
   when (this) {

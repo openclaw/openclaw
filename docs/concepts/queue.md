@@ -39,7 +39,7 @@ Same-turn steering is the default. A prompt that arrives mid-run is injected int
 
 `/queue` controls what normal inbound messages do while a session already has an active run:
 
-- `steer`: inject messages into the active runtime, including while it is executing tools. OpenClaw lets an already-running tool finish, skips sequential calls that have not started, and makes the steer visible before the next tool launch or model decision. Parallel calls continue once their batch has crossed its launch checkpoint. Codex app-server receives one batched `turn/steer` and applies it at the next model boundary. If steering is unavailable, OpenClaw waits until the active run ends before starting the prompt.
+- `steer`: inject messages into the active runtime, including while it is executing tools. OpenClaw lets the first executable call of an assistant message start before steering can skip its unstarted sequential tail. Running tools finish, and parallel batches never skip calls for steering. After each batch settles, OpenClaw checks steering before stop hooks and makes it visible after the tool results, before the next model decision. Codex app-server receives one batched `turn/steer` and applies it at the next model boundary. If steering is unavailable, OpenClaw waits until the active run ends before starting the prompt.
 - `followup`: do not steer. Enqueue each message for a later agent turn after the current run ends.
 - `collect`: do not steer. Coalesce queued messages into a **single** followup turn after the quiet window. If messages target different channels/threads, they drain individually to preserve routing.
 - `interrupt`: abort the active run for that session, then run the newest message.
@@ -65,12 +65,18 @@ Configure globally or per channel via `messages.queue`:
       mode: "steer",
       cap: 20,
       drop: "summarize",
-      byChannel: { discord: "collect" },
-      debounceMsByChannel: { discord: 1000 },
+      byChannel: { discord: "collect", x: "followup" },
+      debounceMsByChannel: { discord: 1000, x: 500 },
     },
   },
 }
 ```
+
+Both maps accept channel IDs from bundled and installed plugins. For example,
+`messages.queue.byChannel.x` sets the X plugin's queue mode. Config validation
+warns about IDs absent from the channel registry; install the corresponding
+plugin or correct the key. Queue modes and nonnegative integer debounce values
+are still validated.
 
 ## Queue options
 
@@ -214,6 +220,7 @@ The Control UI **System busyness** overlay and `diagnostics.lanes` report this w
   - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
   - `session.stuck` always triggers recovery that can release the affected session lane. A `session.stalled` classification past the abort threshold (blocked tool call, stalled model call, or stalled embedded run) can also trigger active-abort recovery, so both classifications can unstick a queue, not only `session.stuck`.
   - Repeated model requests without semantic progress share one stagnation clock. Fresh transport bytes or another retry cannot renew it indefinitely. Recovery rechecks that evidence before aborting, honors owned tool and provider retry deadlines, and lets the existing run owner settle before the queue drains.
+  - When recovery aborts an interactive turn before it replied and its request is already saved in the transcript, OpenClaw attempts one continuation instead of immediately asking the user to retry. When the next queued follow-up is from the same sender and route (for example a `chat.send` with `queueMode: "followup"`), it takes over the outstanding request; otherwise a recovery turn starts on the stalled turn's route. The recovery reply is delivered the same way as any queued follow-up from that source; a Web UI (`chat.send`) recovery arrives as its own run in the chat. Group-thread participant turns get the notice instead, because queued participant replies have no delivery owner. Both use the existing transcript and are instructed not to repeat completed actions. Other senders' queued messages and channel messages that arrived during the stalled turn run afterwards as their own turns. The "stopped making progress" notice is the last resort if that continuation also stalls or cannot be scheduled, including when the original request was not yet saved. Heartbeat and cron turns are unaffected.
   - Repeated `session.stuck` and `session.long_running` warning log lines back off exponentially while the session remains unchanged; recovery attempts still run on every heartbeat tick regardless of that backoff.
 
 ## Related
