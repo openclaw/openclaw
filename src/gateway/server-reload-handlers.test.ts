@@ -6834,7 +6834,7 @@ describe("gateway plugin hot reload handlers", () => {
       expect(channels.start).not.toHaveBeenCalled();
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(handlers.setState).toHaveBeenCalledTimes(committed ? 1 : 0);
-      expect(hoisted.refreshPreparedModelRuntimeSnapshots).not.toHaveBeenCalled();
+      expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledTimes(committed ? 1 : 0);
       if (committed) {
         const gate = hoisted.markPreparedModelRuntimeSnapshotsStale.mock.results[0]?.value;
         expect(gate).toBeDefined();
