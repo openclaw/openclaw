@@ -232,18 +232,6 @@ export type TtsProviderPreference = {
   source: "prefs" | "persona" | "config";
 };
 
-type ResolvedTtsSettingsSnapshot = {
-  autoMode: TtsAutoMode;
-  config: ResolvedTtsConfig;
-  maxLength: number;
-  persona?: ResolvedTtsPersona;
-  personaId?: string;
-  preferredProvider?: TtsProvider;
-  providerPreference?: TtsProviderPreference;
-  prefsPath: string;
-  summarize: boolean;
-};
-
 export function resolveTtsSettingsSnapshot(params: {
   cfg: OpenClawConfig;
   preparedTtsPreferences?: PreparedTtsPreferences;
@@ -251,7 +239,7 @@ export function resolveTtsSettingsSnapshot(params: {
   agentId?: string;
   channelId?: string;
   accountId?: string;
-}): ResolvedTtsSettingsSnapshot {
+}) {
   const config = resolveTtsConfig(params.cfg, {
     agentId: params.agentId,
     channelId: params.channelId,

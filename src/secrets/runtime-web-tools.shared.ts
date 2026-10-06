@@ -4,7 +4,6 @@ import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
-  WebSearchCredentialResolutionSource,
 } from "../plugins/types.js";
 import { setPathExistingStrict } from "./path-utils.js";
 import type { SecretDegradationReason } from "./runtime-degraded-state.js";
@@ -52,7 +51,7 @@ type RuntimeWebProviderSelectionParams = {
   /** Resolves inline/env/SecretRef credentials and reports the winning source. */
   resolveSecretInput: (
     params: RuntimeWebResolveSecretInputParams,
-  ) => Promise<SecretResolutionResult<WebSearchCredentialResolutionSource>>;
+  ) => Promise<SecretResolutionResult>;
 };
 
 function ensureConfigObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
@@ -155,7 +154,7 @@ export async function resolveRuntimeWebProviderSelection(
     digestRuntimeWebOwnerContract({ ...params, scopePath, providerId });
   let selectedProvider: string | undefined;
   let selectedPath: string | undefined;
-  let selectedResolution: SecretResolutionResult<WebSearchCredentialResolutionSource> | undefined;
+  let selectedResolution: SecretResolutionResult | undefined;
   if (params.enabled) {
     const candidates = params.configuredProvider
       ? params.providers.filter((provider) => provider.id === params.configuredProvider)

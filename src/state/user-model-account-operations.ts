@@ -139,12 +139,7 @@ export function setUserProfileAuthLinkAsync(
 }
 
 export function clearUserProfileAuthLinkAsync(
-  params: {
-    profileId: string;
-    provider: string;
-    assertCurrent: (roles?: readonly ModelAccountRole[]) => void;
-    authorityProfileIds?: readonly string[];
-  },
+  params: Omit<Parameters<typeof setUserProfileAuthLinkAsync>[0], "authProfileId">,
   options: AccountOptions = {},
 ) {
   const { assertCurrent, ...input } = params;

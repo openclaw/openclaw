@@ -1,5 +1,6 @@
 /** Typed credential ownership and unavailable-provider results for runtime web tools. */
 import type { SecretRef, SecretRefSource } from "../config/types.secrets.js";
+import type { WebSearchCredentialResolutionSource } from "../plugins/web-provider-types.js";
 import type { SecretDegradationReason } from "./runtime-degraded-state.js";
 import type { SecretResolverWarningCode } from "./runtime-shared.js";
 import type { RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
@@ -14,9 +15,9 @@ export type RuntimeWebResolveSecretInputParams = {
   contractDigest: string;
 };
 
-export type SecretResolutionResult<TSource extends string> = {
+export type SecretResolutionResult = {
   value?: string;
-  source: TSource;
+  source: WebSearchCredentialResolutionSource;
   secretRefConfigured: boolean;
   secretRef?: SecretRef;
   secretRefKey?: string;

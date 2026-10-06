@@ -81,8 +81,6 @@ class CommandLaneTaskTimeoutError extends Error {
           return `abort grace ${details.graceMs}ms elapsed (task budget ${details.taskBudgetMs}ms, elapsed ${details.elapsedMs}ms)`;
         case "release-signal":
           return `lane release requested after ${details.elapsedMs}ms (task budget ${details.taskBudgetMs}ms)`;
-        default:
-          throw new TypeError("Unsupported command lane timeout cause");
       }
     })();
     super(`Command lane "${lane}" task timed out: ${message}`);
@@ -628,11 +626,7 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
 }
 
 /** Per-lane work totals for every live lane; diagnostics composition lives in command-lane-diagnostics.ts. */
-export function listCommandLaneTotals(): Array<{
-  lane: string;
-  activeCount: number;
-  queuedCount: number;
-}> {
+export function listCommandLaneTotals() {
   return [...getQueueState().lanes.values()].map((state) => ({
     lane: state.lane,
     activeCount: state.activeTaskIds.size,

@@ -8,28 +8,22 @@ import {
   type SecretRef,
 } from "../config/types.secrets.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import type { SecretsApplyPlan } from "./plan.js";
+import type { SecretsApplyPlan, SecretsPlanTarget } from "./plan.js";
 import { isRecord } from "./shared.js";
+import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 import {
   discoverAuthProfileSecretTargets,
   discoverConfigSecretTargets,
 } from "./target-registry.js";
 
 /** Credential target shown by `openclaw secrets configure` before a SecretRef is selected. */
-export type ConfigureCandidate = {
-  type: string;
-  path: string;
-  pathSegments: string[];
-  label: string;
-  configFile: "openclaw.json" | "auth-profile-store";
-  expectedResolvedValue: "string" | "string-or-object";
-  existingRef?: SecretRef;
-  isDerived?: boolean;
-  agentId?: string;
-  providerId?: string;
-  accountId?: string;
-  authProfileProvider?: string;
-};
+export type ConfigureCandidate = Omit<SecretsPlanTarget, "ref" | "pathSegments"> &
+  Pick<SecretTargetRegistryEntry, "configFile" | "expectedResolvedValue"> & {
+    pathSegments: string[];
+    label: string;
+    existingRef?: SecretRef;
+    isDerived?: boolean;
+  };
 
 /** Configure candidate after the operator chooses the SecretRef to write. */
 type ConfigureSelectedTarget = ConfigureCandidate & {
@@ -37,10 +31,7 @@ type ConfigureSelectedTarget = ConfigureCandidate & {
 };
 
 /** Provider config mutations collected while building a secrets configure plan. */
-type ConfigureProviderChanges = {
-  upserts: Record<string, SecretProviderConfig>;
-  deletes: string[];
-};
+type ConfigureProviderChanges = ReturnType<typeof collectConfigureProviderChanges>;
 
 function configureCandidateSortKey(candidate: ConfigureCandidate): string {
   if (candidate.configFile === "auth-profile-store") {
@@ -175,7 +166,7 @@ function hasPath(root: unknown, segments: string[]): boolean {
 export function collectConfigureProviderChanges(params: {
   original: OpenClawConfig;
   next: OpenClawConfig;
-}): ConfigureProviderChanges {
+}) {
   const originalProviders = params.original.secrets?.providers ?? {};
   const nextProviders = params.next.secrets?.providers ?? {};
 
