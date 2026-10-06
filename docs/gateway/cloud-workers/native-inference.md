@@ -140,6 +140,25 @@ Configure an explicit device profile with the paired device ID:
 
 ```json5
 {
+  models: {
+    providers: {
+      openai: {
+        api: "openai-completions",
+        models: [
+          {
+            id: "worker-model",
+            name: "Worker model",
+            contextWindow: 32768,
+            maxTokens: 4096,
+            reasoning: true,
+            thinkingLevelMap: { low: "low", high: "high" },
+            input: ["text", "image"],
+            cost: { input: 2, output: 8, cacheRead: 1, cacheWrite: 2 },
+          },
+        ],
+      },
+    },
+  },
   agents: {
     defaults: {
       model: { primary: "openai/worker-model" },
@@ -160,6 +179,12 @@ Configure an explicit device profile with the paired device ID:
   },
 }
 ```
+
+The Gateway copy supplies runtime metadata for this custom model reference so it
+can authorize the selection and prepare tools. Keep those capabilities aligned
+with the node definition, but leave `baseUrl`, `apiKey`, and secret `headers`
+only in the node configuration. A model already present in the Gateway's catalog
+does not need this additional metadata entry.
 
 ### Create and dispatch with worker proxy authentication
 
