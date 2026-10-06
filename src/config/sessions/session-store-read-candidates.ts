@@ -163,7 +163,7 @@ export function assertSessionStoreReadCandidate(
   for (const candidate of candidates) {
     if (
       (matchesAgentDatabaseReadCandidatePath(candidate, pathname) ||
-        (!candidate.scope && matchesWindowsFileAlias(candidate.physicalPath, physicalPath))) &&
+        (!candidate.scope && matchesWindowsFileAlias(candidate.path, pathname))) &&
       (!candidate.scope ||
         matchesAgentDatabaseReadCandidatePath(
           { ...candidate, path: resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate) },

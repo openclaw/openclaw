@@ -41,7 +41,7 @@ test("keeps custody when Windows preserves distinct short and long spellings for
   fs.linkSync(shortPath, longPath);
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-  const candidate = { path: shortPath, physicalPath: shortPath };
+  const candidate = { path: shortPath, physicalPath: longPath };
   expect(isSessionStoreReadCandidateCurrent(candidate)).toBe(true);
   expect(assertSessionStoreReadCandidate(longPath, [candidate])).toBe(longPath);
 });
