@@ -1,6 +1,9 @@
+import { symlinkSync } from "node:fs";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
@@ -23,6 +26,7 @@ import {
 } from "./session-accessor.js";
 import {
   bindSessionPendingInputSources,
+  getForeignLiveSessionPendingInputEntries,
   listSessionPendingInputs,
   readSessionPendingInput,
   stageSessionPendingInput,
@@ -32,6 +36,7 @@ import {
 import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import * as targetWorker from "./session-transcript-read-worker-runtime.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
@@ -101,6 +106,71 @@ describe("committed pending input release", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
+  it.each(["live", "finished", "rotated"] as const)(
+    "observes $0 worker-promoted custody after preparing an alternate database locator",
+    async (custody) => {
+      const { receipt } = await prepare(true);
+      receipts.push(receipt);
+      const promoted = expectDefined(await promote(receipt), "Expected promoted input");
+      const databasePath = database().path;
+      const directory = path.dirname(databasePath);
+      const alias = path.join(directory, "aliased");
+      symlinkSync(directory, alias, "junction");
+      const aliasedScope = { ...scope(), storePath: path.join(alias, path.basename(databasePath)) };
+      const entered = createDeferred();
+      const release = createDeferred();
+      const resolve = targetWorker.resolveSessionSqliteTargetInWorker;
+      const held = vi
+        .spyOn(targetWorker, "resolveSessionSqliteTargetInWorker")
+        .mockImplementationOnce(async (...args) => {
+          const result = await resolve(...args);
+          entered.resolve();
+          await release.promise;
+          return result;
+        });
+      const pending = getForeignLiveSessionPendingInputEntries(aliasedScope);
+      try {
+        await entered.promise;
+        if (custody === "finished") {
+          receipt.finish("interrupted");
+        } else if (custody === "rotated") {
+          rotateAgentEventLifecycleGeneration();
+        }
+        release.resolve();
+        const entries = await pending;
+        expect(entries.get(promoted.messageId)).toBe(
+          custody === "live" ? receipt.message.idempotencyKey : undefined,
+        );
+      } finally {
+        release.resolve();
+        await pending.catch(() => undefined);
+        held.mockRestore();
+      }
+      if (custody === "live") {
+        expect(
+          await receipt.run(
+            async () => (await getForeignLiveSessionPendingInputEntries(aliasedScope)).size,
+          ),
+        ).toBe(0);
+      }
+      receipt.finish("interrupted");
+      await receipt.settled?.();
+      expect((await getForeignLiveSessionPendingInputEntries(aliasedScope)).size).toBe(0);
+    },
+  );
+
+  it("retires promoted transcript protection on lifecycle rotation", async () => {
+    const receipt = await stage("rotated-input");
+    const promoted = expectDefined(await promote(receipt), "Expected promoted input");
+    expect((await getForeignLiveSessionPendingInputEntries(scope())).has(promoted.messageId)).toBe(
+      true,
+    );
+    rotateAgentEventLifecycleGeneration();
+    expect((await getForeignLiveSessionPendingInputEntries(scope())).has(promoted.messageId)).toBe(
+      false,
+    );
+  });
+
   it.each([false, true])(
     "permits only exact committed persistence after custody closes (collected: %s)",
     async (collected) => {
@@ -112,7 +182,26 @@ describe("committed pending input release", () => {
         receipts.push(receipt);
       }
       await promote(receipt);
+      expect((await getForeignLiveSessionPendingInputEntries(scope())).has(receipt.inputId)).toBe(
+        true,
+      );
+      expect(
+        await receipt.run(async () =>
+          (await getForeignLiveSessionPendingInputEntries(scope())).has(receipt.inputId),
+        ),
+      ).toBe(false);
+      expect(
+        (
+          await getForeignLiveSessionPendingInputEntries({ ...scope(), sessionId: "other-session" })
+        ).has(receipt.inputId),
+      ).toBe(false);
+      expect((await getForeignLiveSessionPendingInputEntries(scope())).has("other-entry")).toBe(
+        false,
+      );
       receipt.finish("cancelled");
+      expect((await getForeignLiveSessionPendingInputEntries(scope())).has(receipt.inputId)).toBe(
+        false,
+      );
       expect(() => receipt.run(() => {})).toThrow("ownership ended");
       const before = await loadTranscriptEvents(scope());
       expect(
