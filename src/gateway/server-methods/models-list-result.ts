@@ -120,7 +120,7 @@ export async function prepareModelsListResult({
   const scope = params.readScope;
   const publicationScope = params.publicationScope ?? scope;
   const draft = scope?.draftAccountSelection;
-  let authority =
+  const authority =
     preparationAuthority ??
     (draft
       ? {
@@ -568,7 +568,6 @@ export async function prepareModelsListResult({
       })),
     );
     const projectPublic = createPublicProjector(inventoryProjector, inventory);
-    authority = undefined;
     return {
       isCurrent: () => isCurrent() && inventoryProjector.isCurrent(),
       read: () => ({
@@ -655,8 +654,6 @@ export async function prepareModelsListResult({
     }),
   );
 
-  // Settled shared projections must not retain a request's session-read custody.
-  authority = undefined;
   return {
     isCurrent: () => isCurrent() && projector.isCurrent(),
     read: () => {

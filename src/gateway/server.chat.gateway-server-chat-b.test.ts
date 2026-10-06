@@ -1920,7 +1920,7 @@ describe("gateway server chat", () => {
                   };
                 }),
               });
-              const expiredPreferenceEvaluation = await createModelCatalogDecisions({
+              const expiredPreferenceEvaluation = createModelCatalogDecisions({
                 cfg: initialConfig,
                 agentId: "work",
                 snapshot: catalogSnapshot,

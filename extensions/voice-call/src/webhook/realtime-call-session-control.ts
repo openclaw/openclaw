@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 
-export const OUTBOUND_GREETING_FALLBACK_MS = 3_000;
+const OUTBOUND_GREETING_FALLBACK_MS = 3_000;
 
 export type RealtimeCallControlResult = {
   success: boolean;
