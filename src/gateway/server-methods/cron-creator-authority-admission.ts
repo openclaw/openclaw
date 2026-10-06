@@ -66,7 +66,9 @@ function resolveDirectOperatorAuthority(
   const isDirectOperator =
     isDirectTurn &&
     hasGatewayAdminScope(params.client) &&
-    (internal?.isLocalClient === true || internal?.controlUiAdmin === true);
+    (internal?.isLocalClient === true ||
+      internal?.controlUiAdmin === true ||
+      internal?.nativeMacosAdmin === true);
   return isDirectOperator
     ? Object.freeze({
         runId,
@@ -77,7 +79,9 @@ function resolveDirectOperatorAuthority(
             : { kind: "unknown" as const },
         ...(internal?.controlUiAdmin === true
           ? { managementEntitlement: { source: "control-ui-admin" as const } }
-          : {}),
+          : internal?.nativeMacosAdmin === true
+            ? { managementEntitlement: { source: "native-macos-admin" as const } }
+            : {}),
         ...(internal?.isLocalClient !== true ? { callerScopedCreation: true as const } : {}),
         ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
       })

@@ -237,6 +237,94 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
     expect(isDirectGatewayChatUserTurn({ ...params, isDirectExternalUser: false })).toBe(false);
   });
 
+  it("mints management only for an attested direct macOS admin turn", () => {
+    expect(
+      resolveGatewayChatCronCreatorAuthorityAdmission(
+        createChatParams({
+          client: createClient({ isLocalClient: undefined, nativeMacosAdmin: true }),
+        }),
+      ),
+    ).toEqual({
+      runId: "run-local-chat",
+      callerOrigin: { kind: "unknown" },
+      managementEntitlement: { source: "native-macos-admin" },
+      callerScopedCreation: true,
+    });
+  });
+
+  it("invalidates native management admission when its paired device is revoked", () => {
+    const context = {};
+    const caller = captureGatewayDeviceRevocation(
+      context,
+      { deviceId: "native-mac-device", role: "operator" },
+      () => true,
+    );
+    const admission = resolveGatewayChatCronCreatorAuthorityAdmission(
+      createChatParams({
+        client: createClient({ isLocalClient: undefined, nativeMacosAdmin: true }),
+        isCurrent: caller.isCurrent,
+      }),
+    );
+    expect(admission?.managementEntitlement).toEqual({ source: "native-macos-admin" });
+    const release = retainGatewayDeviceRevocation(admission?.isCurrent);
+    try {
+      expect(admission?.isCurrent?.()).toBe(true);
+      invalidateGatewayDeviceRevocation(context, "native-mac-device", "operator");
+      expect(admission?.isCurrent?.()).toBe(false);
+    } finally {
+      caller.release();
+      release?.();
+    }
+  });
+
+  it("does not trust a claimed macOS client ID without server attestation", () => {
+    const client = {
+      ...createClient({ isLocalClient: undefined }),
+      connect: {
+        scopes: ["operator.admin"],
+        client: { id: "openclaw-macos", mode: "ui" },
+      },
+    } as GatewayClient;
+    expect(
+      resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams({ client })),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "narrowed scope",
+      {
+        client: {
+          ...createClient({ isLocalClient: undefined, nativeMacosAdmin: true }),
+          connect: { scopes: ["operator.read"] },
+        },
+      },
+    ],
+    [
+      "synthetic client",
+      {
+        client: createClient({
+          isLocalClient: undefined,
+          nativeMacosAdmin: true,
+          syntheticClient: true,
+        }),
+      },
+    ],
+    ["reconnect resume", { isReconnectResume: true }],
+    ["spawned lineage", { spawnedBy: "agent:main:parent" }],
+    ["external input provenance", { inputProvenance: { kind: "external_user" } }],
+    ["internal turn", { isDirectExternalUser: false }],
+  ] as const)("does not promote native macOS admin for %s", (_label, overrides) => {
+    expect(
+      resolveGatewayChatCronCreatorAuthorityAdmission(
+        createChatParams({
+          client: createClient({ isLocalClient: undefined, nativeMacosAdmin: true }),
+          ...overrides,
+        } as Partial<Parameters<typeof resolveGatewayChatCronCreatorAuthorityAdmission>[0]>),
+      ),
+    ).toBeUndefined();
+  });
+
   it("mints only for a direct external local-admin user turn", () => {
     expect(resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams())).toEqual({
       runId: "run-local-chat",

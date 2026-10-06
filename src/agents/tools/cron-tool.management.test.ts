@@ -26,6 +26,7 @@ async function withAdminTool(
   origin: "unknown" | "channel-owner",
   run: (tool: ReturnType<typeof createCronTool>, calls: Array<[string, unknown]>) => Promise<void>,
   payload?: Record<string, unknown>,
+  directAdminSource: "control-ui-admin" | "native-macos-admin" = "control-ui-admin",
 ) {
   const runId = "admin-management-tool-run";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
@@ -35,7 +36,7 @@ async function withAdminTool(
     origin === "channel-owner" ? { kind: "external", channel: "discord" } : { kind: origin },
     origin === "channel-owner"
       ? { source: "channel-owner", isCurrent: () => true }
-      : { source: "control-ui-admin" },
+      : { source: directAdminSource },
   )!;
   const identity: AgentRuntimeIdentity = {
     kind: "agentRuntime",
@@ -87,6 +88,18 @@ async function withAdminTool(
 }
 
 describe("admin automation management", () => {
+  it("permits a paired native macOS admin to list Gateway jobs", async () => {
+    await withAdminTool(
+      "unknown",
+      async (tool, calls) => {
+        await tool.execute("native-list", { action: "list", includeDisabled: true });
+        expect(calls).toEqual([["cron.list", { includeDisabled: true, compact: true }]]);
+      },
+      undefined,
+      "native-macos-admin",
+    );
+  });
+
   it.each(["channel-owner", "unknown"] as const)(
     "permits %s command edits without recapturing creator authority",
     async (origin) => {

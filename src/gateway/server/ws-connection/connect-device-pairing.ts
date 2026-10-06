@@ -57,6 +57,7 @@ import type {
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
+import { admitsPairedNativeMacosAdmin } from "./native-macos-admin-admission.js";
 
 export async function authorizeGatewayConnectDevice(
   context: GatewayConnectPhaseContext,
@@ -589,11 +590,25 @@ export async function authorizeGatewayConnectDevice(
           isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
 
+  // The signed device and current pairing role/scope were checked above.
+  // Bind this privilege to the approved pairing client ID, not the wire label alone.
+  const nativeMacosAdmin = admitsPairedNativeMacosAdmin({
+    clientId: connectParams.client.id,
+    clientMode: connectParams.client.mode,
+    platform: connectParams.client.platform,
+    pairedClientId,
+    hasVerifiedDevice: Boolean(device && devicePublicKey),
+    pairingRecordAuthorizesSession: !skipLocalBackendSelfPairing && controlUiPairingKind === null,
+    role,
+    authMethod,
+    scopes,
+  });
   return {
     ...state,
     scopes,
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
+    ...(nativeMacosAdmin ? { nativeMacosAdmin: true as const } : {}),
   };
 }

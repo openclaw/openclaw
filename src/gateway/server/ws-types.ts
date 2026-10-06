@@ -73,6 +73,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */
     controlUiAdmin?: true;
+    /** Paired macOS UI admin admitted from a matching device record; never wire data. */
+    nativeMacosAdmin?: true;
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     /** Server-attested role-policy actor; never accepted from WebSocket wire params. */
