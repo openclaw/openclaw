@@ -360,6 +360,8 @@ describe("gateway concurrency benchmark script", () => {
             "--activity-summary-diagnostics",
             "--entry",
             "/private/fixture/diagnostic-secret/entry.js",
+            "--gateway-runtime",
+            "/private/fixture/runtime-secret/bun",
             "--output",
             output,
             "--json",
@@ -373,10 +375,12 @@ describe("gateway concurrency benchmark script", () => {
         expect(JSON.parse(result.stdout)).toEqual(JSON.parse(written));
         expect(JSON.parse(written)).toMatchObject({
           mode: "mock-activity-summary-diagnostics",
+          gatewayRuntime: "[omitted in activity-summary diagnostics mode]",
           runs: [],
           failedAttempt: { status: "failure", cleanup: { rootRemoved: true } },
         });
         expect(`${written}${result.stdout}${result.stderr}`).not.toContain("diagnostic-secret");
+        expect(`${written}${result.stdout}${result.stderr}`).not.toContain("runtime-secret");
       });
     });
 
@@ -1191,6 +1195,14 @@ describe("gateway concurrency benchmark script", () => {
         await exited;
       }
     });
+  });
+
+  it("selects the Gateway runtime independently of the controller", () => {
+    expect(testing.parseOptions([]).gatewayRuntime).toBe(process.execPath);
+    expect(
+      testing.parseOptions(["--gateway-runtime", "/tmp/bun", "--gateway-cpus", "0,1"]),
+    ).toMatchObject({ gatewayRuntime: "/tmp/bun", gatewayCpus: "0,1" });
+    expect(() => testing.parseOptions(["--gateway-runtime", "bun\0"])).toThrow("--gateway-runtime");
   });
 
   it("parses bounded mock and live benchmark controls without booting a gateway", () => {

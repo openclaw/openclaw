@@ -23,6 +23,11 @@ import {
 import { startGitOperationTiming } from "./git-operation-timing.js";
 
 export const GIT_TIMEOUT_MS = 120_000;
+
+export class GitCommandTimeoutError extends Error {
+  override name = "GitCommandTimeoutError";
+}
+
 // Keep live writers ordered across runtime chunks and shutdown. Settled tails
 // remove themselves; resetting this queue would release already-owned cleanup.
 const gitRefMutations = resolveGlobalSingleton(
@@ -239,7 +244,9 @@ export function createGitCommandError(
     timeoutMs,
   });
   if (result.termination === "timeout") {
-    error.message += `\nGit did not finish within its ${timeoutMs / 1000}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`;
+    return new GitCommandTimeoutError(
+      `${error.message}\nGit did not finish within its ${timeoutMs / 1000}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,
+    );
   }
   return error;
 }

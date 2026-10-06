@@ -18,6 +18,7 @@ export function bindCliQuestionAnswerAuthority(params: {
   assertSourceCurrent?: () => void;
   signal?: AbortSignal;
 }) {
+  params.assertSourceCurrent?.();
   return (sessionKey: string, assertActive: () => void) => {
     const source = params.readSource();
     source?.assertCurrent();

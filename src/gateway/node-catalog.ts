@@ -269,8 +269,3 @@ export function createKnownNodeCatalog(params: {
 export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
   return [...catalog.values()].toSorted(compareKnownNodes);
 }
-
-/** Returns the effective node row shown to gateway clients. */
-export function getKnownNode(catalog: KnownNodeCatalog, nodeId: string): NodeListNode | null {
-  return catalog.get(nodeId) ?? null;
-}

@@ -52,9 +52,12 @@ import {
   pairingBindingForSession,
   pairingStateMatchesBinding,
   isPublishedPairingCurrent,
+  type NodePairingLease,
+  type NodePairingLeaseResolution,
 } from "./node-registry-pairing.js";
 import {
   forgetNodeRunnerInventory,
+  invalidateNodeCatalog,
   invokeLifecycleNodeRegistry,
   invokePublicNodeRegistry,
   isNodeRegistryPendingInvokeConnectionActive,
@@ -125,18 +128,6 @@ const NODE_SESSION_POLICIES = new WeakMap<object, NodeSessionPolicy>();
 export function readNodeSessionWithheldCommands(node: object): readonly string[] {
   return NODE_SESSION_POLICIES.get(node)?.withheldCommands ?? [];
 }
-
-type PairingBoundNodeSessionLease = {
-  session: PairingBoundNodeSession;
-  nodeId: string;
-  connId: string;
-  binding: PairedDeviceNodeBinding;
-};
-
-type PairingLeaseResolution =
-  | { status: "current"; session: PairingBoundNodeSession }
-  | { status: "stale"; presenceInvalidated: boolean }
-  | { status: "unavailable" };
 
 /** Authorized system.run event window bound to one node connection. */
 type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
@@ -296,7 +287,7 @@ export class NodeRegistry {
     return [...this.nodesById.values()].filter((node) => node.client.invalidated !== true);
   }
 
-  private capturePairingLease(node: PairingBoundNodeSession): PairingBoundNodeSessionLease {
+  private capturePairingLease(node: PairingBoundNodeSession): NodePairingLease {
     return {
       session: node,
       nodeId: node.nodeId,
@@ -305,9 +296,7 @@ export class NodeRegistry {
     };
   }
 
-  private currentSessionForLease(
-    lease: PairingBoundNodeSessionLease,
-  ): PairingBoundNodeSession | undefined {
+  private currentSessionForLease(lease: NodePairingLease): PairingBoundNodeSession | undefined {
     const current = this.nodesById.get(lease.nodeId);
     return current === lease.session &&
       current.connId === lease.connId &&
@@ -319,10 +308,10 @@ export class NodeRegistry {
   }
 
   private settlePairingLease(params: {
-    lease: PairingBoundNodeSessionLease;
+    lease: NodePairingLease;
     isCurrent: boolean;
     invalidateStale: boolean;
-  }): PairingLeaseResolution {
+  }): NodePairingLeaseResolution {
     const current = this.currentSessionForLease(params.lease);
     if (!current) {
       return { status: "stale", presenceInvalidated: false };
@@ -337,9 +326,9 @@ export class NodeRegistry {
   }
 
   private async resolvePairingLease(
-    lease: PairingBoundNodeSessionLease,
+    lease: NodePairingLease,
     options: { invalidateStale: boolean },
-  ): Promise<PairingLeaseResolution> {
+  ): Promise<NodePairingLeaseResolution> {
     const resolveCurrentPairingState = this.options.resolveCurrentPairingState;
     if (!resolveCurrentPairingState) {
       const current = this.currentSessionForLease(lease);
@@ -365,6 +354,7 @@ export class NodeRegistry {
   }
 
   private refreshSessionPolicy(node: NodeSession): void {
+    invalidateNodeCatalog(this);
     const policy = expectDefined(NODE_SESSION_POLICIES.get(node), "registered node policy missing");
     const cfg = this.committedConfig;
     const declaredCommands = node.sessionCommandsCeiling ?? node.declaredCommands;
@@ -595,6 +585,7 @@ export class NodeRegistry {
     const node = this.nodesById.get(nodeId);
     const unregistersCurrentNode = node?.connId === connId;
     if (unregistersCurrentNode) {
+      invalidateNodeCatalog(this);
       const hadPresence = node.lastActiveAtMs !== undefined;
       this.nodesById.delete(nodeId);
       this.clearDesktopAvailability(node);
@@ -635,7 +626,7 @@ export class NodeRegistry {
     if (!isPairingStateCurrent) {
       return this.listConnected();
     }
-    const resolved: PairingLeaseResolution[] = [];
+    const resolved: NodePairingLeaseResolution[] = [];
     for (const candidate of this.listConnectedSessions()) {
       const lease = this.capturePairingLease(candidate);
       let isCurrent: boolean;
@@ -646,7 +637,7 @@ export class NodeRegistry {
       }
       resolved.push(this.settlePairingLease({ lease, isCurrent, invalidateStale: true }));
     }
-    return this.projectPairingLeaseResolutions(resolved);
+    return this.projectNodePairingLeaseResolutions(resolved);
   }
 
   /** Resolve persistent pairing state before projecting connected sessions. */
@@ -669,11 +660,11 @@ export class NodeRegistry {
         this.resolvePairingLease(this.capturePairingLease(node), { invalidateStale: true }),
       ),
     );
-    return this.projectPairingLeaseResolutions(resolved);
+    return this.projectNodePairingLeaseResolutions(resolved);
   }
 
-  private projectPairingLeaseResolutions(
-    resolved: readonly PairingLeaseResolution[],
+  private projectNodePairingLeaseResolutions(
+    resolved: readonly NodePairingLeaseResolution[],
   ): NodeSession[] {
     const connected: NodeSession[] = [];
     let invalidatedPresence = false;
@@ -698,6 +689,7 @@ export class NodeRegistry {
       return false;
     }
     node.client.invalidated = true;
+    invalidateNodeCatalog(this);
     node.client.invalidatedReason ??= reason;
     this.clearDesktopAvailability(node);
     forgetNodeRunnerInventory(this, node.connId);
@@ -818,6 +810,7 @@ export class NodeRegistry {
     }
     // Resource snapshots are operator-facing; publishing active-node context would churn prompts.
     node.hostStats = { ...params.stats, updatedAtMs: params.observedAtMs ?? Date.now() };
+    invalidateNodeCatalog(this);
     return node.hostStats;
   }
 
@@ -850,6 +843,7 @@ export class NodeRegistry {
   }
 
   private publishActiveNodeContext(): void {
+    invalidateNodeCatalog(this);
     const selected = selectActiveNodesByProfile(this.listConnectedSessions());
     setActiveNodeContexts(
       [...selected].map(([profileId, active]) => {

@@ -239,7 +239,11 @@ export function assertCapturedSessionEntryReadSource(
   database?: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">,
 ): void {
   if (typeof source.databaseIdentity === "string" && (!database || database.path !== source.path)) {
-    assertExistingDatabaseIdentity(source.path, `file:${source.databaseIdentity}`);
+    assertExistingDatabaseIdentity(
+      source.path,
+      `file:${source.databaseIdentity}`,
+      source.databaseBirthtime,
+    );
   }
   if (!database) {
     if (typeof source.databaseIdentity === "symbol") {

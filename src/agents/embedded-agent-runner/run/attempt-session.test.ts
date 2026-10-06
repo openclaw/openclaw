@@ -853,6 +853,20 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     });
   });
 
+  it.each([
+    ["settled-tool-finalization", true],
+    [undefined, false],
+  ] as const)("sets compactionForbidden for operation %s to %s", async (operation, expected) => {
+    const fixture = createInput();
+    fixture.input.attempt = { ...fixture.input.attempt, operation };
+
+    await prepareEmbeddedAttemptAgentSession(fixture.input);
+
+    expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ compactionForbidden: expected }),
+    );
+  });
+
   it("publishes session ownership before activation can fail", async () => {
     const fixture = createInput({ activationError: new Error("activation failed") });
 

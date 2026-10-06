@@ -82,9 +82,12 @@
   background: none;
   color: var(--text);
   font: inherit;
-  text-decoration: underline;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+button.chat-working-indicator__child:is(:hover, :focus-visible) {
+  text-decoration: underline;
 }
 
 .chat-working-indicator--continuation {
