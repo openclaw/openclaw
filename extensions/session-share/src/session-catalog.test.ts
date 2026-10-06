@@ -430,41 +430,82 @@ describe("session-share receiver catalog", () => {
     expect(fixture.invoke).not.toHaveBeenCalled();
   });
 
-  it("reports slow background refreshes at most once a minute without private data", async () => {
-    diagnostics.enabled = true;
-    diagnostics.warnEnabled = true;
-    const fixture = await catalogFixture();
-    fixture.list.mockResolvedValue({
-      nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
-    });
-    const gate = createDeferred<unknown>();
-    fixture.invoke.mockImplementation(() => gate.promise);
-    let clock = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => clock);
-    await fixture.hydrate();
-    clock = 30_000;
-    gate.reject(
-      Object.assign(new Error("PRIVATE_MESSAGE"), {
-        details: {
-          nodeCommandDispatched: false,
-          nodeError: { code: "TIMEOUT", message: "PRIVATE_MESSAGE" },
-          nodeId: "PRIVATE_NODE",
-        },
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(1);
-    expect(diagnostics.warn.mock.calls).toEqual([
-      [
-        "slow Session Share catalog refresh",
-        {
-          elapsedMs: 30_000,
-          outcome: "rejected",
-          nodeErrorCode: "TIMEOUT",
-          nodeCommandDispatched: false,
-        },
-      ],
-    ]);
-  });
+  it.each([false, undefined])(
+    "preserves slow refresh dispatch attribution (%s) with rate-limited private-safe logs",
+    async (nodeCommandDispatched) => {
+      diagnostics.enabled = true;
+      diagnostics.warnEnabled = true;
+      const fixture = await catalogFixture();
+      fixture.list.mockResolvedValue({
+        nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
+      });
+      const gate = createDeferred<unknown>();
+      fixture.invoke.mockImplementation(() => gate.promise);
+      let clock = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => clock);
+      await fixture.hydrate();
+      clock = 30_000;
+      gate.reject(
+        Object.assign(new Error("PRIVATE_MESSAGE"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: nodeCommandDispatched === undefined ? "PRIVATE_CODE" : "UNAVAILABLE",
+          details: {
+            nodeCommandDispatched,
+            nodeError: {
+              code: nodeCommandDispatched === undefined ? "PRIVATE_CODE" : "TIMEOUT",
+              message: "PRIVATE_MESSAGE",
+            },
+            nodeId: "PRIVATE_NODE",
+            params: { searchTerm: "PRIVATE_SEARCH" },
+          },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await fixture.catalog.list({}))[0]).toMatchObject({
+        sessions: [],
+        error: { code: "NODE_INVOKE_FAILED" },
+      });
+      expect(diagnostics.warn.mock.calls).toEqual([
+        [
+          "slow Session Share catalog refresh",
+          {
+            elapsedMs: 30_000,
+            outcome: "rejected",
+            nodeErrorCode: nodeCommandDispatched === undefined ? "unknown" : "TIMEOUT",
+            ...(nodeCommandDispatched !== undefined ? { nodeCommandDispatched } : {}),
+          },
+        ],
+      ]);
+    },
+  );
+
+  it.each(["level disabled", "disabled before settlement", "sink throws", "fast"])(
+    "preserves successful refreshes when diagnostics are %s",
+    async (mode) => {
+      diagnostics.enabled = true;
+      diagnostics.warnEnabled = mode !== "level disabled";
+      if (mode === "sink throws") {
+        diagnostics.warn.mockImplementation(() => {
+          throw new Error("diagnostic sink failed");
+        });
+      }
+      let clock = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => clock);
+      const fixture = await catalogFixture();
+      const invoke = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation(async (params) => {
+        clock += mode === "fast" ? 999 : 1_200;
+        if (mode === "disabled before settlement") {
+          diagnostics.enabled = false;
+        }
+        return invoke(params);
+      });
+
+      await fixture.hydrate();
+      expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([nativeSession]);
+      expect(diagnostics.warn).toHaveBeenCalledTimes(mode === "sink throws" ? 1 : 0);
+    },
+  );
 
   it("namespaces colliding profile claims by the invoked node, not the claimed node domain", async () => {
     const fixture = await catalogFixture();
