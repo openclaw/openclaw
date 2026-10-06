@@ -27,6 +27,7 @@ export type CodexSteeringQueueOptions = Pick<
   | "images"
   | "imageOrder"
   | "media"
+  | "currentInboundContext"
   | "isInboundUserMessage"
   | "onQueueAccepted"
   | "onQueueSettled"
@@ -56,6 +57,7 @@ export function createCodexSteeringQueue(params: {
     assertCurrent: () => void,
   ) => Promise<{
     input: CodexUserInput[];
+    additionalContext?: Record<string, { kind: "untrusted" | "application"; value: string }>;
     message: AgentMessage;
   }>;
   beforeSubmit?: (items: readonly CodexSteeringCommitItem[]) => Promise<void>;
@@ -255,6 +257,7 @@ export function createCodexSteeringQueue(params: {
         threadId: params.threadId,
         expectedTurnId: params.turnId,
         input: liveItems.flatMap((item) => item.prepared.input),
+        additionalContext: liveItems.at(-1)?.prepared.additionalContext,
         clientUserMessageId,
       };
       // turn/steer is an ack, but nothing guarantees the app-server answers it.
@@ -272,6 +275,7 @@ export function createCodexSteeringQueue(params: {
           // Rebuild only surviving material immediately before each physical write.
           liveItems = liveItems.filter(isCurrent);
           request.input = liveItems.flatMap((item) => item.prepared.input);
+          request.additionalContext = liveItems.at(-1)?.prepared.additionalContext;
           dispatchedBatches.set(request.clientUserMessageId, liveItems);
           if (liveItems.length === 0) {
             skippedRevokedBatch = true;

@@ -535,6 +535,86 @@ describe("Codex app-server steering queue", () => {
     );
   });
 
+  it("replaces native reply context on every steering batch", async () => {
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const queue = createQueue(
+      { request },
+      {
+        prepareMessage: async (text, options) => ({
+          ...(await prepareMessage(text, options, () => {})),
+          additionalContext: {
+            openclaw_current_reply: {
+              kind: "application",
+              value: JSON.stringify({
+                replyTargetPresent:
+                  options.currentInboundContext?.reply?.replyTargetPresent === true,
+              }),
+            },
+            openclaw_current_reply_identifiers: {
+              kind: "untrusted",
+              value: JSON.stringify(options.currentInboundContext?.replyIdentifiers ?? {}),
+            },
+          },
+        }),
+      },
+    );
+
+    const reply = queue.queue("reply", {
+      debounceMs: 0,
+      currentInboundContext: {
+        text: "quoted",
+        reply: {
+          replyTargetPresent: true,
+          quotePresent: true,
+          replyChainPresent: false,
+        },
+        replyIdentifiers: { replyToId: "message-1" },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const ordinary = queue.queue("ordinary", {
+      debounceMs: 0,
+      currentInboundContext: { text: "ordinary" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "turn/steer",
+      expect.objectContaining({
+        additionalContext: {
+          openclaw_current_reply: {
+            kind: "application",
+            value: '{"replyTargetPresent":true}',
+          },
+          openclaw_current_reply_identifiers: {
+            kind: "untrusted",
+            value: '{"replyToId":"message-1"}',
+          },
+        },
+      }),
+      steerRequestOptions,
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "turn/steer",
+      expect.objectContaining({
+        additionalContext: {
+          openclaw_current_reply: {
+            kind: "application",
+            value: '{"replyTargetPresent":false}',
+          },
+          openclaw_current_reply_identifiers: { kind: "untrusted", value: "{}" },
+        },
+      }),
+      steerRequestOptions,
+    );
+
+    queue.cancel();
+    await expect(reply).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+    await expect(ordinary).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+  });
+
   it("rejects accepted but unconsumed steering when the run aborts", async () => {
     const controller = new AbortController();
     const request = vi.fn(async () => ({ turnId: "turn-1" }));

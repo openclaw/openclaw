@@ -54,6 +54,20 @@ export function projectRuntimeContextFragments(fragments: RuntimeContextFragment
     .join("\n\n");
 }
 
+type CurrentInboundReplyMetadata = {
+  replyTargetPresent: true;
+  quotePresent: boolean;
+  replyChainPresent: boolean;
+};
+
+type CurrentInboundReplyIdentifiers = {
+  currentMessageId?: string;
+  threadId?: string;
+  replyToId?: string;
+  replyToIdFull?: string;
+  replyChainMessageIds?: string[];
+};
+
 export type CurrentInboundPromptContext = {
   text: string;
   /** Producer-owned fragments for model projection; text remains the legacy rendering. */
@@ -62,6 +76,10 @@ export type CurrentInboundPromptContext = {
   promptJoiner?: "\n\n" | "\n" | " ";
   /** Generated goal blocks owned by inbound-context assembly, never user text. */
   injectedGoalContexts?: string[];
+  /** OpenClaw-owned reply-presence facts safe for trusted runtime context. */
+  reply?: CurrentInboundReplyMetadata;
+  /** Bounded provider-controlled identifiers; never project these as trusted instructions. */
+  replyIdentifiers?: CurrentInboundReplyIdentifiers;
 };
 
 const INTERNAL_CONTEXT_HEADER =

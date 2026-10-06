@@ -3,6 +3,8 @@ import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent, peekSystemEventEntries } from "../../infra/system-events.js";
 import type { runReplyAgent } from "./agent-runner.runtime.js";
 import type { runPreparedReply } from "./get-reply-run.js";
+import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { withReplySystemEventContext } from "./system-event-session-key.js";
 
@@ -90,5 +92,50 @@ export function registerSystemEventAdmissionCases({
     expect(peekSystemEventEntries("agent:beta:global").map((event) => event.text)).toEqual([
       "Beta hook finished",
     ]);
+  });
+
+  it("drains system events only after waiting behind an active run", async () => {
+    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
+      "./session-system-events.js",
+    );
+    vi.mocked(drainFormattedSystemEvents).mockImplementationOnce(
+      actualSystemEvents.drainFormattedSystemEvents,
+    );
+    vi.mocked(resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    const queueKey = "agent:default:session-key";
+    enqueueSystemEvent("System event after active run", { sessionKey: queueKey });
+    const previousRun = createReplyOperation({
+      sessionId: "session-events-after-wait",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    previousRun.setPhase("running");
+
+    const runPromise = runPrepared({
+      isNewSession: false,
+      sessionId: "session-events-after-wait",
+      provider: "",
+      model: "",
+      resolvedThinkLevel: "off",
+    });
+    await Promise.resolve();
+    expect(peekSystemEventEntries(queueKey).map((event) => event.text)).toEqual([
+      "System event after active run",
+    ]);
+    previousRun.complete();
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    const call = requireRunReplyAgentCall();
+    const context = call.followupRun.currentInboundContext;
+    expect(context?.text).toContain("System event after active run");
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: expect.stringContaining("System event after active run"),
+    });
+    expect(call.commandBody).toBe("[User sent media without caption]");
+    expect(call.transcriptCommandBody).not.toContain("System event after active run");
+    expect(call.followupRun.prompt).toBe("[User sent media without caption]");
+    expect(call.followupRun.transcriptPrompt).not.toContain("System event after active run");
+    expect(peekSystemEventEntries(queueKey)).toStrictEqual([]);
   });
 }
