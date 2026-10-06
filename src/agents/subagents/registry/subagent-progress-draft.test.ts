@@ -1,7 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
+import { afterEach, expect, it, vi, type Mock } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-runtime.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
@@ -14,19 +14,19 @@ import {
 import { killSessionSubagentRuns } from "./subagent-control-kill.js";
 import type * as ControlRuntime from "./subagent-control.runtime.js";
 import { adoptSubagentProgressDraft } from "./subagent-progress-draft.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
 import {
-  adoptPausedSubagentRunForFollowUp,
-  markRequesterTurnYielded,
-  registerSubagentRun,
-  settleRequesterAfterSessionSpawns,
-} from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+  childKey,
+  requesterKey,
+  useSubagentProgressCohort,
+} from "./subagent-progress-draft.test-support.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { adoptPausedSubagentRunForFollowUp } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { testing as registryTesting } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = useSubagentControlFixture();
+const yieldCohort = useSubagentProgressCohort(fixture);
 
 const runtime = vi.hoisted(() => ({ childRunStaysActive: false }));
 
@@ -39,21 +39,10 @@ vi.mock("./subagent-control.runtime.js", async (importOriginal) => {
   };
 });
 
-const requesterKey = "agent:main:main";
-const childKey = (id: string) => `agent:main:subagent:${id}`;
 const CHILD_RESULT = "Private child result marker.";
 
 type Dispatch = SubagentAnnounceDeliveryTestDeps["dispatchGatewayMethodInProcess"];
 type DispatchParams = Parameters<Dispatch>[1];
-
-beforeEach(async () => {
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: requesterKey,
-    defaultSessionId: "requester-session",
-  });
-});
 
 afterEach(() => {
   setSubagentAnnounceDeliveryDepsForTest();
@@ -83,53 +72,6 @@ function rejectRegistryWrites(reject: (row: SubagentRunRecord) => boolean, messa
       options,
     ),
   );
-}
-
-/** The requester turn spawns announcing children, then yields them to its settle wake. */
-async function yieldCohort(requesterTurnRunId: string, ids: readonly string[]) {
-  for (const id of ids) {
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: childKey(id),
-      defaultSessionId: `${id}-session`,
-    });
-  }
-  for (const id of ids) {
-    await registerSubagentRun({
-      runId: id,
-      childSessionKey: childKey(id),
-      requesterSessionKey: requesterKey,
-      requesterAgentId: "main",
-      requesterDisplayKey: requesterKey,
-      requesterTurnRunId,
-      task: `Delegated ${id}`,
-      cleanup: "keep",
-      expectsCompletionMessage: true,
-    });
-  }
-  const spawns = ids.map((id) => ({
-    runId: id,
-    childSessionKey: childKey(id),
-    expectsCompletionMessage: true,
-  }));
-  expect(
-    await markRequesterTurnYielded({
-      requesterSessionKey: requesterKey,
-      requesterAgentId: "main",
-      requesterTurnRunId,
-    }),
-  ).toBe(ids.length);
-  expect(
-    await settleRequesterAfterSessionSpawns({
-      requesterSessionKey: requesterKey,
-      requesterAgentId: "main",
-      requesterTurnRunId,
-      requesterYielded: true,
-      acceptedSessionSpawns: spawns,
-    }),
-  ).toBe(true);
-  return spawns;
 }
 
 async function endRun(runId: string, data: Record<string, unknown> = {}) {
