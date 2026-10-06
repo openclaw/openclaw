@@ -108,7 +108,7 @@ export const portalHandlers: GatewayRequestHandlers = {
       if (!service) {
         return;
       }
-      const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+      const scopes = client?.connect.scopes ?? [];
       let portals: PortalSummary[];
       try {
         portals = portalOperations(options, service, params.environmentId).list().portals;
