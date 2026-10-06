@@ -9,10 +9,10 @@ import type {
 import type { MeetingPluginConfig } from "./plugin-config.js";
 import type { startMeetingAgentRealtimeEngine } from "./realtime-agent-engine.js";
 import type {
-  startMeetingRealtimeEngine,
   MeetingRealtimeAudioEngineHandle,
   MeetingRealtimeEngineConfig,
-} from "./realtime-engine.js";
+} from "./realtime-engine-types.js";
+import type { startMeetingRealtimeEngine } from "./realtime-engine.js";
 import type { createLocalMeetingRealtimeAudioTransport } from "./realtime-local-audio-transport.js";
 import type { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-audio-transport.js";
 import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";

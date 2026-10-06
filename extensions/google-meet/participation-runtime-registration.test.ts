@@ -22,7 +22,17 @@ function setupWithSqlite(env: NodeJS.ProcessEnv) {
   const harness = setupGoogleMeetPlugin(
     plugin,
     { defaultTransport: "chrome", defaultMode: "transcribe" },
-    { stateEnv: env, fullConfig: { transcripts: { enabled: false } } },
+    {
+      stateEnv: env,
+      fullConfig: { transcripts: { enabled: false } },
+      gatewayAvailable: true,
+      gatewayRequestHandler: async (method, params) => {
+        if (method === "browser.request" && params?.path === "/tabs") {
+          return { tabs: [] };
+        }
+        throw new Error(`Unexpected browser request in participation lifecycle fixture: ${method}`);
+      },
+    },
   );
   vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(
     createGoogleMeetToolGatewayForTest(harness.methods),
@@ -74,7 +84,7 @@ describe("Google Meet registered participation lifecycle", () => {
             sessionId,
             active: true,
             sourceOrder: 0,
-            capabilities: [],
+            capabilities: ["chat.send"],
             sources: [],
           });
 

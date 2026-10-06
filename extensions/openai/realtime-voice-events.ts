@@ -31,6 +31,7 @@ function base64ToBuffer(b64: string): Buffer {
 
 export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
   protected handleEvent(event: RealtimeEvent, connection: RealtimeVoiceSessionConnection): void {
+    const responseId = event.response_id ?? event.response?.id;
     const emitServerEvent = () =>
       this.config.onEvent?.({
         direction: "server",
@@ -128,7 +129,11 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       case "response.audio_transcript.delta":
       case "response.output_audio_transcript.delta":
         if (event.delta) {
-          this.config.onTranscript?.("assistant", event.delta, false);
+          if (responseId) {
+            this.config.onTranscript?.("assistant", event.delta, false, undefined, responseId);
+          } else {
+            this.config.onTranscript?.("assistant", event.delta, false);
+          }
         }
         return;
 
@@ -139,7 +144,11 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         {
           const transcript = event.transcript ?? event.text;
           if (transcript) {
-            this.config.onTranscript?.("assistant", transcript, true);
+            if (responseId) {
+              this.config.onTranscript?.("assistant", transcript, true, undefined, responseId);
+            } else {
+              this.config.onTranscript?.("assistant", transcript, true);
+            }
           }
         }
         return;

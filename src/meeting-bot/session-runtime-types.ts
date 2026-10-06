@@ -12,7 +12,11 @@ import type { MeetingDurableTranscriptsOptions } from "./transcripts-bridge.js";
 
 export type MeetingSessionRuntimeHandles<THealth extends MeetingBrowserHealth> = {
   stop?: () => Promise<void>;
-  speak?: (instructions?: string) => void;
+  speak?: (
+    instructions?: string,
+    assertCurrent?: () => void,
+    refreshCurrent?: () => Promise<void>,
+  ) => void | Promise<void>;
   getHealth?: () => Partial<THealth>;
 };
 

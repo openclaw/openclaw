@@ -7,10 +7,8 @@ import type {
   RealtimeVoiceBridgeCreateRequest,
 } from "../talk/provider-types.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
-import {
-  startMeetingRealtimeEngine,
-  type MeetingRealtimeToolCallParams,
-} from "./realtime-engine.js";
+import type { MeetingRealtimeToolCallParams } from "./realtime-engine-types.js";
+import { startMeetingRealtimeEngine } from "./realtime-engine.js";
 
 type PendingWrite = {
   resolve: () => void;
@@ -77,6 +75,12 @@ async function createEngineFixture(options?: {
     writeOutput,
   };
   const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
+  const synthesize = vi.fn(async () => ({
+    success: true,
+    audioBuffer: Buffer.alloc(960, 1),
+    sampleRate: 24_000,
+    outputFormat: "pcm16",
+  }));
   const handle = await startMeetingRealtimeEngine({
     config: {
       chrome: { audioFormat: "pcm16-24khz" },
@@ -97,7 +101,7 @@ async function createEngineFixture(options?: {
       sessionIdPrefix: "meeting-test",
     },
     providers: [provider],
-    runtime: {} as never,
+    runtime: { tts: { textToSpeechTelephony: synthesize } } as never,
     tools: [],
     transport,
   });
@@ -114,6 +118,7 @@ async function createEngineFixture(options?: {
     callbacks: bridgeCallbacks,
     clearOutput,
     handle,
+    synthesize,
     handleBargeIn,
     submitToolResult,
     async waitForWriteStart(count: number) {
@@ -167,6 +172,334 @@ async function createEngineFixture(options?: {
 }
 
 describe("meeting realtime engine output ownership", () => {
+  it.each([
+    ["audio", "before admission"],
+    ["audio", "after admission"],
+    ["creation", "before admission"],
+    ["creation", "after admission"],
+  ] as const)(
+    "preserves exact playback across a retired provider clear (%s, %s)",
+    async (providerStart, clearTiming) => {
+      const fixture = await createEngineFixture();
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      let speaking: Promise<void> | undefined;
+      try {
+        // Google emits unkeyed audio, then acknowledges client cancellation with
+        // onClearAudio followed by onResponseDone, possibly in a later message.
+        const previousWrites = providerStart === "audio" ? 1 : 0;
+        if (providerStart === "audio") {
+          fixture.callbacks.onAudio(Buffer.alloc(960, 2));
+          await fixture.waitForWriteStart(1);
+          fixture.releaseWrite(0);
+          await setImmediate();
+        } else {
+          fixture.callbacks.onEvent?.({ direction: "server", type: "response.created" });
+        }
+        speaking = Promise.resolve(
+          fixture.handle.speak(
+            "A literal answer.",
+            () => {},
+            async () => {},
+          ),
+        );
+        await fixture.waitForWriteStart(previousWrites + 1);
+        expect(fixture.handleBargeIn).toHaveBeenCalledWith({
+          audioPlaybackActive: true,
+          force: true,
+        });
+        expect(fixture.clearOutput).toHaveBeenCalledOnce();
+        if (clearTiming === "after admission") {
+          fixture.releaseWrite(previousWrites);
+          await speaking;
+        }
+
+        fixture.callbacks.onClearAudio("barge-in");
+        await setImmediate();
+        // The clock has not advanced: completed native writes are still queued
+        // for playback, even though speak() has released its reservation.
+        expect(fixture.clearOutput).toHaveBeenCalledOnce();
+        fixture.callbacks.onResponseDone?.({ status: "cancelled" });
+        if (clearTiming === "before admission") {
+          fixture.releaseWrite(previousWrites);
+          await speaking;
+        }
+
+        // A provider terminal observed during local speech must still retire
+        // the clear fence, without closing the local Talk/audio lifecycle.
+        const fresh = Buffer.alloc(960, 3);
+        fixture.callbacks.onAudio(fresh);
+        await setImmediate();
+        expect(fixture.writeOutput).toHaveBeenCalledTimes(previousWrites + 2);
+        expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
+        fixture.releaseWrite(previousWrites + 1);
+        await setImmediate();
+        fixture.callbacks.onClearAudio("barge-in");
+        await setImmediate();
+        expect(fixture.clearOutput).toHaveBeenCalledTimes(2);
+      } finally {
+        await fixture.handle.stop();
+        for (let index = 0; index < fixture.writeOutput.mock.calls.length; index += 1) {
+          fixture.releaseWrite(index);
+        }
+        await speaking?.catch(() => {});
+        now.mockRestore();
+      }
+    },
+  );
+
+  it("preserves an admitted exact utterance while the next reply waits for playback", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(1_000);
+    const fixture = await createEngineFixture();
+    const speech: Promise<void>[] = [];
+    try {
+      speech.push(
+        Promise.resolve(
+          fixture.handle.speak(
+            "First answer",
+            () => {},
+            async () => {},
+          ),
+        ),
+      );
+      await fixture.waitForWriteStart(1);
+      fixture.releaseWrite(0);
+      await speech[0];
+      expect(fixture.clearOutput).toHaveBeenCalledOnce();
+
+      speech.push(
+        Promise.resolve(
+          fixture.handle.speak(
+            "Second answer",
+            () => {},
+            async () => {},
+          ),
+        ),
+      );
+      await setImmediate();
+      expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      expect(fixture.writeOutput).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(19);
+      expect(fixture.writeOutput).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      await fixture.waitForWriteStart(2);
+      fixture.releaseWrite(1);
+      await speech[1];
+      expect(fixture.clearOutput).toHaveBeenCalledTimes(2);
+      expect(fixture.handle.getHealth().recentRealtimeTranscript.map(({ text }) => text)).toEqual([
+        "First answer",
+        "Second answer",
+      ]);
+    } finally {
+      await fixture.handle.stop();
+      for (let index = 0; index < fixture.writeOutput.mock.calls.length; index += 1) {
+        fixture.releaseWrite(index);
+      }
+      await Promise.allSettled(speech);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["source edit", "human interruption", "stop"] as const)(
+    "rejects the next exact reply after %s while waiting for previous playback",
+    async (invalidation) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(1_000);
+      const fixture = await createEngineFixture();
+      let current = true;
+      let second: Promise<void> | undefined;
+      try {
+        const first = Promise.resolve(
+          fixture.handle.speak(
+            "First answer",
+            () => {},
+            async () => {},
+          ),
+        );
+        await fixture.waitForWriteStart(1);
+        fixture.releaseWrite(0);
+        await first;
+        second = Promise.resolve(
+          fixture.handle.speak(
+            "Second answer",
+            () => {
+              if (!current) {
+                throw new Error("Source changed while waiting");
+              }
+            },
+            async () => {},
+          ),
+        );
+        const rejected = expect(second).rejects.toThrow(
+          invalidation === "source edit"
+            ? "Source changed while waiting"
+            : "Exact meeting speech was interrupted",
+        );
+        if (invalidation === "source edit") {
+          current = false;
+          await vi.advanceTimersByTimeAsync(20);
+        } else if (invalidation === "human interruption") {
+          expect(fixture.triggerHumanBargeIn()).toBe(true);
+        } else {
+          await fixture.handle.stop();
+        }
+        await rejected;
+        expect(fixture.writeOutput).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        await fixture.handle.stop();
+        for (let index = 0; index < fixture.writeOutput.mock.calls.length; index += 1) {
+          fixture.releaseWrite(index);
+        }
+        await second?.catch(() => {});
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["typed", "legacy"] as const)(
+    "fences retired anonymous transcripts after exact admission until a %s terminal",
+    async (terminal) => {
+      const fixture = await createEngineFixture();
+      let speaking: Promise<void> | undefined;
+      try {
+        fixture.callbacks.onEvent?.({ direction: "server", type: "response.created" });
+        speaking = Promise.resolve(
+          fixture.handle.speak(
+            "A literal answer.",
+            () => {},
+            async () => {},
+          ),
+        );
+        await fixture.waitForWriteStart(1);
+        fixture.releaseWrite(0);
+        await speaking;
+        const transcriptBefore = fixture.handle.getHealth().recentRealtimeTranscript;
+        fixture.callbacks.onTranscript?.("assistant", "Retired anonymous text", false);
+        fixture.callbacks.onTranscript?.("assistant", "Retired anonymous text", true);
+        expect(fixture.handle.getHealth().recentRealtimeTranscript).toEqual(transcriptBefore);
+        expect(fixture.logger.info).not.toHaveBeenCalledWith(
+          expect.stringContaining("Retired anonymous text"),
+        );
+
+        fixture.callbacks.onTranscript?.("user", "Still listening", true);
+        expect(fixture.handle.getHealth().lastRealtimeTranscriptText).toBe("Still listening");
+        fixture.callbacks.onTranscript?.("assistant", "Fresh keyed text", true, undefined, "fresh");
+        expect(fixture.handle.getHealth().lastRealtimeTranscriptText).toBe("Fresh keyed text");
+        if (terminal === "typed") {
+          fixture.callbacks.onResponseDone?.({ status: "cancelled" });
+        } else {
+          fixture.callbacks.onEvent?.({ direction: "server", type: "response.cancelled" });
+        }
+        fixture.callbacks.onTranscript?.("assistant", "Fresh anonymous text", true);
+        expect(fixture.handle.getHealth().lastRealtimeTranscriptText).toBe("Fresh anonymous text");
+      } finally {
+        await fixture.handle.stop();
+        for (let index = 0; index < fixture.writeOutput.mock.calls.length; index += 1) {
+          fixture.releaseWrite(index);
+        }
+        await speaking?.catch(() => {});
+      }
+    },
+  );
+
+  it("allows human interruption of admitted exact speech while a retired clear is fenced", async () => {
+    const fixture = await createEngineFixture();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    let speaking: Promise<void> | undefined;
+    try {
+      fixture.announceOutputResponse("old-provider-response");
+      speaking = Promise.resolve(
+        fixture.handle.speak(
+          "A literal answer.",
+          () => {},
+          async () => {},
+        ),
+      );
+      await fixture.waitForWriteStart(1);
+      fixture.releaseWrite(0);
+      await speaking;
+      fixture.callbacks.onClearAudio("barge-in");
+      await setImmediate();
+      expect(fixture.clearOutput).toHaveBeenCalledOnce();
+
+      expect(fixture.triggerHumanBargeIn()).toBe(true);
+      await setImmediate();
+      expect(fixture.clearOutput).toHaveBeenCalledTimes(2);
+      const fresh = Buffer.alloc(960, 3);
+      fixture.sendOutputAudio(fresh, "fresh-provider-response");
+      await setImmediate();
+      expect(fixture.writeOutput).toHaveBeenCalledTimes(2);
+      expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
+      fixture.releaseWrite(1);
+    } finally {
+      await fixture.handle.stop();
+      for (let index = 0; index < fixture.writeOutput.mock.calls.length; index += 1) {
+        fixture.releaseWrite(index);
+      }
+      await speaking?.catch(() => {});
+      now.mockRestore();
+    }
+  });
+
+  it("keeps exact speech open when the retired provider turn completes late", async () => {
+    const fixture = await createEngineFixture();
+    fixture.announceOutputResponse("old-provider-response");
+    const speaking = Promise.resolve(
+      fixture.handle.speak(
+        "A literal answer.",
+        () => {},
+        async () => {},
+      ),
+    );
+    try {
+      await fixture.waitForWriteStart(1);
+      expect(fixture.writeOutput).toHaveBeenCalledOnce();
+      const started = fixture.handle
+        .getHealth()
+        .recentTalkEvents.findLast((event) => event.type === "output.audio.started");
+      expect(started?.turnId).toBeDefined();
+      fixture.callbacks.onEvent?.({
+        direction: "server",
+        type: "error",
+        detail: "Cancellation failed: no active response found",
+      });
+      fixture.callbacks.onTranscript?.("assistant", "A stale provider answer.", true);
+      fixture.callbacks.onResponseDone?.({
+        responseId: "old-provider-response",
+        status: "completed",
+      });
+      fixture.callbacks.onEvent?.({
+        direction: "server",
+        responseId: "old-provider-response",
+        type: "response.done",
+      });
+      const pendingEvents = fixture.handle.getHealth().recentTalkEvents;
+      expect(pendingEvents).not.toContainEqual(
+        expect.objectContaining({ type: "turn.ended", turnId: started?.turnId }),
+      );
+      expect(pendingEvents).not.toContainEqual(
+        expect.objectContaining({ type: "output.audio.done", turnId: started?.turnId }),
+      );
+      expect(
+        pendingEvents.filter(
+          (event) => event.type === "output.text.done" && event.turnId === started?.turnId,
+        ),
+      ).toHaveLength(1);
+      fixture.releaseWrite(0);
+      await speaking;
+      expect(fixture.handle.getHealth().recentTalkEvents).toContainEqual(
+        expect.objectContaining({ type: "turn.ended", turnId: started?.turnId }),
+      );
+    } finally {
+      if (fixture.writeOutput.mock.calls.length) {
+        fixture.releaseWrite(0);
+      }
+      await fixture.handle.stop();
+      await speaking.catch(() => {});
+    }
+  });
+
   it.each(["resolve", "reject"] as const)(
     "drains provider transcripts before %s cleanup releases transport",
     async (outcome) => {

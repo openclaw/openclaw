@@ -28,7 +28,7 @@ import type {
 import type { MeetingBrowserRequestCaller } from "./platform-adapter-contract.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import { createBrowserMeetingRealtimeAudioTransport } from "./realtime-browser-audio-transport.js";
-import type { MeetingRealtimeAudioEngineHandle } from "./realtime-engine.js";
+import type { MeetingRealtimeAudioEngineHandle } from "./realtime-engine-types.js";
 import type {
   MeetingBrowserHealth,
   MeetingBrowserTab,

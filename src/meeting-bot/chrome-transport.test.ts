@@ -10,7 +10,8 @@ import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
 import type { MeetingChromeTransportConfig } from "./chrome-transport-types.js";
 import { createMeetingPluginConfigSchema } from "./plugin-config.js";
 import { startMeetingAgentRealtimeEngine } from "./realtime-agent-engine.js";
-import { type MeetingRealtimeEngineConfig, startMeetingRealtimeEngine } from "./realtime-engine.js";
+import type { MeetingRealtimeEngineConfig } from "./realtime-engine-types.js";
+import { startMeetingRealtimeEngine } from "./realtime-engine.js";
 import { createLocalMeetingRealtimeAudioTransport } from "./realtime-local-audio-transport.js";
 import { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-audio-transport.js";
 

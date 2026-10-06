@@ -1,5 +1,6 @@
 import { normalizeOptionalString as readLogString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -15,7 +16,17 @@ import {
 } from "../talk/provider-resolver.js";
 import type { RealtimeVoiceProviderConfig } from "../talk/provider-types.js";
 import { truncateUtf16Safe } from "../utils.js";
-import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
+import {
+  convertMeetingTtsAudioForBridge,
+  type MeetingRealtimeAudioFormat,
+} from "./realtime-audio-format.js";
+
+// Shared engine transcript batching and legacy mixed-loopback echo windows.
+export const MEETING_REALTIME_TRANSCRIPT_TIMING = {
+  debounceMs: 900,
+  echoSuppressionTailMs: 3_000,
+  transcriptEchoLookbackMs: 45_000,
+} as const;
 
 type MeetingRealtimeProviderSelectionConfig = {
   realtime: {
@@ -35,6 +46,17 @@ type ResolvedRealtimeTranscriptionProvider = {
 
 export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat): number {
   return audioFormat === "g711-ulaw-8khz" ? 8 : 48;
+}
+
+export function assertMeetingInputIsolated(
+  transport: { inputAudioIsolated?: boolean },
+  platform: { displayName: string },
+): void {
+  if (!transport.inputAudioIsolated) {
+    throw new Error(
+      `${platform.displayName} native live voice requires isolated meeting audio input. Remove chrome.audioInputCommand to use managed browser capture, which must be available before connecting.`,
+    );
+  }
 }
 
 export function resolveMeetingRealtimeProvider(params: {
@@ -190,4 +212,32 @@ export function normalizeMeetingTtsPromptText(text: string | undefined): string 
     return sayExactly.replace(/^["']|["']$/g, "").trim() || trimmed;
   }
   return trimmed;
+}
+
+export async function synthesizeMeetingSpeech(params: {
+  text: string;
+  runtime: PluginRuntime;
+  cfg: OpenClawConfig;
+  audioFormat: MeetingRealtimeAudioFormat;
+  displayName: string;
+  assertCurrent(): void;
+}) {
+  params.assertCurrent();
+  const result = await params.runtime.tts.textToSpeechTelephony({
+    text: params.text,
+    cfg: params.cfg,
+  });
+  params.assertCurrent();
+  if (!result.success || !result.audioBuffer || !result.sampleRate) {
+    throw new Error(result.error ?? "TTS conversion failed");
+  }
+  const audio = convertMeetingTtsAudioForBridge(
+    result.audioBuffer,
+    result.sampleRate,
+    params.audioFormat,
+    result.outputFormat,
+    params.displayName,
+  );
+  params.assertCurrent();
+  return { audio, result };
 }

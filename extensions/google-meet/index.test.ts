@@ -25,6 +25,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import plugin from "./index.js";
 import { findGoogleMeetCalendarEvent } from "./src/calendar.js";
 import { resolveGoogleMeetConfig, type GoogleMeetConfig } from "./src/config.js";
+import { GoogleMeetChatObserver } from "./src/google-meet-chat.js";
 import { normalizeMeetUrl } from "./src/meet-url.js";
 import { buildGoogleMeetPreflightReport, fetchGoogleMeetArtifacts } from "./src/meet.js";
 import {
@@ -765,11 +766,14 @@ function browserProxyPayload(result: unknown) {
 }
 
 describe("google-meet plugin", () => {
+  // Native chat has its own registered lifecycle suite with the real observer.
+  // Keep legacy audio/join fixtures from starting background polls or a live CLI fallback.
   beforeEach(() => {
     vi.clearAllMocks();
     for (const mock of Object.values(voiceCallMocks)) {
       mock.mockReset();
     }
+    vi.spyOn(GoogleMeetChatObserver.prototype, "start").mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -903,26 +907,6 @@ describe("google-meet plugin", () => {
     expect(() => normalizeMeetUrl("https://meet.google.com:444/abc-defg-hij")).toThrow(
       "meet.google.com",
     );
-  });
-
-  it("registers the node-host command used by chrome-node transport", () => {
-    const { nodeHostCommands, nodeInvokePolicies } = setup();
-
-    const command = nodeHostCommands.find(
-      (entry): entry is Record<string, unknown> =>
-        isRecord(entry) && entry.command === "googlemeet.chrome",
-    );
-    if (!command) {
-      throw new Error("expected googlemeet.chrome node host command");
-    }
-    expect(command.cap).toBe("google-meet");
-    expect(command.dangerous).toBe(true);
-    expect(typeof command.handle).toBe("function");
-    expect(nodeInvokePolicies).toHaveLength(1);
-    expect(nodeInvokePolicies[0]).toMatchObject({
-      commands: ["googlemeet.chrome"],
-      dangerous: true,
-    });
   });
 
   it("keeps local Chrome talk-back available on Linux and blocks unsupported hosts", async () => {

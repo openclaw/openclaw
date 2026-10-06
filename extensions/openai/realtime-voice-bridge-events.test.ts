@@ -1,5 +1,8 @@
 // Openai tests cover realtime voice provider plugin behavior.
-import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  createRealtimeVoiceSessionHarness,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -612,6 +615,112 @@ describe("OpenAI realtime voice bridge events", () => {
       true,
     );
   });
+
+  it("keeps a retired native transcript out of the harness after local speech releases", async () => {
+    let localSpeech = false;
+    const onTranscript = vi.fn();
+    const harness = createRealtimeVoiceSessionHarness({
+      talk: {
+        sessionId: "native-transcript-reservation",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+      },
+      talkPayloads: {
+        turnStarted: () => ({}),
+        turnEnded: (reason) => ({ reason }),
+        inputAudioDelta: () => ({}),
+        outputAudioStarted: () => ({}),
+        outputAudioDelta: () => ({}),
+        outputAudioDone: (reason) => ({ reason }),
+      },
+    });
+    const session = harness.createBridge(
+      {
+        provider: buildOpenAIRealtimeVoiceProvider(),
+        providerConfig: { apiKey: "test-key" }, // pragma: allowlist secret
+        audioSink: { sendAudio: vi.fn() },
+        onTranscript,
+      },
+      { shouldHandleResponseLifecycle: () => !localSpeech },
+    );
+    try {
+      const socket = await connectReadyBridge(session.bridge);
+      emitServerEvent(socket, { type: "response.created", response: { id: "retired" } });
+      expect(harness.finishResponse({ status: "cancelled", responseId: "retired" }).ok).toBe(true);
+      localSpeech = true;
+      session.handleBargeIn({ force: true });
+      harness.recordOutputAudio(Buffer.from([1, 2]));
+      harness.endTurn();
+      localSpeech = false;
+      for (const type of [
+        "response.output_audio_transcript.delta",
+        "response.output_audio_transcript.done",
+      ]) {
+        emitServerEvent(socket, {
+          type,
+          response_id: "retired",
+          delta: "Retired",
+          transcript: "Retired",
+        });
+      }
+      expect(onTranscript).not.toHaveBeenCalled();
+      expect(harness.transcript).toEqual([]);
+      expect(harness.talk.activeTurnId).toBeUndefined();
+
+      emitServerEvent(socket, {
+        type: "response.done",
+        response: { id: "retired", status: "cancelled" },
+      });
+      emitServerEvent(socket, { type: "response.created", response: { id: "fresh" } });
+      emitServerEvent(socket, {
+        type: "response.output_audio_transcript.done",
+        response_id: "fresh",
+        transcript: "Fresh answer",
+      });
+      expect(harness.transcript).toMatchObject([{ role: "assistant", text: "Fresh answer" }]);
+      expect(onTranscript).toHaveBeenCalledOnce();
+    } finally {
+      await session.close();
+      harness.close();
+    }
+  });
+
+  it.each([
+    ["response.text.delta", "response.text.done"],
+    ["response.output_text.delta", "response.output_text.done"],
+    ["response.audio_transcript.delta", "response.audio_transcript.done"],
+    ["response.output_audio_transcript.delta", "response.output_audio_transcript.done"],
+    ["conversation.output_transcript.delta", "response.output_text.done"],
+  ])(
+    "carries native response identity through %s even during cancellation",
+    async (deltaType, doneType) => {
+      const onTranscript = vi.fn();
+      const bridge = createNativeBridge({ onTranscript });
+      const socket = await connectReadyBridge(bridge);
+      emitServerEvent(socket, { type: "response.created", response: { id: "cancelled" } });
+      bridge.handleBargeIn?.({ force: true });
+      emitServerEvent(socket, { type: deltaType, response_id: "cancelled", delta: "Partial" });
+      emitServerEvent(socket, { type: doneType, response_id: "cancelled", text: "Final" });
+      emitServerEvent(socket, {
+        type: "response.done",
+        response: { id: "cancelled", status: "cancelled" },
+      });
+      emitServerEvent(socket, { type: "response.created", response: { id: "fresh" } });
+      emitServerEvent(socket, { type: deltaType, response_id: "fresh", delta: "Fresh partial" });
+      emitServerEvent(socket, { type: doneType, response_id: "fresh", transcript: "Fresh final" });
+
+      // The provider reports native identity; opting out of retired text is host policy.
+      expect(onTranscript.mock.calls).toEqual([
+        ["assistant", "Partial", false, undefined, "cancelled"],
+        ["assistant", "Final", true, undefined, "cancelled"],
+        ["assistant", "Fresh partial", false, undefined, "fresh"],
+        ["assistant", "Fresh final", true, undefined, "fresh"],
+      ]);
+      await bridge.close();
+    },
+  );
 
   it("surfaces input transcription failures with their provider error details", async () => {
     const onError = vi.fn();

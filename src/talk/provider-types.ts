@@ -197,6 +197,8 @@ export type RealtimeVoiceBridgeCallbacks = {
     text: string,
     isFinal: boolean,
     metadata?: { textMode: "snapshot" },
+    /** Native assistant response identity, when supplied by the provider. Never synthesize it. */
+    responseId?: string,
   ) => void;
   /** Synchronously admits native control; only consult permits task fallthrough. Respond is call-bound. */
   handleDelegationInput?: (

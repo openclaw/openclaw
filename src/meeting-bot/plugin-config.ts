@@ -18,7 +18,7 @@ import {
   type MeetingAudioBackendSelection,
 } from "./audio-backend.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
-import type { MeetingRealtimeEngineConfig } from "./realtime-engine.js";
+import type { MeetingRealtimeEngineConfig } from "./realtime-engine-types.js";
 
 type MeetingPluginMode = "agent" | "bidi" | "transcribe";
 

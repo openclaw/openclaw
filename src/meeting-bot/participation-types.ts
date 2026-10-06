@@ -61,6 +61,8 @@ export type MeetingBrowserParticipationAdapter = {
     meetingUrl: string;
     requestId: string;
     action: MeetingParticipationAction;
+    /** Resolved by the live session owner, never accepted from tool arguments. */
+    source?: MeetingParticipationSource;
   }): string;
   parsePreparationResult?(
     result: unknown,
@@ -72,6 +74,8 @@ export type MeetingBrowserParticipationAdapter = {
     meetingUrl: string;
     requestId: string;
     action: MeetingParticipationAction;
+    /** Resolved by the live session owner, never accepted from tool arguments. */
+    source?: MeetingParticipationSource;
   }): string;
   parseActionResult(
     result: unknown,

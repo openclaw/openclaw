@@ -1,123 +1,46 @@
 // Shared meeting bot realtime engines own provider and audio-transport orchestration.
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
-import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
-import type { RealtimeVoiceAgentConsultToolPolicy } from "../talk/agent-consult-tool.js";
 import { isRealtimeVoiceAudioAudible } from "../talk/audio-energy.js";
-import type { RealtimeVoiceTool, RealtimeVoiceToolCallEvent } from "../talk/provider-types.js";
 import {
   createRealtimeVoiceSessionHarness,
   type RealtimeVoiceSessionHarness,
 } from "../talk/realtime-session-harness.js";
 import { resolveRealtimeVoiceBargeIn } from "../talk/realtime-session-policy.js";
-import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
-import type { TalkEventInput } from "../talk/talk-events.js";
-import {
-  resolveMeetingRealtimeAudioFormat,
-  type MeetingRealtimeAudioFormat,
-} from "./realtime-audio-format.js";
 import type {
-  MeetingRealtimeAudioTransport,
-  MeetingRealtimeAudioTransportHealth,
-} from "./realtime-audio-transport.js";
+  RealtimeVoiceBridgeSession,
+  RealtimeVoiceBridgeSessionParams,
+} from "../talk/session-runtime.js";
+import { resolveMeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 import {
+  assertMeetingInputIsolated,
   buildMeetingSpeakExactUserMessage,
+  formatMeetingAgentTtsResultLog,
   formatMeetingTranscriptSummaryLog,
   formatMeetingRealtimeVoiceModelLog,
+  MEETING_REALTIME_TRANSCRIPT_TIMING,
   meetingOutputBytesPerMs,
   resolveMeetingRealtimeProvider,
+  synthesizeMeetingSpeech,
 } from "./realtime-engine-support.js";
+import type {
+  MeetingRealtimeAudioEngineHandle,
+  MeetingRealtimeEngineParams,
+} from "./realtime-engine-types.js";
 import {
   createMeetingRealtimeOutputOwner,
   createMeetingRealtimeOutputQueue,
 } from "./realtime-output-owner.js";
 import { createMeetingRealtimeToolContinuity } from "./realtime-tool-continuity.js";
 
-export type MeetingRuntimePlatform = {
-  /** Adapter-owned identity keeps platform names and log prefixes out of core. */
-  displayName: string;
-  logScope: string;
-  sessionIdPrefix: string;
-};
-
-export type MeetingRealtimeEngineConfig = {
-  chrome: { audioFormat: MeetingRealtimeAudioFormat };
-  realtime: {
-    strategy: string;
-    agentId?: string;
-    provider?: string;
-    transcriptionProvider?: string;
-    voiceProvider?: string;
-    model?: string;
-    instructions?: string;
-    introMessage?: string;
-    toolPolicy?: RealtimeVoiceAgentConsultToolPolicy;
-    providers: Record<string, Record<string, unknown>>;
-  };
-};
-
-export type MeetingAgentConsultParams = {
-  meetingSessionId: string;
-  requesterSessionKey?: string;
-  args: unknown;
-  transcript: Array<{ role: "user" | "assistant"; text: string }>;
-  /** Meeting-owned cancellation for the active consult. */
-  abortSignal?: AbortSignal;
-};
-
-export type MeetingRealtimeToolCallParams = {
-  strategy: string;
-  session: RealtimeVoiceBridgeSession;
-  event: RealtimeVoiceToolCallEvent;
-  meetingSessionId: string;
-  requesterSessionKey?: string;
-  transcript: Array<{ role: "user" | "assistant"; text: string }>;
-  onTalkEvent: (event: TalkEventInput) => void;
-};
-
-export type MeetingRealtimeAudioEngineHealth = ReturnType<
-  RealtimeVoiceSessionHarness["getHealth"]
-> &
-  MeetingRealtimeAudioTransportHealth & {
-    lastClearAt?: string;
-    clearCount?: number;
-    bridgeClosed: boolean;
-  };
-
-export type MeetingRealtimeAudioEngineHandle = {
-  providerId: string;
-  speak: (instructions?: string) => void;
-  getHealth: () => MeetingRealtimeAudioEngineHealth;
-  stop: () => Promise<void>;
-};
-
-export const MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
-// Playback duration plus a tail blocks live loopback; transcript lookback catches delayed echo.
-export const MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
-export const MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
-export async function startMeetingRealtimeEngine(params: {
-  config: MeetingRealtimeEngineConfig;
-  fullConfig: OpenClawConfig;
-  runtime: PluginRuntime;
-  platform: MeetingRuntimePlatform;
-  meetingSessionId: string;
-  requesterSessionKey?: string;
-  logPrefix?: "node";
-  talkSessionId?: string;
-  talkContext?: { nodeId: string; bridgeId: string };
-  transport: MeetingRealtimeAudioTransport;
-  logger: RuntimeLogger;
-  providers?: RealtimeVoiceProviderPlugin[];
-  consultAgent: (params: MeetingAgentConsultParams) => Promise<{ text: string }>;
-  tools: RealtimeVoiceTool[];
-  handleToolCall: (params: MeetingRealtimeToolCallParams) => Promise<void>;
-}): Promise<MeetingRealtimeAudioEngineHandle> {
+export async function startMeetingRealtimeEngine(
+  params: MeetingRealtimeEngineParams,
+): Promise<MeetingRealtimeAudioEngineHandle> {
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
   let bridgeClosed = false;
   let transportStopped = false;
   let transportDisposed = false;
+  let humanBargeInMonitorStarted = false;
   // Fatal transport callbacks can stop the session before its bridge exists.
   let bridge: RealtimeVoiceBridgeSession | undefined;
   let realtimeReady = false;
@@ -214,7 +137,7 @@ export async function startMeetingRealtimeEngine(params: {
   };
 
   const blockOutput = (): { blocked: boolean; token: symbol } => {
-    const result = outputOwner.block();
+    const result = outputOwner.block(outputQueue.hasUnplayedPreparedAudio());
     invalidateOutputPlayback();
     return result;
   };
@@ -231,7 +154,7 @@ export async function startMeetingRealtimeEngine(params: {
     if (!block) {
       invalidateOutputPlayback();
     }
-    harness.flushOutput(outputQueue.clear);
+    harness.flushOutput(() => outputQueue.clear());
     harness.finishOutputAudio("output-backpressure");
     if (!block) {
       return;
@@ -244,21 +167,31 @@ export async function startMeetingRealtimeEngine(params: {
     });
   };
 
-  const startHumanBargeInMonitor = () => {
-    if (
-      !params.transport.startBargeInMonitor ||
-      !resolveRealtimeVoiceBargeIn({
-        configuredBargeIn: undefined,
-        interruptResponseOnInputAudio: undefined,
-        capabilities: resolved.capabilities,
-        outputAudioMode: bridge?.bridge.outputAudioMode,
-      })
-    ) {
+  const startHumanBargeInMonitor = (allowExactSpeech = false) => {
+    if (!params.transport.startBargeInMonitor || humanBargeInMonitorStarted) {
+      return;
+    }
+    const providerBargeIn = resolveRealtimeVoiceBargeIn({
+      configuredBargeIn: undefined,
+      interruptResponseOnInputAudio: undefined,
+      capabilities: resolved.capabilities,
+      outputAudioMode: bridge?.bridge.outputAudioMode,
+    });
+    if (!providerBargeIn && !allowExactSpeech) {
       return;
     }
     params.transport.startBargeInMonitor(() => {
-      if (stopped || !harness.outputActivity.isInterruptible()) {
+      const exactSpeech = outputOwner.hasExactSpeech() || outputQueue.hasUnplayedPreparedAudio();
+      if (
+        stopped ||
+        (!exactSpeech && (!providerBargeIn || !harness.outputActivity.isInterruptible()))
+      ) {
         return false;
+      }
+      if (exactSpeech) {
+        invalidateAndClearOutputPlayback();
+        harness.finishOutputAudio("interrupted");
+        return true;
       }
       const now = Date.now();
       const playbackActive = harness.isOutputPlaybackWindowActive();
@@ -269,6 +202,7 @@ export async function startMeetingRealtimeEngine(params: {
       harness.handleBargeIn({ audioPlaybackActive: true }, invalidateAndClearOutputPlayback);
       return true;
     });
+    humanBargeInMonitorStarted = true;
   };
 
   const resolved = resolveMeetingRealtimeProvider({
@@ -322,11 +256,11 @@ export async function startMeetingRealtimeEngine(params: {
       ? undefined
       : {
           bytesPerMs: meetingOutputBytesPerMs(params.config.chrome.audioFormat),
-          tailMs: MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
-          transcriptLookbackMs: MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS,
+          tailMs: MEETING_REALTIME_TRANSCRIPT_TIMING.echoSuppressionTailMs,
+          transcriptLookbackMs: MEETING_REALTIME_TRANSCRIPT_TIMING.transcriptEchoLookbackMs,
         },
     talkback: {
-      debounceMs: MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS,
+      debounceMs: MEETING_REALTIME_TRANSCRIPT_TIMING.debounceMs,
       logger: params.logger,
       logPrefix: `${params.platform.logScope} ${realtimeLogScope} agent`,
       responseStyle: "Brief, natural spoken answer for a live meeting.",
@@ -340,6 +274,9 @@ export async function startMeetingRealtimeEngine(params: {
           abortSignal: signal,
         }),
       deliver: (text) => {
+        if (stopped) {
+          return;
+        }
         bridge?.sendUserMessage(buildMeetingSpeakExactUserMessage(text));
       },
     },
@@ -361,20 +298,13 @@ export async function startMeetingRealtimeEngine(params: {
     );
   }
   try {
-    const requireIsolatedInput = () => {
-      if (!params.transport.inputAudioIsolated) {
-        throw new Error(
-          `${params.platform.displayName} native live voice requires isolated meeting audio input. Remove chrome.audioInputCommand to use managed browser capture, which must be available before connecting.`,
-        );
-      }
-    };
     if (
       resolved.capabilities?.handlesInputAudioBargeIn === true &&
       resolved.capabilities.supportsBargeIn === false
     ) {
-      requireIsolatedInput();
+      assertMeetingInputIsolated(params.transport, params.platform);
     }
-    bridge = harness.createBridge({
+    const bridgeParams: RealtimeVoiceBridgeSessionParams = {
       provider: resolved.provider,
       capabilities: resolved.capabilities,
       cfg: params.fullConfig,
@@ -414,6 +344,9 @@ export async function startMeetingRealtimeEngine(params: {
           const responseId = outputOwner.takeNextResponseId();
           const continuous = bridge?.bridge.outputAudioMode === "continuous";
           const audible = !continuous || isRealtimeVoiceAudioAudible(audio, audioFormat);
+          if (continuous && !outputOwner.acceptContinuous(audible)) {
+            return;
+          }
           if (!audible && !outputQueue.hasUnplayedAudibleAudio()) {
             if (outputGenerationActive) {
               outputGenerationActive = false;
@@ -441,7 +374,7 @@ export async function startMeetingRealtimeEngine(params: {
             outputOwner.reset();
           }
           invalidateOutputPlayback();
-          harness.flushOutput(outputQueue.clear);
+          harness.flushOutput(() => outputQueue.clear());
           harness.finishOutputAudio("clear");
         },
       },
@@ -512,7 +445,7 @@ export async function startMeetingRealtimeEngine(params: {
           toolContinuity.reset(event.type);
           const turnId = harness.talk.activeTurnId;
           invalidateOutputPlayback();
-          harness.flushOutput(outputQueue.clear);
+          harness.flushOutput(() => outputQueue.clear());
           harness.finishOutputAudio(event.type);
           if (turnId) {
             harness.talk.cancelTurn({
@@ -523,6 +456,12 @@ export async function startMeetingRealtimeEngine(params: {
           return;
         }
         outputOwner.noteEvent(event);
+        if (
+          event.direction === "server" &&
+          (event.type === "response.done" || event.type === "response.cancelled")
+        ) {
+          outputOwner.terminal(event.responseId);
+        }
         if (event.type === "input_audio_buffer.speech_started") {
           harness.ensureTurn();
         } else if (event.type === "input_audio_buffer.speech_stopped") {
@@ -540,7 +479,7 @@ export async function startMeetingRealtimeEngine(params: {
           event.type === "error" &&
           event.detail === "Cancellation failed: no active response found"
         ) {
-          if (outputOwner.clearBlocked()) {
+          if (outputOwner.clearBlocked() && !outputOwner.hasExactSpeech()) {
             outputGenerationActive = false;
             harness.finishOutputAudio(event.type);
           }
@@ -622,9 +561,15 @@ export async function startMeetingRealtimeEngine(params: {
           payload: outputTalkPayload,
         });
       },
+    };
+    bridge = harness.createBridge(bridgeParams, {
+      shouldHandleResponseLifecycle: () => !outputOwner.hasExactSpeech(),
+      shouldHandleAssistantTranscript: (responseId) =>
+        outputOwner.canHandleAssistantTranscript(responseId),
+      onProviderResponseDone: (outcome) => void outputOwner.terminal(outcome.responseId),
     });
     if (bridge.bridge.outputAudioMode === "continuous") {
-      requireIsolatedInput();
+      assertMeetingInputIsolated(params.transport, params.platform);
     }
     startHumanBargeInMonitor();
 
@@ -667,8 +612,96 @@ export async function startMeetingRealtimeEngine(params: {
 
   return {
     providerId: resolved.provider.id,
-    speak: (instructions) => {
-      bridge?.triggerGreeting(instructions);
+    speak: (instructions, assertCurrent, refreshCurrent): undefined | Promise<void> => {
+      if (stopped) {
+        throw new Error("Meeting realtime session is closed");
+      }
+      assertCurrent?.();
+      if (!refreshCurrent) {
+        bridge?.triggerGreeting(instructions);
+        return undefined;
+      }
+      const text = instructions?.trim();
+      if (!text) {
+        throw new Error("Exact meeting speech requires text");
+      }
+      if (typeof params.runtime.tts?.textToSpeechTelephony !== "function") {
+        throw new Error("Exact meeting speech requires an available TTS provider");
+      }
+      if (outputOwner.hasExactSpeech()) {
+        throw new Error("Exact meeting speech is already pending");
+      }
+      let speech = outputOwner.reserveExactSpeech();
+      const assertSpeechCurrent = () => {
+        if (stopped || !outputOwner.isExactSpeechCurrent(speech)) {
+          throw new Error("Exact meeting speech was interrupted");
+        }
+        assertCurrent?.();
+      };
+      return (async () => {
+        let prepared: symbol | undefined;
+        let speechTurnId: string | undefined;
+        let completed = false;
+        try {
+          await outputQueue.waitForPreparedPlayback();
+          assertSpeechCurrent();
+          // Preserve prior local playback before retiring the provider generation.
+          harness.finishResponse({
+            status: "cancelled",
+            responseId: outputOwner.takeNextResponseId(),
+          });
+          invalidateAndClearOutputPlayback();
+          bridge?.handleBargeIn({ audioPlaybackActive: true, force: true });
+          speech = outputOwner.reserveExactSpeech();
+          prepared = outputQueue.reservePrepared();
+          if (!prepared) {
+            throw new Error("Meeting audio output is unavailable");
+          }
+          startHumanBargeInMonitor(true);
+          const { audio, result } = await synthesizeMeetingSpeech({
+            text,
+            runtime: params.runtime,
+            cfg: params.fullConfig,
+            audioFormat: params.config.chrome.audioFormat,
+            displayName: params.platform.displayName,
+            assertCurrent: assertSpeechCurrent,
+          });
+          assertSpeechCurrent();
+          params.logger.info(
+            formatMeetingAgentTtsResultLog(params.platform.logScope, realtimeLogScope, result),
+          );
+          await outputQueue.enqueuePrepared(prepared, audio, {
+            assertCurrent: assertSpeechCurrent,
+            refreshCurrent,
+            onStarted: () => {
+              speechTurnId = harness.ensureTurn();
+              harness.recordTranscript("assistant", text);
+              harness.emit({
+                type: "output.text.done",
+                turnId: speechTurnId,
+                final: true,
+                payload: { text },
+              });
+              outputGenerationActive = true;
+              harness.outputActivity.markPlaybackStarted();
+              harness.recordOutputAudio(audio);
+            },
+          });
+          completed = true;
+        } finally {
+          if (speechTurnId && harness.talk.activeTurnId === speechTurnId) {
+            harness.finishOutputAudio(completed ? "completed" : "interrupted");
+            harness.endTurn(completed ? "completed" : "interrupted");
+          }
+          if (outputOwner.isExactSpeechCurrent(speech)) {
+            outputGenerationActive = false;
+          }
+          if (prepared) {
+            outputQueue.releasePrepared(prepared);
+          }
+          outputOwner.releaseExactSpeech(speech);
+        }
+      })();
     },
     getHealth: () => ({
       ...harness.getHealth({

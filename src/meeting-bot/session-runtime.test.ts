@@ -13,6 +13,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
+import type { MeetingRealtimeAudioEngineHandle } from "./realtime-engine-types.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
   createTestRealtimeEngine,
@@ -24,7 +25,7 @@ import {
 const engineMocks = vi.hoisted(() => ({
   localDispose: vi.fn(async () => {}),
   nodeDispose: vi.fn(async () => {}),
-  speak: vi.fn(),
+  speak: vi.fn<MeetingRealtimeAudioEngineHandle["speak"]>(),
   startAgent: vi.fn(),
 }));
 
@@ -772,40 +773,6 @@ describe("MeetingSessionRuntime leave cleanup", () => {
   );
 });
 
-describe("MeetingSessionRuntime speech readiness", () => {
-  it("treats an unknown microphone state as transiently unverified", async () => {
-    const { runtime } = createTestRuntime({
-      talkBack: true,
-      releaseBrowserTab: async () => true,
-      joinTransport: async ({ session }) => {
-        session.browser = {
-          launched: true,
-          hasAudioBridge: true,
-          health: { inCall: true },
-        };
-        return {};
-      },
-    });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "main",
-    });
-
-    expect(runtime.refreshSpeechReadiness(session)).toEqual({
-      ready: false,
-      reason: "browser-unverified",
-      message: "browser unverified",
-    });
-    expect(session.browser?.health).toMatchObject({
-      speechReady: false,
-      speechBlockedReason: "browser-unverified",
-    });
-
-    session.browser!.health = { ...session.browser?.health, micMuted: false };
-    expect(runtime.refreshSpeechReadiness(session)).toEqual({ ready: true });
-  });
-});
-
 describe.each([
   {
     title: "Zoom",
@@ -897,7 +864,7 @@ describe.each([
       expect(engineMocks.startAgent).toHaveBeenCalledWith(
         expect.objectContaining({ requesterSessionKey: "agent:support:session:caller" }),
       );
-      expect(engineMocks.speak).toHaveBeenCalledWith("hello");
+      expect(engineMocks.speak).toHaveBeenCalledWith("hello", expect.any(Function), undefined);
       expect(joined.session.chrome?.audioBridge).toMatchObject({ type: "node-command-pair" });
 
       if (isZoom) {
@@ -918,11 +885,17 @@ describe.each([
         await runtime.status(joined.session.id);
         expect((await runtime.speak(joined.session.id, "again")).spoken).toBe(true);
         expect(engineMocks.startAgent).toHaveBeenCalledTimes(2);
-        expect(engineMocks.speak).toHaveBeenCalledWith("again");
+        expect(engineMocks.speak).toHaveBeenCalledWith("again", expect.any(Function), undefined);
         expect(joined.session.chrome?.health?.bridgeClosed).toBe(false);
       }
       expect(harness.state.audioCaptureId).toEqual(expect.any(String));
+      const assertCurrent = engineMocks.speak.mock.calls.at(-1)?.[1];
+      if (!assertCurrent) {
+        throw new Error("Expected the meeting owner to guard native speech.");
+      }
+      expect(assertCurrent).not.toThrow();
       await runtime.leave(joined.session.id);
+      expect(assertCurrent).toThrow("Meeting session is no longer active");
       expect(harness.state.audioCaptureId).toBeUndefined();
     });
   });

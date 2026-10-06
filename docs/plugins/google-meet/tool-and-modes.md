@@ -40,6 +40,7 @@ Agents use the `google_meet` tool:
 | `transcript`            | Read the bounded caption transcript; `sinceIndex` resumes from the previous `nextIndex`           |
 | `participation_context` | Read currently available native actions and fresh observed source references for a session        |
 | `participate`           | Execute a supported native action using a stable `requestId` and `participationAction`            |
+| `send_chat`             | Send exact native chat text using `sessionId`, `requestId`, and `text`                            |
 | `leave`                 | End a session (Chrome clicks Leave; closes only tabs it opened; Twilio hangs up)                  |
 | `end_active_conference` | End the active Google Meet conference for an API-managed space                                    |
 | `speak`                 | Make the realtime agent speak immediately, given `sessionId` and `message`                        |
@@ -118,6 +119,15 @@ only capabilities available for the current tracked browser session; an empty
 list means no native action is available. A platform must provide the native
 implementation before the runtime advertises its capability. Twilio does not
 support browser participation actions.
+
+Chrome sessions support `chat.send`, also exposed as `send_chat` and
+`openclaw googlemeet send-chat <session-id> <text> --request-id <id>`.
+Agent and bidi modes consult the configured agent for fresh incoming chat requests
+and normally return one written answer, even while the Meet microphone is muted.
+Observe-only mode never replies automatically. Voice output requires a current
+incoming source that explicitly requests speech; model output cannot authorize it.
+See [native meeting chat](/plugins/google-meet#native-meeting-chat) for source,
+draft, size, and delivery guarantees.
 
 Pass the advertised action object in `participationAction` and reuse the same
 `requestId` when checking an unclear response. Reusing that ID never repeats the

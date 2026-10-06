@@ -1,6 +1,12 @@
 import { getRootOptionAwareCommandPath } from "openclaw/plugin-sdk/cli-argv";
 
-const DEFAULT_JSON_COMMANDS = new Set(["join", "status", "test-listen", "test-speech"]);
+const DEFAULT_JSON_COMMANDS = new Set([
+  "join",
+  "send-chat",
+  "status",
+  "test-listen",
+  "test-speech",
+]);
 
 function hasOption(argv: readonly string[], flag: string): boolean {
   for (const arg of argv.slice(2)) {

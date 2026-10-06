@@ -166,7 +166,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
       case "response.output_text.delta":
       case "response.output_audio_transcript.delta":
         if (event.delta) {
-          this.appendAssistantTranscriptDelta(event.delta);
+          this.appendAssistantTranscriptDelta(event.delta, responseId);
         }
         return;
       case "response.text.done":
@@ -178,7 +178,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
             return;
           }
         }
-        this.flushAssistantTranscript(event.transcript ?? event.text);
+        this.flushAssistantTranscript(event.transcript ?? event.text, responseId);
         return;
       case "conversation.item.input_audio_transcription.delta":
         if (event.delta) {
@@ -292,7 +292,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
                     : "",
               )
               .join("");
-            this.flushAssistantTranscript(terminalTranscript);
+            this.flushAssistantTranscript(terminalTranscript, responseId);
           });
           if (this.outputResponse) {
             this.outputResponse.ended = true;
@@ -430,22 +430,30 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
     });
   }
 
-  private appendAssistantTranscriptDelta(delta: string): void {
+  private appendAssistantTranscriptDelta(delta: string, responseId?: string): void {
     if (this.assistantTranscriptFinalized) {
       this.assistantTranscriptBuffer = "";
       this.assistantTranscriptFinalized = false;
     }
     this.assistantTranscriptBuffer += delta;
-    this.config.onTranscript?.("assistant", delta, false);
+    if (responseId) {
+      this.config.onTranscript?.("assistant", delta, false, undefined, responseId);
+    } else {
+      this.config.onTranscript?.("assistant", delta, false);
+    }
   }
 
-  private flushAssistantTranscript(finalTranscript?: string): void {
+  private flushAssistantTranscript(finalTranscript?: string, responseId?: string): void {
     if (this.assistantTranscriptFinalized) {
       return;
     }
     const transcript = finalTranscript || this.assistantTranscriptBuffer;
     if (transcript) {
-      this.config.onTranscript?.("assistant", transcript, true);
+      if (responseId) {
+        this.config.onTranscript?.("assistant", transcript, true, undefined, responseId);
+      } else {
+        this.config.onTranscript?.("assistant", transcript, true);
+      }
       this.assistantTranscriptFinalized = true;
     }
     this.assistantTranscriptBuffer = "";

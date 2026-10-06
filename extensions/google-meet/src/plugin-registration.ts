@@ -67,6 +67,7 @@ const googleMeetGatewayMethods = {
   status: "googlemeet.status",
   transcript: "googlemeet.transcript",
   participate: "googlemeet.participate",
+  send_chat: "googlemeet.participate",
   leave: "googlemeet.leave",
   speak: "googlemeet.speak",
   participation_context: "googlemeet.participationContext",
@@ -94,7 +95,14 @@ export function readGoogleMeetParticipationParams(raw: Record<string, unknown>):
       throw new Error(`${name} must be a non-empty string`);
     }
   }
-  const action = asParamRecord(raw.participationAction);
+  const action: Record<string, unknown> =
+    raw.action === "send_chat"
+      ? {
+          type: "chat.send",
+          text: raw.text,
+          ...(raw.output === undefined ? {} : { output: raw.output }),
+        }
+      : asParamRecord(raw.participationAction);
   const type = normalizeOptionalString(action.type);
   if (!type) {
     throw new Error("participationAction.type required");

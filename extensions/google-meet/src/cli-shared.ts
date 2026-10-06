@@ -101,6 +101,7 @@ type GoogleMeetGatewayMethod =
   | "googlemeet.create"
   | "googlemeet.join"
   | "googlemeet.leave"
+  | "googlemeet.participate"
   | "googlemeet.speak"
   | "googlemeet.status"
   | "googlemeet.transcript"

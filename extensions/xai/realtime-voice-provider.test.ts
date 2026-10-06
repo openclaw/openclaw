@@ -578,49 +578,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
   });
 
-  it("preserves corrected final text from legacy realtime text events", async () => {
-    const onTranscript = vi.fn();
-    const { socket } = await connect({ onTranscript });
-    socket.emitServer({ type: "response.created" });
-    socket.emitServer({ type: "response.text.delta", delta: "draft assistant" });
-    socket.emitServer({ type: "response.text.done", text: "corrected assistant" });
-    socket.emitServer({ type: "response.done" });
-    expect(onTranscript.mock.calls).toEqual([
-      ["assistant", "draft assistant", false],
-      ["assistant", "corrected assistant", true],
-    ]);
-  });
-
-  it("continues after malformed terminal items and content beside valid text", async () => {
-    const onTranscript = vi.fn();
-    const { bridge, socket } = await connect({ onTranscript });
-    socket.emitServer({ type: "response.created" });
-    bridge.sendUserMessage?.("Continue.");
-    socket.emitServer({
-      type: "response.done",
-      response: {
-        status: "completed",
-        output: [
-          null,
-          {
-            type: "message",
-            role: "assistant",
-            content: [
-              null,
-              { type: "output_text", text: "Valid text " },
-              { type: "output_audio", transcript: "and audio" },
-            ],
-          },
-        ],
-      },
-    });
-    expect(parseSent(socket).slice(-2)).toEqual([
-      userMessageEvent("Continue."),
-      { type: "response.create" },
-    ]);
-    expect(onTranscript.mock.calls).toEqual([["assistant", "Valid text and audio", true]]);
-  });
-
   it.each([false, true])(
     "interrupts acknowledged legacy playback (completed=%s)",
     async (completed) => {
@@ -1273,11 +1230,13 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
     expect(onToolCall).not.toHaveBeenCalled();
     expect(onResponseDone).toHaveBeenCalledTimes(1);
-    expect(onTranscript.mock.calls).toEqual([["assistant", "current", false]]);
+    expect(onTranscript.mock.calls).toEqual([
+      ["assistant", "current", false, undefined, "continuation"],
+    ]);
     responseDone(socket, "continuation");
     expect(onTranscript.mock.calls).toEqual([
-      ["assistant", "current", false],
-      ["assistant", "current", true],
+      ["assistant", "current", false, undefined, "continuation"],
+      ["assistant", "current", true, undefined, "continuation"],
     ]);
     expect(onResponseDone).toHaveBeenCalledTimes(2);
   });

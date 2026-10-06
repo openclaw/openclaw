@@ -554,6 +554,22 @@ resolve here.
 
 [Provider voice capabilities](/plugins/sdk-provider-plugins/voice-and-audio) — Speech, realtime transcription, realtime voice, and media understanding capabilities.
 
+Realtime voice providers can pass a native assistant response ID as the optional
+fifth `onTranscript(role, text, isFinal, metadata, responseId)` argument. Keep
+snapshot metadata in the fourth argument, and omit the ID when the native event
+has none. Do not derive it from transcript text or unrelated diagnostic events.
+
+Hosts using `createRealtimeVoiceSessionHarness` can opt into transcript fencing
+with `createBridge`'s `shouldHandleResponseLifecycle` option. Retired response IDs
+remain fenced after a local speech reservation ends; ordinary consumers retain
+their existing transcript behavior. The optional `onProviderResponseDone`
+callback observes typed provider terminals before Talk lifecycle admission, even when
+the response is retired, the lifecycle is reserved, or no Talk turn is active.
+It does not imply that a Talk turn completed; the existing `onResponseDone`
+callback still reports only admitted completions. Hosts can additionally use
+`shouldHandleAssistantTranscript(responseId)` to reject transcript-only tails
+without blocking user input or changing provider terminal settlement.
+
 - <a id="speech-tts"></a>[Speech (TTS)](/plugins/sdk-provider-plugins/voice-and-audio#speech-tts)
 - <a id="realtime-transcription"></a>[Realtime transcription](/plugins/sdk-provider-plugins/voice-and-audio#realtime-transcription)
 - <a id="realtime-voice"></a>[Realtime voice](/plugins/sdk-provider-plugins/voice-and-audio#realtime-voice)

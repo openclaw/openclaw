@@ -2,15 +2,15 @@
  * Public SDK subpath for shared browser-meeting audio transports and realtime engines.
  */
 
-export {
-  startMeetingRealtimeEngine,
-  type MeetingAgentConsultParams,
-  type MeetingRealtimeAudioEngineHandle,
-  type MeetingRealtimeAudioEngineHealth,
-  type MeetingRealtimeEngineConfig,
-  type MeetingRealtimeToolCallParams,
-  type MeetingRuntimePlatform,
-} from "../meeting-bot/realtime-engine.js";
+export { startMeetingRealtimeEngine } from "../meeting-bot/realtime-engine.js";
+export type {
+  MeetingAgentConsultParams,
+  MeetingRealtimeAudioEngineHandle,
+  MeetingRealtimeAudioEngineHealth,
+  MeetingRealtimeEngineConfig,
+  MeetingRealtimeToolCallParams,
+  MeetingRuntimePlatform,
+} from "../meeting-bot/realtime-engine-types.js";
 export { startMeetingAgentRealtimeEngine } from "../meeting-bot/realtime-agent-engine.js";
 export {
   type MeetingRealtimeAudioTransport,
@@ -51,6 +51,8 @@ export {
   leaveMeetingWithBrowser,
   readMeetingTranscriptWithBrowser,
 } from "../meeting-bot/browser-session-control.js";
+// Serializes work on a browser target; callers still own session/source checks.
+export { runMeetingBrowserAct } from "../meeting-bot/browser-act-lock.js";
 export {
   asMeetingBrowserTabs,
   readMeetingBrowserTab,

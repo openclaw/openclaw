@@ -9,7 +9,8 @@ import type {
   RealtimeVoiceBridgeCreateRequest,
 } from "../talk/provider-types.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
-import { startMeetingRealtimeEngine, type MeetingAgentConsultParams } from "./realtime-engine.js";
+import type { MeetingAgentConsultParams } from "./realtime-engine-types.js";
+import { startMeetingRealtimeEngine } from "./realtime-engine.js";
 
 async function createLiveFixture(
   options: {

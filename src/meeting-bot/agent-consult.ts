@@ -21,7 +21,7 @@ import type {
   MeetingAgentConsultParams,
   MeetingRealtimeToolCallParams,
   MeetingRuntimePlatform,
-} from "./realtime-engine.js";
+} from "./realtime-engine-types.js";
 import { readMeetingRealtimeToolAbortSignal } from "./realtime-tool-continuity.js";
 
 export function createMeetingRealtimeEngineBindings(params: {
