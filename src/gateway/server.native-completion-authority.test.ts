@@ -503,7 +503,7 @@ describe("native completion final-effect authority", () => {
         },
       });
       expect(prepared.queueHandle.messageInjectionV2?.version).toBe(2);
-      const inject = vi.spyOn(session.agent, "steer");
+      const inject = vi.spyOn(session.agent, "admitSteeringMessage");
       const steer = session.steer.bind(session);
       let steering: ReturnType<typeof session.steer> | undefined;
       vi.spyOn(session, "steer").mockImplementation((...args) => (steering = steer(...args)));

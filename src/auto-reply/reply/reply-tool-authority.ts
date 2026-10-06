@@ -37,19 +37,12 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import {
-  assertCapturedSessionEntryReadSource,
-  loadExactSessionEntryCandidates,
-} from "../../config/sessions/session-accessor.sqlite-exact-read.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type {
-  SessionEntryWorkerRead,
-  PreparedSessionEntryWorkerRead,
-} from "../../config/sessions/session-entry-read-runtime.types.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
-import { captureSessionStoreReadCandidate } from "../../config/sessions/session-store-read-candidates.js";
-import { loadGatewaySessionEntryReadOnlyInWorker } from "../../gateway/session-utils-store-worker.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import type { PreparedSessionEntryWorkerRead } from "../../config/sessions/session-entry-read-runtime.types.js";
+import {
+  prepareGatewaySessionEntryReadOnlyInWorker,
+  type GatewaySessionEntryReadPlan,
+} from "../../gateway/session-utils-store-worker.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -494,25 +487,28 @@ export function prepareReplyToolAuthority(
     | {
         storePath: string;
         canonicalKey: string;
+        storeKeys: readonly string[];
         agentId: string;
         source: Awaited<
-          ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>
-        >["capturedReadSource"];
+          ReturnType<typeof prepareGatewaySessionEntryReadOnlyInWorker>
+        >["loaded"]["capturedReadSource"];
         sources: Awaited<
-          ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>
-        >["capturedReadSources"];
+          ReturnType<typeof prepareGatewaySessionEntryReadOnlyInWorker>
+        >["loaded"]["capturedReadSources"];
         sessionId: string | undefined;
         lifecycleRevision: SessionEntry["lifecycleRevision"];
       }
     | undefined;
+  let capturedReadPlan: GatewaySessionEntryReadPlan | undefined;
   const prepare = async (input: ReplyToolAuthorityInput, route?: ReplyToolAuthorityRoute) => {
     const assertCurrent = () => {
       assertCurrentOperatorAuthority(snapshot.operatorAuthority);
       assertCurrentOperatorAuthority(input.operatorAuthority);
     };
     const key = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
-    const loaded = key
-      ? await loadGatewaySessionEntryReadOnlyInWorker({
+    capturedReadPlan?.assertCurrent();
+    const preparedLookup = key
+      ? await prepareGatewaySessionEntryReadOnlyInWorker({
           cfg: snapshot.run.config ?? {},
           key,
           agentId: resolveSessionAgentId({
@@ -524,10 +520,12 @@ export function prepareReplyToolAuthority(
           assertActive: assertCurrent,
         })
       : undefined;
-    if (loaded) {
+    if (preparedLookup) {
+      const loaded = preparedLookup.loaded;
       const identity = {
         storePath: loaded.storePath,
         canonicalKey: loaded.canonicalKey,
+        storeKeys: [...loaded.storeKeys],
         agentId: loaded.agentId,
         source: loaded.capturedReadSource,
         sources: loaded.capturedReadSources,
@@ -537,7 +535,11 @@ export function prepareReplyToolAuthority(
       if (captured && !isDeepStrictEqual(identity, captured)) {
         throw new Error("Tool authority classification source changed");
       }
-      captured ??= identity;
+      if (!captured) {
+        captured = identity;
+        capturedReadPlan = preparedLookup.readPlan;
+      }
+      capturedReadPlan?.assertCurrent();
     }
     return withPreparedReplyToolAuthorityContext(
       input,
@@ -609,36 +611,13 @@ export function prepareReplyToolAuthority(
       const original = captured;
       const incoming = caller ? applyReplyToolAuthorityOverlay(snapshot, caller) : snapshot;
       const projected = narrow ? narrow(incoming) : incoming;
-      const source = original?.source;
-      const storePath =
-        original &&
-        (source?.path ??
-          resolveUnsuffixedSqliteTargetFromSessionStorePath(original.storePath).path);
-      const missingIdentity =
-        storePath && !source ? readDatabasePathIdentitySync(storePath) : undefined;
+      const plan = capturedReadPlan;
+      if (original && !plan) {
+        throw new Error("Tool authority classification source is unavailable");
+      }
       const assertSources = () => {
         assertActive();
-        for (const capturedSource of original?.sources ?? []) {
-          assertCapturedSessionEntryReadSource(capturedSource);
-        }
-        if (source && typeof source.databaseIdentity === "string") {
-          assertCapturedSessionEntryReadSource(source);
-          if (
-            original &&
-            captureSessionStoreReadCandidate(
-              resolveUnsuffixedSqliteTargetFromSessionStorePath(original.storePath).path,
-            ).physicalPath !== source.path
-          ) {
-            throw new Error("Tool authority classification route changed");
-          }
-        }
-        if (
-          missingIdentity &&
-          storePath &&
-          !isDeepStrictEqual(readDatabasePathIdentitySync(storePath), missingIdentity)
-        ) {
-          throw new Error("Tool authority classification source changed");
-        }
+        plan?.assertCurrent();
       };
       const assertEntry = (entry: SessionEntry | undefined) => {
         assertSources();
@@ -669,43 +648,17 @@ export function prepareReplyToolAuthority(
         }
         assertSources();
       };
-      const reads: readonly SessionEntryWorkerRead[] =
-        original && storePath
-          ? [
-              {
-                agentId: source?.agentId ?? original.agentId,
-                storePath,
-                sessionKeys: [original.canonicalKey],
-                projection: "exact",
-                env,
-              },
-            ]
-          : [];
+      const reads = plan?.reads ?? [];
       const assertPrepared = (currentReads: readonly PreparedSessionEntryWorkerRead[]) => {
-        for (const read of currentReads) {
-          read.assertCurrent();
-        }
-        assertEntry(
-          currentReads[0]?.result.entries.find((row) => row.sessionKey === original?.canonicalKey)
-            ?.entry,
-        );
+        assertSources();
+        assertEntry(plan?.selectPrepared(currentReads));
       };
       recordPreparedToolAuthorityRead({
         reads,
         assertPrepared,
         assertLegacyCurrent: () => {
           assertSources();
-          const entry =
-            original && storePath
-              ? loadExactSessionEntryCandidates({
-                  readOnly: true,
-                  readSource: source ?? { agentId: original.agentId, path: storePath },
-                  expectedSource: source,
-                  env,
-                  sessionKeys: [original.canonicalKey],
-                })[0]?.entry
-              : undefined;
-          assertEntry(entry);
+          assertEntry(plan?.readLegacy());
         },
       });
       return {

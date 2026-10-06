@@ -3,7 +3,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
 import { createNativeSessionBindingAuthority } from "../../agents/harness/native-session/binding-authority.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
+  deleteSessionEntryLifecycle,
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -30,12 +32,21 @@ afterEach(() => {
 
 const overlay = { senderIsOwner: true, disableTools: false, traceAuthorized: false };
 
-async function createPolicyOperation(name: string, incognito = false) {
+async function createPolicyOperation(
+  name: string,
+  options: {
+    incognito?: boolean;
+    mainAlias?: boolean;
+    store?: string;
+    policyStorePath?: string;
+  } = {},
+) {
+  const { incognito, mainAlias } = options;
   const policyKey = incognito
     ? `agent:main:dashboard:incognito-${name}`
     : `agent:main:${name}-policy`;
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: policyKey },
+  const policyEntry = await upsertSessionEntryCore(
+    { agentId: "main", sessionKey: policyKey, storePath: options.policyStorePath },
     {
       sessionId: name,
       updatedAt: 1,
@@ -43,14 +54,25 @@ async function createPolicyOperation(name: string, incognito = false) {
       ...(incognito ? { incognito: true } : {}),
     },
   );
+  if (!policyEntry) {
+    throw new Error("Policy fixture entry was not created");
+  }
   const run = createQueueTestRun({ prompt: name });
   Object.assign(run.run, {
     agentId: "main",
     sessionId: name,
     sessionKey: `agent:main:${name}`,
-    runtimePolicySessionKey: policyKey,
+    runtimePolicySessionKey: mainAlias ? "agent:main:main" : policyKey,
     senderIsOwner: true,
     config: {
+      ...(mainAlias || options.store
+        ? {
+            session: {
+              ...(mainAlias ? { mainKey: `${name}-policy` } : {}),
+              ...(options.store ? { store: options.store } : {}),
+            },
+          }
+        : {}),
       agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
       tools: { sandbox: { tools: { deny: ["exec"] } } },
     },
@@ -58,7 +80,7 @@ async function createPolicyOperation(name: string, incognito = false) {
   const operation = createTestReplyOperation({ sessionKey: run.run.sessionKey, sessionId: name });
   await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
   const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
-  return { operation, fingerprint, policyKey };
+  return { operation, fingerprint, policyKey, policyEntry };
 }
 
 it.each(["worker", "compatibility"] as const)(
@@ -165,17 +187,71 @@ it.each(["worker", "compatibility"] as const)(
   },
 );
 
-it.each(
-  (["file", "incognito"] as const).flatMap((storage) =>
-    (["session", "revision", "metadata"] as const).map((change) => ({ storage, change })),
+it.each([
+  ...(["file", "incognito"] as const).flatMap((storage) =>
+    (["session", "revision", "metadata"] as const).map((change) => ({
+      storage,
+      change,
+      admission: "compatibility" as const,
+    })),
   ),
-)(
-  "retains $storage policy lineage in compatibility admission after $change",
-  async ({ storage, change }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const { operation, fingerprint, policyKey } = await createPolicyOperation(
+  ...(["worker", "compatibility"] as const).map((admission) => ({
+    storage: "file" as const,
+    change: "alias" as const,
+    admission,
+  })),
+  ...(["worker", "compatibility"] as const).flatMap((admission) =>
+    (["other-store", "missing-store"] as const).map((change) => ({
+      storage: "file" as const,
+      change,
+      admission,
+    })),
+  ),
+  ...(["other-store-unrelated", "other-store-move"] as const).map((change) => ({
+    storage: "file" as const,
+    change,
+    admission: "worker" as const,
+  })),
+])(
+  "retains $storage policy lineage in $admission admission after $change",
+  async ({ storage, change, admission }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const multipleStores = change.startsWith("other-store") || change === "missing-store";
+      const store = state.statePath(
+        "configured",
+        "agents",
+        "{agentId}",
+        "sessions",
+        "sessions.json",
+      );
+      const configuredStorePath = resolveSessionStorePathCore(store, {
+        agentId: "main",
+        env: state.env,
+      });
+      const defaultStorePath = resolveSessionStorePathCore(undefined, {
+        agentId: "main",
+        env: state.env,
+      });
+      const otherKey = "agent:main:unrelated-policy";
+      if (multipleStores && change !== "missing-store") {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: otherKey, storePath: defaultStorePath },
+          { sessionId: "unrelated-policy", updatedAt: 1 },
+        );
+      }
+      const { operation, fingerprint, policyKey, policyEntry } = await createPolicyOperation(
         "retained-policy",
-        storage === "incognito",
+        {
+          incognito: storage === "incognito",
+          mainAlias: storage === "file",
+          ...(multipleStores
+            ? {
+                store,
+                policyStorePath:
+                  change === "missing-store" ? defaultStorePath : configuredStorePath,
+              }
+            : {}),
+        },
       );
       const authority = createNativeSessionBindingAuthority([], () => {});
       const effect = vi.fn();
@@ -213,17 +289,21 @@ it.each(
           }
           return value;
         });
+      const preparation = {
+        assertCurrent() {},
+        async prepareCurrent() {},
+        compatAssertCurrent() {},
+      };
+      if (admission === "worker") {
+        bindWorkerToolPreparation(preparation);
+      }
       const attempt = await beginReplyMessageInjectionTarget(
         replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!,
         "retained policy input",
         {
           isInboundUserMessage: true,
           toolAuthorityOverlay: overlay,
-          toolAuthorityPreparation: {
-            assertCurrent() {},
-            async prepareCurrent() {},
-            compatAssertCurrent() {},
-          },
+          toolAuthorityPreparation: preparation,
         },
       );
       try {
@@ -232,17 +312,43 @@ it.each(
           attempt.outcome,
           "Final policy preparation was not reached",
         );
-        await updateSessionEntry({ agentId: "main", sessionKey: policyKey }, () =>
-          change === "session"
-            ? { sessionId: "replacement" }
-            : change === "revision"
-              ? { lifecycleRevision: "replacement" }
-              : { label: "renamed" },
-        );
+        if (multipleStores) {
+          if (change === "other-store-move") {
+            await deleteSessionEntryLifecycle({
+              archiveTranscript: false,
+              storePath: configuredStorePath,
+              target: { canonicalKey: policyKey, storeKeys: [policyKey] },
+            });
+          }
+          await upsertSessionEntryCore(
+            {
+              agentId: "main",
+              sessionKey: change === "other-store-unrelated" ? otherKey : policyKey,
+              storePath: change === "missing-store" ? configuredStorePath : defaultStorePath,
+            },
+            change === "other-store-unrelated"
+              ? { label: "unrelated change", updatedAt: 2 }
+              : { ...policyEntry, updatedAt: 2 },
+          );
+        } else if (change === "alias") {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: "agent:main:main" },
+            { sessionId: "conflicting-alias", updatedAt: 2, sandboxMode: "off" },
+          );
+        } else {
+          await updateSessionEntry({ agentId: "main", sessionKey: policyKey }, () =>
+            change === "session"
+              ? { sessionId: "replacement" }
+              : change === "revision"
+                ? { lifecycleRevision: "replacement" }
+                : { label: "renamed" },
+          );
+        }
         resume.resolve();
         await attempt.outcome;
-        await expect(attempt.acceptance).resolves.toBe(change === "metadata");
-        expect(effect).toHaveBeenCalledTimes(change === "metadata" ? 1 : 0);
+        const accepted = change === "metadata" || change === "other-store-unrelated";
+        await expect(attempt.acceptance).resolves.toBe(accepted);
+        expect(effect).toHaveBeenCalledTimes(accepted ? 1 : 0);
       } finally {
         resume.resolve();
         await attempt.outcome;

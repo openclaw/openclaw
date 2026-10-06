@@ -21,7 +21,6 @@ import {
   type WorkerProcessInput,
 } from "../worker/worker-process-protocol.js";
 import {
-  buildNodeWorkerContainerStartArgv,
   createNodeWorkerContainer,
   type NodeWorkerContainerEngine,
 } from "./node-worker-container-engine.js";
@@ -178,7 +177,13 @@ export async function prepareNodeWorkerLaunchTransport(
       return { kind: "terminal", receipt: claimed };
     }
     const { adapter, ready } = await createChildAdapter({
-      argv: buildNodeWorkerContainerStartArgv(options.containerEngine, container.containerId),
+      argv: [
+        options.containerEngine.command,
+        "start",
+        "--attach",
+        "--interactive",
+        container.containerId,
+      ],
       env: options.containerEngine.env ?? options.engineEnv,
       exactEnv: true,
       stdinMode: "pipe-open",

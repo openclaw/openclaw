@@ -177,19 +177,26 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     });
   });
 
-  it.each(["terminal", "abort"] as const)(
-    "joins admission cleanup when %s cannot remove input that left the runtime queue",
-    async (cause) => {
+  it.each(
+    (["terminal", "abort", "handoff"] as const).flatMap((cause) =>
+      (["fulfilled", "rejected"] as const).map((admission) => ({ cause, admission })),
+    ),
+  )(
+    "joins $admission admission cleanup when $cause cannot remove input that left the runtime queue",
+    async ({ cause, admission }) => {
       const { session } = await createTestSession();
       vi.useFakeTimers();
       const installed = deferred();
       const cleanup = deferred();
       const prepare = async () => {};
       bindMessageInjectionAdmission(prepare, async (consume) => {
-        consume();
+        const result = consume();
         installed.resolve();
         await cleanup.promise;
-        throw new Error("admission cleanup failed after installation");
+        if (admission === "rejected") {
+          throw new Error("admission cleanup failed after installation");
+        }
+        return result;
       });
       const f = fixture();
       f.session.agent = session.agent;
@@ -218,10 +225,10 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         // Model submission is not exercised: another owner removes the actual
         // installed message, so this adapter cannot prove it withdrew the input.
         expect(session.agent.cancelSteeringMessage(() => true)?.role).toBe("user");
-        if (cause === "terminal") {
-          f.emit({ type: "agent_settled" });
-        } else {
+        if (cause === "abort") {
           controller.abort();
+        } else {
+          f.emit({ type: cause === "handoff" ? "agent_handoff" : "agent_settled" });
         }
         await vi.advanceTimersByTimeAsync(0);
         expect(result).toBeUndefined();
@@ -229,10 +236,70 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         cleanup.resolve();
         await waiting;
         expect(result?.value).toMatchObject({ transcriptCommit: "unconfirmed" });
+        expect(onQueueAccepted).not.toHaveBeenCalledWith(false);
         expect(f.listeners).toHaveLength(0);
       } finally {
         cleanup.resolve();
         await waiting;
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "closes admission on pre-enqueue persistence failure (observer throws: %s)",
+    async (observerThrows) => {
+      const { session } = await createTestSession();
+      vi.useFakeTimers();
+      const entered = deferred();
+      const release = deferred();
+      const prepare = async () => {};
+      bindMessageInjectionAdmission(prepare, async (consume) => {
+        entered.resolve();
+        await release.promise;
+        return consume();
+      });
+      const steering = vi.spyOn(session, "steer");
+      const queueIdentity = "pre-enqueue-persistence-failure";
+      const persistenceError = new Error("input persistence failed before enqueue");
+      const onQueueAccepted = vi.fn();
+      const onQueueSettled = vi.fn(() => {
+        if (observerThrows) {
+          throw new Error("settlement observer failed");
+        }
+      });
+      let outcome: { error: unknown } | undefined;
+      const waiting = steerActiveSessionWithOptionalDeliveryWait(
+        session,
+        "must not enqueue",
+        { waitForTranscriptCommit: true, queueIdentity, onQueueAccepted, onQueueSettled },
+        undefined,
+        undefined,
+        undefined,
+        prepare,
+      ).catch((error: unknown) => {
+        outcome = { error };
+      });
+      try {
+        await entered.promise;
+        reportSteeringMessagePersistenceFailure(
+          message("must not enqueue", queueIdentity),
+          persistenceError,
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(outcome).toBeUndefined();
+        expect(onQueueAccepted).not.toHaveBeenCalled();
+        release.resolve();
+        await waiting;
+        expect(outcome?.error).toMatchObject({
+          cause: expect.objectContaining({ message: persistenceError.message }),
+        });
+        expect(session.agent.hasQueuedMessages()).toBe(false);
+        expect(session.getSteeringMessages()).toEqual([]);
+        expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
+        expect(onQueueSettled).toHaveBeenCalledOnce();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([waiting, ...steering.mock.results.map((result) => result.value)]);
       }
     },
   );

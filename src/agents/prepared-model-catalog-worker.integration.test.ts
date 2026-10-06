@@ -352,7 +352,7 @@ describe("prepared model catalog worker boundary", () => {
       expect.objectContaining({ id: "account-scoped-model" }),
     );
 
-    const catalog = await fixture.snapshot.loadFullModelCatalog?.();
+    const catalog = await loadCompletedFullCatalog(fixture.snapshot);
 
     expect(catalog?.entries).toContainEqual(
       expect.objectContaining({
@@ -820,6 +820,8 @@ describe("prepared model catalog worker boundary", () => {
           timeout: 5000,
           input,
         });
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.signal, result.stderr).toBeNull();
         expect(result.status, result.stderr).toBe(0);
       };
       const refreshAuth = async () => {

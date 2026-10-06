@@ -28,19 +28,10 @@ import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ImageDescriptionRequest } from "./types.js";
 
-type ImageRuntimeParams = {
-  cfg: ImageDescriptionRequest["cfg"];
-  agentDir: string;
-  provider: string;
-  model: string;
-  profile?: string;
-  preferredProfile?: string;
-  signal?: AbortSignal;
-  authStore?: ImageDescriptionRequest["authStore"];
-  agentId?: string;
-  workspaceDir?: string;
-  preparedModelRuntime?: ImageDescriptionRequest["preparedModelRuntime"];
-};
+type ImageRuntimeParams = Omit<
+  ImageDescriptionRequest,
+  "buffer" | "fileName" | "mime" | "prompt" | "maxTokens" | "timeoutMs"
+>;
 
 type ResolvedImageRuntimeContext = {
   cfg: ImageRuntimeParams["cfg"];

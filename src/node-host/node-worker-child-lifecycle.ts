@@ -57,8 +57,17 @@ import {
   type createNodeWorkerLaunchRecovery,
 } from "./node-worker-supervisor-recovery.js";
 import { stopOwnedNodeWorkerTree } from "./node-worker-tree-control.js";
-import { nodeWorkerDescriptorSecrets } from "./node-worker-turn-lifecycle.js";
 import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+
+function nodeWorkerDescriptorSecrets(descriptor: WorkerLaunchDescriptor): string[] {
+  const endpoint = descriptor.connectionEndpoint;
+  const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
+  return [
+    descriptor.admission.credential,
+    ...(access ? [access.clientId, access.clientSecret] : []),
+    ...(descriptor.assignment.github ? [descriptor.assignment.github.token] : []),
+  ];
+}
 
 /** Owns physical children and their observed exit, turn settlement, and retained idle lifetime. */
 export class NodeWorkerChildLifecycle {

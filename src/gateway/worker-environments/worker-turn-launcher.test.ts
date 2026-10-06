@@ -9,6 +9,7 @@ import {
 import * as preparedModelRuntime from "../../agents/prepared-model-runtime.js";
 import {
   installSessionPlacementAdmissionProvider,
+  prepareSessionPlacementSandbox,
   resolveSessionPlacementRuntimeOverride,
 } from "../../agents/session-placement-admission.js";
 import {
@@ -49,6 +50,33 @@ import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-targ
 describe("worker turn launcher local placement", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it("reads absent sandbox placement without caller-thread SQL", async () => {
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+    });
+    const uninstall = installSessionPlacementAdmissionProvider(provider);
+    const sql = observeMainThreadSql();
+    try {
+      using prepared = await prepareSessionPlacementSandbox({
+        agentId: "main",
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        workspaceDir: root,
+      });
+      expect(prepared.sandbox).toBeNull();
+      prepared.assertCurrent();
+      sql.expectIdle();
+      await seedActivePlacement("remote-exec");
+      sql.clear();
+      expect(prepared.assertCurrent).toThrow("placement authority changed");
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+      uninstall();
+    }
+  });
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "uses only the matching %s placement as a runtime default",
@@ -756,19 +784,28 @@ describe("worker turn launcher local placement", () => {
     };
     const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
 
-    await expect(
-      provider.resolveSandbox({
-        agentId: "main",
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        workspaceDir: "/caller/workspace",
-      }),
-    ).resolves.toMatchObject({
+    using prepared = await provider.prepareSandbox({
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      workspaceDir: "/caller/workspace",
+    });
+    expect(prepared.sandbox).toMatchObject({
       backendId: "node",
       placementExecutionMode: "remote-exec",
       placementNodeId: "paired-node-1",
       containerWorkdir: "/worker/workspace",
     });
+    const sql = observeMainThreadSql();
+    try {
+      prepared.assertCurrent();
+      sql.expectIdle();
+      environment.nodeDeviceId = "replacement-node";
+      expect(prepared.assertCurrent).toThrow("environment changed");
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
   });
 
   it("rejects a remote-exec placement replaced while resolving its managed workspace", async () => {
@@ -793,13 +830,13 @@ describe("worker turn launcher local placement", () => {
     });
 
     await expect(
-      provider.resolveSandbox({
+      provider.prepareSandbox({
         agentId: "main",
         sessionId: SESSION_ID,
         sessionKey: SESSION_KEY,
         workspaceDir: "/caller/workspace",
       }),
-    ).rejects.toThrow("changed while preparing its managed workspace");
+    ).rejects.toThrow("placement authority changed");
   });
 
   it("rejects a paired-node environment replaced after sandbox preparation", async () => {
@@ -821,7 +858,7 @@ describe("worker turn launcher local placement", () => {
     });
 
     await expect(
-      provider.resolveSandbox({
+      provider.prepareSandbox({
         agentId: "main",
         sessionId: SESSION_ID,
         sessionKey: SESSION_KEY,

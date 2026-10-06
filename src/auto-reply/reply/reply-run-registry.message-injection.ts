@@ -352,9 +352,13 @@ function resolveReplyMessageInjectionFailure(
     accepted &&
     !candidates.some((candidate) => candidate instanceof MessageInjectionWithdrawnError)
   ) {
+    const sourceRefusal = candidates.findLast(
+      (candidate) => candidate instanceof MessageInjectionAuthorityError,
+    );
+    const completionError = sourceRefusal?.cause instanceof Error ? sourceRefusal.cause : error;
     return {
       status: "indeterminate",
-      errorMessage: toErrorObject(error, "Message injection completion failed").message,
+      errorMessage: toErrorObject(completionError, "Message injection completion failed").message,
     };
   }
   const targetUnavailable = candidates.findLast(

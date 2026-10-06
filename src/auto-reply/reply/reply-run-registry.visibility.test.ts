@@ -171,39 +171,46 @@ it.each([
   { sink: "claim", failure: "wrapped-accepted-cleanup" },
   { sink: "claim", failure: "accepted-generic" },
   { sink: "claim", failure: "accepted-refused" },
+  { sink: "claim", failure: "accepted-source-refusal" },
   { sink: "claim", failure: "withdrawn-unconfirmed" },
   { sink: "claim", failure: "withdrawn-source-closed" },
 ] as const)("keeps $sink replay decisions bounded after $failure", async ({ sink, failure }) => {
   const unsupported = new QuestionDispatchUnsupportedError("legacy dispatcher");
   const withdrawn = new MessageInjectionWithdrawnError("exact input withdrawn");
   const cleanup = new MessageInjectionAcceptedUnconfirmedError({ cause: new Error("cleanup") });
+  const sourceRefusal = new Error("Source session access was revoked");
   const error =
-    failure === "withdrawn-source-closed"
-      ? withdrawn
-      : failure === "refused" || failure === "accepted-refused"
-        ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
-        : failure === "unconfirmed" || failure === "withdrawn-unconfirmed"
-          ? new Error("runtime failure", {
-              cause: new QuestionAnswerUnconfirmedError(
-                failure === "withdrawn-unconfirmed" ? withdrawn : unsupported,
-              ),
-            })
-          : failure === "accepted-cleanup"
-            ? cleanup
-            : failure === "wrapped-accepted-cleanup"
-              ? new Error("backend completion failed", { cause: cleanup })
-              : failure.startsWith("target-")
-                ? new MessageInjectionAuthorityError({
-                    cause: new MessageInjectionTargetUnavailableError("Terminal delivery closed"),
-                  })
-                : failure === "generic" || failure === "accepted-generic"
-                  ? new Error("unknown cancellation failure")
-                  : unsupported;
+    failure === "accepted-source-refusal"
+      ? new MessageInjectionAuthorityError({
+          cause: new MessageInjectionAuthorityError({ cause: sourceRefusal }),
+        })
+      : failure === "withdrawn-source-closed"
+        ? withdrawn
+        : failure === "refused" || failure === "accepted-refused"
+          ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
+          : failure === "unconfirmed" || failure === "withdrawn-unconfirmed"
+            ? new Error("runtime failure", {
+                cause: new QuestionAnswerUnconfirmedError(
+                  failure === "withdrawn-unconfirmed" ? withdrawn : unsupported,
+                ),
+              })
+            : failure === "accepted-cleanup"
+              ? cleanup
+              : failure === "wrapped-accepted-cleanup"
+                ? new Error("backend completion failed", { cause: cleanup })
+                : failure.startsWith("target-")
+                  ? new MessageInjectionAuthorityError({
+                      cause: new MessageInjectionTargetUnavailableError("Terminal delivery closed"),
+                    })
+                  : failure === "generic" || failure === "accepted-generic"
+                    ? new Error("unknown cancellation failure")
+                    : unsupported;
   const reportsAccepted =
     failure === "accepted" ||
     failure === "target-accepted" ||
     failure === "accepted-generic" ||
     failure === "accepted-refused" ||
+    failure === "accepted-source-refusal" ||
     failure === "withdrawn-source-closed";
   const indeterminate =
     (reportsAccepted && failure !== "withdrawn-source-closed") ||
@@ -264,6 +271,7 @@ it.each([
               : indeterminate
                 ? "indeterminate"
                 : "failed",
+          ...(failure === "accepted-source-refusal" ? { errorMessage: sourceRefusal.message } : {}),
           ...(failure === "unsupported" || failure === "target-closed"
             ? { reason: "injection_unavailable" }
             : {}),

@@ -184,7 +184,7 @@ async function steerWithTranscriptLifecycle(
       }
       resolve();
     };
-    const rejectAfterCancellation = (message: string, allowReplay = false) => {
+    const rejectAfterCancellation = (message: string) => {
       acceptanceOpen = false;
       // Cancellation is best-effort but must finish before rejecting so callers
       // do not return while a stale queued message can leak into the next turn.
@@ -197,7 +197,7 @@ async function steerWithTranscriptLifecycle(
               accepted ||= hasAcceptedSteeringCustody(error);
             });
           }
-          if (!removed && accepted && !allowReplay) {
+          if (!removed && accepted) {
             log.warn("failed to find queued steering message for cancellation");
             throw new EmbeddedSteeringAcceptedUnconfirmedError(message);
           }
@@ -221,7 +221,7 @@ async function steerWithTranscriptLifecycle(
           finish(
             error instanceof EmbeddedSteeringAcceptedUnconfirmedError
               ? error
-              : accepted && !allowReplay
+              : accepted
                 ? new EmbeddedSteeringAcceptedUnconfirmedError(message, { cause: error })
                 : new Error(message, { cause: error }),
           );
@@ -254,12 +254,41 @@ async function steerWithTranscriptLifecycle(
         const message = `active session ${handedOff ? "handed off" : "ended"} before queued steering message was committed to the transcript`;
         // Terminal state closes admission and owns exact queue cleanup even when
         // steer() enqueued synchronously but its Promise has not settled yet.
-        rejectAfterCancellation(message, handedOff);
+        rejectAfterCancellation(message);
       }
     });
     const unsubscribePersistenceFailure = subscribeSteeringMessagePersistenceFailure(
       queueIdentity,
-      (error) => finish(error),
+      (error) => {
+        acceptanceOpen = false;
+        void steering.then(
+          () => {
+            if (settled) {
+              return;
+            }
+            accepted = true;
+            reportAcceptance(true);
+            finish(error);
+          },
+          (admissionError: unknown) => {
+            if (settled) {
+              return;
+            }
+            accepted ||=
+              hasAcceptedSteeringCustody(admissionError) || hasAcceptedSteeringCustody(error);
+            if (!accepted) {
+              reportAcceptance(false);
+            }
+            finish(
+              new AggregateError(
+                [error, admissionError],
+                toErrorObject(error, "Steering persistence failed").message,
+                { cause: error },
+              ),
+            );
+          },
+        );
+      },
     );
     if (abortRequested) {
       rejectBeforeAcceptance("queued steering message was cancelled before acceptance");

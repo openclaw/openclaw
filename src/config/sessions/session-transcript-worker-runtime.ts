@@ -59,26 +59,35 @@ export type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.t
 const log = createSubsystemLogger("sessions/history-worker");
 const historyPrewarms = new WeakMap<
   HistoryDatabaseResource,
-  { promise: Promise<void>; pending: boolean; retiredSequence: number }
+  Map<
+    SessionHistoryWorkerLane,
+    { promise: Promise<void>; pending: boolean; retiredSequence: number }
+  >
 >();
 
-export function isSessionHistoryWorkerCold(): boolean {
-  return historyLane.pending === 0 && historyLane.nativeSequence <= historyLane.retiredSequence;
+export function isSessionHistoryWorkerCold(lane: SessionHistoryWorkerLane = historyLane): boolean {
+  return lane.pending === 0 && lane.nativeSequence <= lane.retiredSequence;
 }
 
 /** Reuse normal reader custody; repeated warmups never refresh the idle deadline. */
 export async function prewarmSessionHistoryWorker(
   options: OpenClawAgentDatabaseOptions,
+  lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<void> {
   try {
     const resource = acquireHistoryDatabaseResource(options);
-    const existing = historyPrewarms.get(resource);
+    let prewarms = historyPrewarms.get(resource);
+    if (!prewarms) {
+      prewarms = new Map();
+      historyPrewarms.set(resource, prewarms);
+    }
+    const existing = prewarms.get(lane);
     if (
       existing &&
       (existing.pending ||
-        (!historyLane.rotation &&
-          existing.retiredSequence === historyLane.retiredSequence &&
-          resource.nativeSequences.has(historyLane)))
+        (!lane.rotation &&
+          existing.retiredSequence === lane.retiredSequence &&
+          resource.nativeSequences.has(lane)))
     ) {
       return await existing.promise;
     }
@@ -86,20 +95,23 @@ export async function prewarmSessionHistoryWorker(
     const prewarm = {
       promise: completion.promise,
       pending: true,
-      retiredSequence: historyLane.retiredSequence,
+      retiredSequence: lane.retiredSequence,
     };
-    historyPrewarms.set(resource, prewarm);
-    void withSessionHistoryWorkerDatabase(options, (owner) =>
-      owner.prewarm({
-        env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
-      }),
+    prewarms.set(lane, prewarm);
+    void withSessionHistoryWorkerDatabase(
+      options,
+      (owner) =>
+        owner.prewarm({
+          env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
+        }),
+      lane,
     ).then(
       () => {
         prewarm.pending = false;
         completion.resolve();
       },
       (error: unknown) => {
-        historyPrewarms.delete(resource);
+        prewarms.delete(lane);
         log.debug(`Session history worker prewarm failed: ${String(error)}`);
         completion.resolve();
       },
