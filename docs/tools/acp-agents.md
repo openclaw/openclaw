@@ -78,13 +78,13 @@ For Claude Code through ACP, the stack is:
 ACP Claude is a **harness session** with ACP controls, session resume,
 background-task tracking, and optional conversation/thread binding.
 
-CLI backends are separate text-only local fallback runtimes - see
-[CLI Backends](/gateway/cli-backends).
+CLI backends are a separate path: the local CLI runs normal agent turns as the
+model runtime, without ACP controls. See [CLI Backends](/gateway/cli-backends).
 
 For operators, the practical rule is:
 
 - **Want `/acp spawn`, bindable sessions, runtime controls, or persistent harness work?** Use ACP.
-- **Want simple local text fallback through the raw CLI?** Use CLI backends.
+- **Want normal agent turns to run through a local CLI such as Claude Code?** Use CLI backends.
 
 ## acpx harness, plugin setup, and permissions
 
