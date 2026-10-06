@@ -44,10 +44,6 @@ import {
   type ZaloUpdate,
 } from "./api.js";
 import { normalizeZaloAllowEntry, resolveZaloRuntimeGroupPolicy } from "./group-access.js";
-import {
-  prepareZaloDurableReplyPayload,
-  resolveZaloDurableReplyOptions,
-} from "./monitor-durable.js";
 import type { ZaloRuntimeEnv, ZaloStatusSink } from "./monitor.types.js";
 import {
   prepareHostedZaloMediaUrl,
@@ -591,18 +587,25 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
     delivery: {
-      preparePayload: (payload) =>
-        prepareZaloDurableReplyPayload({
-          payload,
-          tableMode,
-          convertMarkdownTables: core.channel.text.convertMarkdownTables,
-        }),
-      durable: (payload, info) =>
-        resolveZaloDurableReplyOptions({
-          payload,
-          infoKind: info.kind,
-          chatId,
-        }),
+      preparePayload: (payload) => {
+        if (!payload.text) {
+          return payload;
+        }
+        return {
+          ...payload,
+          text: core.channel.text.convertMarkdownTables(payload.text, tableMode),
+        };
+      },
+      durable: (payload, info) => {
+        if (info.kind !== "final") {
+          return false;
+        }
+        const reply = resolveSendableOutboundReplyParts(payload);
+        if (reply.hasMedia || !reply.hasText) {
+          return false;
+        }
+        return { to: chatId };
+      },
       deliver: async (payload) => {
         await deliverZaloReply({
           payload,

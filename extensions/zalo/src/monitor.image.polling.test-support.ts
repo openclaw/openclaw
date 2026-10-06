@@ -93,6 +93,27 @@ describe("Zalo polling image handling", () => {
       }),
     );
 
+    const delivery = vi.mocked(core.channel.inbound.dispatch).mock.calls[0]?.[0].delivery;
+    if (!delivery?.preparePayload || typeof delivery.durable !== "function") {
+      throw new Error("expected Zalo reply preparation and durable delivery callbacks");
+    }
+    const convertMarkdownTables = vi.mocked(core.channel.text.convertMarkdownTables);
+    convertMarkdownTables.mockReturnValueOnce("converted table");
+    expect(await delivery.preparePayload({ text: "| a |\n| - |" }, { kind: "final" })).toEqual({
+      text: "converted table",
+    });
+    expect(convertMarkdownTables).toHaveBeenCalledWith("| a |\n| - |", "code");
+    expect(await delivery.durable({ text: "hello" }, { kind: "final" })).toEqual({
+      to: "chat-123",
+    });
+    expect(
+      await delivery.durable(
+        { text: "photo", mediaUrl: "https://example.com/photo.jpg" },
+        { kind: "final" },
+      ),
+    ).toBe(false);
+    expect(await delivery.durable({ text: "hello" }, { kind: "block" })).toBe(false);
+
     abort.abort();
     await run;
   });

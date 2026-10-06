@@ -1226,7 +1226,6 @@
 ["extensions/msteams/src/reply-dispatcher.test.ts","./revoked-context.js","bf3bd890d6b7132da4b13b19f27d52b346a8f134f5d623b08cecc1483dd0ecfc",1]
 ["extensions/msteams/src/reply-dispatcher.test.ts","./runtime.js","cf067b9e8bade1972a6f5daa2f6ad488815e9fd7968b802ad587766d88d22d6e",1]
 ["extensions/msteams/src/resolve-allowlist.test.ts","./graph-users.js","7c80ba7c83b6db86b2eff0ef8bbe6d26936c163eb063c907bfbd7670c40e9257",1]
-["extensions/msteams/src/resolve-allowlist.test.ts","./graph.js","07100ed7329ea3bdfaf0d225ba8cbd7e98c9e7481cffe35351a7c04151a004d1",1]
 ["extensions/msteams/src/send-context.test.ts","./conversation-store-state.js","3d916f8e2be95337e489bfb651f62c75b3a527c5f3aad7001b39affdb391e769",1]
 ["extensions/msteams/src/send-context.test.ts","./runtime.js","b0c87a602164d3c4215e61f91c2d22a1a1f5fe989c5cce608f5d9795518d9de1",1]
 ["extensions/msteams/src/send-context.test.ts","./sdk.js","a3bfb7faf9a7461a4708d12a28f8fdac313eed76a5b2718feeeb1b95c88b6b86",1]
