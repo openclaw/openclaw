@@ -64,6 +64,7 @@ function createSubject(params?: {
   debounceMs?: number;
   duplicates?: Set<string>;
   prefixInputs?: (event: MatrixRawEvent) => Promise<MatrixCommandPrefixInputs>;
+  onHandle?: (event: MatrixRawEvent, options?: MatrixRoomMessageDispatchOptions) => Promise<void>;
 }) {
   const dispatched: Dispatched[] = [];
   const claims = new Map<string, ReturnType<typeof createClaim>>();
@@ -76,6 +77,7 @@ function createSubject(params?: {
     selfUserId: BOT,
     handleRoomMessage: async (roomId, event, options) => {
       dispatched.push({ roomId, event, options });
+      await params?.onHandle?.(event, options);
     },
     inboundDeduper: {
       claim: vi.fn(async ({ eventId }: { roomId: string; eventId: string }) => {
@@ -191,6 +193,53 @@ describe("matrix inbound debounce", () => {
     expect(event.content).toMatchObject({ body: "lool", filename: "IMG_0002.jpg" });
     expect(options?.replayClaim).toBe(claims.get("$img"));
     expect(options?.absorbedReplayClaims).toEqual([claims.get("$q")]);
+  });
+
+  it.each([0, DEBOUNCE_MS])(
+    "reprocesses a released event redelivered inside the repeat window (debounce %i ms)",
+    async (debounceMs) => {
+      let failNext = true;
+      const { enqueue, dispatched } = createSubject({
+        debounceMs,
+        onHandle: async (_event, options) => {
+          if (failNext) {
+            failNext = false;
+            // A pre-adoption failure releases the replay claim so a retry can run.
+            options?.replayClaim?.release();
+            throw new Error("transient");
+          }
+        },
+      });
+      const event = text("$retry", "hello");
+
+      await enqueue(ROOM, event).catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(debounceMs);
+      expect(dispatched).toHaveLength(1);
+
+      await enqueue(ROOM, event);
+      await vi.advanceTimersByTimeAsync(debounceMs);
+      expect(dispatched).toHaveLength(2);
+    },
+  );
+
+  it("suppresses a simultaneous E2EE copy while the first is still being handled", async () => {
+    let finish!: () => void;
+    const { enqueue, dispatched } = createSubject({
+      debounceMs: 0,
+      onHandle: () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    });
+    const event = text("$twice", "hi");
+
+    const first = enqueue(ROOM, event);
+    await vi.advanceTimersByTimeAsync(0);
+    await enqueue(ROOM, event);
+    finish();
+    await first;
+
+    expect(dispatched).toHaveLength(1);
   });
 
   it("starts a new batch for a second attachment", async () => {
