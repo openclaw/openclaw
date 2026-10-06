@@ -18,6 +18,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { waitForChatAbortControllerRemoval } from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import {
   controlUiClient,
@@ -57,8 +58,11 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
     const initialRuntimeStarted = createDeferred();
     const inputQueued = createDeferred();
     const steerAccepted = createDeferred();
+    const steerDeclined = createDeferred();
     const releaseSteerCommit = createDeferred();
     const steerTerminal = createDeferred();
+    const followupStarted = createDeferred();
+    const releaseFollowup = createDeferred();
     const queuedSettled = createDeferred();
     const steerRunId = "prestart-steer-input";
     const steerText = "Steer: include the regression proof.";
@@ -77,7 +81,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           "runId" in payload &&
           payload.runId === steerRunId &&
           "state" in payload &&
-          payload.state !== "delta"
+          (payload.state === "final" || payload.state === "error" || payload.state === "aborted")
         ) {
           terminalBeforeConsumption.push(consumed.length === 0);
           steerTerminal.resolve();
@@ -106,10 +110,16 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           cancel: () => {},
           messageInjectionV2: {
             version: 2,
-            isAvailable: () => injection !== "unavailable",
+            isAvailable: () => {
+              if (injection === "unavailable") {
+                steerDeclined.resolve();
+              }
+              return injection !== "unavailable";
+            },
             queueMessage: async (text, options, assertCurrent) => {
               assertCurrent();
               if (injection === "rejected") {
+                steerDeclined.resolve();
                 throw new Error("Runtime declined late steering");
               }
               options?.onQueueAccepted?.(true);
@@ -123,11 +133,14 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         });
         await releaseInitialRun.promise;
       } else {
+        opts?.onAgentRunStart?.(runId);
         await expectDefined(
           followupRun.userTurnTranscriptRecorder,
           "queued input",
         ).persistApproved();
         consumed.push({ runId, text: followupRun.prompt });
+        followupStarted.resolve();
+        await releaseFollowup.promise;
       }
       return {
         runId,
@@ -199,17 +212,21 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         requestOptions,
       );
       expect(sent).toMatchObject({ ok: true, payload: { runId: steerRunId, status: "started" } });
+      const steerEntry = expectDefined(
+        context.chatAbortControllers.get(steerRunId),
+        "steer source registration",
+      );
       expect(terminalBeforeConsumption).toEqual([]);
       releaseWorkspace.resolve();
-      await withinTest(Promise.race([inputQueued.promise, steerTerminal.promise]), signal);
+      await withinTest(inputQueued.promise, signal);
       // Steering can park before reply preparation reaches the runtime.
       await withinTest(initialRuntimeStarted.promise, signal);
       expect(context.chatQueuedTurns.has(steerRunId)).toBe(true);
       expect(initialOperation?.phase).toBe("running");
       expect(consumed).toEqual([]);
       releaseInitialBackend.resolve();
-      await withinTest(Promise.race([steerAccepted.promise, steerTerminal.promise]), signal);
       if (injection === "accepted") {
+        await withinTest(steerAccepted.promise, signal);
         expect(terminalBeforeConsumption).toEqual([]);
         expect(consumed).toEqual([]);
         releaseSteerCommit.resolve();
@@ -220,20 +237,36 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         expect(terminalBeforeConsumption).toEqual([false]);
         expect(runtime.execute).toHaveBeenCalledOnce();
       } else {
-        // Rejected steering retains the existing source-completion contract;
-        // queue custody must still deliver the input after the first run ends.
-        expect(terminalBeforeConsumption).toEqual([true]);
+        await withinTest(steerDeclined.promise, signal);
+        expect(
+          await waitForChatAbortControllerRemoval({
+            entries: context.chatAbortControllers,
+            targets: [{ runId: steerRunId, entry: steerEntry }],
+            timeoutMs: null,
+            signal,
+          }),
+        ).toBe(true);
+        expect(terminalBeforeConsumption).toEqual([]);
         expect(consumed).toEqual([]);
         expect(context.chatQueuedTurns.has(steerRunId)).toBe(true);
         expectDefined(initialOperation, "initial run owner").complete();
         releaseInitialRun.resolve();
-        await withinTest(queuedSettled.promise, signal);
+        await withinTest(followupStarted.promise, signal);
         expect(runtime.execute).toHaveBeenCalledTimes(2);
         expect(consumed).toEqual([
           { runId: expect.any(String), text: expect.stringContaining(steerText) },
         ]);
         expect(consumed[0]?.runId).not.toBe(createdSession.runId);
         expect(consumed[0]?.runId).not.toBe(steerRunId);
+        expect(terminalBeforeConsumption).toEqual([]);
+        releaseFollowup.resolve();
+        await withinTest(queuedSettled.promise, signal);
+        expect(terminalBeforeConsumption).toEqual([false]);
+        expect(context.broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({ runId: steerRunId, state: "final" }),
+          expect.objectContaining({ sessionKeys: [sessionKey] }),
+        );
       }
       expect(getFollowupQueueDepth(sessionKey)).toBe(0);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
@@ -264,6 +297,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
       releaseWorkspace.resolve();
       releaseInitialBackend.resolve();
       releaseSteerCommit.resolve();
+      releaseFollowup.resolve();
       if (sessionKey) {
         clearFollowupQueueForTest(sessionKey);
       }
