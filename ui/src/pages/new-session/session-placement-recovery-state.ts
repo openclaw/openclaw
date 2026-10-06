@@ -124,7 +124,7 @@ export class PendingSessionPlacementRecoveryState {
       const live = owners?.get(this.claimKey(gatewayUrl, recoveryScope, candidate.sessionKey));
       return candidate.phase === "creating" && (!live || live === this);
     });
-    if (!recovery) {
+    if (!recovery || recovery.phase !== "creating") {
       return null;
     }
     this.apply(recovery, true, true);

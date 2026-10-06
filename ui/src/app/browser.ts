@@ -90,8 +90,8 @@ export function createBrowserHistory(): RouterHistory {
       if (!stopPopState) {
         const onPopState = () => {
           const location = readLocation();
-          for (const listener of listeners) {
-            listener(location);
+          for (const subscriber of listeners) {
+            subscriber(location);
           }
         };
         window.addEventListener("popstate", onPopState);
