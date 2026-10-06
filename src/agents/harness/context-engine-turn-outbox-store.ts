@@ -10,7 +10,7 @@ import type { SqliteWorkerCommand, SqliteWorkerStore } from "../../infra/sqlite-
 import { recordContextEngineTurnOutboxSchemaCommitted } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
 import {
   runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "../../state/openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -72,7 +72,7 @@ async function runContextEngineTurnOutboxCommand(
     return await runOpenClawAgentWriteAdmission(
       options,
       () =>
-        withOpenClawAgentDatabaseAsync(
+        withOpenClawAgentDatabaseRuntime(
           options,
           async ({ db }) => {
             assertCurrent();

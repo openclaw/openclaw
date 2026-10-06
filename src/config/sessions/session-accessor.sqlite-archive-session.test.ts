@@ -8,6 +8,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as readonlyDatabase from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -45,6 +46,16 @@ import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
+
+const fault = useSqliteWorkerFault([
+  {
+    name: "refuse_archive_result",
+    match: /^update session_transcript_archives\b/u,
+    sql: `CREATE TEMP TRIGGER refuse_archive_result BEFORE UPDATE OF published_at
+      ON main.session_transcript_archives
+      BEGIN SELECT RAISE(ABORT, 'synthetic archive result recording failure'); END;`,
+  },
+]);
 
 const archiveScopeHooks = vi.hoisted(() => ({
   afterMaterializeQueued: undefined as (() => void) | undefined,
@@ -285,16 +296,7 @@ describe("SQLite transcript archive sessions", () => {
         )
         .get(sessionIds[0]);
     const pending = readPending();
-    const databaseOptions = { agentId: database.agentId, path: database.path, env: testState.env };
-    // Fixture DDL must share admission with native worker writes and checkpoint cleanup.
-    await writeAdmission.runOpenClawAgentWriteAdmission(databaseOptions, () =>
-      database.db.exec(`
-        CREATE TRIGGER refuse_archive_result BEFORE UPDATE OF published_at
-        ON session_transcript_archives BEGIN
-          SELECT RAISE(ABORT, 'synthetic archive result recording failure');
-        END;
-      `),
-    );
+    fault.enable();
     try {
       await expect(deleteArchivedSession(sessionKey)).rejects.toThrow(
         "synthetic archive result recording failure",
@@ -305,9 +307,7 @@ describe("SQLite transcript archive sessions", () => {
         loadTranscriptEvents({ sessionKey, sessionId: sessionIds[0], storePath }),
       ).resolves.toEqual([]);
     } finally {
-      await writeAdmission.runOpenClawAgentWriteAdmission(databaseOptions, () =>
-        database.db.exec("DROP TRIGGER refuse_archive_result"),
-      );
+      fault.disable();
     }
 
     await expect(deleteArchivedSession(sessionKey)).resolves.toMatchObject({

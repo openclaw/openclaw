@@ -95,12 +95,30 @@ export function assertCanonicalSessionValidationSchema(database: DatabaseSync): 
   }
   // Admitted handles own DDL/rollback invalidation; unmanaged readers only retain committed cookies.
   if (schema || !database.isTransaction) {
-    const unregister = registerNodeSqliteDisposeCallback(database, () => {
-      validatedSchemas.delete(database);
-      unregister();
-    });
-    validatedSchemas.set(database, { cookie, schema, unregister });
+    rememberCanonicalSessionValidationSchema(database, cookie, schema);
   }
+}
+
+/** Writable admission may carry this assertion from its validated physical sibling. */
+export function adoptCanonicalSessionValidationSchema(database: DatabaseSync): void {
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  if (!schema) {
+    throw new Error("Canonical schema handoff requires admitted schema facts");
+  }
+  rememberCanonicalSessionValidationSchema(database, schema.schemaVersion, schema);
+}
+
+function rememberCanonicalSessionValidationSchema(
+  database: DatabaseSync,
+  cookie: number,
+  schema?: SqliteSchemaFacts,
+): void {
+  validatedSchemas.get(database)?.unregister();
+  const unregister = registerNodeSqliteDisposeCallback(database, () => {
+    validatedSchemas.delete(database);
+    unregister();
+  });
+  validatedSchemas.set(database, { cookie, schema, unregister });
 }
 
 /** The schema owner installs this complete group before seeding pending keys. */

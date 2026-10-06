@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { PassThrough } from "node:stream";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -32,25 +32,7 @@ export function registerGracefulGatewayShutdownTests({
   flushLogger,
   requestGatewayRestartWithSignalAdmission,
   armShutdownHardExitWatchdog,
-}: Pick<
-  UpdateRespawnFixtures,
-  | "acquireGatewayLock"
-  | "consumeGatewayRestartIntentPayloadSync"
-  | "restartGatewayProcessWithFreshPid"
-  | "respawnGatewayProcessForUpdate"
-  | "waitForGatewayActiveWork"
-  | "gatewayLog"
-  | "createSignaledLoopHarness"
-  | "hasManagedProviderLocalServices"
-  | "stopManagedProviderLocalServices"
-  | "flushLogger"
-> & {
-  consumeGatewaySuspendHandoff: Mock<
-    typeof import("../../infra/gateway-suspend-coordinator.js").consumeGatewaySuspendHandoff
-  >;
-  requestGatewayRestartWithSignalAdmission: Mock;
-  armShutdownHardExitWatchdog: Mock;
-}): void {
+}: UpdateRespawnFixtures): void {
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
     const gatewayStateOwner = { release: vi.fn(async () => {}) };
@@ -375,31 +357,7 @@ export function registerShutdownCompletionTests({
   armShutdownHardExitWatchdog,
   cancelShutdownHardExitWatchdog,
   writeDiagnosticStabilityBundleForFailureSync,
-}: Pick<
-  UpdateRespawnFixtures,
-  | "consumeGatewayRestartIntentPayloadSync"
-  | "waitForGatewayActiveWork"
-  | "hasManagedProviderLocalServices"
-  | "stopManagedProviderLocalServices"
-  | "createSignaledLoopHarness"
-  | "consumeGatewayRestartIntent"
-  | "managedUpdateSuccessorOwner"
-  | "cancelManagedServiceUpdateHandoff"
-  | "commitManagedServiceUpdateHandoff"
-  | "requestManagedServiceUpdateHandoffPark"
-  | "writeGatewayRestartHandoffSync"
-  | "flushLogger"
-  | "restartGatewayProcessWithFreshPid"
-> &
-  Pick<
-    typeof import("./run-loop-mocks.test-support.js").runLoopFixture,
-    "createGatewayActiveWorkSnapshot" | "idleActiveWorkSnapshot" | "abortEmbeddedAgentRun"
-  > & {
-    gatewayLog: { error: Mock; warn: Mock };
-    armShutdownHardExitWatchdog: Mock;
-    cancelShutdownHardExitWatchdog: Mock;
-    writeDiagnosticStabilityBundleForFailureSync: Mock;
-  }): void {
+}: UpdateRespawnFixtures): void {
   it("reports failure when foreground provider service cleanup times out after server close", async () => {
     vi.clearAllMocks();
     hasManagedProviderLocalServices.mockReturnValue(true);

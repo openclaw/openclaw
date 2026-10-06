@@ -75,11 +75,16 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
       ? params.fastMode.label
       : t("chat.modelControls.fast");
   const triggerLabel = showReasoning ? reasoningValueText : t("chat.modelControls.speed");
-  const triggerTitle = showReasoning
-    ? params.fastMode.active
-      ? `${triggerLabel} · ${speedLabel}`
-      : triggerLabel
-    : `${triggerLabel}: ${params.fastMode.label}`;
+  const triggerTitle = [
+    showReasoning
+      ? params.fastMode.active
+        ? `${triggerLabel} · ${speedLabel}`
+        : triggerLabel
+      : `${triggerLabel}: ${params.fastMode.label}`,
+    params.fastMode.hint,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const commitThinking = (value: string) => {
     void params
       .onThinkingSelect(value, params.sessionKey)

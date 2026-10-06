@@ -26,6 +26,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   resolveOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -291,7 +292,10 @@ export class SqliteBoardStore implements BoardStore {
             authority.assertCurrent();
           }
         };
-        return withOpenClawAgentDatabaseAsync(
+        const withDatabase = nativeSource
+          ? withOpenClawAgentDatabaseAsync
+          : withOpenClawAgentDatabaseRuntime;
+        return withDatabase(
           databaseOptions,
           async (database) => {
             if (prepare) {

@@ -36,13 +36,14 @@ vi.mock("../../state/openclaw-agent-db-readonly.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-transaction.js", () => ({
   runOpenClawAgentWriteWithYieldingAdmission: boundary.commit,
 }));
-vi.mock("../../state/openclaw-agent-db.js", () => ({
+vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-agent-db.js")>()),
   getOpenClawAgentDatabaseIfOpen: () => undefined,
   isIncognitoOpenClawAgentSqlitePath: () => false,
   openOpenClawAgentDatabase: boundary.open,
   resolveOpenClawAgentSqlitePath: (options: OpenClawAgentDatabaseOptions) =>
     options.path ?? `${options.env?.OPENCLAW_STATE_DIR}/${options.agentId}.sqlite`,
-  withOpenClawAgentDatabaseAsync: async (
+  withOpenClawAgentDatabaseRuntime: async (
     _options: OpenClawAgentDatabaseOptions,
     run: () => unknown,
   ) => await run(),

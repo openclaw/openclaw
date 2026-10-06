@@ -39,8 +39,13 @@ export async function repairWorktreePackIndex(
       throw error;
     });
     assertCurrent();
-    if (packs.some((name) => name.endsWith(".idx"))) {
-      await requireGit(repoRoot, ["multi-pack-index", "write"], options);
+    const indexes = packs.filter((name) => name.endsWith(".idx"));
+    if (indexes.length > 0) {
+      // Reusing a stale MIDX fails before discovery when it names a removed pack.
+      await requireGit(repoRoot, ["multi-pack-index", "write", "--stdin-packs"], {
+        ...options,
+        input: `${indexes.join("\n")}\n`,
+      });
     }
   }, params.signal);
 }

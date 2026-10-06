@@ -25,7 +25,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-re
 import {
   isIncognitoOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "../state/openclaw-agent-db.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
@@ -192,7 +192,7 @@ export const progressCardStore = {
       const result = await runOpenClawAgentWriteAdmission(
         databaseOptions,
         () =>
-          withOpenClawAgentDatabaseAsync(
+          withOpenClawAgentDatabaseRuntime(
             databaseOptions,
             () =>
               runOpenClawAgentWriteTransaction(
