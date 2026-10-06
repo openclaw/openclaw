@@ -53,6 +53,7 @@ export type ChannelsState = {
   pairingError: string | null;
   pairingLastSuccess: number | null;
   pairingBusyRequestId: string | null;
+  pairingBusyKind: "approve" | "dismiss" | null;
   whatsappLoginMessage: string | null;
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginSessionKey: string | null;
@@ -204,6 +205,7 @@ function createInitialChannelsState(snapshot: ChannelGatewaySnapshot): ChannelsS
     pairingError: null,
     pairingLastSuccess: null,
     pairingBusyRequestId: null,
+    pairingBusyKind: null,
     whatsappLoginMessage: null,
     whatsappLoginQrDataUrl: null,
     whatsappLoginSessionKey: null,
@@ -270,6 +272,20 @@ async function loadChannelPairing(
   }
 }
 
+function setPairingBusy(
+  state: ChannelsState,
+  requestId: string,
+  kind: "approve" | "dismiss",
+): void {
+  state.pairingBusyRequestId = requestId;
+  state.pairingBusyKind = kind;
+}
+
+function clearPairingBusy(state: ChannelsState): void {
+  state.pairingBusyRequestId = null;
+  state.pairingBusyKind = null;
+}
+
 function removePairingRequestFromSnapshot(state: ChannelsState, requestId: string): void {
   const snapshot = state.pairingSnapshot;
   if (!snapshot || !snapshot.requests.some((request) => request.requestId === requestId)) {
@@ -286,6 +302,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
   const lifecycle = { whatsappEpoch: 0, pairingEpoch: 0 };
   async function mutateChannelPairing<T>(
     requestId: string,
+    kind: "approve" | "dismiss",
     request: (client: ChannelGatewayClient) => Promise<T>,
   ): Promise<{ result: T } | null> {
     const client = state.client;
@@ -299,7 +316,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       lifecycle.pairingEpoch === pairingEpoch &&
       state.pairingBusyRequestId === requestId;
     invalidatePairingRefresh(state);
-    state.pairingBusyRequestId = requestId;
+    setPairingBusy(state, requestId, kind);
     state.pairingError = null;
     try {
       const result = await request(client);
@@ -317,7 +334,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       return null;
     } finally {
       if (isCurrent()) {
-        state.pairingBusyRequestId = null;
+        clearPairingBusy(state);
       }
     }
   }
@@ -557,7 +574,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       state.pairingError = null;
       state.pairingLastSuccess = null;
       state.pairingLoading = false;
-      state.pairingBusyRequestId = null;
+      clearPairingBusy(state);
       state.pairingRefreshSeq += 1;
     }
     publish();
@@ -583,7 +600,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     refreshPairing: () => run(() => loadChannelPairing(state)),
     approvePairing: async (params) => {
       const mutation = await run(() =>
-        mutateChannelPairing(params.requestId, (client) =>
+        mutateChannelPairing(params.requestId, "approve", (client) =>
           client.request<ChannelsPairingApproveResult>("channels.pairing.approve", params),
         ),
       );
@@ -592,7 +609,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     dismissPairing: async (params) =>
       Boolean(
         await run(() =>
-          mutateChannelPairing(params.requestId, (client) =>
+          mutateChannelPairing(params.requestId, "dismiss", (client) =>
             client.request("channels.pairing.dismiss", params),
           ),
         ),
@@ -611,7 +628,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       lifecycle.whatsappEpoch += 1;
       lifecycle.pairingEpoch += 1;
       state.pairingRefreshSeq += 1;
-      state.pairingBusyRequestId = null;
+      clearPairingBusy(state);
       state.whatsappBusy = false;
       stopGateway();
       stopEvents();
