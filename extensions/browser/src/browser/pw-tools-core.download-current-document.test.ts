@@ -5,6 +5,7 @@ import path from "node:path";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as outputFiles from "./output-files.js";
+import { observeOutputWriteSettlement } from "./output-files.test-support.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -162,18 +163,7 @@ describe("download current document", () => {
   it.for(["caller", "navigation", "close"] as const)(
     "cancels an active save on %s and leaves no partial file",
     async (reason, { signal, onTestFinished }) => {
-      const writeSettled = Promise.withResolvers<void>();
-      const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
-      const write = vi
-        .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")
-        .mockImplementation((params) => {
-          const pending = writeOutput(params);
-          void pending.then(
-            () => writeSettled.resolve(),
-            () => writeSettled.resolve(),
-          );
-          return pending;
-        });
+      const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
       onTestFinished(() => write.mockRestore());
       const controller = new AbortController();
       const download = makeDownload();
