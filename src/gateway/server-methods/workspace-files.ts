@@ -96,19 +96,6 @@ export function resolveFileRoot(params: {
   return isPathInside(resolvedRoot, resolvedCwd) ? params.spawnedCwd : params.root;
 }
 
-function mergeRelevance(
-  current: SessionFileRelevance | undefined,
-  next: SessionFileRelevance | undefined,
-): SessionFileRelevance | undefined {
-  if (!current) {
-    return next;
-  }
-  if (!next || current === next) {
-    return current;
-  }
-  return "mixed";
-}
-
 function buildSessionRelevanceMap(
   files: readonly TouchedFile[],
   root: string | undefined,
@@ -143,7 +130,7 @@ function relevanceForBrowserPath(
   let aggregate: SessionFileRelevance | undefined;
   for (const [filePath, sessionKind] of relevance) {
     if (filePath.startsWith(prefix) && filePath !== browserPath) {
-      aggregate = mergeRelevance(aggregate, sessionKind);
+      aggregate = !aggregate || aggregate === sessionKind ? sessionKind : "mixed";
     }
   }
   return aggregate;
@@ -182,21 +169,6 @@ export async function populateSessionFilePreview(
     // The hash doubles as the sessions.files.set CAS token. Binary files
     // never receive one, so replacement characters cannot be saved back.
     entry.hash = sha256Hex(buffer);
-    return;
-  }
-  entry.previewKind = "unsupported";
-  if (mimeType) {
-    entry.mimeType = mimeType;
-  }
-}
-
-function applyOversizedFileMetadata(
-  entry: SessionFileEntry,
-  buffer: Buffer,
-  mimeType?: string,
-): void {
-  const prefixIsText = decodeUtf8Strict(buffer) !== undefined;
-  if ((!mimeType && prefixIsText) || (mimeType && isDetectedTextMime(mimeType) && prefixIsText)) {
     return;
   }
   entry.previewKind = "unsupported";
@@ -268,7 +240,14 @@ async function toSessionFileEntry(
       delete entry.hash;
     }
   } else {
-    applyOversizedFileMetadata(entry, read.buffer, await detectMime({ buffer: read.buffer }));
+    const mimeType = await detectMime({ buffer: read.buffer });
+    const prefixIsText = decodeUtf8Strict(read.buffer) !== undefined;
+    if (!prefixIsText || (mimeType && !isDetectedTextMime(mimeType))) {
+      entry.previewKind = "unsupported";
+      if (mimeType) {
+        entry.mimeType = mimeType;
+      }
+    }
   }
   return entry;
 }

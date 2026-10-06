@@ -127,7 +127,6 @@ async function handleSessionSend(
   const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
   const { legacyKey } = loaded;
   let { entry, canonicalKey } = loaded;
-  // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
   const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey, entry, {
     acpMetadataSessionKey: legacyKey ?? canonicalKey,
   });

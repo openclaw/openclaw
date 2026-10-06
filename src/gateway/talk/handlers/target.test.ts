@@ -45,8 +45,8 @@ vi.mock("../../../talk/provider-registry.js", () => ({ listRealtimeVoiceProvider
 vi.mock("../../../agents/realtime-bootstrap-context.js", () => ({
   resolveRealtimeVoiceAgentContextInstructions: mocks.bootstrap,
 }));
-vi.mock("../relay/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../relay/index.js")>()),
+vi.mock("../relay/session-create.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../relay/session-create.js")>()),
   createTalkRealtimeRelaySession: mocks.createRelay,
 }));
 vi.mock("../transcription-relay.js", async (importOriginal) => ({
