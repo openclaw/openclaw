@@ -20,9 +20,7 @@ function outputTokensLabel(outputTokens: number): string {
 }
 
 export function renderChatWorkingIndicator(
-  part: Omit<Extract<ChatItem, { kind: "reading-indicator" }>, "startedAt"> & {
-    startedAt: number | null;
-  },
+  part: Extract<ChatItem, { kind: "reading-indicator" }>,
   options: {
     mascot?: ThemeMascot;
     workingPhrases?: readonly string[];
@@ -37,17 +35,51 @@ export function renderChatWorkingIndicator(
   const waitingApproval = options.waitingApproval === true;
   const waitingSubagents = options.waitingSubagents;
   const child = waitingSubagents?.child;
+  // Child sessions that are not subagents get a count and nothing else.
+  const waitingSessions =
+    waitingSubagents?.runningCount === 0 ? (waitingSubagents.sessionCount ?? 0) : 0;
   const neutral = (options.mascot ?? currentThemeBranding().mascot) === "none";
   const continuation = options.presentation === "continuation";
+  // Without loaded child rows the pane only knows that some are still running.
   const statusLabel = waitingSubagents
-    ? t("chat.waitingOnSubagents")
+    ? waitingSubagents.runningCount > 1
+      ? t("chat.waitingOnSubagentsCount", { count: String(waitingSubagents.runningCount) })
+      : waitingSessions > 1
+        ? t("chat.waitingOnSessionsCount", { count: String(waitingSessions) })
+        : waitingSessions === 1
+          ? t("chat.waitingOnSession")
+          : t("chat.waitingOnSubagents")
     : waitingApproval
       ? t("chat.waitingForApproval")
       : options.startupLabel || t("common.working");
+  // The name stands in for the count once one child is left. The translated
+  // sentence decides where it goes; only that placeholder becomes the control,
+  // and a translation without the placeholder still gets the name at its end.
+  const [beforeChild = "", ...afterChild] = child
+    ? t("chat.waitingOnSubagent").split("{name}")
+    : [];
+  const sentencePart = (words: string) =>
+    words.trim() ? html`<span>${words.trim()}</span>` : nothing;
+  const childName = !child
+    ? nothing
+    : options.onOpenSession
+      ? html`<button
+          class="chat-working-indicator__child"
+          type="button"
+          title=${child.label}
+          @click=${() => options.onOpenSession?.(child.key)}
+        >
+          ${child.label}
+        </button>`
+      : html`<span class="chat-working-indicator__child" title=${child.label}
+          >${child.label}</span
+        >`;
   const working = !waitingSubagents && !waitingApproval && !options.startupLabel;
   // Providers report exact usage at response boundaries, not per text delta.
   // Keep the latest count visible while the run continues through tools.
   const outputTokens = waitingSubagents ? null : options.outputTokens;
+  // A wait counts from the handoff, which loaded history cannot always place.
+  const startedAt = waitingSubagents ? waitingSubagents.startedAt : part.startedAt;
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
   return html`
@@ -75,26 +107,18 @@ export function renderChatWorkingIndicator(
             `
       }
       <span class="chat-working-indicator__status">
-        <span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>
         ${
-          child && options.onOpenSession
-            ? html`<button
-                class="chat-working-indicator__child"
-                type="button"
-                title=${child.label}
-                @click=${() => options.onOpenSession?.(child.key)}
-              >
-                ${child.label}
-              </button>`
-            : nothing
+          child
+            ? html`${sentencePart(beforeChild)}${childName}${sentencePart(afterChild.join(""))}`
+            : html`<span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>`
         }
         ${
-          waitingApproval || part.startedAt === null
+          waitingApproval || startedAt === null
             ? nothing
             : html`
                 <openclaw-elapsed-time
                   class="chat-working-indicator__elapsed"
-                  .startMs=${part.startedAt}
+                  .startMs=${startedAt}
                 ></openclaw-elapsed-time>
               `
         }

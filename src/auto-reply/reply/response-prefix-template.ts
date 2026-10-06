@@ -1,5 +1,4 @@
 // Resolves response-prefix templates for channel and sender scoped replies.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type ResponsePrefixContext = {
   /** Short model name (e.g., "gpt-5.4", "claude-opus-4-6") */
@@ -27,7 +26,7 @@ export function resolveResponsePrefixTemplate(
   }
 
   return template.replace(TEMPLATE_VAR_PATTERN, (match, varName: string) => {
-    const normalizedVar = normalizeLowercaseStringOrEmpty(varName);
+    const normalizedVar = varName.toLowerCase();
 
     switch (normalizedVar) {
       case "model":

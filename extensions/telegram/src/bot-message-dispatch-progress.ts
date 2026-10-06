@@ -151,7 +151,7 @@ export function createProgressState(
       config.runtime.error?.(`telegram preview cleanup failed: ${formatErrorMessage(error)}`),
   });
   return {
-    verboseProgressActive: () => false,
+    verboseProgressActive: async () => false,
     progressCompositor,
     previewLifecycle,
     commentaryProgressEnabled: progressCompositor.commentaryProgressEnabled,
@@ -221,10 +221,12 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
   }
 }
 
-export function canPushToolProgress(turn: Turn): boolean {
+export async function canPushToolProgress(turn: Turn): Promise<boolean> {
+  const verbose = await turn.verboseProgressActive();
   return Boolean(
     turn.answerLane.stream &&
-    !turn.verboseProgressActive() &&
+    !verbose &&
+    !turn.isSuperseded() &&
     !turn.answerLane.finalized &&
     !turn.previewLifecycle.finalStarted,
   );
@@ -241,7 +243,7 @@ export async function pushToolProgress(
   line?: string | ChannelProgressDraftLine,
   options?: { toolName?: string; startImmediately?: boolean; id?: string },
 ): Promise<boolean> {
-  if (!canPushToolProgress(turn)) {
+  if (!(await canPushToolProgress(turn))) {
     return false;
   }
   // Structured rows own detail; formatted callbacks only fill a missing keyed row.
@@ -273,7 +275,7 @@ export async function handleToolStart(
   payload: CallbackPayload<"onToolStart">,
 ): Promise<boolean> {
   const toolName = payload.name?.trim();
-  const progressPromise = canPushToolProgress(turn)
+  const progressPromise = (await canPushToolProgress(turn))
     ? turn.progressCompositor.pushToolEvent(payload)
     : Promise.resolve(false);
   if (turn.statusReactionController && toolName) {
@@ -331,7 +333,7 @@ export async function handleItemEvent(
       turn.progressCompositor.resetActivity();
     }
     rendered =
-      (payload.kind === "preamble" || canPushToolProgress(turn)) &&
+      (payload.kind === "preamble" || (await canPushToolProgress(turn))) &&
       (await turn.progressCompositor.pushItemEvent(payload));
   });
   return rendered;
@@ -341,7 +343,7 @@ export async function handlePlanUpdate(
   turn: Turn,
   payload: CallbackPayload<"onPlanUpdate">,
 ): Promise<boolean> {
-  return payload.phase === "update" && canPushToolProgress(turn)
+  return payload.phase === "update" && (await canPushToolProgress(turn))
     ? await turn.progressCompositor.pushPlanProgress(payload.steps, {
         explanation: payload.explanation,
         explanationFormat: payload.explanationFormat,

@@ -392,7 +392,7 @@ export function startOpenClawStateReadOperation(
       );
     }
     // The transport checks current authority at dispatch, including after a queue wait.
-    receipt.phase = "unobserved";
+    receipt.phase = command.type === "admit" ? "before-read" : "unobserved";
     if (!transport) {
       throw new Error("Shared-state read transport is unavailable");
     }
@@ -470,58 +470,63 @@ export function startOpenClawStateReadOperation(
     if (snapshot) {
       openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
     }
-    const native =
-      !snapshot && preserveArtifacts
-        ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read")
-        : undefined;
-    borrowed =
-      native ??
-      (!snapshot && !preserveArtifacts
-        ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
-        : undefined);
-    const independentWarmSource =
-      native &&
-      preferIndependentWarmRead &&
-      canReadWarmNativeSourceIndependently(
-        native.database,
-        pathname,
-        context.admission.identity.key,
-      );
-    if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
-      finishProducer();
-    } else if (native && !independentWarmSource) {
-      awaitedOnly = true;
-      waitAwaited(
-        prepareSqliteReadOnlyLocationFromOwnedDatabase(
-          native.database.db,
-          authority.assertCurrent,
-          authority.signal,
-          "async",
-        ),
-        (location) => {
-          prepared = location;
-          query();
-        },
-        finishProducer,
-      );
-    } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
-      expectedSourceIdentity = { key: context.admission.identity.key };
-      authority.assertCurrent();
-      waitRetained("producer", transport.startValidateFresh(context, authority), () => {
-        authority.assertCurrent();
-        preparation = startSqliteReadOnlyLocationAsync(pathname, {
-          preserveSourceArtifacts: preserveArtifacts,
-          signal: authority.signal,
-          expectedSourceIdentity,
-        });
-        waitRetained("producer", preparation, (location) => {
-          prepared = location;
-          startPreparedCleanup = () => location.startCleanup();
-          query();
-        });
-      });
-    } else {
+    if (command.type === "admit") {
+      // Admission must finish before a snapshot producer may open the source.
       query();
+    } else {
+      const native =
+        !snapshot && preserveArtifacts
+          ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read")
+          : undefined;
+      borrowed =
+        native ??
+        (!snapshot && !preserveArtifacts
+          ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
+          : undefined);
+      const independentWarmSource =
+        native &&
+        preferIndependentWarmRead &&
+        canReadWarmNativeSourceIndependently(
+          native.database,
+          pathname,
+          context.admission.identity.key,
+        );
+      if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
+        finishProducer();
+      } else if (native && !independentWarmSource) {
+        awaitedOnly = true;
+        waitAwaited(
+          prepareSqliteReadOnlyLocationFromOwnedDatabase(
+            native.database.db,
+            authority.assertCurrent,
+            authority.signal,
+            "async",
+          ),
+          (location) => {
+            prepared = location;
+            query();
+          },
+          finishProducer,
+        );
+      } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
+        expectedSourceIdentity = { key: context.admission.identity.key };
+        authority.assertCurrent();
+        waitRetained("producer", transport.startValidateFresh(context, authority), () => {
+          authority.assertCurrent();
+          preparation = startSqliteReadOnlyLocationAsync(pathname, {
+            preserveSourceArtifacts: preserveArtifacts,
+            signal: authority.signal,
+            expectedSourceIdentity,
+          });
+          waitRetained("producer", preparation, (location) => {
+            prepared = location;
+            startPreparedCleanup = () => location.startCleanup();
+            query();
+          });
+        });
+      } else {
+        query();
+      }
     }
   } catch (error) {
     finishProducer({ error });

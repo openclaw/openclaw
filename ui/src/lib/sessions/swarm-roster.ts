@@ -88,6 +88,8 @@ type SwarmRead = "parent" | "children";
 
 export class SwarmRosterHydrator {
   rows: GatewaySessionRow[] = [];
+  /** True once the child query has filled `rows`; the seed can hold only some children. */
+  hydrated = false;
   private key = "";
   private generation = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -109,6 +111,10 @@ export class SwarmRosterHydrator {
   private parentRefreshQueued = false;
   private parentRefreshForced = false;
   private publishingParentRead = false;
+  /** True once the first child read has answered. */
+  private childrenRead = false;
+  /** Parent-named children the child query has already been asked to bring in. */
+  private readonly requestedChildren = new Set<string>();
 
   update(params: SwarmHydrationParams): void {
     const key = `${params.sourceEpoch}:${params.agentId ?? ""}:${params.parentKey}`;
@@ -176,11 +182,43 @@ export class SwarmRosterHydrator {
     );
     // Parent counts remain independent of the optional child-name page.
     void this.readParent();
-    void this.children.refresh().catch(() => {
-      if (isCurrent()) {
+    this.refreshChildren();
+  }
+
+  private refreshChildren(): void {
+    const generation = this.generation;
+    // The list keeps one more read queued behind a read already in flight.
+    void this.children?.refresh().catch(() => {
+      if (generation === this.generation) {
         this.retry("children");
       }
     });
+  }
+
+  /**
+   * A launch reaches the parent row at once, but the child query only re-reads
+   * on its paced schedule. Read it now, and report the roster incomplete until
+   * that read answers, so nothing counts children it has not seen. Each named
+   * child is asked for once: one the list never returns, such as an archived
+   * child, must not hide the count again or keep the list re-reading.
+   */
+  private refreshNewChildren(): void {
+    if (!this.childrenRead) {
+      // The first read is still loading every child.
+      return;
+    }
+    const held = new Set(this.childRows.map((row) => row.key));
+    const unasked = (this.parentRow?.childSessions ?? []).filter(
+      (key) => !held.has(key) && !this.requestedChildren.has(key),
+    );
+    if (unasked.length === 0) {
+      return;
+    }
+    for (const key of unasked) {
+      this.requestedChildren.add(key);
+    }
+    this.hydrated = false;
+    this.refreshChildren();
   }
 
   private applyParent(parent: GatewaySessionRow | null): void {
@@ -211,6 +249,7 @@ export class SwarmRosterHydrator {
         : parent;
     this.parentSummary = summary;
     this.rows = this.parentRow ? mergeSwarmSessionRows(this.childRows, [this.parentRow]) : [];
+    this.refreshNewChildren();
     this.params?.onRows(this.rows);
     if (parent && changed && this.parent && !this.publishingParentRead) {
       void this.readParent();
@@ -237,12 +276,8 @@ export class SwarmRosterHydrator {
       retry.timer = null;
       if (owner === "parent") {
         void this.readParent();
-      } else {
-        void this.children?.refresh().catch(() => {
-          if (generation === this.generation) {
-            this.retry(owner);
-          }
-        });
+      } else if (generation === this.generation) {
+        this.refreshChildren();
       }
     }, delay);
   }
@@ -366,7 +401,11 @@ export class SwarmRosterHydrator {
         const parent = this.parentRow;
         this.childRows = rows;
         this.rows = parent ? mergeSwarmSessionRows(this.childRows, [parent]) : [];
+        this.childrenRead = true;
+        this.hydrated = true;
         this.recovered("children");
+        // A child launched during this read is still missing from it.
+        this.refreshNewChildren();
         params.onRows(this.rows);
       })
       .catch(() => {
@@ -392,7 +431,10 @@ export class SwarmRosterHydrator {
     this.parentRequest = null;
     this.parentRefreshQueued = false;
     this.parentRefreshForced = false;
+    this.childrenRead = false;
+    this.requestedChildren.clear();
     this.rows = [];
+    this.hydrated = false;
     this.key = key;
     this.generation += 1;
     this.recovered("parent");

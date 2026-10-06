@@ -1,8 +1,3 @@
-/**
- * Auth profile list helpers.
- * Provides provider-compatible profile lookup and stable de-duplication used by
- * ordering, repair, and profile mutation paths.
- */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import type { AuthProfileStore } from "./types.js";
@@ -10,7 +5,6 @@ import type { AuthProfileStore } from "./types.js";
 /** Deduplicates profile ids while preserving first-seen order. */
 export const dedupeProfileIds: (profileIds: string[]) => string[] = uniqueStrings;
 
-/** Lists auth profile ids whose credential provider matches the requested provider. */
 export function listProfilesForProvider(store: AuthProfileStore, provider: string): string[] {
   const providerKey = resolveProviderIdForAuth(provider);
   return Object.entries(store.profiles)

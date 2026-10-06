@@ -19,9 +19,9 @@ function createProjectorHarness(
   const deliveries: Delivery[] = [];
   const projector = createAcpReplyProjector({
     cfg: createCfg(cfgOverrides),
-    shouldSendToolSummaries: opts?.shouldSendToolSummaries ?? true,
-    shouldSendToolSummariesNow: opts?.shouldSendToolSummariesNow,
-    shouldSendFullToolDetails: opts?.shouldSendFullToolDetails ?? false,
+    shouldSendToolSummaries: async () =>
+      opts?.shouldSendToolSummariesNow?.() ?? opts?.shouldSendToolSummaries ?? true,
+    shouldSendFullToolDetails: async () => opts?.shouldSendFullToolDetails ?? false,
     deliver: async (kind, payload) => {
       deliveries.push({ kind, text: payload.text });
       return true;

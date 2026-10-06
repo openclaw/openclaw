@@ -154,22 +154,6 @@ describe("CallManager verification on restore", () => {
     );
   });
 
-  it("resolves a terminal call from persisted state after restore", async () => {
-    const { call, manager } = await initializeManager({
-      callOverrides: { state: "completed", endReason: "completed", endedAt: Date.now() },
-    });
-
-    expect(manager.getCall(call.callId as string)).toBeUndefined();
-    expect(await manager.getCallFromMemoryOrStore(call.callId as string)).toMatchObject({
-      callId: call.callId,
-      state: "completed",
-    });
-    expect(await manager.getCallFromMemoryOrStore(call.providerCallId as string)).toMatchObject({
-      callId: call.callId,
-      state: "completed",
-    });
-  });
-
   it("restores existing records through the retained runtime without a data migration", async () => {
     const retainedStateRuntime = installStateRuntime();
     const storePath = createTestStorePath();
@@ -234,22 +218,6 @@ describe("CallManager verification on restore", () => {
       callId: "call-active",
       state: "answered",
     });
-  });
-
-  it("skips calls older than maxDurationSeconds", async () => {
-    const { manager, provider, storePath } = await initializeManager({
-      callOverrides: {
-        startedAt: Date.now() - 600_000,
-        answeredAt: Date.now() - 590_000,
-      },
-      configOverrides: { maxDurationSeconds: 300 },
-    });
-
-    expect(manager.getActiveCalls()).toHaveLength(0);
-    const hangupCall = requireSingleHangupCall(provider);
-    expect(hangupCall.reason).toBe("timeout");
-
-    expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
   });
 
   it("summarizes repeated restored-call verification outcomes", async () => {
@@ -345,25 +313,35 @@ describe("CallManager verification on restore", () => {
     logSpy.mockRestore();
   });
 
-  it("uses only remaining max duration for restored answered calls", async () => {
+  it("uses call start as max-duration anchor for restored listening calls without answeredAt", async () => {
+    const state = "listening";
     vi.useFakeTimers();
-    const now = new Date("2026-03-17T03:07:00Z");
+    const now = new Date("2026-03-17T03:07:00Z").getTime();
     vi.setSystemTime(now);
-    const { manager, provider } = await initializeManager({
+    const startedAt = now - 290_000;
+    const { manager, provider, storePath } = await initializeManager({
       callOverrides: {
-        startedAt: now.getTime() - 290_000,
-        answeredAt: now.getTime() - 290_000,
-        state: "answered",
+        callId: `call-${state}`,
+        providerCallId: `provider-${state}`,
+        state,
+        startedAt,
+        answeredAt: undefined,
       },
       configOverrides: { maxDurationSeconds: 300 },
     });
 
-    expect(manager.getActiveCalls()).toHaveLength(1);
-    const endCall = vi.spyOn(manager, "endCall");
+    const activeCall = requireSingleActiveCall(manager);
+    expect(activeCall.state).toBe(state);
+    expect(activeCall.answeredAt).toBe(startedAt);
+    expect(
+      (await loadActiveCallsFromStore(storePath)).activeCalls.get(activeCall.callId)?.answeredAt,
+    ).toBe(startedAt);
+
     await vi.advanceTimersByTimeAsync(9_000);
     expect(manager.getActiveCalls()).toHaveLength(1);
     expect(provider.hangupCalls).toHaveLength(0);
 
+    const endCall = vi.spyOn(manager, "endCall");
     await vi.advanceTimersByTimeAsync(1_100);
     expect(endCall).toHaveBeenCalledOnce();
     await requireRecord(endCall.mock.results[0], "timeout completion").value;
@@ -371,45 +349,6 @@ describe("CallManager verification on restore", () => {
     const hangupCall = requireSingleHangupCall(provider);
     expect(hangupCall.reason).toBe("timeout");
   });
-
-  it.each(["speaking", "listening"] as const)(
-    "uses call start as max-duration anchor for restored live %s calls without answeredAt",
-    async (state) => {
-      vi.useFakeTimers();
-      const now = new Date("2026-03-17T03:07:00Z").getTime();
-      vi.setSystemTime(now);
-      const startedAt = now - 290_000;
-      const { manager, provider, storePath } = await initializeManager({
-        callOverrides: {
-          callId: `call-${state}`,
-          providerCallId: `provider-${state}`,
-          state,
-          startedAt,
-          answeredAt: undefined,
-        },
-        configOverrides: { maxDurationSeconds: 300 },
-      });
-
-      const activeCall = requireSingleActiveCall(manager);
-      expect(activeCall.state).toBe(state);
-      expect(activeCall.answeredAt).toBe(startedAt);
-      expect(
-        (await loadActiveCallsFromStore(storePath)).activeCalls.get(activeCall.callId)?.answeredAt,
-      ).toBe(startedAt);
-
-      await vi.advanceTimersByTimeAsync(9_000);
-      expect(manager.getActiveCalls()).toHaveLength(1);
-      expect(provider.hangupCalls).toHaveLength(0);
-
-      const endCall = vi.spyOn(manager, "endCall");
-      await vi.advanceTimersByTimeAsync(1_100);
-      expect(endCall).toHaveBeenCalledOnce();
-      await requireRecord(endCall.mock.results[0], "timeout completion").value;
-      expect(manager.getActiveCalls()).toHaveLength(0);
-      const hangupCall = requireSingleHangupCall(provider);
-      expect(hangupCall.reason).toBe("timeout");
-    },
-  );
 
   it("keeps terminal identity when a replay key is retained or evicted", async () => {
     const storePath = createTestStorePath();

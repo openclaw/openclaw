@@ -8,7 +8,11 @@ import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { sleep } from "../../utils/sleep.js";
-import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
+import {
+  assertManagedWorktreeRemovalComplete,
+  lockWorktreeForProcess,
+  unlockWorktree,
+} from "./git-lock.js";
 import { worktreePathExists } from "./git.js";
 import { readRegistryWorktree, readRegistryWorktrees } from "./registry-read.js";
 import {
@@ -85,7 +89,9 @@ async function retainGitLock(context: OpenClawStateWorkerContext, id: string): P
       if (!record) {
         return;
       }
-      await lockWorktreeForProcess(record);
+      const options = { beforeRun: () => context.admission.assertCurrent() };
+      await assertManagedWorktreeRemovalComplete(record, options);
+      await lockWorktreeForProcess(record, options);
       held.gitLocked = true;
     } catch (error) {
       heldGitLocks.delete(id);

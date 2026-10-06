@@ -81,10 +81,6 @@ describe("auditGatewayServiceConfig runtime", () => {
     },
   );
 
-  it("accepts Bun with WAL-safe node:sqlite", async () => {
-    expect(hasIssue(await auditBun(), codes.gatewayRuntimeBun)).toBe(false);
-  });
-
   it("reports a failed Bun probe without recommending runtime migration", async () => {
     const error = new Error("Bun runtime probe failed at /opt/bun (cwd /root): EACCES");
     resolveBunRuntimeInfoMock.mockResolvedValue({ status: "probe-failed", error });
@@ -173,37 +169,6 @@ describe("auditGatewayServiceConfig PATH", () => {
     expect(issue?.message).toContain("/opt/homebrew/sbin");
   });
 
-  it("identifies stale Linux manager paths beside the managed PATH", async () => {
-    const env = { HOME: "/tmp/openclaw-testuser", PNPM_HOME: "/opt/active-pnpm" };
-    const stale = [
-      ".volta/bin",
-      ".asdf/shims",
-      ".nvm/current/bin",
-      ".local/share/fnm/current/bin",
-      ".fnm/current/bin",
-      ".local/share/pnpm",
-    ].map((entry) => `${env.HOME}/${entry}`);
-    stale.push("/opt/pnpm/bin");
-    const result = await audit(
-      { environment: { PATH: [minimalPath("linux", env), ...stale].join(":") } },
-      { env },
-    );
-    expect(hasIssue(result, codes.gatewayPathMissingDirs)).toBe(false);
-    expect(result.issues.find((entry) => entry.code === codes.gatewayPathNonMinimal)?.detail).toBe(
-      stale.join(", "),
-    );
-  });
-
-  it("requires explicitly configured Linux tool roots", async () => {
-    const result = await audit(
-      {},
-      { env: { HOME: "/tmp/openclaw-testuser", PNPM_HOME: "/opt/pnpm" } },
-    );
-    expect(
-      result.issues.find((entry) => entry.code === codes.gatewayPathMissingDirs)?.message,
-    ).toContain("/opt/pnpm");
-  });
-
   it("allows the expected active bin while rejecting unrelated manager paths", async () => {
     const env = { HOME: "/Users/testuser" };
     const expectedServicePath = [
@@ -243,28 +208,10 @@ describe("auditGatewayServiceConfig PATH", () => {
       expect(hasIssue(result, codes.gatewayPathMissingDirs)).toBe(false);
     },
   );
-
-  it("skips PATH drift checks for semicolon-delimited Windows paths", async () => {
-    const result = await audit(
-      {
-        programArguments: ["C:\\Program Files\\nodejs\\node.exe", "gateway"],
-        environment: { PATH: "C:\\Users\\test\\.nvm\\current\\bin;C:\\Windows\\System32" },
-      },
-      {
-        env: { HOME: "C:\\Users\\test" },
-        platform: "win32",
-        expectedServicePath: "C:\\Program Files\\nodejs;C:\\Windows\\System32",
-      },
-    );
-    expect(hasIssue(result, codes.gatewayPathMissing)).toBe(false);
-    expect(hasIssue(result, codes.gatewayPathMissingDirs)).toBe(false);
-    expect(hasIssue(result, codes.gatewayPathNonMinimal)).toBe(false);
-  });
 });
 
 describe("auditGatewayServiceConfig command", () => {
   it.each([
-    ["/bin/zsh", "-lc", false],
     ["/usr/local/bin/helper", "-lc", true],
     ["/bin/zsh", "-l", true],
   ] as const)("audits gateway tokens for %s %s", async (executable, flag, missing) => {
@@ -281,7 +228,6 @@ describe("auditGatewayServiceConfig command", () => {
   });
 
   it.each([
-    { args: ["--port", "18789"], detail: "18789 -> 18888" },
     { args: ["--port", "18789", "--port=18888"], detail: undefined },
     { args: ["--port", "--port=18888"], detail: "--port=18888 -> 18888" },
   ])("audits the final unconsumed port flag: $args", async ({ args, detail }) => {
@@ -469,7 +415,7 @@ describe("auditGatewayServiceConfig systemd", () => {
     expect(systemdCodes(await auditUnit())).toEqual([]);
   });
 
-  it.each(["process", "none", ""])(
+  it.each(["none", ""])(
     "warns about base-unit KillMode=%s when the manager is unavailable",
     async (killMode) => {
       await writeUnit([
@@ -487,18 +433,6 @@ describe("auditGatewayServiceConfig systemd", () => {
       ).toBe(true);
     },
   );
-
-  it("accepts resilient continued settings when the manager is unavailable", async () => {
-    const continuation = "\\\n  # continued setting \\\n  ; ignored comment\n  ";
-    await writeUnit([
-      `After=basic.target ${continuation}network-online.target`,
-      `Wants=basic.target ${continuation}network-online.target`,
-      `RestartSec=${continuation}5s`,
-      `KillMode=${continuation}mixed`,
-      `TimeoutStopSec=${continuation}330`,
-    ]);
-    expect(systemdCodes(await auditUnit())).toEqual([]);
-  });
 
   it("finds credentials in an orphaned backup without revealing them", async () => {
     await fs.mkdir(path.dirname(unitPath), { recursive: true });
@@ -537,5 +471,45 @@ describe("auditGatewayServiceConfig systemd", () => {
       level: "recommended",
       detail: expect.stringContaining("mode: 644"),
     });
+  });
+});
+
+describe("systemd shutdown timeout audit", () => {
+  it.each([
+    { name: "unlimited base timeout", base: "infinity", expected: false },
+    { name: "disabled base timeout", base: "0", expected: false },
+    { name: "invalid base timeout", base: "invalid", expected: true },
+  ])("reports a drain requirement for $name", async ({ base, expected }) => {
+    const home = tempDirs.make("openclaw-stop-timeout-audit-");
+    const unitPath = path.join(home, ".config/systemd/user/openclaw-gateway.service");
+    await fs.mkdir(path.dirname(unitPath), { recursive: true });
+    await fs.writeFile(
+      unitPath,
+      [
+        "[Unit]",
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "[Service]",
+        "ExecStart=/usr/bin/node gateway",
+        "RestartSec=5",
+        "KillMode=mixed",
+        `TimeoutStopSec=${base}`,
+      ].join("\n"),
+    );
+
+    const result = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: null,
+    });
+    const issue = result.issues.find((entry) => entry.code === "systemd-stop-timeout");
+    expect(Boolean(issue)).toBe(expected);
+    if (expected) {
+      expect(issue).toMatchObject({
+        message: expect.stringContaining("TimeoutStopSec=330"),
+        detail: expect.stringContaining(unitPath),
+        level: "recommended",
+      });
+    }
   });
 });

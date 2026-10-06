@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 
 /** Whether native Codex search may use cached or live external web access. */
-export type CodexNativeSearchMode = "cached" | "live";
+type CodexNativeSearchMode = "cached" | "live";
 /** OpenAI search context-size hint for Codex native web search. */
 type CodexNativeSearchContextSize = "low" | "medium" | "high";
 

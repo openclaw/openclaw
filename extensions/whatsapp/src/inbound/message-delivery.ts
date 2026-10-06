@@ -646,10 +646,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     if (detachMessagesUpsert) {
       return;
     }
-    detachMessagesUpsert = socketSession.listen(
-      "messages.upsert",
-      handleMessagesUpsertEvent as unknown as (...args: unknown[]) => void,
-    );
+    detachMessagesUpsert = socketSession.listen("messages.upsert", handleMessagesUpsertEvent);
     durableInboundMonitor.start();
   };
   const stopIntake = () => {

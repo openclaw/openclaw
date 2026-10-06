@@ -5137,6 +5137,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           TASK: task,
           RUN_BUNDLED_TESTS: String(eventName !== "pull_request"),
           RUN_PR_MADGE_IMPORT_CYCLES: String(eventName === "pull_request"),
+          RUN_PR_KYSELY_GUARDRAILS: String(eventName === "pull_request"),
+          SPLIT_PR_GUARDS: "false",
           GITHUB_EVENT_NAME: eventName,
           CHECKOUT_KIND: "linux-node",
           CHECKOUT_BASE_SHA: String(checkoutBase),

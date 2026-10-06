@@ -24,10 +24,7 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { isLoopbackGatewayUrl } from "../gateway/net.js";
-import type {
-  DoctorMemoryEmbeddingRuntimePayload,
-  DoctorMemoryStatusPayload,
-} from "../gateway/server-methods/doctor.js";
+import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatMissingChildRuntimeWarning } from "../infra/child-runtime-viability.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -181,20 +178,6 @@ export async function collectGatewayHealthFindings(
     return [...historyFindings, warning(diagnostic.message, diagnostic.fixHint)];
   }
 }
-
-type GatewayMemoryProbe = {
-  checked: boolean;
-  ready: boolean;
-  error?: string;
-  runtimeFacts?: DoctorMemoryEmbeddingRuntimePayload;
-  /**
-   * True when the probe was intentionally skipped by the gateway (probe: false
-   * path). Distinct from checked: false caused by a network timeout or
-   * unavailable gateway. Renderers should suppress warnings only for skipped
-   * probes, not for transport failures.
-   */
-  skipped: boolean;
-};
 
 function isGatewayCallTimeout(message: string): boolean {
   return /^gateway timeout after \d+ms(?:\n|$)/.test(message);
@@ -472,6 +455,15 @@ export async function checkGatewayHealth(params: {
 
   return { healthOk, authenticated: false, status };
 }
+
+/** Doctor callers also create skipped probes without diagnostic fields. */
+type GatewayMemoryProbe = {
+  checked: boolean;
+  ready: boolean;
+  error?: string;
+  runtimeFacts?: DoctorMemoryStatusPayload["embeddingRuntime"];
+  skipped: boolean;
+};
 
 /** Probes gateway memory readiness without forcing deep embedding checks. */
 export async function probeGatewayMemoryStatus(params: {

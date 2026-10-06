@@ -1003,10 +1003,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
   if (params.source.kind === "url") {
     return { ok: true, path: cloned.rootDir, cleanup: cloned.cleanup };
   }
-  const subPath =
-    params.source.kind === "git-subdir"
-      ? params.source.path.trim()
-      : normalizeOptionalString(params.source.path) || ".";
+  const subPath = params.source.path ?? ".";
   const canonicalRootDir = await fs.realpath(cloned.rootDir);
   const target = await ensureInsideMarketplaceRoot(cloned.rootDir, subPath, {
     canonicalRootDir,

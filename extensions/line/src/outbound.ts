@@ -8,7 +8,6 @@ import {
   defineChannelMessageAdapter,
   listMessageReceiptPlatformIds,
   type ChannelMessageSendResult,
-  type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAttachedChannelResultAdapter,
@@ -33,7 +32,6 @@ import {
   renderLinePresentation,
 } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
-import { createLineSendReceipt } from "./send-receipt.js";
 import { explainLineRefusal } from "./send-retry.js";
 import type { LineChannelData, LineSendResult, ResolvedLineAccount } from "./types.js";
 
@@ -213,7 +211,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           continue;
         }
         await recordResult(
-          outboundRuntime.sendMessageLine(to, "", {
+          sendText(to, "", {
             ...sendOptions,
             ...mediaOptions,
             mediaUrl: trimmed,
@@ -339,7 +337,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         payload: { text: ctx.text },
       }),
     // Core sends a single media reply through here rather than through the payload
-    // owner, so the quote has to be resolved again; sendMessageLine puts it on the
+    // owner, so the quote has to be resolved again; pushMessageLine puts it on the
     // caption, the one part of a media send LINE accepts a quote on.
     sendMedia: async ({
       cfg,
@@ -352,7 +350,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     }) =>
       await (
         await loadLineOutboundRuntime()
-      ).sendMessageLine(to, text, {
+      ).pushMessageLine(to, text, {
         verbose: false,
         mediaUrl,
         cfg,
@@ -371,18 +369,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
 
 function toLineMessageSendResult(
   result: Awaited<ReturnType<NonNullable<typeof lineOutboundAdapter.sendPayload>>>,
-  kind: MessageReceiptPartKind,
 ): ChannelMessageSendResult {
-  const source = result as typeof result & { chatId?: string };
-  const receipt =
-    result.receipt ??
-    (result.messageId
-      ? createLineSendReceipt({
-          messageId: result.messageId,
-          chatId: source.chatId ?? "",
-          kind,
-        })
-      : undefined);
+  const { receipt } = result;
   if (!receipt) {
     throw new Error("LINE message adapter send did not return a receipt");
   }
@@ -412,20 +400,20 @@ export const lineMessageAdapter = defineChannelMessageAdapter({
         ...ctx,
         payload: { text: ctx.text },
         onDeliveryResult: async (deliveryResult) => {
-          await onDeliveryResult?.(toLineMessageSendResult(deliveryResult, "text"));
+          await onDeliveryResult?.(toLineMessageSendResult(deliveryResult));
         },
       });
-      return toLineMessageSendResult(result, "text");
+      return toLineMessageSendResult(result);
     },
     media: async ({ onDeliveryResult, ...ctx }) => {
       const result = await lineOutboundAdapter.sendPayload!({
         ...ctx,
         payload: { text: ctx.text, mediaUrl: ctx.mediaUrl },
         onDeliveryResult: async (deliveryResult) => {
-          await onDeliveryResult?.(toLineMessageSendResult(deliveryResult, "media"));
+          await onDeliveryResult?.(toLineMessageSendResult(deliveryResult));
         },
       });
-      return toLineMessageSendResult(result, "media");
+      return toLineMessageSendResult(result);
     },
   },
   receive: {

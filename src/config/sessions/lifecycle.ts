@@ -239,9 +239,3 @@ export function hasTerminalMainSessionTranscriptNewerThanRegistrySync(
     return false;
   }
 }
-
-export async function hasTerminalMainSessionTranscriptNewerThanRegistry(
-  params: TerminalMainSessionTranscriptRegistryParams,
-): Promise<boolean> {
-  return hasTerminalMainSessionTranscriptNewerThanRegistrySync(params);
-}

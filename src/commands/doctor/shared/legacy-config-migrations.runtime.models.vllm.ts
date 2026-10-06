@@ -39,13 +39,7 @@ function normalizeLegacyVllmQwenThinkingFormat(
   }
 }
 
-function getLegacyVllmQwenThinkingFormat(params: Record<string, unknown>):
-  | {
-      key: (typeof QWEN_THINKING_FORMAT_KEYS)[number];
-      value: unknown;
-      compat: "qwen" | "qwen-chat-template" | undefined;
-    }
-  | undefined {
+function getLegacyVllmQwenThinkingFormat(params: Record<string, unknown>) {
   for (const key of QWEN_THINKING_FORMAT_KEYS) {
     if (Object.hasOwn(params, key)) {
       return {

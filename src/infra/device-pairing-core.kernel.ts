@@ -111,33 +111,6 @@ function toPublicPendingDevicePairingRequest(
   return request;
 }
 
-function buildPendingDevicePairingRequest(params: {
-  nowMs: number;
-  deviceId: string;
-  isRepair: boolean;
-  req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">;
-}): DevicePairingPendingRequest {
-  const role = normalizeDevicePairingRole(params.req.role) ?? undefined;
-  return {
-    requestId: randomUUID(),
-    deviceId: params.deviceId,
-    publicKey: params.req.publicKey,
-    displayName: params.req.displayName,
-    platform: params.req.platform,
-    deviceFamily: params.req.deviceFamily,
-    clientId: params.req.clientId,
-    clientMode: params.req.clientMode,
-    browserOrigin: params.req.browserOrigin,
-    role,
-    roles: mergeDevicePairingRoles(params.req.roles, role),
-    scopes: mergeDevicePairingScopes(params.req.scopes),
-    remoteIp: params.req.remoteIp,
-    silent: params.req.silent,
-    isRepair: params.isRepair,
-    ts: params.nowMs,
-  };
-}
-
 /** Create or refresh a pending device pairing request for owner approval. */
 export function requestDevicePairingInWorker(
   req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
@@ -165,26 +138,37 @@ export function requestDevicePairingInWorker(
     for (const pending of pendingForDevice) {
       delete state.pendingById[pending.requestId];
     }
-    request = buildPendingDevicePairingRequest({
-      nowMs,
+    const role =
+      normalizeDevicePairingRole(req.role) ??
+      normalizeDevicePairingRole(latestPending?.role) ??
+      undefined;
+    request = {
+      requestId: randomUUID(),
       deviceId,
+      publicKey: req.publicKey,
+      displayName: req.displayName,
+      platform: req.platform,
+      deviceFamily: req.deviceFamily,
+      clientId: req.clientId,
+      clientMode: req.clientMode,
+      browserOrigin: req.browserOrigin,
+      role,
+      roles: mergeDevicePairingRoles(
+        ...pendingForDevice.flatMap((pending) => [pending.roles, pending.role]),
+        req.roles,
+        req.role,
+        role,
+      ),
+      scopes: mergeDevicePairingScopes(
+        ...pendingForDevice.map((pending) => pending.scopes),
+        req.scopes,
+      ),
+      remoteIp: req.remoteIp,
+      // Preserve interactive visibility when any superseded request needed attention.
+      silent: Boolean(req.silent && pendingForDevice.every((pending) => pending.silent === true)),
       isRepair,
-      req: {
-        ...req,
-        role: normalizeDevicePairingRole(req.role) ?? latestPending?.role,
-        roles: mergeDevicePairingRoles(
-          ...pendingForDevice.flatMap((pending) => [pending.roles, pending.role]),
-          req.roles,
-          req.role,
-        ),
-        scopes: mergeDevicePairingScopes(
-          ...pendingForDevice.map((pending) => pending.scopes),
-          req.scopes,
-        ),
-        // Preserve interactive visibility when any superseded request needed attention.
-        silent: Boolean(req.silent && pendingForDevice.every((pending) => pending.silent === true)),
-      },
-    });
+      ts: nowMs,
+    };
     created = true;
   }
   state.pendingById[request.requestId] = request;

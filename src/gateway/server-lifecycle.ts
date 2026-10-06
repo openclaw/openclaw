@@ -354,12 +354,6 @@ export async function prepareGatewayLifecycle(params: {
     publishPresence: runtime.publishPresence,
   });
   deps.cron = runtimeState.cronState.cron;
-  const pluginHostServices = {
-    get cron() {
-      return kernel.getCronService();
-    },
-  };
-
   const cronReconciliation = createGatewayCronReconciliation({
     port,
     workspaceDir: defaultWorkspaceDir,
@@ -377,9 +371,6 @@ export async function prepareGatewayLifecycle(params: {
       }
     },
   });
-  let deliveryRecoveryStopPromise: Promise<void> | null = null;
-  const stopDeliveryRecoveryForClose = () =>
-    (deliveryRecoveryStopPromise ??= runtimeState.stopDeliveryRecovery());
   let mediaCleanupStopPromise: ReturnType<typeof runtimeState.stopMediaCleanup> | null = null;
   const stopMediaCleanupForClose = () =>
     (mediaCleanupStopPromise ??= runtimeState.stopMediaCleanup());
@@ -391,6 +382,7 @@ export async function prepareGatewayLifecycle(params: {
   // Connect, RPC, and maintenance refreshes share a Gateway owner, not a socket lifetime.
   const healthWork = new AsyncWorkScope();
   const markClosePreludeStarted = (options?: GatewayCloseOptions) => {
+    fenceSessionSuspensionWritesForGatewayShutdown();
     if (lifecycle.closePreludeStarted) {
       return params.pluginMetadata.beginClose();
     }
@@ -421,9 +413,10 @@ export async function prepareGatewayLifecycle(params: {
     connectionDependentSidecarStopOwner.beginClose();
     // Keep late general sidecars owned until received work drains. Fence background
     // producers now, before their plugin/channel and shared-state dependencies can close.
-    void stopDeliveryRecoveryForClose();
+    void runtimeState.stopDeliveryRecovery();
     void stopMediaCleanupForClose();
     void runtimeState.stopGatewayUpdateCheck().catch(() => {});
+    void stopConfigReloaderForClose().catch(() => {});
     void runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     runtime.stopPresencePublications();
@@ -436,7 +429,6 @@ export async function prepareGatewayLifecycle(params: {
   const stopConfigReloaderForClose = () =>
     (configReloaderStopPromise ??= runtimeState.configReloader.stop());
   const beginClosePrelude = async (options?: GatewayCloseOptions) => {
-    fenceSessionSuspensionWritesForGatewayShutdown();
     const step = <T>(name: string, run: () => T | Promise<T>) =>
       measureGatewayCloseStep(`restart.close.${name}`, run);
     await step("prelude-fence", () => markClosePreludeStarted(options));
@@ -446,7 +438,7 @@ export async function prepareGatewayLifecycle(params: {
       step("auth-profile-usage", () => closeAuthProfileUsage(params.sdkResourceHost)),
       step("pending-request-entries", () => requestEntryLifetime.waitForPendingEntries()),
       step("model-accounts", stopModelAccountsForClose),
-      step("delivery-recovery", stopDeliveryRecoveryForClose),
+      step("delivery-recovery", runtimeState.stopDeliveryRecovery),
       step("media-cleanup", stopMediaCleanupForClose),
       step("update-check", () => runtimeState.stopGatewayUpdateCheck()),
       step("config-reloader", () => stopConfigReloaderForClose().catch(() => {})),
@@ -524,7 +516,8 @@ export async function prepareGatewayLifecycle(params: {
     }
   };
   const prepareClose = async (optsValue?: GatewayCloseOptions) => {
-    await beginClosePrelude(optsValue);
+    // Recovery and reply cancellation must precede services that join those replies.
+    await markClosePreludeStarted(optsValue);
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
@@ -558,6 +551,7 @@ export async function prepareGatewayLifecycle(params: {
       },
       optsValue,
     );
+    await beginClosePrelude(optsValue);
     // Startup may still publish cleanup owners while received work settles.
     // Resolve their handles only when the caller reaches final teardown.
     return async () => {
@@ -701,11 +695,14 @@ export async function prepareGatewayLifecycle(params: {
     runtimeState,
     unavailableGatewayMethods,
     kernel,
-    pluginHostServices,
+    pluginHostServices: {
+      get cron() {
+        return kernel.getCronService();
+      },
+    },
     shutdownRuntime,
     lifecycle,
     cronReconciliation,
-    beginClosePrelude,
     getRuntimeSnapshot,
     startChannels,
     startChannel,

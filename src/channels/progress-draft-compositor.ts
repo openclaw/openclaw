@@ -595,11 +595,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return await renderAfterRetraction();
       }
       const isNewPreambleItem = Boolean(itemId && itemId !== preambleItemId);
-      if (isNewPreambleItem) {
-        preambleItemId = itemId;
-      } else if (!itemId) {
-        preambleItemId = undefined;
-      }
+      preambleItemId = itemId;
       if (normalized === preambleText && !isNewPreambleItem) {
         return false;
       }

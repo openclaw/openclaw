@@ -16,10 +16,8 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  disposeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -282,7 +280,7 @@ describe("outbound session persistence", () => {
         sourceSessionKey: sourceScope.sessionKey,
       }),
     );
-    expect(disposeOpenClawAgentDatabaseByPath(sourcePath, { env })).toBe(true);
+    expect(await disposeOpenClawAgentDatabaseByPath(sourcePath, { env })).toBe(true);
     fs.renameSync(sourcePath, path.join(root, "retired-source.sqlite"));
     openOpenClawAgentDatabase({ agentId: "replacement", path: sourcePath, env });
     replaceSessionEntrySync(sourceScope, { sessionId: "same-session", updatedAt: 100 });

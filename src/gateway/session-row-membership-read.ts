@@ -329,7 +329,7 @@ export function createSessionRowEntryReadAccess(
             captures.map(({ target, file }) => ({
               agentId: target.agentId,
               path: file.canonicalPath,
-              requestedPath: target.storePath,
+              requestedPaths: [target.storePath],
               env: params.env,
             })),
             async (owners) => {

@@ -9,7 +9,6 @@ import {
   assertSkillProposalSupportTargetUnchanged,
   markSkillProposalStale,
   withSkillProposalLifecycleDispatch,
-  type SkillProposalTransitionInput,
 } from "./apply-transition.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { resolveDraftedSkillDescription, resolveSkillProposalName } from "./frontmatter.js";
@@ -26,7 +25,6 @@ import {
 import { readRequiredProposal } from "./service-query.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { captureSkillWorkshopStoreOptions } from "./store-client.js";
-import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
 import {
   hashSkillProposalContent,
   readSkillProposalRecord,
@@ -118,9 +116,9 @@ export async function reviseSkillProposal(
         assertInsideSkillsRoot(skillsRoot, record.target.skillFile, "skill file");
         assertInsideSkillsRoot(skillsRoot, record.target.skillDir, "skill directory");
 
-        const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
+        const currentSkillContent = await readWorkspaceSkillFile(record.target.skillFile);
         if (record.kind === "create") {
-          if (currentContent !== null) {
+          if (currentSkillContent !== null) {
             await markSkillProposalStale({
               store,
               record,
@@ -130,12 +128,12 @@ export async function reviseSkillProposal(
             });
           }
         } else {
-          if (currentContent === null) {
+          if (currentSkillContent === null) {
             throw new Error(`Target skill is missing: ${record.target.skillFile}`);
           }
           if (
             record.target.currentContentHash &&
-            hashSkillProposalContent(currentContent) !== record.target.currentContentHash
+            hashSkillProposalContent(currentSkillContent) !== record.target.currentContentHash
           ) {
             await markSkillProposalStale({
               store,
@@ -145,7 +143,22 @@ export async function reviseSkillProposal(
               input: lockedRequest,
             });
           }
-          await assertSupportTargetsUnchanged(record, lockedRequest, store);
+          for (const file of record.supportFiles ?? []) {
+            if (file.targetExisted === undefined) {
+              continue;
+            }
+            const currentContent = await readWorkspaceSupportFile({
+              skillDir: record.target.skillDir,
+              relativePath: file.path,
+            });
+            await assertSkillProposalSupportTargetUnchanged({
+              store,
+              record,
+              file,
+              currentContent,
+              input: lockedRequest,
+            });
+          }
         }
 
         const supportFiles =
@@ -344,30 +357,4 @@ async function markProposal(
     });
   }
   return result.record;
-}
-
-async function assertSupportTargetsUnchanged(
-  record: SkillProposalRecord,
-  input: SkillProposalTransitionInput,
-  store: SkillWorkshopStoreOptions,
-): Promise<void> {
-  if (record.kind !== "update" || !record.supportFiles) {
-    return;
-  }
-  for (const file of record.supportFiles) {
-    if (file.targetExisted === undefined) {
-      continue;
-    }
-    const currentContent = await readWorkspaceSupportFile({
-      skillDir: record.target.skillDir,
-      relativePath: file.path,
-    });
-    await assertSkillProposalSupportTargetUnchanged({
-      store,
-      record,
-      file,
-      currentContent,
-      input,
-    });
-  }
 }

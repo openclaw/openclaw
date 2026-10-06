@@ -42,13 +42,7 @@ async function startGatewayServerWithSdkHost(
     void beginMacOSSystemCaWarmupOnce({ log });
   }
   let startupSettled: Promise<void>;
-  const {
-    beginClosePrelude,
-    closeOnStartupFailure,
-    prepareClose,
-    terminalSessions,
-    shutdownRuntime,
-  } = gatewayKernel;
+  const { closeOnStartupFailure, prepareClose, terminalSessions, shutdownRuntime } = gatewayKernel;
   try {
     const transport = await createGatewayHttpTransport({
       ...gatewayKernel.createHttpTransportOptions(),
@@ -118,13 +112,11 @@ async function startGatewayServerWithSdkHost(
       if (!closePromise) {
         closePromise = sdkResourceHost
           .run(async () => {
-            const prelude = beginClosePrelude(optsLocal);
+            const preparedClose = prepareClose(optsLocal);
             releasePostReadyWork();
-            await prelude;
-            const close = await prepareClose(optsLocal);
             await runGatewayCloseSteps({
               owner: gatewayKernel,
-              close,
+              close: await preparedClose,
               disposeTerminalSessions: () => terminalSessions.disposeAll(),
               runStopHooks: async () => {
                 await shutdownRuntime.runGlobalGatewayStopSafely({

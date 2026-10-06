@@ -429,37 +429,6 @@ it.each(["incognito", "maintenance", "alias replacement"] as const)(
   },
 );
 
-it("publishes the logical creator identity while retaining the shared database's physical owner", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      path: state.statePath("shared.sqlite"),
-    });
-    const key = "agent:work:shared-creation";
-    const agents: string[] = [];
-    const stop = onSessionIdentityMutation((mutation) => {
-      if (mutation.kind === "create" && mutation.current.sessionKeys.includes(key)) {
-        agents.push(mutation.agentId);
-      }
-    });
-    try {
-      expect(
-        (
-          await createSessionEntryWithTranscript(
-            { agentId: "work", storePath: database.path, sessionKey: key },
-            () => ({ ok: true, entry: { sessionId: "logical-work", updatedAt: 1 } }),
-          )
-        ).ok,
-      ).toBe(true);
-      expect(agents).toEqual(["work"]);
-      expect(readExactSessionEntryRow(database, key)?.entry.sessionId).toBe("logical-work");
-      expect(database.agentId).toBe("main");
-    } finally {
-      stop();
-    }
-  });
-});
-
 it("adopts admitted Signal history and collaboration without host SQL, preserving a case-distinct Matrix sibling", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });

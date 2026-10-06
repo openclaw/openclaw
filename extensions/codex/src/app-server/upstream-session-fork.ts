@@ -198,7 +198,7 @@ export async function forkCodexUpstreamSession(
           afterImport: async (entry, initialization) => {
             // Link BEFORE bind: a crash cannot expose a bound session to local-only
             // rewind/switch while its canonical upstream ownership is missing.
-            initialization.link({
+            await initialization.linkAsync({
               sessionKey: entry.key,
               agentId: entry.agentId,
               catalogId: params.upstream.catalogId,

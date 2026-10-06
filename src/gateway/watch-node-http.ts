@@ -115,11 +115,6 @@ type QueuedNodeEvent = { json: string; byteLength: number };
 
 type PendingChallenge = { clientKey: string; expiresAtMs: number };
 
-type ResponseLifecycle = {
-  completed: Promise<boolean>;
-  isAborted: () => boolean;
-};
-
 type WatchNodeSession = {
   token: string;
   nodeId: string;
@@ -198,7 +193,7 @@ function resolveWatchClientAddress(
   };
 }
 
-function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
+function trackResponseLifecycle(res: ServerResponse) {
   let aborted = false;
   let settled = false;
   const completion = createDeferredCore<boolean>();
@@ -282,15 +277,7 @@ function createChallengeStore() {
 }
 
 /** Create the first-party watchOS node HTTP transport for one Gateway process. */
-export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions): {
-  handleRequest: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-  invalidateSessionsForDevice: (
-    deviceId: string,
-    opts?: { role?: string; reason?: string },
-  ) => void;
-  disconnectSessionsForDevice: (deviceId: string, opts?: { role?: string }) => void;
-  close: () => void;
-} {
+export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions) {
   const now = options.now ?? Date.now;
   const challenges = createChallengeStore();
   const sessionsByToken = new Map<string, WatchNodeSession>();
@@ -1144,7 +1131,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
 
   return {
     handleRequest,
-    invalidateSessionsForDevice: (deviceId, opts) => {
+    invalidateSessionsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       if (opts?.role && opts.role !== "node") {
         return;
       }
@@ -1155,7 +1142,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         session.invalidatedReason = opts?.reason ?? "device-invalidated";
       }
     },
-    disconnectSessionsForDevice: (deviceId, opts) => {
+    disconnectSessionsForDevice: (deviceId: string, opts?: { role?: string }) => {
       if (opts?.role && opts.role !== "node") {
         return;
       }

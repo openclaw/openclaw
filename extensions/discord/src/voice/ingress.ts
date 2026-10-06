@@ -12,7 +12,7 @@ import { buildDiscordGroupSystemPrompt } from "../monitor/inbound-context.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { getDiscordRuntime } from "../runtime.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
-import type { VoiceSessionEntry } from "./session.js";
+import type { VoiceRealtimeSpeakerContext, VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
@@ -24,47 +24,34 @@ const contextSdk: Partial<
   Pick<typeof realtimeBootstrapSdk, "resolveRealtimeVoiceAgentContextInstructions">
 > = realtimeBootstrapSdk;
 
-export type DiscordVoiceIngressContext = {
-  extraSystemPrompt?: string;
+export type DiscordVoiceIngressContext = VoiceRealtimeSpeakerContext & {
   isCurrent?: () => boolean;
-  senderIsOwner: boolean;
-  speakerLabel: string;
 };
 
-function summarizeAgentTurnPayloads(payloads: readonly unknown[]): string {
-  let textPayloads = 0;
+type DiscordVoiceAgentTurnResult = Awaited<
+  ReturnType<ReturnType<typeof getDiscordRuntime>["agent"]["runCommandFromIngress"]>
+>;
+
+function summarizeAgentTurnPayloads(
+  payloads: NonNullable<DiscordVoiceAgentTurnResult["payloads"]>,
+): string {
   let nonEmptyTextPayloads = 0;
-  let reasoningPayloads = 0;
   let errorPayloads = 0;
   let mediaPayloads = 0;
 
   for (const payload of payloads) {
-    if (!payload || typeof payload !== "object") {
-      continue;
+    if (payload.text.trim()) {
+      nonEmptyTextPayloads += 1;
     }
-    const record = payload as Record<string, unknown>;
-    const text = record.text;
-    if (typeof text === "string") {
-      textPayloads += 1;
-      if (text.trim()) {
-        nonEmptyTextPayloads += 1;
-      }
-    }
-    if (record.isReasoning === true) {
-      reasoningPayloads += 1;
-    }
-    if (record.isError === true) {
+    if (payload.isError === true) {
       errorPayloads += 1;
     }
-    if (
-      typeof record.mediaUrl === "string" ||
-      (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0)
-    ) {
+    if (payload.mediaUrl != null || payload.mediaUrls?.length) {
       mediaPayloads += 1;
     }
   }
 
-  return `payloadCount=${payloads.length} textPayloads=${textPayloads} nonEmptyTextPayloads=${nonEmptyTextPayloads} reasoningPayloads=${reasoningPayloads} errorPayloads=${errorPayloads} mediaPayloads=${mediaPayloads}`;
+  return `payloadCount=${payloads.length} textPayloads=${payloads.length} nonEmptyTextPayloads=${nonEmptyTextPayloads} reasoningPayloads=0 errorPayloads=${errorPayloads} mediaPayloads=${mediaPayloads}`;
 }
 
 export async function resolveDiscordVoiceIngressContext(params: {
@@ -151,9 +138,7 @@ export async function runDiscordVoiceAgentTurn(params: {
         },
       })
     : undefined;
-  let result: Awaited<
-    ReturnType<ReturnType<typeof getDiscordRuntime>["agent"]["runCommandFromIngress"]>
-  >;
+  let result: DiscordVoiceAgentTurnResult;
   try {
     result = await getDiscordRuntime().agent.runCommandFromIngress(
       {
@@ -180,7 +165,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   const payloads = result.payloads ?? [];
   const text = payloads
     .map((payload) => payload.text)
-    .filter((entry) => typeof entry === "string" && entry.trim())
+    .filter((entry) => entry?.trim())
     .join("\n")
     .trim();
   if (!text) {

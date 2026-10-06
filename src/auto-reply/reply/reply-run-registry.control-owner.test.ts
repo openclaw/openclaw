@@ -95,16 +95,20 @@ describe("reply run control ownership", () => {
         throw new Error("Expected a live message injection target");
       }
       await expect(
-        beginReplyMessageInjectionTarget(target, "different input", {
-          terminalReplyExpectation:
-            terminalReplyExpectation === "required" ? "optional" : "required",
-        }).outcome,
+        (
+          await beginReplyMessageInjectionTarget(target, "different input", {
+            terminalReplyExpectation:
+              terminalReplyExpectation === "required" ? "optional" : "required",
+          })
+        ).outcome,
       ).resolves.toEqual({ status: "rejected", reason: "reply_expectation_mismatch" });
       expect(queueMessage).not.toHaveBeenCalled();
       await expect(
-        beginReplyMessageInjectionTarget(target, "matching input", {
-          terminalReplyExpectation,
-        }).outcome,
+        (
+          await beginReplyMessageInjectionTarget(target, "matching input", {
+            terminalReplyExpectation,
+          })
+        ).outcome,
       ).resolves.toEqual({ status: "accepted" });
       expect(queueMessage).toHaveBeenCalledOnce();
     },

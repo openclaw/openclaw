@@ -632,7 +632,7 @@ export async function restoreSubagentRunsFromDisk(params: {
         retainSubagentRunRuntimeOwner(params.runs.get(runId), entry);
         params.runs.set(runId, immutableSubagentRun(entry));
         rememberRestoredSubagentRunNotification(entry);
-        subagentRuns.commitOwnership(entry);
+        subagentRuns.settleCommittedOwnership(entry);
         added += 1;
       }
       const events: Array<() => void> = [];

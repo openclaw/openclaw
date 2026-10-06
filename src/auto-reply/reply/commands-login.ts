@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -36,7 +33,7 @@ const WEB_LOGIN_SURFACES = new Set(["control", "control-ui", "dashboard", "inter
 const activeProviderLoginFlows = createProviderLoginFlowRegistry();
 
 function normalizeSurface(value: unknown): string {
-  return normalizeLowercaseStringOrEmpty(normalizeOptionalString(value) ?? "").replace(/_/gu, "-");
+  return normalizeLowercaseStringOrEmpty(value).replace(/_/gu, "-");
 }
 
 function hasPrivateTarget(value: unknown): boolean {
@@ -265,7 +262,7 @@ async function runChannelProviderLogin(params: {
       runtime: defaultRuntime,
       signal: flowSignal,
       assertCurrent,
-      sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
+      sendMessage: (text) => emitLoginMessage(params.commandParams, text),
       sendReply,
       onModelAccessRequested: (request) => {
         modelAccess = request;

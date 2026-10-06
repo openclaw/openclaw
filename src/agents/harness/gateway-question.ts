@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
+import { withQuestionInputAssertion } from "../../auto-reply/reply/message-injection-authority.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -91,7 +92,7 @@ function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionI
   let refused = false;
   const assertCurrent = () => {
     try {
-      authority?.assertCurrent();
+      withQuestionInputAssertion(() => authority?.assertCurrent());
       state.answerAuthority?.assertActive();
       if (pendingAgentQuestions.get(state.sessionKey) !== state) {
         throw new Error("pending question is no longer current");
@@ -300,7 +301,7 @@ async function claimQuestionAnswer(
   if (!state || state.resolving || (state.kind === "gateway" && state.cancelRequested)) {
     return false;
   }
-  params.authority?.assertCurrent();
+  withQuestionInputAssertion(() => params.authority?.assertCurrent());
   const sourceRecorder = params.sourceRecorder;
   const stagedSource = sourceRecorder?.getPendingInputMessage?.() !== undefined;
   const reservation = reserveQuestionInput(state, params.authority);
@@ -415,7 +416,7 @@ export async function cancelPendingAgentQuestionForSession(params: {
   resolvedBy: string;
   authority?: QuestionInputAuthority;
 }): Promise<boolean> {
-  params.authority?.assertCurrent();
+  withQuestionInputAssertion(() => params.authority?.assertCurrent());
   const sessionKey = params.sessionKey?.trim();
   const state = sessionKey ? pendingAgentQuestions.get(sessionKey) : undefined;
   if (!state || state.resolving) {
