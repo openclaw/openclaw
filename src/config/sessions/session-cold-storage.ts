@@ -1,5 +1,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
+import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
+import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
@@ -55,6 +57,7 @@ import type {
   SessionColdTurnGuard,
 } from "./session-cold-storage-worker.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -262,6 +265,7 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
       admissionIdentities: [
         ...(collectActiveSessionWorkAdmissions().get(options.ownerStorePath) ?? []),
       ],
+      liveSessionKeys: [...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex())],
       cooledSessionIds: [...cooled],
       beforeMs: options.beforeMs,
       maxTranscripts: options.maxTranscripts,
@@ -318,12 +322,16 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
               externalizations: batch.externalizations,
               beforeMs: options.beforeMs,
               protectionKeys: batch.protectionKeys,
+              liveSessionKeys: input.liveSessionKeys,
             },
             () => {
               assertCurrent();
               const admissions = collectActiveSessionWorkAdmissions().get(options.ownerStorePath);
               if (
-                [...(admissions ?? [])].some((identity) =>
+                [
+                  ...(admissions ?? []),
+                  ...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
+                ].some((identity) =>
                   batch.protectionKeys.includes(normalizeStoreSessionKey(identity)),
                 )
               ) {
@@ -370,6 +378,13 @@ export async function restoreSessionColdTranscript(
   turnGuard?: SessionColdTurnGuard,
 ): Promise<void> {
   assertCurrent?.();
+  const binding = captureIncognitoSessionBinding(scope);
+  if (binding) {
+    binding.admissionSignal?.throwIfAborted();
+    binding.actor.assertReadable();
+    // An actor has no cold archive to restore; loss must still reject this continuation.
+    return;
+  }
   let resolved = preparation?.target;
   if (
     !resolved &&

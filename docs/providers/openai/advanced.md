@@ -400,6 +400,10 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
       OpenAI does not get these headers, even though it is a native route)
     - Keep OpenAI-only request shaping (`service_tier`, `store`,
       reasoning-compat, prompt-cache hints)
+    - Send tool-bearing turns for reasoning models configured with
+      `openai-completions` on `api.openai.com` to `/v1/responses`, because
+      Chat Completions rejects function tools with reasoning for current GPT
+      models. Credentials, endpoint host, and proxy routes are unchanged.
 
     **Proxy/compatible routes:**
     - Use looser compat behavior

@@ -743,6 +743,33 @@ bridges remain until the atomic activation removes them together. This compositi
 changes no schema, retention, durability, permissions, environment names, or update
 behavior and retires no T1 sites.
 
+### Incognito private display and expiry composition (P7m2, inactive)
+
+Exact private-row preparation consumes the shared actor binding and retains all
+selected private rows through one synchronous presentation frame. Related durable
+rows share one ordered worker read with the native SDK mutation witness; each
+actor, sharing snapshot, and related owner remains retained through consumption
+and cleanup. Keyed placement publications invalidate the transient read before
+presentation; stale preparation retries before invoking the consumer. Private
+rows stay outside the resident roster. Retained Gateway lookups consume the same
+actor and revoke their validation callback when consumption ends.
+Captured child rows retain their own agent and physical store; a captured missing
+child remains absent throughout presentation.
+Ordinary unbound reads keep their synchronous completion boundary; a later topology
+publication cannot reject or replay an already consumed result. Actor-bound reads
+retain their final authority checks through asynchronous cleanup.
+
+The all-actor deadline sidecar captures existing execution topology before
+awaiting acquisition and checks the same incarnation before installing each
+24-hour deadline. Deletion runs with the captured shared binding; stopping the
+sidecar joins accepted deletion before releasing actors. One stale actor cannot
+skip other captured actors, and failed cleanup remains owned. The sidecar remains
+inactive until the domain deletion facade and atomic acquisition switch are
+installed together. Cold restore, disk-budget cleanup, archive inspection, and
+page reclamation preserve the actor's no-disk and no-archive exclusions.
+Production still uses the native routes, and this prerequisite changes no schema,
+retention, durability, SDK contract, configuration, update behavior, or T1 counts.
+
 ### Incognito shared binding and SDK preflight (P7h1, inactive)
 
 SessionManager and Codex history consume one captured actor binding. The binding

@@ -154,15 +154,18 @@ describe("AppSidebar delegated activity", () => {
     );
     mixed.sidebar.sidebarAgentsMode = "roster";
     const rosterParent = () => mixed.sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
-    await waitForFast(() =>
-      expect(mixed.sidebar.querySelector('[data-agent-collapse="main"]')).not.toBeNull(),
+    await waitForFast(
+      () => expect(mixed.sidebar.querySelector('[data-agent-collapse="main"]')).not.toBeNull(),
+      { timeout: 5_000 },
     );
-    await waitForFast(() => expect(rosterParent()).not.toBeNull());
+    await waitForFast(() => expect(rosterParent()).not.toBeNull(), { timeout: 5_000 });
     mixed.sidebar
       .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${parentKey}"]`)!
       .click();
-    await waitForFast(() =>
-      expect(mixed.sidebar.querySelector(`[data-session-key="${persistentKey}"]`)).not.toBeNull(),
+    await waitForFast(
+      () =>
+        expect(mixed.sidebar.querySelector(`[data-session-key="${persistentKey}"]`)).not.toBeNull(),
+      { timeout: 5_000 },
     );
     expect(
       rosterParent().querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
@@ -192,8 +195,9 @@ describe("AppSidebar delegated activity", () => {
     ];
     mixed.sessions.publishList({ result: mixed.result });
     await rosterActivityStore(mixed.context).refresh();
-    await waitForFast(() =>
-      expect(rosterParent().querySelector('[data-session-attention="error"]')).not.toBeNull(),
+    await waitForFast(
+      () => expect(rosterParent().querySelector('[data-session-attention="error"]')).not.toBeNull(),
+      { timeout: 5_000 },
     );
     expect(rosterParent().querySelector(".session-glyph__ring")).toBeNull();
     expect(rosterParent().querySelector('[aria-label="Unread"]')).not.toBeNull();

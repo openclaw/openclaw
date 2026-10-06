@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  hasActiveRestartRecoverySourceClaim,
+  hasRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
   normalizeRestartRecoveryTerminalRunIds,
 } from "./restart-recovery-state.js";
@@ -27,8 +27,7 @@ function hasActiveClaim(
   scope: Pick<RestartRecoveryTerminalDeliveryScope, "sessionId" | "sourceTurnId">,
 ): boolean {
   return (
-    entry.sessionId === scope.sessionId &&
-    hasActiveRestartRecoverySourceClaim(entry, scope.sourceTurnId)
+    entry.sessionId === scope.sessionId && hasRestartRecoverySourceClaim(entry, scope.sourceTurnId)
   );
 }
 

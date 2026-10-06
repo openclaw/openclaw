@@ -229,10 +229,14 @@ export async function applyOpenClawDatabaseVerificationResults(options: {
   results: readonly OpenClawDatabaseVerifyResult[];
   targets: readonly OpenClawDatabaseVerifyTarget[];
   workerLifetime?: DatabaseVerifyWorkerLifetime;
+  onVerified?: (pathname: string) => Promise<boolean | undefined>;
 }): Promise<void> {
   const targetByPath = new Map(options.targets.map((target) => [target.path, target]));
 
-  for (const result of options.results) {
+  // A healthy writer's queue must never delay quarantine of another database.
+  for (const result of options.results.toSorted(
+    (left, right) => Number(left.ok) - Number(right.ok),
+  )) {
     options.workerLifetime?.assertCurrent?.();
     const target = targetByPath.get(result.path);
     if (!target) {
@@ -245,7 +249,19 @@ export async function applyOpenClawDatabaseVerificationResults(options: {
       check: target.check,
     };
     if (result.ok) {
-      log.info("database integrity verification passed", details);
+      let durableVerification: boolean | undefined;
+      try {
+        durableVerification = await options.onVerified?.(result.path);
+      } catch (error) {
+        options.workerLifetime?.assertCurrent?.();
+        durableVerification = false;
+        log.warn("database integrity verification proof was not retained", {
+          ...details,
+          error: String(error),
+        });
+      }
+      options.workerLifetime?.assertCurrent?.();
+      log.info("database integrity verification passed", { ...details, durableVerification });
       continue;
     }
     if (!result.terminal) {

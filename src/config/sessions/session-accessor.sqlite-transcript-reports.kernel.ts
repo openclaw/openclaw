@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { hasSubagentSessionOwnerInDatabase } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { readGatewayOwnerLeaseFromDatabase } from "../../infra/gateway-owner-lease.read.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -18,25 +16,20 @@ import {
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { withCachedOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly-reuse.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
-import {
-  isStartupSessionSettlementCandidate,
-  type AbortedSessionTranscriptPartial,
-  type AbortedSessionTranscriptPartialResult,
-  type CustomMessageReport,
-  type CustomMessageReportAppend,
-  type PreparedTranscriptReport,
-  type SelectedTranscriptReport,
-  type TranscriptReportSelection,
-  type TranscriptReport,
-  type StartupSessionSettlement,
-  type StartupSessionSettlementOutcome,
+import type {
+  AbortedSessionTranscriptPartial,
+  AbortedSessionTranscriptPartialResult,
+  CustomMessageReport,
+  CustomMessageReportAppend,
+  PreparedTranscriptReport,
+  SelectedTranscriptReport,
+  TranscriptReportSelection,
+  TranscriptReport,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
@@ -50,7 +43,6 @@ import {
   projectSessionTranscriptReportFacts,
   type SessionTranscriptReportFacts,
 } from "./session-transcript-report-facts.js";
-import { settleArchivedSessionRun } from "./terminal-status.js";
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
@@ -227,96 +219,6 @@ export function appendSessionTranscriptReportInTransaction(
       prepareCustomTranscriptReport(selected, facts.appendParentId),
     );
   }
-}
-
-/** Agent execution retains this same-thread shared handle; never open a fallback during a grant. */
-export function inspectStartupSessionSettlementOwner(
-  resolved: ResolvedTranscriptScope,
-  input: StartupSessionSettlement,
-): "retained" | "ownerless" {
-  const read = withCachedOpenClawStateDatabaseReadOnly<"retained" | "ownerless">(
-    (shared) => {
-      const lease = readGatewayOwnerLeaseFromDatabase(shared.db);
-      if (
-        lease?.state !== "live" ||
-        lease.pid !== input.observation.gatewayOwner.pid ||
-        lease.owner !== input.observation.gatewayOwner.owner
-      ) {
-        throw new Error("startup Gateway ownership changed or could not be verified");
-      }
-      return input.kind === "interrupt" &&
-        hasSubagentSessionOwnerInDatabase(shared, resolved.sessionKey)
-        ? "retained"
-        : "ownerless";
-    },
-    resolveOpenClawStateSqlitePath(resolved.env),
-    true,
-  );
-  if (!read.reused) {
-    throw new Error("Startup settlement lost its retained shared-state owner");
-  }
-  return read.value;
-}
-
-/** Startup settles the entry and, for interruption only, its receipt in one writer transaction. */
-export function settleStartupSessionInTransaction(
-  database: OpenClawAgentDatabase,
-  resolved: ResolvedTranscriptScope,
-  input: StartupSessionSettlement,
-  projection: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded: () => void },
-): Exclude<StartupSessionSettlementOutcome, "retained"> {
-  const current = readSessionEntryRow(database, resolved.sessionKey)?.entry;
-  const { expected, processStartedAt, endedAt } = input.observation;
-  if (
-    !current ||
-    current.sessionId !== expected.sessionId ||
-    current.lifecycleRevision !== expected.lifecycleRevision ||
-    current.lifecycleRunId !== expected.lifecycleRunId ||
-    current.updatedAt !== expected.updatedAt ||
-    current.startedAt !== expected.startedAt ||
-    current.archivedAt !== expected.archivedAt ||
-    (current.archivedAt !== undefined) !== (input.kind === "archive") ||
-    !isStartupSessionSettlementCandidate(current, processStartedAt)
-  ) {
-    throw new Error("startup session changed before settlement");
-  }
-  if (input.kind === "archive") {
-    const next = { ...current };
-    settleArchivedSessionRun(next, endedAt);
-    writeSessionEntry(database, resolved.sessionKey, next, { canonicalPreviousEntry: current });
-    return "archived";
-  }
-  const facts = prepareTranscriptReportSelection(database, resolved, {
-    kind: "custom",
-    customTypes: [input.report.customType],
-    suppressWhenAssistantRun: input.runId,
-  });
-  if (facts.suppressed) {
-    return "unchanged";
-  }
-  writeSessionEntry(
-    database,
-    resolved.sessionKey,
-    {
-      ...current,
-      status: "interrupted",
-      abortedLastRun: true,
-      endedAt,
-      lastRunError: input.error,
-    },
-    { canonicalPreviousEntry: current },
-  );
-  if (isRecord(facts.latest?.details) && facts.latest.details.runId === input.runId) {
-    return "interrupted";
-  }
-  appendSelectedTranscriptReportInTransaction(
-    database,
-    resolved,
-    facts.appendParentId,
-    prepareCustomTranscriptReport(input.report, facts.appendParentId),
-    projection,
-  );
-  return "interrupted";
 }
 
 /** The producer has settled; only its committed answer may replace the buffered fallback. */

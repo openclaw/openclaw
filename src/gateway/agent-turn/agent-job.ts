@@ -561,6 +561,10 @@ export function setGatewayDedupeEntry(params: {
   }
   if (incomingObservation.state === "active") {
     beginAgentJob(key.runId);
+    // Queue custody can become observable after an RPC wait has already begun.
+    for (const waiter of agentRunWaiters.get(key.runId) ?? []) {
+      waiter();
+    }
     return;
   }
   if (incomingObservation.state === "terminal") {
@@ -668,6 +672,8 @@ export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
   source?: "agent" | "chat";
+  /** A caller-owned nonterminal observation can finish this wait without ending the run. */
+  stopWaiting?: () => boolean;
 }): Promise<AgentJobObservation | null> {
   ensureAgentRunListener();
   const cached = getAgentRunSnapshot(params);
@@ -698,6 +704,10 @@ export async function waitForAgentJob(params: {
       if (lifecycleReset) {
         // The lifecycle interrupted this wait; do not cache it as a terminal run outcome.
         finish({ status: "timeout", timeoutPhase: "gateway_draining" });
+        return;
+      }
+      if (params.stopWaiting?.()) {
+        finish(null);
         return;
       }
       const snapshot = getAgentRunSnapshot(params);

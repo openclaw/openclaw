@@ -237,7 +237,7 @@ describe("gateway WebSocket chat abort settlement", () => {
 
         // Hold the wait deadline while real abort and persistence work establishes ordering.
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        const waitResponse =
+        let waitResponse =
           settlement === "queued-dispatch-settled"
             ? undefined
             : rpcReq(socket, "agent.wait", { runId, timeoutMs: 2_000 });
@@ -246,8 +246,14 @@ describe("gateway WebSocket chat abort settlement", () => {
           void waitResponse.catch(() => {});
           await withinTest(waitInstalled.promise, signal);
         }
-        if (settlement.startsWith("queued-") && settlement !== "queued-dispatch-settled") {
+        if (waitResponse && settlement.startsWith("queued-")) {
           expect(queuedLifecycle?.onDeferred?.()).toBe(true);
+          await expect(withinTest(waitResponse, signal)).resolves.toMatchObject({
+            ok: true,
+            payload: { runId, status: "pending", timeoutPhase: "queue", providerStarted: false },
+          });
+          expect(terminalStates).toEqual([]);
+          waitResponse = undefined;
         }
         const abortedFrame = onceMessage(
           socket,

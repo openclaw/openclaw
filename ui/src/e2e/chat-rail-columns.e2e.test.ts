@@ -872,9 +872,7 @@ suite.define(() => {
           await sidePanel(page)
             .getByRole("button", { name: "Close tab: shell 1", exact: true })
             .click();
-          await sidePanel(page)
-            .getByRole("button", { name: "Close Terminal", exact: true })
-            .click();
+          // Closing the last terminal tab removes the Terminal slot; Review stays.
           await expect.poll(() => tabLabels(page)).toEqual(["Review"]);
           // Closing back down to a strip that fits must release the shrink state:
           // the in-pill fade is a symptom of overflow, so labels that fit again

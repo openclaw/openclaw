@@ -37,14 +37,11 @@ import { readSessionEntryReplacementState } from "./session-accessor.sqlite-repl
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import {
-  hasSessionEntriesByStatus,
-  readSessionEntriesByStatus,
-} from "./session-accessor.sqlite-status.js";
-import {
   readLatestAssistantTextFromDatabase,
   readTranscriptHeaderFromDatabase,
 } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { readSessionWorktreeOwnerFactsInDatabase } from "./session-accessor.sqlite-worktree-owner.js";
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
@@ -352,22 +349,24 @@ export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerIn
 export function readExactSessionEntriesWithLifecycle(
   request: SessionExactEntriesWorkerInput,
 ): SessionExactEntriesWorkerResult {
-  if (request.projection === "exact") {
+  if (request.projection === "exact" || request.projection === "worktree") {
     // Logical accessors validate only their candidates; unrelated rows are not listing admission.
     let source: SessionExactEntriesWorkerResult["source"];
     const read = withOpenClawAgentDatabaseReadOnly(
       (database) => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
         return runSqliteDeferredTransactionSync(database.db, () =>
-          request.sessionKeys.flatMap((sessionKey) => {
-            const entry = readExactSessionEntryRow(
-              database,
-              sessionKey,
-              request.snapshotFields ?? "full",
-              "canonical",
-            )?.entry;
-            return entry ? [{ sessionKey, entry }] : [];
-          }),
+          request.projection === "worktree"
+            ? readSessionWorktreeOwnerFactsInDatabase(database, request.sessionKeys)
+            : request.sessionKeys.flatMap((sessionKey) => {
+                const entry = readExactSessionEntryRow(
+                  database,
+                  sessionKey,
+                  request.snapshotFields ?? "full",
+                  "canonical",
+                )?.entry;
+                return entry ? [{ sessionKey, entry }] : [];
+              }),
         );
       },
       { ...request.database, env: request.env },
@@ -383,26 +382,6 @@ export function readExactSessionEntriesWithLifecycle(
       source,
       entries: read.found ? read.value : [],
       lifecycleTimestamps: {},
-    };
-  }
-  if (request.statusSelection) {
-    const { statuses, presenceOnly } = request.statusSelection;
-    const read = withOpenClawAgentDatabaseReadOnly(
-      (database) => ({
-        entries: presenceOnly ? [] : readSessionEntriesByStatus(database, statuses),
-        statusFound: presenceOnly ? hasSessionEntriesByStatus(database, statuses) : false,
-      }),
-      { ...request.database, env: request.env },
-    );
-    if (!read.found && !presenceOnly && read.reason !== "database-missing") {
-      throw new SessionMetadataUnavailableError(read.reason);
-    }
-    return {
-      kind: "session-exact-entries",
-      lifecycleTimestamps: {},
-      ...(read.found
-        ? read.value
-        : { entries: [], statusFound: read.reason !== "database-missing" }),
     };
   }
   const result = withOpenClawAgentDatabaseReadOnly(

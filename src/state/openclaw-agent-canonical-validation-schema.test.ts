@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { constants, DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   assertCanonicalSessionValidationSchema,
@@ -44,10 +46,13 @@ function clearPending(database: DatabaseSync) {
   database.exec("DELETE FROM session_canonical_validation_pending");
 }
 
-function withDatabase(run: (database: DatabaseSync) => void) {
-  const database = new DatabaseSync(":memory:");
+function withDatabase(run: (database: DatabaseSync) => void, admitted = false) {
+  const database = admitted ? openNodeSqliteDatabase(":memory:") : new DatabaseSync(":memory:");
   try {
     database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    if (admitted) {
+      admitSqliteSchema(database);
+    }
     run(database);
   } finally {
     if (database.isOpen) {
@@ -231,24 +236,31 @@ describe("canonical validation schema admission", () => {
       }).toThrow(/canonical validation schema is missing or drifted.*openclaw doctor --fix/u);
     });
   });
-  it.each([
-    "DROP TABLE session_canonical_validation_pending",
-    "DROP TRIGGER session_nodes_canonical_pending_after_update",
-    "DROP TRIGGER session_windows_canonical_pending_after_delete",
-    "DROP TRIGGER session_key_contract_canonical_pending_after_update",
-    `CREATE TRIGGER clear_canonical_pending AFTER INSERT ON session_canonical_validation_pending
+  it.each(
+    [
+      "DROP TABLE session_canonical_validation_pending",
+      "DROP TRIGGER session_nodes_canonical_pending_after_update",
+      "DROP TRIGGER session_windows_canonical_pending_after_delete",
+      "DROP TRIGGER session_key_contract_canonical_pending_after_update",
+      `CREATE TRIGGER clear_canonical_pending AFTER INSERT ON session_canonical_validation_pending
       BEGIN DELETE FROM session_canonical_validation_pending; END`,
-  ])("rejects changed required schema after a cached admission (%#)", (change) => {
-    withDatabase((database) => {
-      assertCanonicalSessionValidationSchema(database);
-      database.exec(change);
-      expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
-        change.startsWith("DROP TABLE")
-          ? missingTable
-          : /canonical validation schema is missing or drifted/u,
-      );
-    });
-  });
+      `CREATE TRIGGER session_canonical_validation_pending AFTER INSERT ON conversations
+      BEGIN DELETE FROM session_canonical_validation_pending; END`,
+    ].flatMap((change) => [false, true].map((admitted) => ({ change, admitted }))),
+  )(
+    "rejects changed required schema after cached admission, admitted=$admitted (%#)",
+    ({ change, admitted }) => {
+      withDatabase((database) => {
+        assertCanonicalSessionValidationSchema(database);
+        database.exec(change);
+        expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
+          change.startsWith("DROP TABLE")
+            ? missingTable
+            : /canonical validation schema is missing or drifted/u,
+        );
+      }, admitted);
+    },
+  );
 
   it("does not reuse validation performed inside a rolled-back schema transaction", () => {
     withDatabase((database) => {

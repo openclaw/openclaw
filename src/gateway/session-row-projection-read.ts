@@ -6,6 +6,9 @@ import { listSubagentSessionListRunsForControllers } from "../agents/subagents/r
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { resolveStateDir } from "../config/paths.js";
 import { captureCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
+import { captureSessionEntryNativeMutationWitness } from "../config/sessions/session-entry-read-ordered.js";
+import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import {
   assertSessionStoreReadCandidate,
@@ -15,11 +18,17 @@ import { projectionLane } from "../config/sessions/session-transcript-worker-res
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import {
+  prepareSessionRowPublicationScope,
+  sessionChangeAffectsStoredRow,
+} from "../sessions/session-row-facts.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
 import {
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -249,19 +258,28 @@ export async function withSessionRowDatabaseFacts(
   }
 }
 
-/**
- * Inactive acquisition: the atomic cutover supplies the original actor, never a native fallback.
- * @internal Knip production exception; atomic P7 activation installs this acquisition.
- */
-export function withIncognitoSessionRow<T>(
+type IncognitoRowResources = {
+  assertions: Array<() => void>;
+  acp: Array<Awaited<ReturnType<IncognitoAgentDatabaseExecution["acp"]["prepareEntryRead"]>>>;
+  releases: Array<() => void>;
+};
+
+async function withRetainedIncognitoSessionRow<T>(
   params: {
-    actor: IncognitoAgentDatabaseExecution;
+    actor: IncognitoSessionActor;
+    prepareAcp: IncognitoAgentDatabaseExecution["acp"]["prepareEntryRead"];
     authority: IncognitoSessionAuthority;
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
     key: string;
   },
-  consume: (row: Row | undefined) => T,
+  consume: (prepared: {
+    present: () => Row | undefined;
+    durable: Array<{ key: string; agentId: string; preserveQualifiedAddress: boolean }>;
+    relatedRows: NonNullable<Row["preparedPrivate"]>["relatedRows"];
+    assertCurrent: () => void;
+  }) => Promise<T>,
+  retained: IncognitoRowResources,
 ): Promise<T> {
   const { actor, authority, cfg, key } = params;
   const env = { ...params.env, OPENCLAW_STATE_DIR: resolveStateDir(params.env) };
@@ -282,6 +300,11 @@ export function withIncognitoSessionRow<T>(
       actor.assertCurrent();
       authority.assertCurrent();
       const { value, snapshot } = await actor.sessions.readRow(authority, key);
+      retained.assertions.push(() => {
+        authority.assertCurrent();
+        actor.assertReadable();
+        snapshot.assertCurrent();
+      });
       let active = true;
       const assertions = [snapshot.assertCurrent];
       const assertSourcesCurrent = (checks: readonly (() => void)[]) => {
@@ -297,32 +320,28 @@ export function withIncognitoSessionRow<T>(
         }
         assertSourcesCurrent(assertions);
       };
-      const finish = (row: Row | undefined): T => {
-        assertCurrent();
+      if (!value) {
         try {
-          const result = consume(row);
-          if (isPromiseLike(result)) {
-            void Promise.resolve(result).catch(() => undefined);
-            throw new Error("Incognito row consumers must remain synchronous");
-          }
-          assertCurrent();
-          return result;
+          return await consume({
+            present: () => undefined,
+            durable: [],
+            relatedRows: {},
+            assertCurrent,
+          });
         } finally {
           active = false;
         }
-      };
-      if (!value) {
-        return finish(undefined);
       }
       const claim = actor.sessions.captureCurrent(key);
       assertions.push(() => claim.authorize(authority, "commit"));
-      const acp = await actor.acp.prepareEntryRead({
+      const acp = await params.prepareAcp({
         authority,
         cfg,
         env,
         databasePath: sharedPath,
         sessionKey: key,
       });
+      retained.acp.push(acp);
       try {
         assertions.push(acp.assertCurrent);
         assertCurrent();
@@ -342,34 +361,42 @@ export function withIncognitoSessionRow<T>(
               (workspace) => workspace.workspaceId === facts.entry.repositoryWorkspaceId,
             ) ?? null;
         }
-        const relatedEntries = Object.fromEntries(
-          value.children.map((child) => [child.sessionKey, child.entry]),
-        );
-        const present = () =>
-          finish(
-            createIncognitoSessionRow({
-              cfg,
-              key,
+        const relatedRows = Object.fromEntries(
+          value.children.map((child) => [
+            child.sessionKey,
+            {
+              key: child.sessionKey,
               agentId: actor.agentId,
-              storePath: actor.path,
-              entry: facts.entry,
-              membership: actor.sessions.readSharing(key)?.membership,
-              source: { identity: actor.identity.incarnation, assertCurrent },
-              prepared: {
-                relatedEntries,
-                databaseFacts: facts,
-                titleFields: value.titleFields,
-                terminalModel: value.terminalModel,
-              },
-            }),
-          );
+              storeTarget: { agentId: actor.agentId, storePath: actor.path },
+              entry: child.entry,
+            },
+          ]),
+        );
+        const present = () => {
+          assertCurrent();
+          return createIncognitoSessionRow({
+            cfg,
+            key,
+            agentId: actor.agentId,
+            storePath: actor.path,
+            entry: facts.entry,
+            membership: actor.sessions.readSharing(key)?.membership,
+            source: { identity: actor.identity.incarnation, assertCurrent },
+            prepared: {
+              relatedRows,
+              databaseFacts: facts,
+              titleFields: value.titleFields,
+              terminalModel: value.terminalModel,
+            },
+          });
+        };
         const parentKey = facts.entry.parentSessionKey || resolveSessionParentSessionKey(key);
         const relatedKeys = [
           ...new Set([
             ...(parentKey ? [parentKey] : []),
             ...listSubagentSessionListRunsForControllers([key]).map((run) => run.childSessionKey),
           ]),
-        ].filter((relatedKey) => relatedKey !== key && !relatedEntries[relatedKey]);
+        ].filter((relatedKey) => relatedKey !== key && !relatedRows[relatedKey]);
         const privateKeys = relatedKeys.filter(isIncognitoSessionKey);
         const durable = relatedKeys
           .filter((relatedKey) => !isIncognitoSessionKey(relatedKey))
@@ -386,26 +413,7 @@ export function withIncognitoSessionRow<T>(
             preserveQualifiedAddress: false,
           });
         }
-        const withDurable = (): Promise<T> => {
-          const [first, ...remaining] = durable;
-          if (!first) {
-            return Promise.resolve(present());
-          }
-          return withGatewaySessionStoreTarget(
-            { cfg, env, ...first, relatedKeys: remaining, projection: "list", ordered: true },
-            (target, _membership, assertDurableCurrent, relatedTargets) => {
-              assertions.push(assertDurableCurrent);
-              for (const [index, selected] of [target, ...relatedTargets].entries()) {
-                const requested = durable[index]!;
-                const entry = selected.store[selected.canonicalKey];
-                if (entry && !relatedEntries[requested.key]) {
-                  relatedEntries[requested.key] = entry;
-                }
-              }
-              return present();
-            },
-          );
-        };
+        const withDurable = () => consume({ present, durable, relatedRows, assertCurrent });
         // Acquisitions outlive presentation and retain root checks, never their own or siblings'.
         const acquisitionAssertions = [...assertions];
         const withPrivate = async (index: number): Promise<T> => {
@@ -414,9 +422,9 @@ export function withIncognitoSessionRow<T>(
             return withDurable();
           }
           const agentId = parseAgentSessionKey(relatedKey)?.agentId ?? actor.agentId;
-          const relatedActor =
+          const capturedActor =
             agentId === actor.agentId
-              ? actor
+              ? undefined
               : await captureOpenClawAgentDatabaseExecution({
                   kind: "ephemeral",
                   agentId,
@@ -424,6 +432,7 @@ export function withIncognitoSessionRow<T>(
                   authority: { assertCurrent: () => assertSourcesCurrent(acquisitionAssertions) },
                   existingOnly: true,
                 });
+          const relatedActor = agentId === actor.agentId ? actor : capturedActor;
           assertCurrent();
           if (!relatedActor) {
             return withPrivate(index + 1);
@@ -435,21 +444,24 @@ export function withIncognitoSessionRow<T>(
                 { sessionKey: relatedKey },
               );
               assertions.push(() => relatedActor.assertReadable(), prepared.snapshot.assertCurrent);
+              retained.assertions.push(prepared.snapshot.assertSettledCurrent);
               if (prepared.entry) {
-                relatedEntries[relatedKey] = prepared.entry;
+                relatedRows[relatedKey] = {
+                  key: relatedKey,
+                  agentId: relatedActor.agentId,
+                  storeTarget: { agentId: relatedActor.agentId, storePath: relatedActor.path },
+                  entry: prepared.entry,
+                };
               }
               return withPrivate(index + 1);
             });
           } finally {
-            if (relatedActor !== actor) {
-              await relatedActor.release();
-            }
+            await capturedActor?.release();
           }
         };
         return await withPrivate(0);
       } finally {
         active = false;
-        acp.release();
       }
     })
     .then((result) => {
@@ -457,4 +469,202 @@ export function withIncognitoSessionRow<T>(
       actor.assertReadable();
       return result;
     });
+}
+
+type IncognitoRowParams = Parameters<typeof withRetainedIncognitoSessionRow>[0];
+
+function withIncognitoSessionRows<T>(
+  selections: readonly IncognitoRowParams[],
+  consume: (rows: ReadonlyMap<string, Row | undefined>) => T,
+): Promise<T> {
+  const prepared: Array<Parameters<Parameters<typeof withRetainedIncognitoSessionRow>[1]>[0]> = [];
+  const resources: IncognitoRowResources = { assertions: [], acp: [], releases: [] };
+  const finish = () => {
+    for (const row of prepared) {
+      row.assertCurrent();
+    }
+    const rows = new Map(
+      selections.map((selection, index) => [
+        JSON.stringify([selection.actor.agentId, selection.key]),
+        prepared[index]!.present(),
+      ]),
+    );
+    const result = consume(rows);
+    if (isPromiseLike(result)) {
+      void Promise.resolve(result).catch(() => undefined);
+      throw new Error("Incognito row consumers must remain synchronous");
+    }
+    for (const row of prepared) {
+      row.assertCurrent();
+    }
+    return result;
+  };
+  const retain = (index: number): Promise<T> => {
+    const selection = selections[index];
+    if (selection) {
+      return withRetainedIncognitoSessionRow(
+        selection,
+        async (row) => {
+          prepared.push(row);
+          try {
+            return await retain(index + 1);
+          } finally {
+            prepared.pop();
+          }
+        },
+        resources,
+      );
+    }
+    const durable = prepared.flatMap((row) => row.durable.map((target) => ({ row, target })));
+    const [first, ...rest] = durable;
+    if (!first) {
+      return Promise.resolve(finish());
+    }
+    return withGatewaySessionStoreTarget(
+      {
+        cfg: selections[0]!.cfg,
+        env: selections[0]!.env,
+        ...first.target,
+        relatedKeys: rest.map(({ target }) => target),
+        projection: "list",
+        ordered: true,
+      },
+      (target, _membership, assertCurrent, relatedTargets) => {
+        assertCurrent();
+        const sources = [target, ...relatedTargets].flatMap((selected) =>
+          (selected.capturedReadSources ?? []).map((source) => ({
+            source,
+            scope: prepareSessionRowPublicationScope([source.path], source.databaseIdentity),
+            sessionKeys: selected.storeKeys,
+          })),
+        );
+        const assertNativeCurrent = captureSessionEntryNativeMutationWitness(
+          sources.map(({ source }) => ({ ...source, env: selections[0]!.env })),
+        );
+        let changed = false;
+        resources.releases.push(
+          sessionChanges.subscribeFacts((change) => {
+            changed ||= sources.some(({ source, scope, sessionKeys }) =>
+              sessionChangeAffectsStoredRow(change, {
+                ...scope,
+                agentId: source.agentId,
+                sessionKeys,
+              }),
+            );
+          }),
+        );
+        resources.assertions.push(() => {
+          assertNativeCurrent();
+          if (changed) {
+            throw new Error("Session entry changed during read");
+          }
+          for (const { source } of sources) {
+            if (typeof source.databaseIdentity !== "string") {
+              throw new Error("Related durable session requires its captured file identity");
+            }
+            assertExistingDatabaseIdentity(
+              source.path,
+              `file:${source.databaseIdentity}`,
+              source.databaseBirthtime,
+            );
+          }
+        });
+        for (const [targetIndex, selected] of [target, ...relatedTargets].entries()) {
+          const { row, target: requested } = durable[targetIndex]!;
+          const entry = selected.store[selected.canonicalKey];
+          if (entry && !row.relatedRows[requested.key]) {
+            const source = expectDefined(selected.readSource, "captured related session source");
+            row.relatedRows[requested.key] = {
+              key: selected.canonicalKey,
+              agentId: selected.agentId,
+              storeTarget: { agentId: source.agentId, storePath: source.path },
+              entry,
+            };
+          }
+        }
+        const result = finish();
+        assertCurrent();
+        return result;
+      },
+    );
+  };
+  const release = () => {
+    for (const acp of resources.acp.toReversed()) {
+      acp.release();
+    }
+    for (const releaseResource of resources.releases.toReversed()) {
+      releaseResource();
+    }
+  };
+  return retain(0).then(
+    (result) => {
+      try {
+        for (const assertCurrent of resources.assertions) {
+          assertCurrent();
+        }
+        for (const acp of resources.acp) {
+          acp.assertCurrent();
+        }
+        return result;
+      } finally {
+        release();
+      }
+    },
+    (error: unknown) => {
+      release();
+      throw error;
+    },
+  );
+}
+
+/**
+ * Private presentation consumes the captured row synchronously inside its retained owners.
+ * @internal Knip production exception; P7 retains the single-row adapter for bound acquisition.
+ */
+export function withIncognitoSessionRow<T>(
+  params: Omit<IncognitoRowParams, "prepareAcp" | "actor"> & {
+    actor: IncognitoAgentDatabaseExecution;
+  },
+  consume: (row: Row | undefined) => T,
+): Promise<T> {
+  return withIncognitoSessionRows(
+    [{ ...params, prepareAcp: (input) => params.actor.acp.prepareEntryRead(input) }],
+    (rows) => consume(rows.get(JSON.stringify([params.actor.agentId, params.key]))),
+  );
+}
+
+/** Retain all selected private rows through the existing synchronous presentation frame. */
+export function withBoundIncognitoSessionRows<T>(
+  cfg: OpenClawConfig,
+  queries: readonly { key: string; agentId: string; storePath?: string }[],
+  consume: (rows: ReadonlyMap<string, Row | undefined>) => T,
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<T> {
+  const env = { ...environment, OPENCLAW_STATE_DIR: resolveStateDir(environment) };
+  const selections = queries.flatMap((query) => {
+    const binding = captureIncognitoSessionBinding({ ...query, sessionKey: query.key, env });
+    return binding
+      ? [
+          {
+            actor: binding.actor,
+            prepareAcp: async (
+              params: Parameters<IncognitoAgentDatabaseExecution["acp"]["prepareEntryRead"]>[0],
+            ) => {
+              const { prepareIncognitoAcpSessionEntryRead } =
+                await import("../acp/runtime/session-meta-worker-mutation.js");
+              return prepareIncognitoAcpSessionEntryRead({
+                ...params,
+                actor: binding.actor,
+                storePath: binding.actor.path,
+              });
+            },
+            authority: { assertCurrent: () => binding.admissionSignal?.throwIfAborted() },
+            cfg,
+            env,
+            key: query.key,
+          },
+        ]
+      : [];
+  });
+  return withIncognitoSessionRows(selections, consume);
 }

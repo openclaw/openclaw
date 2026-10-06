@@ -22,7 +22,6 @@ describe("restart recovery terminal delivery receipt", () => {
   const seed = (fields: Partial<SessionEntry>) =>
     replaceSessionEntry(scope(), { sessionId: "session-1", updatedAt: 1, ...fields });
   const claim = {
-    status: "running",
     restartRecoveryDeliveryRunId: "recovery-1",
     restartRecoveryDeliverySourceRunId: "source-1",
   } as const;
@@ -84,7 +83,7 @@ describe("restart recovery terminal delivery receipt", () => {
 
 describe("restart recovery steering block reasons", () => {
   const claim: Partial<SessionEntry> = {
-    status: "running",
+    status: undefined,
     restartRecoveryDeliveryRunId: "recovery-1",
     restartRecoveryDeliverySourceRunId: "source-1",
   };
@@ -123,32 +122,32 @@ describe("restart recovery steering block reasons", () => {
     },
     {
       name: "terminal-source tombstone on the active source",
-      fields: { status: "running", restartRecoveryTerminalRunIds: ["source-1"] },
+      fields: { status: undefined, restartRecoveryTerminalRunIds: ["source-1"] },
       sourceTurnId: "source-1",
       reason: "already-delivered",
     },
     {
       name: "claimless entry with an unrelated tombstone",
-      fields: { status: "running", restartRecoveryTerminalRunIds: ["source-old"] },
+      fields: { status: undefined, restartRecoveryTerminalRunIds: ["source-old"] },
       sourceTurnId: "source-1",
       reason: undefined,
     },
     {
       name: "claimless entry with tombstones and an unknown active source",
-      fields: { status: "running", restartRecoveryTerminalRunIds: ["source-old"] },
+      fields: { status: undefined, restartRecoveryTerminalRunIds: ["source-old"] },
       sourceTurnId: "",
       reason: "unknown-source-with-terminal-history",
     },
     {
       name: "stale claim",
-      fields: { ...claim, status: "done" },
+      fields: { ...claim, status: "done", restartRecoveryDeliverySourceRunId: "source-2" },
       sourceTurnId: "source-1",
       reason: "stale-claim",
     },
     {
       name: "replaced session",
       fields: {
-        status: "running",
+        status: undefined,
         sessionId: "session-2",
         restartRecoveryTerminalRunIds: ["source-1"],
       },
@@ -157,16 +156,16 @@ describe("restart recovery steering block reasons", () => {
     },
     {
       name: "claimless fresh entry",
-      fields: { status: "running" },
+      fields: { status: undefined },
       sourceTurnId: "",
       reason: undefined,
     },
-    {
-      name: "startable live claim",
-      fields: claim,
+    ...([undefined, "done", "interrupted"] as const).map((status) => ({
+      name: `exact source claim with outcome ${status}`,
+      fields: { ...claim, status },
       sourceTurnId: "source-1",
       reason: undefined,
-    },
+    })),
     { name: "missing entry", sourceTurnId: "source-1", reason: undefined },
   ])("classifies $name", ({ fields, sourceTurnId, reason }) => {
     const entry = fields ? { sessionId: "session-1", updatedAt: 1, ...fields } : undefined;
