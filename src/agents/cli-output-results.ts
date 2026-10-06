@@ -24,9 +24,12 @@ export function transformCliResultText(
 
 /** Records the model's final message when it differs from the cumulative delivery text. */
 export function withCliRawFinalText(output: CliOutput, finalMessageText: string): CliOutput {
-  return finalMessageText === output.text.trim()
-    ? output
-    : { ...output, rawFinalText: finalMessageText };
+  if (finalMessageText !== output.text.trim()) {
+    return { ...output, rawFinalText: finalMessageText };
+  }
+  // A replacement result spreads the earlier output; drop its stale final message.
+  const { rawFinalText: _staleFinalText, ...current } = output;
+  return current;
 }
 
 /** Keep completed answers distinct while retaining cumulative transcript text. */

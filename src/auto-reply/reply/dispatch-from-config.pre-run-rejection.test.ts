@@ -139,15 +139,9 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
         dispatcher,
         replyResolver: async () => undefined,
       });
-      // Capture must never hold completion open for a pending delivery; before the
-      // fix this waited for the ledger's 30s settle deadline.
-      const outcome = await Promise.race([
-        dispatch.then(() => "completed" as const),
-        new Promise<"waiting">((resolve) => {
-          setTimeout(() => resolve("waiting"), 2_000);
-        }),
-      ]);
-      expect(outcome).toBe("completed");
+      // Capture must never hold completion open for a pending delivery: the gate
+      // stays closed until finally, so a regression never settles and times out.
+      await dispatch;
       expect(processedEvents).toEqual([
         expect.objectContaining({ outcome: "completed", reason: "before_dispatch_handled" }),
       ]);
