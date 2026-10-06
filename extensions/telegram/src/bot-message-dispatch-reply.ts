@@ -223,7 +223,7 @@ async function settleTerminalNoVisibleDelivery(
   return toTelegramReplyDeliveryResult(turn, false);
 }
 
-async function adoptProgressContinuation(
+async function adoptProgressDraft(
   turn: Turn,
   payload: ReplyPayload,
   info: Parameters<NonNullable<Deliver>>[1],
@@ -231,11 +231,11 @@ async function adoptProgressContinuation(
   if (
     info.kind !== "final" ||
     payload.isError === true ||
-    typeof info.adoptProgressContinuation !== "function"
+    typeof info.adoptProgressDraft !== "function"
   ) {
     return false;
   }
-  const adopt = info.adoptProgressContinuation;
+  const adopt = info.adoptProgressDraft;
   await turn.draftEventQueue;
   const stream = turn.answerLane.stream;
   if (!stream || turn.answerLane.finalized || turn.isSuperseded()) {
@@ -351,7 +351,7 @@ async function deliverReplyWithNormalization(
     effectivePayload.presentation === undefined &&
     effectivePayload.channelData?.askUser === undefined &&
     !hasExecApprovalPayload(effectivePayload) &&
-    (await adoptProgressContinuation(turn, incomingPayload, info))
+    (await adoptProgressDraft(turn, incomingPayload, info))
   ) {
     return toTelegramReplyDeliveryResult(turn, true);
   }

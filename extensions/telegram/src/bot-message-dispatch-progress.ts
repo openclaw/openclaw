@@ -23,6 +23,7 @@ import type {
 } from "./bot-message-dispatch.types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState } from "./lane-delivery-text-deliverer.js";
+import { TelegramRequestNotStartedError } from "./network-errors.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { editMessageTelegram } from "./send.js";
 
@@ -228,6 +229,14 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
  * adopting owner's prepared items reach it.
  */
 export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
+  // Retirement revokes the card synchronously: renders still queued here and
+  // edits still waiting for Telegram admission are rejected before network I/O.
+  let retired = false;
+  const assertNotRetired = () => {
+    if (retired) {
+      throw new TelegramRequestNotStartedError("Telegram retained progress retired");
+    }
+  };
   const compositor = createChannelProgressDraftCompositor({
     preparedItems: true,
     entry: turn.telegramCfg,
@@ -238,6 +247,9 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
     updateOnLineChange: true,
     initialSnapshot: turn.progressCompositor.getSnapshot(),
     update: (_text, options) => {
+      if (retired) {
+        return;
+      }
       stream.updatePreview(
         renderTelegramProgressDraftPreview(options.snapshot, {
           toolProgress: compositor.previewToolProgressEnabled,
@@ -245,6 +257,7 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
           maxLines: resolveChannelProgressDraftMaxLines(turn.telegramCfg),
           maxLineChars: resolveChannelProgressDraftMaxLineChars(turn.telegramCfg),
         }),
+        assertNotRetired,
       );
     },
   });
@@ -258,11 +271,13 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
   return {
     push: (item: Parameters<Turn["progressCompositor"]["pushItemEvent"]>[0]) =>
       enqueue(() => compositor.pushItemEvent(item)),
-    retire: () =>
+    retire: () => {
+      retired = true;
       enqueue(async () => {
         compositor.cancel();
         await stream.clear();
-      }),
+      });
+    },
   };
 }
 

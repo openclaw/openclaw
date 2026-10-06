@@ -623,12 +623,15 @@ export function createTelegramDraftStream(params: {
     updateDraft(text);
   };
 
-  const updatePreview = (preview: TelegramDraftPreview) => {
+  const updatePreview = (
+    preview: TelegramDraftPreview,
+    assertPlatformSendAuthorized?: () => void,
+  ) => {
     const text = preview.text.trimEnd();
     if (!text) {
       return;
     }
-    requestDraftUpdate(text, { ...preview, text });
+    requestDraftUpdate(text, { ...preview, text }, undefined, assertPlatformSendAuthorized);
   };
 
   const stop = async () => {

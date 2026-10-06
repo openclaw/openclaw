@@ -10,8 +10,10 @@ import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import type { ReplyResolverOptions } from "./bot-message-dispatch.telegram-http.test-support.js";
 import { createTelegramDispatchHttpFixture } from "./bot-message-dispatch.telegram-http.test-support.js";
+import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies, deliverStructuredReplies } from "./bot/delivery.replies.js";
 import { resolveTelegramTestUpload } from "./send.telegram-http.test-support.js";
 
@@ -244,7 +246,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
         { step: "Finish delegated work", status: "in_progress" as const },
       ];
       let draft:
-        | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressContinuation"]>>[0]
+        | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0]
         | undefined;
       let progressMessageId: number | undefined;
       let parentCallbacks: ReplyResolverOptions | undefined;
@@ -335,7 +337,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
 
   it("gives a queued turn its own progress card while the adopted card stays retained", async () => {
     let draft:
-      | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressContinuation"]>>[0]
+      | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0]
       | undefined;
     let parentCallbacks: ReplyResolverOptions | undefined;
     await dispatchProgressTurn(
@@ -385,6 +387,78 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
         .filter((call) => call.method === "deleteMessage")
         .map((call) => Number(call.fields.message_id)),
     ).toEqual([retainedId]);
+  });
+
+  it("rejects a retained edit still awaiting Telegram admission once the draft retires", async () => {
+    // The account scheduler is where an edit waits before network admission.
+    http.bot.api.config.use(
+      getOrCreateAccountThrottler(http.token, () =>
+        apiThrottler({ global: {}, group: { maxConcurrent: 1 }, out: { maxConcurrent: 1 } }),
+      ).transformer,
+    );
+    let draft:
+      | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0]
+      | undefined;
+    let parentCallbacks: ReplyResolverOptions | undefined;
+    await dispatchProgressTurn(
+      async (options) => {
+        parentCallbacks = options;
+        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
+        await waitForBotApiCall((call) => call.method === "sendMessage");
+      },
+      {
+        mode: "progress",
+        toolProgress: true,
+        finalReply: setReplyPayloadMetadata(
+          { text: "Waiting for delegated work." },
+          {
+            progressContinuation: {
+              adopt: (candidate) => {
+                draft = candidate;
+                return true;
+              },
+              close: () => undefined,
+            },
+          },
+        ),
+      },
+    );
+    const [retainedId] = [...visibleMessages.keys()];
+    assert(retainedId !== undefined && draft);
+
+    // A queued turn's card holds this chat's request lane, so the retained edit
+    // below waits in the account scheduler, not on the network.
+    const held = {
+      predicate: (call: { method: string }) => call.method === "sendMessage",
+      arrived: Promise.withResolvers<void>(),
+      release: Promise.withResolvers<void>(),
+    };
+    http.holdNextCall = held;
+    await parentCallbacks?.onQueuedFollowupAdmitted?.();
+    const queuedTool = emitToolStart(parentCallbacks, {
+      name: "web_search",
+      phase: "start",
+      toolCallId: "queued",
+    });
+    await held.arrived.promise;
+    const callsBeforeLateEdit = calls.length;
+    draft.push({
+      itemId: "late-child",
+      kind: "subagent",
+      title: "Late child update",
+      phase: "update",
+      status: "running",
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    draft.retire();
+    held.release.resolve();
+    await queuedTool;
+    await expect.poll(() => visibleMessages.has(retainedId), { timeout: 5_000 }).toBe(false);
+    expect(
+      calls
+        .slice(callsBeforeLateEdit)
+        .filter((call) => String(call.fields.text).includes("Late child update")),
+    ).toEqual([]);
   });
 
   it("shows compaction transitions and retires progress only after the final is accepted", async () => {

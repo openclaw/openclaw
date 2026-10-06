@@ -168,7 +168,8 @@ describe("accepted continuation status delivery", () => {
         deliver: async (payload, info) => {
           order.push(`deliver:${payload.text}`);
           await Promise.resolve();
-          expect(info.adoptProgressContinuation?.(progressDraft)).toBe(true);
+          expect(info.adoptProgressContinuation).toBeUndefined();
+          expect(info.adoptProgressDraft?.(progressDraft)).toBe(true);
         },
       });
 
