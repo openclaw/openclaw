@@ -37,6 +37,7 @@ const activeManagement = new AsyncLocalStorage<{
 /** Admission fact, independent of a run lifetime so an authorized yield can transfer it. */
 export type CronManagementEntitlement =
   | Readonly<{ source: "control-ui-admin" }>
+  | Readonly<{ source: "native-macos-admin" }>
   | Readonly<{ source: "channel-owner"; isCurrent: () => boolean }>;
 
 export type CronCreatorAuthorityRunScope = {

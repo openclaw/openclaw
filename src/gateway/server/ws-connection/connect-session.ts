@@ -362,6 +362,7 @@ export async function attachAuthenticatedGatewayConnect(
     ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
+    ...(state.nativeMacosAdmin ? { nativeMacosAdmin: true as const } : {}),
     ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
     ...(trustedAgentRuntimeIdentity ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity } : {}),
     ...(sharedSecretOperatorOwner ? { operatorRoleActor: { kind: "system" as const } } : {}),
