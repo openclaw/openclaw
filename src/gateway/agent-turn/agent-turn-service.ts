@@ -7,6 +7,7 @@ import {
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -148,11 +149,11 @@ export function createAgentTurnService(
       preAcceptedReservedSessionKey,
       preAttachmentSession,
     } = routing;
-    const assertRequestCurrent = () => {
-      assertAdmissionCurrent?.();
-      dedupeLifecycle.assertReservationCurrent();
-      assertInputCommitAllowed?.();
-    };
+    const assertRequestCurrent = composeSessionSourceAssertion([
+      assertAdmissionCurrent,
+      () => dedupeLifecycle.assertReservationCurrent(),
+      assertInputCommitAllowed,
+    ]);
     let agentId = routing.agentId;
     let requestedSessionKey = routing.requestedSessionKey;
     let gatewayAdmissionTransferred = false;
@@ -301,6 +302,7 @@ export function createAgentTurnService(
           effectiveBootstrapContextRunKind,
           preAttachmentSession,
           respond,
+          assertCurrent: assertRequestCurrent,
         });
         assertRequestCurrent();
         if (!preparedSession) {

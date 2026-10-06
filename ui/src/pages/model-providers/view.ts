@@ -61,7 +61,6 @@ type ModelProvidersViewProps = Omit<DefaultModelsViewProps, "models" | "selectio
     cards: ModelProviderCard[];
     configuredModels: ModelPickerEntry[];
     defaultModels: DefaultModelSelection;
-    /** True while picker-triggered catalog discovery is in flight. */
     catalogDiscovering: boolean;
     /** Retryable error from a picker-triggered catalog discovery. */
     catalogDiscoveryError: string | null;

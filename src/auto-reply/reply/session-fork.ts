@@ -21,6 +21,7 @@ import {
 export { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../../sessions/model-overrides.js";
 
 type ParentForkDecisionParams = {
+  parentSessionKey?: string;
   parentEntry: SessionEntry;
   agentId?: string;
   config?: OpenClawConfig;
@@ -66,6 +67,7 @@ export async function resolveParentForkDecision(
   assertModelSelectionUnlocked(params.parentEntry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
   return await resolveSessionParentForkDecision({
     parentEntry: params.parentEntry,
+    parentSessionKey: params.parentSessionKey,
     storePath: resolveParentForkStorePath(params),
   });
 }

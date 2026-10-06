@@ -123,7 +123,6 @@ function resolveHeartbeatBleedHint(params: {
   );
 }
 
-/** Builds recovery instructions for context-overflow failures. */
 export function buildContextOverflowRecoveryText(params: {
   cfg: FollowupRun["run"]["config"];
   agentId?: string;

@@ -212,7 +212,6 @@ function normalizeCanonicalApnsRegistrationWithRelayOrigin(
   };
 }
 
-/** Normalizes one canonical registration with an explicit transport discriminator. */
 export function normalizeCanonicalApnsRegistration(
   record: unknown,
   env: NodeJS.ProcessEnv = process.env,
@@ -264,7 +263,6 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
   return normalized;
 }
 
-/** Persists a validated direct or relay APNs registration for one node id. */
 export async function registerApnsRegistration(
   params: RegisterApnsParams,
 ): Promise<ApnsRegistration> {

@@ -5,6 +5,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -121,6 +122,7 @@ function git(...args: string[]): string {
 
 function requestContext() {
   return {
+    logGateway: createSubsystemLogger("test/repository-files"),
     getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     workerRepositoryWorkspaceMutationService: {
       mutate: async <T>(params: {

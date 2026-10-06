@@ -16,8 +16,8 @@ import type { SessionAccessScope, SessionEntrySummary } from "./session-accessor
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
-  withSessionStoreReaderInWorker,
-} from "./session-entry-read-runtime.js";
+} from "./session-entry-read-request.js";
+import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 
 async function readSessionStatusSelection(
   input: Partial<Omit<SessionAccessScope, "sessionKey">>,

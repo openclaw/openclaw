@@ -65,7 +65,6 @@ import {
 import { waitForRestartRecoveryProgress } from "./reply-turn-recovery-wait.js";
 import { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
 
-/** Admission result for a reply turn attempting to own the session run slot. */
 type ReplyTurnAdmission =
   | {
       status: "owned";
@@ -172,7 +171,6 @@ type ReplyTurnAdmissionParams = {
   onLifecycleInterrupt?: () => void;
 };
 
-/** Waits for or claims the per-session reply run slot. */
 export async function admitReplyTurn(
   params: ReplyTurnAdmissionParams,
 ): Promise<ReplyTurnAdmission> {
@@ -752,7 +750,6 @@ export async function admitReplyTurn(
   }
 }
 
-/** Resolves the default turn kind from reply options. */
 export function resolveReplyTurnKind(opts?: { isHeartbeat?: boolean }): ReplyTurnKind {
   return opts?.isHeartbeat === true ? "heartbeat" : "visible";
 }

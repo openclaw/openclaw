@@ -1,4 +1,3 @@
-/** Gateway-backed archive and delete commands for stored sessions. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   PreservedSessionWorktree,

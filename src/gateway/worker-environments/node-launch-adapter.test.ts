@@ -33,6 +33,7 @@ import {
   createNodeWorkerLaunchAdapter,
   measureNodeWorkerLaunchBytes,
 } from "./node-launch-adapter.js";
+import { registerNodeLaunchAdapterNativeInferenceSuite } from "./node-launch-adapter.native-inference.suite.js";
 
 const DEVICE_ID = "device-session-host";
 const WORKER_RUNS = {
@@ -237,6 +238,8 @@ describe("node worker launch adapter", () => {
       expect(invoke).toHaveBeenCalledOnce();
     },
   );
+
+  registerNodeLaunchAdapterNativeInferenceSuite();
 
   it("cancels an in-flight status wait through the existing terminal cancellation receipt", async () => {
     const input = launchInput();

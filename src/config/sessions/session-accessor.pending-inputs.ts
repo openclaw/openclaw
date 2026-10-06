@@ -44,6 +44,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import {
   withCurrentPendingInputAuthority,
   type SessionPendingInputAuthority,
@@ -207,11 +208,12 @@ export function stageSessionPendingInput(
   scope: PendingInputScope,
   options: PendingInputStageOptions,
 ): Promise<SessionPendingInputReceipt | undefined> {
-  scope.incognito?.admissionSignal?.throwIfAborted();
-  scope.incognito?.actor.assertCurrent();
+  const incognito = scope.incognito ?? captureIncognitoSessionOperation(scope);
+  incognito?.admissionSignal?.throwIfAborted();
+  incognito?.actor.assertCurrent();
   const captured = {
     ...scope,
-    incognito: scope.incognito && { ...scope.incognito },
+    incognito: incognito && { ...incognito },
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const preparedRequest = preparePendingInputRequest(options);

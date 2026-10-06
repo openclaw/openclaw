@@ -346,7 +346,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         return { health, readyz: false, http: undefined, launchAgentRecovery };
       }
       params.onProgress?.("http", "checking Gateway HTTP healthz and readyz endpoints");
-      const context = await deadline.read("HTTP probe context", () =>
+      const context = await deadline.read("HTTP check context", () =>
         resolveGatewayRestartProbeContext(params.serviceEnv, undefined, deadline.signal),
       );
       assertCurrent();

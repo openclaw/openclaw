@@ -1,5 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { withSandboxRuntimeStatusesInWorker } from "../../../agents/sandbox/runtime-status.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { combineChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
@@ -11,8 +12,14 @@ import {
   resolveReplyOperatorAuthorityKey,
   resolveReplyScreenToolTarget,
   resolveReplyThemeProfileId,
+  resolveReplyToolAuthorityContext,
 } from "../reply-tool-authority.js";
-import type { FollowupRun } from "./types.js";
+import {
+  FollowupRunDeferredError,
+  isFollowupRunAborted,
+  type FollowupRun,
+  type QueuedFollowupReplyBatch,
+} from "./types.js";
 
 export function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
   return (
@@ -84,7 +91,8 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
   ]);
 }
 
-export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
+/** Storage grouping is policy-independent; drain prepares current screen/theme authority. */
+export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
   const execution = run.run;
   const provenance = execution.inputProvenance;
   return JSON.stringify([
@@ -108,8 +116,6 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.model,
     execution.messageProvider ?? "",
     JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
-    stableStringify(resolveReplyScreenToolTarget(run) ?? null),
-    resolveReplyThemeProfileId(run) ?? "",
     stableStringify(execution.toolBindings ?? null),
     execution.chatType ?? "",
     execution.agentAccountId ?? "",
@@ -159,6 +165,90 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.blockReplyBreak,
     resolveTurnAdoptionLifecycleDeliveryKey(run.turnAdoptionLifecycle),
   ]);
+}
+
+export async function prepareNextDeliveryGroup(
+  readItems: () => FollowupRun[],
+  assertDrainCurrent: () => void,
+): Promise<{ items: FollowupRun[]; assertCurrent: () => void }> {
+  const items = readItems().slice();
+  const sourceKey = (item: FollowupRun) =>
+    JSON.stringify([
+      resolveFollowupDeliveryStorageKey(item),
+      item.run.agentId,
+      item.run.sessionKey,
+      item.run.sessionId,
+      item.run.sessionFile,
+      item.admissionSessionId,
+      item.run.gatewayUiCommandTarget,
+    ]);
+  const sources = items.map((item) => ({
+    item,
+    run: item.run,
+    config: item.run.config,
+    lifecycle: item.turnAdoptionLifecycle,
+    operator: item.operatorAuthority,
+    key: sourceKey(item),
+  }));
+  const assertCurrent = () => {
+    assertDrainCurrent();
+    for (const source of sources) {
+      source.item.operatorAuthority?.assertCurrent();
+    }
+    const current = readItems();
+    for (const [index, source] of sources.entries()) {
+      const { item } = source;
+      if (
+        current[index] !== item ||
+        isFollowupRunAborted(item) ||
+        item.run !== source.run ||
+        item.run.config !== source.config ||
+        item.turnAdoptionLifecycle !== source.lifecycle ||
+        item.operatorAuthority !== source.operator ||
+        sourceKey(item) !== source.key
+      ) {
+        throw new FollowupRunDeferredError("Queued delivery source changed during preparation");
+      }
+    }
+    assertDrainCurrent();
+  };
+  assertCurrent();
+  if (items.length <= 1) {
+    return { items, assertCurrent };
+  }
+  const policyItems = items.filter((item) => item.run.gatewayUiCommandTarget && !item.disableTools);
+  return withSandboxRuntimeStatusesInWorker(
+    policyItems.map(({ run }) => ({
+      cfg: run.config,
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
+      classificationSessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
+    })),
+    { env: { ...process.env }, cwd: process.cwd(), assertCurrent },
+    (statuses) => {
+      const group: FollowupRun[] = [];
+      let firstKey: string | undefined;
+      for (const item of items) {
+        const index = policyItems.indexOf(item);
+        const profile =
+          index < 0
+            ? undefined
+            : resolveReplyToolAuthorityContext(item, undefined, statuses[index]).capabilityProfile;
+        const key = JSON.stringify([
+          resolveFollowupDeliveryStorageKey(item),
+          profile ? stableStringify(resolveReplyScreenToolTarget(item, profile) ?? null) : "null",
+          profile ? (resolveReplyThemeProfileId(item, profile) ?? "") : "",
+        ]);
+        if (firstKey !== undefined && key !== firstKey) {
+          break;
+        }
+        firstKey = key;
+        group.push(item);
+      }
+      assertCurrent();
+      return { items: group, assertCurrent };
+    },
+  );
 }
 
 export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
@@ -247,6 +337,44 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
   };
 }
 
+function collectReplyDisposition(
+  items: FollowupRun[],
+): FollowupRun["queuedFollowupReplyDisposition"] {
+  const primary = items.at(-1)?.queuedFollowupReplyDisposition;
+  const terminalRecipients = items.slice(0, -1).flatMap((item) => {
+    const disposition = item.queuedFollowupReplyDisposition;
+    return disposition?.kind === "deliver" ? [disposition.deliver] : [];
+  });
+  if (terminalRecipients.length === 0) {
+    return primary;
+  }
+  const deliver = primary?.kind === "deliver" ? primary.deliver : undefined;
+  return {
+    kind: "deliver",
+    deliver: Object.assign(
+      async (batch: QueuedFollowupReplyBatch) => {
+        if (batch.completion.kind === "progress") {
+          await deliver?.(batch);
+          return;
+        }
+        // The content owner publishes once; every consumed source receives the outcome.
+        const results = await Promise.allSettled([
+          ...terminalRecipients.map(async (recipient) => recipient({ ...batch, payloads: [] })),
+          Promise.resolve().then(() => deliver?.(batch)),
+        ]);
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure) {
+          throw failure.reason;
+        }
+      },
+      {
+        ownsCompletion: deliver?.ownsCompletion,
+        createSourceRetry: deliver?.createSourceRetry,
+      },
+    ),
+  };
+}
+
 export function collectRuntimeMetadata(
   items: FollowupRun[],
   abortSignal?: AbortSignal,
@@ -287,7 +415,7 @@ export function collectRuntimeMetadata(
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
-    queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
+    queuedFollowupReplyDisposition: collectReplyDisposition(items),
     runObservers: items.at(-1)?.runObservers,
   };
 }

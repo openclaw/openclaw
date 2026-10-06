@@ -16,6 +16,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import {
   prepareIncognitoSessionHistoryRead,
   type IncognitoSessionHistoryBinding,
@@ -43,8 +44,9 @@ export async function readSessionTranscriptAnchorsAsync(
   signal?: AbortSignal,
   /** Consume only a current snapshot, while its original writer FIFO and reader remain retained. */
   onRead?: (facts: SessionTranscriptAnchorFacts) => void,
-  incognito?: IncognitoSessionHistoryBinding,
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTranscriptAnchorFacts> {
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     const { actor, authority, target } = prepareIncognitoSessionHistoryRead(
       incognito,
@@ -129,7 +131,7 @@ export async function readSessionTranscriptAnchorsAsync(
       return empty;
     }
     return withSessionHistoryWorkerDatabase(
-      { ...options, requestedPath: storePath },
+      { ...options, requestedPaths: [storePath] },
       async (owner) => {
         const read = async () => {
           const native = onRead ? getOpenClawAgentDatabaseIfOpen(options) : undefined;

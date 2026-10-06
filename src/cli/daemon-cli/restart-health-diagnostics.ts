@@ -30,7 +30,7 @@ export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSn
     lines.push(`Port diagnostics errors: ${snapshot.portUsage.errors.join("; ")}`);
   }
   if (snapshot.probeError) {
-    lines.push(`Gateway probe failed: ${snapshot.probeError}`);
+    lines.push(`Gateway check failed: ${snapshot.probeError}`);
   }
   return lines;
 }
@@ -64,7 +64,7 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   }
   for (const [heading, errors] of [
     ["Activated plugin load errors:", snapshot.activatedPluginErrors],
-    ["Channel health probe errors:", snapshot.channelProbeErrors],
+    ["Channel health check errors:", snapshot.channelProbeErrors],
   ] as const) {
     if (errors?.length) {
       lines.push(heading);

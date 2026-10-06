@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as commands from "../../process/exec.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
@@ -193,16 +194,16 @@ it.each([false, true])(
     const created = await createSourceOnly("lossless", "lossless");
     await configure("repository", "clean", created.path);
     await fs.utimes(path.join(created.path, "README.md"), new Date(0), new Date(0));
-    const run = commands.runCommandWithTimeout;
+    const run = gitExec.executeGitCommand;
     let reachedRemoval = false;
-    vi.spyOn(commands, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      if (args[0][0] === "git" && args[0].includes("worktree") && args[0].includes("remove")) {
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "worktree" && args[1] === "remove") {
         reachedRemoval = true;
         if (lateFile) {
           await fs.writeFile(path.join(created.path, "late.txt"), "preserved user bytes");
         }
       }
-      return await run(...args);
+      return await run(cwd, args, options);
     });
     if (lateFile) {
       await expect(service.removeIfLossless(created.id)).rejects.toThrow();

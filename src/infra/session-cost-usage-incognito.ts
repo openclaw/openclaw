@@ -1,35 +1,124 @@
 import { randomUUID } from "node:crypto";
 import {
   formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
+import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import type {
   IncognitoComputeOperations,
   IncognitoComputeTarget,
   IncognitoComputeInstance,
 } from "../config/sessions/session-incognito-compute-contract.js";
 import type { IncognitoComputeScope } from "../config/sessions/session-incognito-compute.js";
-import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
+import type {
+  IncognitoSessionAuthority,
+  IncognitoSessionFacts,
+} from "../config/sessions/session-incognito-contract.js";
 import { getAsyncWorkSignal, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
-import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
 import type { UsageCostWorkerHostRequest } from "./session-cost-usage-worker.types.js";
 
 export type UsageCostIncognitoBinding = {
-  actor: IncognitoAgentDatabaseExecution;
+  actor: IncognitoSessionActor;
   authority: IncognitoSessionAuthority;
   target?: IncognitoComputeTarget;
   retainSource?: (sessionKey: string) => void;
+  admissionSignal?: AbortSignal;
 };
+
+/**
+ * Captures only an explicitly selected private store; aggregate durable discovery stays durable.
+ * @internal P7 inactive composition; retain the Knip production exception until atomic activation.
+ */
+export function captureUsageCostIncognitoBinding(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+  storePath?: string;
+  sessionFile?: string;
+  sessionFiles?: readonly string[];
+  sessionTarget?: { agentId: string; storePath: string; sessionKey: string };
+  incognito?: UsageCostIncognitoBinding;
+}): UsageCostIncognitoBinding | undefined {
+  if (params.incognito) {
+    return params.incognito;
+  }
+  const targets = [
+    ...(params.sessionTarget ? [params.sessionTarget] : []),
+    ...[params.sessionFile, ...(params.sessionFiles ?? [])].flatMap((file) => {
+      const marker = parseSqliteSessionFileMarker(file);
+      return marker ? [marker] : [];
+    }),
+    {
+      agentId: params.agentId,
+      env: params.env,
+      storePath: params.storePath ?? params.databasePath,
+    },
+  ];
+  for (const target of targets) {
+    const binding = captureIncognitoSessionBinding(target);
+    if (binding) {
+      return {
+        actor: binding.actor,
+        authority: { assertCurrent: () => binding.actor.assertReadable() },
+        admissionSignal: binding.admissionSignal,
+      };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Observations start at FIFO read acceptance and survive compute cleanup without recapture.
+ * @internal P7 inactive composition; retain the Knip production exception until atomic activation.
+ */
+export function createUsageCostIncognitoReadObservation(binding: UsageCostIncognitoBinding) {
+  const observations = new Map<
+    string,
+    {
+      claim: ReturnType<typeof binding.actor.sessions.captureCurrent>;
+      snapshot: ReturnType<typeof binding.actor.sessions.captureSnapshot>;
+    }
+  >();
+  return {
+    onRead: (facts: readonly IncognitoSessionFacts[]) => {
+      for (const { sessionKey } of facts) {
+        const observed = observations.get(sessionKey);
+        if (observed) {
+          observed.snapshot.assertCurrent();
+        } else {
+          observations.set(sessionKey, {
+            claim: binding.actor.sessions.captureCurrent(sessionKey),
+            snapshot: binding.actor.sessions.captureSnapshot(sessionKey),
+          });
+        }
+      }
+    },
+    assertCurrent: () => {
+      binding.actor.assertReadable();
+      binding.authority.assertCurrent();
+      binding.admissionSignal?.throwIfAborted();
+      getAsyncWorkSignal()?.throwIfAborted();
+      observations.forEach(({ claim, snapshot }) => {
+        claim.authorize(binding.authority, "commit");
+        snapshot.assertCurrent();
+      });
+    },
+  };
+}
 
 export function withUsageCostIncognitoScope<T>(
   binding: UsageCostIncognitoBinding | undefined,
   operation: (binding?: UsageCostIncognitoBinding) => Promise<T>,
+  settleAccepted = false,
 ): Promise<T> {
   if (!binding) {
     return operation();
   }
   getAsyncWorkSignal()?.throwIfAborted();
+  binding.admissionSignal?.throwIfAborted();
   const { actor, authority } = binding;
   const target = structuredClone(binding.target);
   const claims = new Map<string, ReturnType<typeof actor.sessions.captureCurrent>>();
@@ -43,12 +132,16 @@ export function withUsageCostIncognitoScope<T>(
   const assertCurrent = () => {
     actor.assertCurrent();
     authority.assertCurrent();
+    if (!settleAccepted) {
+      binding.admissionSignal?.throwIfAborted();
+    }
   };
   assertCurrent();
   return actor.sessions.withSharedState(() =>
     runOutsideAsyncWorkScope(async () => {
       const result = await operation({
         actor,
+        admissionSignal: binding.admissionSignal,
         target,
         retainSource,
         authority: {

@@ -13,6 +13,7 @@ type DurableHistoryReadOperationRequest = Extract<
     kind:
       | "transcript-match"
       | "transcript-search"
+      | "transcript-search-current"
       | "branch-summaries"
       | "session-title-fields"
       | "session-preview"
@@ -32,6 +33,7 @@ export type SessionHistoryReadOperationRequest =
   | Exclude<DurableHistoryReadOperationRequest, BranchReadRequest>
   | {
       kind: "branch-summaries";
+      database: BranchReadRequest["database"];
       request: Omit<BranchReadRequest["request"], "databaseIdentity"> & {
         databaseIdentity?: string;
       };
@@ -43,6 +45,7 @@ export function isSessionHistoryReadOperation(
   switch (request.kind) {
     case "transcript-match":
     case "transcript-search":
+    case "transcript-search-current":
     case "branch-summaries":
     case "session-title-fields":
     case "session-preview":
@@ -193,6 +196,17 @@ async function prepareHistoryRead(
         return { kind: request.kind, result: opened.found ? opened.value : undefined };
       };
     }
+    case "transcript-search-current": {
+      const { isSessionTranscriptSearchCurrentSync } =
+        await import("./session-transcript-search.js");
+      return () => ({
+        kind: request.kind,
+        current: isSessionTranscriptSearchCurrentSync(request.revision, {
+          ...request.database,
+          env: request.env,
+        }),
+      });
+    }
     case "transcript-search": {
       const { searchSessionTranscriptsReadOnlySync } =
         await import("./session-transcript-search.js");
@@ -208,18 +222,28 @@ async function prepareHistoryRead(
       const { readSessionBranchSnapshot, readSessionBranchSummariesInWorker } =
         await import("./session-accessor.sqlite-branches.js");
       if (retainedDatabase) {
-        return () =>
-          readSessionBranchSnapshot(retainedDatabase, {
+        return () => ({
+          kind: request.kind,
+          result: readSessionBranchSnapshot(retainedDatabase, {
             sessionKey: request.request.sessionKey,
             sessionId: request.request.sessionId,
             lifecycleRevision: request.request.lifecycleRevision,
-          });
+            previous: request.request.previous,
+          }),
+        });
       }
       const databaseIdentity = request.request.databaseIdentity;
       if (databaseIdentity === undefined) {
         throw new Error("Durable branch reads require their captured database identity");
       }
-      return () => readSessionBranchSummariesInWorker({ ...request.request, databaseIdentity });
+      return () => ({
+        kind: request.kind,
+        result: readSessionBranchSummariesInWorker({
+          ...request.request,
+          database: request.database,
+          databaseIdentity,
+        }),
+      });
     }
     case "session-title-fields": {
       const { readSessionTitleFieldsFromTranscript } =

@@ -15,6 +15,7 @@ import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
 } from "../../gateway/in-process-subagent-resume.js";
+import { retainInternalApprovalCommitGuard } from "../../gateway/internal-approval-authority.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/method-scopes.js";
 import type {
   GatewayAgentRunTaskOwner,
@@ -29,10 +30,12 @@ import {
   runWithOperatorToolGatewayContinuationContext,
 } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { TrustedSessionCreation } from "../../gateway/session-creation-provenance.js";
+import { isGatewayNativeApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { readQuestionDispatchCapability } from "../harness/host-private-capabilities.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -59,6 +62,7 @@ export type InProcessGatewayCaller = <T = Record<string, unknown>>(
 type AgentToolGatewayRequest = Pick<
   CallGatewayOptions,
   | "assertDispatchCurrent"
+  | "prepareDispatchCurrent"
   | "config"
   | "expectFinal"
   | "method"
@@ -274,7 +278,14 @@ async function callAgentToolGatewayRequestBound<T>(
     } = request;
     return await runBoundInProcessGatewayCall(
       boundGateway,
-      () => callGateway<T>({ ...wireRequest, method }),
+      () =>
+        callGateway<T>({
+          ...wireRequest,
+          method,
+          assertDispatchCurrent:
+            readQuestionDispatchCapability(request.assertDispatchCurrent)
+              ?.assertCompatibilityCurrent ?? request.assertDispatchCurrent,
+        }),
       assertCurrent,
       revalidateOnCompletion,
     );
@@ -290,14 +301,24 @@ async function callAgentToolGatewayRequestBound<T>(
     method === "sessions.create" &&
     positional?.sessionCreation?.via === "spawn" &&
     request.agentToolCaller !== undefined;
-  const assertMutationCurrent =
+  let assertMutationCurrent =
     assertCurrent && !transfersCreatedInput
       ? composeSessionSourceAssertion([
           assertCurrent,
           captureExternalSessionCommitGuard(request.sessionMutationCommitGuard),
         ])
       : captureExternalSessionCommitGuard(request.sessionMutationCommitGuard);
+  if (
+    isGatewayNativeApprovalMethod(method) &&
+    !request.sessionMutationCommitGuard &&
+    !assertDispatchCurrent
+  ) {
+    assertMutationCurrent = retainInternalApprovalCommitGuard(
+      composeSessionSourceAssertion([assertMutationCurrent]),
+    );
+  }
   const dispatchOptions = {
+    prepareDispatchCurrent: request.prepareDispatchCurrent,
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" as const },
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),

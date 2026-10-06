@@ -3056,7 +3056,6 @@ class ChatController internal constructor(
     rememberSelection: Boolean = true,
   ) {
     val key = normalizeRequestedSessionKey(sessionKey)
-    if (key.isEmpty()) return
     val owner = normalizeSessionSelectionOwner(key, ownerAgentId)
     prepareSessionSelection(key)
     val generation =
@@ -3378,12 +3377,7 @@ class ChatController internal constructor(
 
   private fun currentSelectedSession(): ChatSessionEntry? = _sessions.value.firstOrNull { it.key == _sessionKey.value }
 
-  private fun advertisedRunIds(session: ChatSessionEntry? = currentSelectedSession()): List<String> =
-    session
-      ?.activeRunIds
-      .orEmpty()
-      .mapNotNull { it.trim().takeIf(String::isNotEmpty) }
-      .distinct()
+  private fun advertisedRunIds(session: ChatSessionEntry? = currentSelectedSession()): List<String> = session?.activeRunIds.orEmpty().distinct()
 
   private fun publishRunPresentation() {
     synchronized(gatewayScopeApplyLock) {
@@ -5778,11 +5772,7 @@ class ChatController internal constructor(
   ): Boolean {
     val rows = runCatching { commandOutbox.load(gatewayId) }.getOrDefault(emptyList())
     if (rows.isEmpty()) return false
-    val inFlightRunId =
-      history.inFlightRun
-        ?.runId
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() }
+    val inFlightRunId = history.inFlightRun?.runId
     val sessionRows =
       rows.filter { row ->
         sameOutboxSession(row.sessionKey, history.sessionKey) &&
@@ -6800,7 +6790,7 @@ class ChatController internal constructor(
     val eventSessionKey =
       when (normalizedSessionKey) {
         null -> return null
-        "main" -> appliedMainSessionKey.trim().takeIf(String::isNotEmpty) ?: return null
+        "main" -> appliedMainSessionKey
         else -> normalizedSessionKey
       }
     return resolveChatComposerRoutingOwner(
@@ -8729,7 +8719,7 @@ internal fun reconcileMessageIds(
   return incoming.map { message ->
     val key = messageIdentityKey(message) ?: return@map message
     val matches = messagesByKey[key] ?: return@map message
-    val previousMessage = matches.removeFirstOrNull() ?: return@map message
+    val previousMessage = matches.removeFirst()
     if (matches.isEmpty()) {
       messagesByKey.remove(key)
     }

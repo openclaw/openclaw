@@ -75,15 +75,6 @@ type FirecrawlResolvedEndpoint = {
   mode: FirecrawlEndpointMode;
 };
 
-type FirecrawlSearchItem = {
-  title: string;
-  url: string;
-  description?: string;
-  content?: string;
-  published?: string;
-  siteName?: string;
-};
-
 type FirecrawlSearchParams = {
   cfg?: OpenClawConfig;
   query: string;
@@ -157,16 +148,9 @@ async function firecrawlEndpointTargetsPrivateNetwork(
 }
 
 async function validateFirecrawlBaseUrl(
-  baseUrl: string,
+  url: URL,
   lookupFn?: LookupFn,
 ): Promise<FirecrawlEndpointMode> {
-  let url: URL;
-  try {
-    url = new URL(baseUrl.trim() || DEFAULT_FIRECRAWL_BASE_URL);
-  } catch {
-    throw new Error("Firecrawl baseUrl must be a valid http:// or https:// URL.");
-  }
-
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("Firecrawl baseUrl must use http:// or https://.");
   }
@@ -190,7 +174,7 @@ async function resolveEndpoint(
   lookupFn?: LookupFn,
 ): Promise<FirecrawlResolvedEndpoint> {
   const url = new URL(baseUrl.trim() || DEFAULT_FIRECRAWL_BASE_URL);
-  const mode = await validateFirecrawlBaseUrl(url.toString(), lookupFn);
+  const mode = await validateFirecrawlBaseUrl(url, lookupFn);
   url.username = "";
   url.password = "";
   url.search = "";
@@ -230,10 +214,7 @@ async function postFirecrawlJson<T>(
     },
     async ({ response }) => {
       if (!response.ok) {
-        let detail =
-          typeof response.statusText === "string" && response.statusText.trim()
-            ? response.statusText.trim()
-            : "request failed";
+        let detail = response.statusText.trim() || "request failed";
 
         const errorBody = await readResponseText(response, { maxBytes: 64_000 });
         let payload: Record<string, unknown> | undefined;
@@ -296,10 +277,7 @@ function isValidFirecrawlPublishedDate(value: string): boolean {
   return timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate);
 }
 
-function resolveSearchItems(
-  payload: Record<string, unknown>,
-  count: number,
-): FirecrawlSearchItem[] {
+function resolveSearchItems(payload: Record<string, unknown>, count: number) {
   const nestedData = asOptionalRecord(payload.data);
   const envelopeCandidates = [payload.data, payload.results, nestedData?.results, nestedData?.data];
   const sourceCandidates = [nestedData?.web, nestedData?.news, nestedData?.images];
@@ -316,7 +294,7 @@ function resolveSearchItems(
   if (!rawItems) {
     return [];
   }
-  const items: FirecrawlSearchItem[] = [];
+  const items = [];
   let inspectedObjects = 0;
   for (const rawItem of rawItems) {
     if (inspectedObjects >= FIRECRAWL_SEARCH_MAX_RESULTS || items.length >= count) {
@@ -513,7 +491,7 @@ export function parseFirecrawlScrapePayload(params: {
   url: string;
   extractMode: "markdown" | "text";
   maxChars: number;
-}): Record<string, unknown> {
+}) {
   const data = asRecord(params.payload.data);
   const metadata = asOptionalObjectRecord(data.metadata);
   const rawStatus = parseFiniteNumber(metadata?.statusCode) ?? parseFiniteNumber(data.statusCode);
@@ -575,9 +553,7 @@ export function parseFirecrawlScrapePayload(params: {
   };
 }
 
-export async function runFirecrawlScrape(
-  params: FirecrawlScrapeParams,
-): Promise<Record<string, unknown>> {
+export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
   params.signal?.throwIfAborted();
   assertFirecrawlScrapeTargetAllowed(params.url);
 

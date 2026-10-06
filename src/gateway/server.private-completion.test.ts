@@ -13,12 +13,13 @@ import { resolveAgentRunErrorLifecycleFields } from "../agents/run-termination.j
 import { runAnnounceAgentCall } from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
 import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { listRunsForControllerFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import {
   writeSubagentSessionEntry,
   settleSubagentRegistryPersistenceWork,
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRunsForControllerFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
@@ -794,7 +795,7 @@ describe("private subagent completion processing receipts", () => {
         // are admitted; a slow socket handshake must not hide the outstanding wait.
         await expect
           .poll(() =>
-            loadSubagentRunsForControllerFromSqlite(sessionKey).some(
+            listRunsForControllerFromRuns(loadSubagentRegistryFromSqlite(), sessionKey).some(
               (run) => run.runId === descendantRunId,
             ),
           )
@@ -847,7 +848,7 @@ describe("private subagent completion processing receipts", () => {
         value: { status: "timeout", stopReason: "rpc" },
       });
       expect(
-        loadSubagentRunsForControllerFromSqlite(sessionKey).find(
+        listRunsForControllerFromRuns(loadSubagentRegistryFromSqlite(), sessionKey).find(
           (run) => run.runId === descendantRunId,
         ),
       ).toMatchObject({ endedReason: "subagent-killed", execution: { status: "terminal" } });

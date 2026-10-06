@@ -13,9 +13,17 @@ import type {
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { AgentCreationClaimWitness } from "./agent-creation-claim.js";
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-registry-listing.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
 import type { RegisteredAgentWorkerOperations } from "./openclaw-agent-execution-operations.js";
+
+/** A retired owner refused new work; an admitted command's failure is never classified here. */
+export const AgentDatabaseExecutionAdmissionClosedError = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentDatabaseExecutionAdmissionClosedError"),
+  () => class AdmissionClosedError extends Error {},
+);
 
 /** Recorded by the native owner; a descriptor never grants access to that owner. */
 export type AgentDatabaseFileExecutionIdentity = {
@@ -67,6 +75,35 @@ export type OpenClawAgentDatabaseExecution = {
   release(): Promise<void>;
 };
 
+export type AgentDatabaseFileExecutionOwner = {
+  readonly kind: "file";
+  readonly agentId: string;
+  readonly sharedDatabaseKey: string;
+  readonly creationIdentity?: DatabasePathIdentity;
+  borrow(
+    pathname: string,
+    expectedIdentity?: AgentDatabaseExecutionFileIdentity,
+    expectedCreationIdentity?: DatabasePathIdentity,
+    requestedPath?: string,
+  ): OpenClawAgentDatabaseExecution;
+  closeIdle(): Promise<void>;
+  close(): Promise<void>;
+};
+
+export type AgentDatabaseNativeGeneration = {
+  failure(): "open-refused" | "native" | undefined;
+  isPrepared(): boolean;
+  captureClaim(): AgentDatabaseGenerationClaim;
+  run<T>(
+    source: AgentDatabaseRequestExecutionSource,
+    operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
+    assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
+    createIfMissing?: boolean,
+    signal?: AbortSignal,
+  ): Promise<T | undefined>;
+  close(): Promise<void>;
+};
+
 export type AgentDatabaseFileExecutionOpen = {
   kind?: "file";
   leaseId: string;
@@ -77,6 +114,7 @@ export type AgentDatabaseFileExecutionOpen = {
   expectedIdentity?: AgentDatabaseExecutionFileIdentity;
   /** Captured before a creating request yields; absence is an identity too. */
   creatingIdentity?: DatabasePathIdentity;
+  creationClaim?: AgentCreationClaimWitness;
 };
 
 /** Process-private locators; neither a handle nor its incarnation grants authority. */

@@ -77,8 +77,11 @@ reader until conditional deletion can validate metadata at the mutation owner.
 Their inactive incognito composition accepts a prepared session reader whose
 current-source assertion reaches the binding transaction and commit grants.
 The preparation retains the original actor revision and ACP metadata publication
-fence until cleanup releases it. Production does not supply that reader until
-the atomic incognito activation; guarded durable cleanup remains separate work.
+fence until cleanup releases it. The local `prepareAcpSessionEntryRead` helper captures an existing private actor
+binding and supplies that retained reader; it returns `undefined` without a binding.
+Discord and Telegram startup cleanup use it by default. Ordinary production
+acquisition stays native until atomic incognito activation; guarded durable
+cleanup remains separate work.
 `IncognitoSessionEndedError` and `IncognitoSessionSyncAccessError`, exposed through
 the local `openclaw/plugin-sdk/acp-runtime` facade, must propagate through cleanup and status
 probes. Use `rethrowIncognitoSessionError(error)` before treating other failures

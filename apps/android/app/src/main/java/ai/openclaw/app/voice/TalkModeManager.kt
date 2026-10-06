@@ -931,7 +931,7 @@ class TalkModeManager internal constructor(
         synchronized(completedRunsLock) {
           completedRunTexts[runId] = text
           while (completedRunTexts.size > maxCachedRunCompletions) {
-            completedRunTexts.entries.firstOrNull()?.let { completedRunTexts.remove(it.key) }
+            completedRunTexts.remove(completedRunTexts.keys.first())
           }
         }
       }
@@ -1840,7 +1840,7 @@ class TalkModeManager internal constructor(
     setRealtimePlaying(false)
     if (preserveStatus) setStatus(status)
     _isListening.value = false
-    if (closeSession && !sessionId.isNullOrBlank() && lease != null) {
+    if (closeSession && sessionId != null && lease != null) {
       gatewayWorkScope.launch { closeRealtimeSession(sessionId, lease) }
     }
   }
@@ -2044,7 +2044,7 @@ class TalkModeManager internal constructor(
     if (entry.isStreaming) return false
     val existing = entry.text
     if (existing.isBlank() || incoming.isBlank()) return false
-    if (incoming.firstOrNull()?.isWhitespace() == true) return false
+    if (incoming.first().isWhitespace()) return false
     if (incoming == existing || incoming.startsWith(existing) || existing.endsWith(incoming)) return false
     if (isFinal && realtimeUserEntryAwaitingFinal) {
       val elapsedMs =
@@ -2087,7 +2087,7 @@ class TalkModeManager internal constructor(
     if (incoming.isEmpty()) return existing
     if (incoming == existing || existing.endsWith(incoming)) return existing
     if (incoming.startsWith(existing)) return incoming
-    if (incoming.firstOrNull()?.isWhitespace() == true) return existing + incoming
+    if (incoming.first().isWhitespace()) return existing + incoming
     if (isFinal && looksLikeTranscriptReplacement(existing, incoming)) return incoming
     val overlap = findTranscriptTextOverlap(existing, incoming)
     val suffix = if (overlap > 0) incoming.drop(overlap) else incoming
@@ -2114,7 +2114,7 @@ class TalkModeManager internal constructor(
     val incomingText = normalizeTranscriptText(incoming)
     val commonPrefix = commonPrefixLength(existingText, incomingText)
     val shortest = minOf(existingText.length, incomingText.length)
-    return commonPrefix >= 6 && commonPrefix.toDouble() / maxOf(1, shortest).toDouble() >= 0.45
+    return commonPrefix >= 6 && commonPrefix.toDouble() / shortest.toDouble() >= 0.45
   }
 
   private fun transcriptWords(value: String): List<String> =
@@ -2284,7 +2284,7 @@ class TalkModeManager internal constructor(
       check(recorder.state == AudioRecord.STATE_INITIALIZED) { "AudioRecord initialization failed" }
       recorder.startRecording()
       check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "AudioRecord did not start" }
-      val activeRecorder = checkNotNull(recorder)
+      val activeRecorder = recorder
       val activeWriteStream = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
       writeStream = activeWriteStream
       val source = PushToTalkAudioSource(pipe[0], activeWriteStream, activeRecorder)
@@ -2729,8 +2729,7 @@ class TalkModeManager internal constructor(
     synchronized(completedRunsLock) {
       completedRunStates[runId] = isFinal
       while (completedRunStates.size > maxCachedRunCompletions) {
-        val first = completedRunStates.entries.firstOrNull() ?: break
-        completedRunStates.remove(first.key)
+        completedRunStates.remove(completedRunStates.keys.first())
       }
     }
   }

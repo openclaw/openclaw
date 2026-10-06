@@ -1,4 +1,3 @@
-/** Model selection state for reply runs, including catalog and override handling. */
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -106,7 +105,6 @@ const sessionPersistenceRuntimeLoader = createLazyImportLoader(
   () => import("./session-entry-persistence.js"),
 );
 
-/** Resolves provider/model, allowlist, catalog, and thinking defaults for a reply run. */
 export async function createModelSelectionState(params: {
   cfg: OpenClawConfig;
   agentId: string;

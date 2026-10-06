@@ -518,7 +518,6 @@ async function sendFollowupPayloads(params: {
   return queuedPayloads;
 }
 
-/** Performs the already-resolved follow-up delivery action. */
 export type FollowupDeliveryResult =
   | { kind: "completed"; payloads: ReplyPayload[] }
   | { kind: "source-retry" };

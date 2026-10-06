@@ -267,7 +267,12 @@ export function executeSharedStateCommand(
       ? readAgentProvenanceBatchInDatabase(database.db, command.input.agentIds)
       : listAgentProvenanceInDatabase(database.db);
   }
-  if (command.type === "sessionUpstream.current" || command.type === "sessionUpstream.settle") {
+  if (
+    command.type === "sessionUpstream.current" ||
+    command.type === "sessionUpstream.settle" ||
+    command.type === "sessionUpstream.upsert" ||
+    command.type === "sessionUpstream.delete"
+  ) {
     return executeSessionUpstreamCommand(command, writeOptions);
   }
   if (

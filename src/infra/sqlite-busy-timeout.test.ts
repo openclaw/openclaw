@@ -13,6 +13,7 @@ describe("runWithSqliteBusyTimeout", () => {
   afterEach(() => {
     database?.close();
     database = undefined;
+    vi.restoreAllMocks();
   });
 
   it("restores the previous timeout after success and failure", () => {
@@ -35,6 +36,7 @@ describe("runWithSqliteBusyTimeout", () => {
   it("restores timeout and lock reporting before the admitted operation finishes", () => {
     database = new DatabaseSync(":memory:");
     database.exec("PRAGMA busy_timeout = 5000");
+    const exec = vi.spyOn(database, "exec");
     runWithSqliteBusyTimeout(
       database,
       25,
@@ -47,6 +49,8 @@ describe("runWithSqliteBusyTimeout", () => {
       { lockFailureReporting: "suppress" },
     );
     expect(shouldReportSqliteLockFailure(database)).toBe(true);
+    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
+    expect(exec.mock.calls).toEqual([["PRAGMA busy_timeout = 25"], ["PRAGMA busy_timeout = 5000"]]);
   });
 
   it.each([-1, 1.5])("rejects invalid timeout %s", (timeout) => {

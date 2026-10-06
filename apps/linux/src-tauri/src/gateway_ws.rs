@@ -234,7 +234,7 @@ enum GatewayRequest {
         generation: GatewayGeneration,
     },
     RefreshCanvasSurface {
-        observed_url: Option<String>,
+        observed_url: String,
         generation: GatewayGeneration,
     },
     ChatHistory {
@@ -862,7 +862,7 @@ impl GatewayClient {
         }
         let response = self
             .request(GatewayRequest::RefreshCanvasSurface {
-                observed_url: observed.url.clone(),
+                observed_url,
                 generation,
             })
             .await?;
@@ -1112,14 +1112,11 @@ impl GatewayClient {
                 reconnect_attempt = 0;
                 continue;
             }
-            reconnect_attempt = if reached_hello {
+            reconnect_attempt = if reached_hello || connection_result.is_ok() {
                 1
             } else {
                 reconnect_attempt.saturating_add(1)
             };
-            if connection_result.is_ok() {
-                reconnect_attempt = 1;
-            }
             if !driver_should_run(
                 app.get_window(QUICKCHAT_LABEL).is_some()
                     || self.inner.desktop_demand.load(Ordering::SeqCst)
@@ -1445,21 +1442,11 @@ impl GatewayClient {
             .config
             .lock()
             .expect("gateway config mutex poisoned");
-        let surface = self
-            .inner
+        self.inner
             .canvas_surface
             .lock()
             .expect("gateway canvas surface mutex poisoned")
-            .clone();
-        let generation = self.inner.config_generation.load(Ordering::SeqCst);
-        if surface.generation == generation {
-            surface
-        } else {
-            CanvasSurfaceState {
-                generation,
-                url: None,
-            }
-        }
+            .clone()
     }
 
     fn set_user_accent(&self, generation: u64, accent: Option<String>) -> bool {
@@ -1993,10 +1980,7 @@ async fn perform_session_request(
                 })
         }
         GatewayRequest::RefreshCanvasSurface { observed_url, .. } => {
-            let mut params = json!({ "surface": "canvas" });
-            if let Some(observed_url) = observed_url {
-                params["observedUrl"] = Value::String(observed_url);
-            }
+            let params = json!({ "surface": "canvas", "observedUrl": observed_url });
             let response: PluginSurfaceRefreshResponse =
                 request_on_session(client, session, "plugin.surface.refresh", params, authority)
                     .await?;
@@ -3417,7 +3401,7 @@ esac
             (
                 "plugin.surface.refresh",
                 GatewayRequest::RefreshCanvasSurface {
-                    observed_url: None,
+                    observed_url: "http://127.0.0.1:18789/__openclaw__/canvas/fixture".into(),
                     generation: GatewayGeneration(generation),
                 },
             ),

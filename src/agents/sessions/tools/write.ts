@@ -12,7 +12,7 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.js"
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool, AgentToolResult } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
-import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import type { ToolRenderResultOptions } from "../extensions/types.js";
 import { WRITE_DIFF_MAX_BYTES } from "./file-diff.js";
 import {
   resolveFileMutationQueueKey,
@@ -41,7 +41,6 @@ import { writeSchema, WriteToolOutputSchema } from "./tool-schemas.js";
 interface WriteOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
-  /** Write content to a file */
   writeFile: (absolutePath: string, content: string) => Promise<void>;
   /** Create directory recursively */
   mkdir: (dir: string) => Promise<void>;
@@ -363,37 +362,13 @@ function successfulWriteResult(path: string, content: string, details: WriteTool
   );
 }
 
-async function recoverSuccessfulWrite(params: {
-  absolutePath: string;
-  content: string;
-  error: unknown;
-  ops: WriteOperations;
-  path: string;
-  precheck: WriteToolPrecheck;
-  details: WriteToolDetails;
-  signal?: AbortSignal;
-}) {
-  if (!isWriteRecoveryCandidate(params.error, params.signal)) {
-    return null;
-  }
-  const verified = await verifyPersistedUtf8File(params.absolutePath, params.content, params.ops);
-  const changed =
-    params.precheck.state === "different" ||
-    (params.precheck.state === "unknown" &&
-      (await didWriteMetadataChange(params.absolutePath, params.precheck.beforeStat, params.ops)));
-  if (!verified || !changed) {
-    return null;
-  }
-  return successfulWriteResult(params.path, params.content, params.details);
-}
-
-function createWriteToolDefinition(
+export function createWriteTool(
   cwd: string,
   options?: WriteToolOptions,
-): ToolDefinition<typeof writeSchema, WriteToolDetails> {
+): AgentTool<typeof writeSchema> {
   const ops = options?.operations ?? defaultWriteOperations;
   const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
-  return {
+  return wrapToolDefinition<typeof writeSchema, WriteToolDetails>({
     name: "write",
     label: "write",
     description: "Write/overwrite file; creates parent directories.",
@@ -452,19 +427,16 @@ function createWriteToolDefinition(
           return successfulWriteResult(path, content, details);
         } catch (error: unknown) {
           assertCurrent();
-          const recovered = await recoverSuccessfulWrite({
-            absolutePath,
-            content,
-            error,
-            ops,
-            path,
-            precheck,
-            details,
-            signal,
-          });
-          if (recovered) {
-            assertCurrent();
-            return recovered;
+          if (isWriteRecoveryCandidate(error, signal)) {
+            const verified = await verifyPersistedUtf8File(absolutePath, content, ops);
+            const changed =
+              precheck.state === "different" ||
+              (precheck.state === "unknown" &&
+                (await didWriteMetadataChange(absolutePath, precheck.beforeStat, ops)));
+            if (verified && changed) {
+              assertCurrent();
+              return successfulWriteResult(path, content, details);
+            }
           }
           throw error;
         }
@@ -499,12 +471,5 @@ function createWriteToolDefinition(
       }
       return reuseTextComponent(context.lastComponent, output);
     },
-  };
-}
-
-export function createWriteTool(
-  cwd: string,
-  options?: WriteToolOptions,
-): AgentTool<typeof writeSchema> {
-  return wrapToolDefinition(createWriteToolDefinition(cwd, options));
+  });
 }

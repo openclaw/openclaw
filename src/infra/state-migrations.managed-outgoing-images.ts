@@ -475,14 +475,12 @@ export function migrateLegacyManagedOutgoingImages(params: {
     return { changes, warnings };
   }
 
-  let deletedExpiredFiles = 0;
   try {
     for (const parsed of parsedRecords) {
       if (!discardedIds.has(parsed.record.attachmentId)) {
         continue;
       }
       fs.rmSync(parsed.originalPath, { force: true });
-      deletedExpiredFiles += 1;
     }
   } catch (error) {
     warnings.push(
@@ -516,8 +514,7 @@ export function migrateLegacyManagedOutgoingImages(params: {
   }
   if (discardedIds.size > 0) {
     changes.push(
-      `Discarded ${discardedIds.size} expired managed outgoing image record(s)` +
-        (deletedExpiredFiles > 0 ? ` and ${deletedExpiredFiles} attachment file(s)` : ""),
+      `Discarded ${discardedIds.size} expired managed outgoing image record(s) and ${discardedIds.size} attachment file(s)`,
     );
   }
   changes.push("Removed legacy managed outgoing image JSON after SQLite verification");

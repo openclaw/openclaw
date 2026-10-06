@@ -348,7 +348,7 @@ export async function dispatchChatSlashCommand(
       if (!requireChatSessionAction(host, "reset")) {
         return "failed";
       }
-      return await clearChatHistory(host);
+      return clearChatHistory(host);
     }
     case "compact":
       if (!requireChatSessionAction(host, "compact")) {

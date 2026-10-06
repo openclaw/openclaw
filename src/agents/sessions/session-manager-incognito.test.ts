@@ -338,9 +338,9 @@ it("rejects context disclosure when its admission closes during the awaited cons
       await manager.appendMessageAsync(makeUserMessage("private admitted context", 1));
       await expect(
         SessionManager.readSessionContextAsync(target, async (messages) => {
-          expect([...messages]).toMatchObject([{ content: "private admitted context" }]);
           await Promise.resolve();
           admission.abort(new Error("context admission closed"));
+          expect(() => [...messages]).toThrow("context admission closed");
           return "revoked context result";
         }),
       ).rejects.toThrow("context admission closed");

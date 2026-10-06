@@ -1050,7 +1050,7 @@ describe("gateway/node-registry", () => {
       }
 
       await expect(connectivity).resolves.toEqual(
-        failure("NOT_CONNECTED", "node connection changed during connectivity probe"),
+        failure("NOT_CONNECTED", "node connection changed during connectivity check"),
       );
       await expect(invoke).resolves.toEqual(
         failure("DISCONNECTED", "node disconnected (debug.ping)"),
@@ -1084,7 +1084,7 @@ describe("gateway/node-registry", () => {
 
     const result = await registry.checkConnectivity("node-1", 1);
 
-    expect(result).toEqual(failure("TIMEOUT", "node connectivity probe timed out"));
+    expect(result).toEqual(failure("TIMEOUT", "node connectivity check timed out"));
   });
 
   it("settles zero-timeout MCP calls without disconnecting the replacement node", async () => {

@@ -27,7 +27,6 @@ import type { AgentMessage } from "./runtime/index.js";
 
 export { stripDowngradedToolCallText } from "../shared/text/downgraded-tool-call-text.js";
 
-/** Narrow an agent message to an assistant message. */
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
 }
@@ -198,12 +197,10 @@ export function extractAssistantVisibleText(
   return prepareAssistantVisibleText(msg, prepareText)();
 }
 
-/** Extract the commentary/narration text of a commentary-phase assistant message. */
 export function extractAssistantCommentaryText(msg: AssistantMessage): string {
   return prepareEmbeddedAssistantTextForPhase(msg, "commentary")();
 }
 
-/** Extract sanitized assistant text across all text content blocks. */
 export function extractEmbeddedAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
@@ -241,13 +238,11 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
   return blocks.join("\n");
 }
 
-/** Format reasoning text for markdown-friendly channel surfaces. */
 export function formatReasoningMessage(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
     return "";
   }
-  // Show reasoning in italics (cursive) for markdown-friendly surfaces (Discord, etc.).
   // Keep a plain prefix so existing parsing/detection keeps working.
   // Note: Underscore markdown cannot span multiple lines on Telegram, so we wrap
   // each non-empty line separately.
@@ -268,7 +263,6 @@ const THINKING_TAG_CLOSE_RE = new RegExp(
   String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "i",
 );
-/** Global regex used to scan provider-emitted thinking tags. */
 export const THINKING_TAG_SCAN_RE = new RegExp(
   String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "gi",
@@ -296,7 +290,6 @@ export function createThinkingTagStreamState(): ThinkingTagStreamState {
   };
 }
 
-/** Split text that starts with thinking tags into structured thinking/text blocks. */
 function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
   // Avoid false positives: only treat it as structured thinking when it begins
@@ -361,7 +354,6 @@ function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   return blocks;
 }
 
-/** Promote inline thinking-tag text blocks into native thinking blocks in place. */
 export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) {
     return;
@@ -410,7 +402,6 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   stripCompactionReplayCheckpointInPlace(message);
 }
 
-/** Extract closed thinking-tag content from a complete text payload. */
 export function extractThinkingFromTaggedText(text: string): string {
   if (!text) {
     return "";
@@ -430,7 +421,6 @@ export function extractThinkingFromTaggedText(text: string): string {
   return result.trim();
 }
 
-/** Incrementally extract thinking-tag content from a growing streaming payload. */
 export function extractThinkingFromTaggedStream(
   text: string,
   state: ThinkingTagStreamState,

@@ -16,7 +16,6 @@ export async function load(
     return restored;
   }
   const requestedLocation = newSessionModelLocationFromSearch(search);
-  const requestedAgentId = requestedLocation.agentId.trim();
   let groupCwd = "";
   let groupWorktree = false;
   let groupStatus: NewSessionRouteData["groupStatus"];
@@ -38,7 +37,7 @@ export async function load(
   }
   const route: NewSessionRouteData = {
     ...requestedLocation,
-    requestedAgentId,
+    requestedAgentId: requestedLocation.agentId,
     groupStatus,
     groupCwd,
     groupWorktree,

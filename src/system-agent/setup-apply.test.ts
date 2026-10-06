@@ -21,7 +21,7 @@ import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { projectDefaultInferenceRoute } from "./inference-route.js";
+import { projectInferenceRoute } from "./inference-route.js";
 import { applySystemAgentSetup } from "./setup-apply.js";
 
 const mocks = getSetupApplyMocks();
@@ -77,7 +77,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       } satisfies OpenClawConfig;
       const absentRoster = snapshot("probe", source, runtimeConfig);
       setSetupCommitState(runtimeConfig, absentRoster);
-      const expectedInferenceRoute = await projectDefaultInferenceRoute(runtimeConfig);
+      const expectedInferenceRoute = await projectInferenceRoute(runtimeConfig);
       mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
 
       await applySystemAgentSetup(
@@ -365,7 +365,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
 
     await expect(
       applySystemAgentSetup(
-        baseParams({ expectedInferenceRoute: await projectDefaultInferenceRoute(verified) }),
+        baseParams({ expectedInferenceRoute: await projectInferenceRoute(verified) }),
       ),
     ).rejects.toThrow("changed before setup could start");
 
@@ -386,7 +386,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
 
     await expect(
       applySystemAgentSetup(
-        baseParams({ expectedInferenceRoute: await projectDefaultInferenceRoute(current) }),
+        baseParams({ expectedInferenceRoute: await projectInferenceRoute(current) }),
       ),
     ).rejects.toThrow("changed before setup could start");
 
@@ -403,7 +403,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       applySystemAgentSetup(
         baseParams({
           finalizeConfig: () => mainAgentModelConfig("anthropic/claude-opus-4-8"),
-          expectedInferenceRoute: await projectDefaultInferenceRoute(initial),
+          expectedInferenceRoute: await projectInferenceRoute(initial),
         }),
       ),
     ).rejects.toThrow("no longer preserves the exact verified inference route");
@@ -473,7 +473,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         result: result.result,
       };
     });
-    const expectedInferenceRoute = await projectDefaultInferenceRoute(initial);
+    const expectedInferenceRoute = await projectInferenceRoute(initial);
 
     await applySystemAgentSetup(baseParams({ expectedInferenceRoute, surface: "cli" }));
 
@@ -528,7 +528,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
 
     await expect(
       applySystemAgentSetup(
-        baseParams({ expectedInferenceRoute: await projectDefaultInferenceRoute(initial) }),
+        baseParams({ expectedInferenceRoute: await projectInferenceRoute(initial) }),
       ),
     ).rejects.toThrow("changed after the config write");
 
@@ -570,7 +570,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     }));
     await applySystemAgentSetup(
       baseParams({
-        expectedInferenceRoute: await projectDefaultInferenceRoute(initialSnapshot.runtimeConfig),
+        expectedInferenceRoute: await projectInferenceRoute(initialSnapshot.runtimeConfig),
       }),
     );
 
@@ -604,7 +604,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       await expect(
         applySystemAgentSetup(
           baseParams({
-            expectedInferenceRoute: await projectDefaultInferenceRoute(sourceConfig),
+            expectedInferenceRoute: await projectInferenceRoute(sourceConfig),
           }),
         ),
       ).rejects.toThrow("materialized inference route");
@@ -621,7 +621,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       auth: { order: { openai: ["openai:verified"] } },
     } satisfies OpenClawConfig;
     const initialSnapshot = snapshot("probe", initial);
-    const expectedInferenceRoute = await projectDefaultInferenceRoute(initial);
+    const expectedInferenceRoute = await projectInferenceRoute(initial);
     let currentConfig: OpenClawConfig = initial;
     let currentHash = "probe";
     setSetupCommitState(initial, initialSnapshot);

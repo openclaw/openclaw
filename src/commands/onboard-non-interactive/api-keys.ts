@@ -52,7 +52,6 @@ async function resolveApiKeyFromProfiles(params: {
   return null;
 }
 
-/** Resolves an API key for non-interactive setup without prompting the user. */
 export async function resolveNonInteractiveApiKey(params: {
   provider: string;
   cfg: OpenClawConfig;

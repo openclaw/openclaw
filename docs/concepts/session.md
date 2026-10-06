@@ -216,6 +216,13 @@ Accepting, queueing, or preparing a resume request alone does not refresh it.
 CLI backends that do not report turn acceptance refresh the budget only after
 observed assistant output or tool activity; silent startup does not refresh it.
 
+First turns that qualify for restart-safe admission through `sessions.create`
+use the same durable admission as idle `chat.send` turns, including direct RPC
+clients. A restart
+during managed worktree preparation resumes the accepted turn and prepares or
+reuses its local worktree before starting the agent. Recovery does not inherit
+the original caller's permission to run worktree setup scripts.
+
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
 A completed reply or a later user message closes that turn to replay.
@@ -326,9 +333,9 @@ sessions retain their sidebar nesting; subagent runs appear in transcript activi
 and session transcripts. Existing child pins disappear and no longer protect the session
 from maintenance.
 
-Gateway model-run probe sessions are short-lived by default. Rows matching
+Gateway model-run check sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
-pressure-gated: it only removes stale probe rows when session-entry
+pressure-gated: it only removes stale check rows when session-entry
 maintenance/cap pressure is reached, and runs before the broader stale-entry
 age cutoff and entry cap. Normal direct, group, thread, cron, hook, heartbeat,
 ACP, and sub-agent sessions do not inherit this 24h retention.

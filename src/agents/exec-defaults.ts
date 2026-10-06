@@ -3,6 +3,7 @@
  */
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ExecToolConfig } from "../config/types.tools.js";
 import {
   loadExecApprovals,
   type ExecAsk,
@@ -31,24 +32,19 @@ export type ExecSessionDefaults = Pick<
 >;
 
 // Resolved exec config layers come from global config, agent config, and per-call overrides.
-export type ExecPolicyOverrides = {
-  host?: ExecTarget;
-  mode?: ExecMode;
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  node?: string;
-};
+export type ExecPolicyOverrides = Pick<
+  ExecToolConfig,
+  "host" | "mode" | "security" | "ask" | "node"
+>;
 
 // Gather the shared config state once so exec resolution applies one
 // agent/global/session precedence order.
-export function resolveExecConfigState(params: {
-  cfg?: OpenClawConfig;
-  sessionEntry?: ExecSessionDefaults;
-  execOverrides?: ExecPolicyOverrides;
-  agentId?: string;
-  sessionKey?: string;
-  scope?: { kind: "defaults" };
-}): {
+export function resolveExecConfigState(
+  params: Omit<
+    ResolveExecDefaultsParams,
+    "execApprovals" | "sandboxAvailable" | "elevatedRequested"
+  >,
+): {
   cfg: OpenClawConfig;
   host: ExecTarget;
   agentId: string | undefined;
@@ -85,15 +81,7 @@ export function resolveExecConfigState(params: {
 
 /** Resolves whether node exec is usable and any effective node binding. */
 export function resolveNodeExecEligibility(
-  params: {
-    cfg?: OpenClawConfig;
-    execApprovals?: ExecApprovalsFile;
-    sessionEntry?: ExecSessionDefaults;
-    execOverrides?: ExecPolicyOverrides;
-    agentId?: string;
-    sessionKey?: string;
-    sandboxAvailable?: boolean;
-  },
+  params: Omit<ResolveExecDefaultsParams, "scope" | "elevatedRequested">,
   preparedDefaults?: ResolvedExecDefaults,
 ): { canExec: boolean; node?: string } {
   const defaults = preparedDefaults ?? resolveExecDefaults(params);

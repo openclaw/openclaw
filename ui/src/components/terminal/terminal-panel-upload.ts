@@ -44,17 +44,6 @@ type TerminalUploadBatch = {
   abortController: AbortController;
 };
 
-type TerminalUploadProgress = {
-  completed: number;
-  canInsert: boolean;
-  current: number;
-  error: string | null;
-  fileName: string;
-  retryable: boolean;
-  state: TerminalUploadBatch["state"];
-  total: number;
-};
-
 function isRetryableUploadError(error: unknown): boolean {
   if (typeof error === "object" && error !== null && "retryable" in error) {
     const gatewayError = error as { gatewayCode?: unknown; code?: unknown; retryable?: unknown };
@@ -102,7 +91,7 @@ export class TerminalPanelUploadController {
     return this.batch !== null;
   }
 
-  get progress(): TerminalUploadProgress | null {
+  get progress() {
     const batch = this.batch;
     if (!batch) {
       return null;

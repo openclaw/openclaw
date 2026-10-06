@@ -97,12 +97,10 @@ export class SettingsManager {
     this.recomputeSettings();
   }
 
-  /** Create a SettingsManager that loads from files */
   static create(cwd: string, agentDir: string = getAgentDir()): SettingsManager {
     return SettingsManager.fromStorage(new FileSettingsStorage(cwd, agentDir));
   }
 
-  /** Create a SettingsManager from an arbitrary storage backend */
   static fromStorage(storage: SettingsStorage): SettingsManager {
     return new SettingsManager(storage, {
       global: SettingsManager.loadScope(storage, "global"),
@@ -110,7 +108,6 @@ export class SettingsManager {
     });
   }
 
-  /** Create an in-memory SettingsManager (no file I/O) */
   static inMemory(settings: Partial<Settings> = {}): SettingsManager {
     const storage = new InMemorySettingsStorage();
     const initialSettings = requireSupportedSettings(structuredClone(settings), "global");

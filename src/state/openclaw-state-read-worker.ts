@@ -35,6 +35,7 @@ import type {
   OpenClawStateReadCommand,
   OpenClawStateReadLocation,
   OpenClawStateReadOutcome,
+  OpenClawStateReadOptions,
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
@@ -208,8 +209,10 @@ export function captureOpenClawStateReadSource() {
   const state = runtime;
   const admitted = new Set<ReadOperation>();
   return {
-    createTransport: (command: OpenClawStateReadCommand) =>
-      createReadTransport(command, state, () => admitted.size > 0),
+    createTransport: (
+      command: OpenClawStateReadCommand,
+      onChunk?: OpenClawStateReadOptions["onChunk"],
+    ) => createReadTransport(command, state, () => admitted.size > 0, onChunk),
     own(service: () => void, close: () => Promise<void>): () => void {
       if (state.sealed || state.closing) {
         throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
@@ -269,6 +272,7 @@ function createReadTransport(
   command: OpenClawStateReadCommand,
   state: ReadRuntime,
   ownsAdmission: () => boolean,
+  onChunk?: OpenClawStateReadOptions["onChunk"],
 ) {
   // Capture nested input before the read owner can yield during snapshot preparation.
   const capturedCommand = captureCommand(command);
@@ -387,7 +391,20 @@ function createReadTransport(
           authority.assertCurrent();
           return request;
         },
-        { signal: authority.signal, inputBytes: requestBytes(request) },
+        {
+          signal: authority.signal,
+          inputBytes: requestBytes(request),
+          diagnosticOperation: readCommand.type,
+          ...(onChunk
+            ? {
+                onRequestSync(value: unknown) {
+                  authority.assertCurrent();
+                  onChunk(value);
+                  return { input: null, timeoutMs: 300_000 };
+                },
+              }
+            : {}),
+        },
       );
       tasks.set(task, cleanup);
       void task.result.then(

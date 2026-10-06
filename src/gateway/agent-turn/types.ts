@@ -59,17 +59,9 @@ export type AgentTurnContext = Pick<
   | "validateAgentRuntimeApprovalAuthority"
 >;
 
-export type AgentJobTerminalSnapshot = {
-  status: "ok" | "error" | "timeout";
-  startedAt?: number;
-  endedAt?: number;
-  error?: string;
-  stopReason?: string;
-  livenessState?: string;
+export type AgentJobTerminalSnapshot = Omit<AgentRunTerminalOutcome, "reason"> & {
   yielded?: boolean;
   pendingError?: boolean;
-  timeoutPhase?: AgentRunTerminalOutcome["timeoutPhase"];
-  providerStarted?: boolean;
   terminalDelivery?: AgentRunTerminalDeliverySnapshot;
   terminalReceipt?: AgentRunTerminalReceipt;
   terminalReply?: AgentRunTerminalReplySnapshot;

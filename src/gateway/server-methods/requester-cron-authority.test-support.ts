@@ -43,6 +43,7 @@ import { loadCronStore } from "../../cron/store.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db-lifecycle.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
@@ -85,6 +86,7 @@ export function installRequesterCronAuthorityTestHooks() {
     cron?.stop();
     revokeRequesterCronAuthority(SESSION);
     await cleanupSessionStateForTest({ stateDir });
+    closeOpenClawAgentDatabasesForTest(stateDir);
     clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
   });

@@ -39,6 +39,7 @@ import { resolveRealpathOrAbsolute } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import {
   readIncognitoUsageTranscript,
+  captureUsageCostIncognitoBinding,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
@@ -412,7 +413,7 @@ export async function* readTranscriptRecordsBestEffort(
   }
 }
 
-export async function resolveUsageSessionSource(params: {
+export async function resolveUsageSessionSource(input: {
   sessionId?: string;
   sessionFile?: string;
   agentId: string;
@@ -424,6 +425,7 @@ export async function resolveUsageSessionSource(params: {
     storePath: string;
   };
 }): Promise<{ sessionFile: string; entry?: SessionEntry } | undefined> {
+  const params = { ...input, incognito: captureUsageCostIncognitoBinding(input) };
   const signal = getAsyncWorkSignal();
   const assertCurrent = () => signal?.throwIfAborted();
   assertCurrent();

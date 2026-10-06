@@ -13,9 +13,34 @@ import type {
   SessionEntryCurrentSource,
 } from "./session-entry-current.types.js";
 import type { SessionEntryReadWorkerOwner } from "./session-entry-read-runtime.js";
+import {
+  captureIncognitoSessionBinding,
+  type IncognitoSessionBinding,
+} from "./session-incognito-binding.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+
+function captureIncognitoSessionEntryCurrentRead(
+  binding: IncognitoSessionBinding,
+  sessionKey: string,
+): Exclude<CapturedSessionEntryCurrentRead, { kind: "file" }> {
+  const { actor, admissionSignal } = binding;
+  const claim = actor.sessions.captureCurrent(sessionKey);
+  const assertSourceCurrent = () => {
+    admissionSignal?.throwIfAborted();
+    actor.assertReadable();
+    claim.assertCurrent();
+  };
+  return {
+    kind: "incognito",
+    assertSourceCurrent,
+    readCurrent() {
+      assertSourceCurrent();
+      return actor.sessions.readSharing(sessionKey)?.entry;
+    },
+  };
+}
 
 /** Process-held currency consumes its original writer's published facts, never a native query. */
 export function captureNativeSessionEntryCurrentRead(
@@ -26,6 +51,10 @@ export function captureNativeSessionEntryCurrentRead(
   assertCanonicalSessionKeyWrite(sessionKey, agentId);
   if (!agentId) {
     throw new Error("Session currency requires its original agent");
+  }
+  const binding = captureIncognitoSessionBinding(scope);
+  if (binding) {
+    return captureIncognitoSessionEntryCurrentRead(binding, sessionKey);
   }
   const env = captureSessionTranscriptStorageEnvironment(scope.env ?? process.env);
   const storePath = isIncognitoSessionKey(sessionKey)
@@ -59,6 +88,9 @@ export function captureSessionEntryCurrentRead(
   const sessionKey = scope.sessionKey;
   const agentId = scope.agentId ?? parseAgentSessionKey(sessionKey)?.agentId;
   assertCanonicalSessionKeyWrite(sessionKey, agentId);
+  if (owner.incognito) {
+    return captureIncognitoSessionEntryCurrentRead(owner.incognito, sessionKey);
+  }
   if (owner.kind === "native") {
     return captureNativeSessionEntryCurrentRead(scope);
   }

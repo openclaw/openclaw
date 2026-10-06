@@ -304,6 +304,8 @@ harness here.
 Catalog preparation and explicit Refresh acquire the requested native inventories
 once per runtime while preserving the configured default.
 Opening the picker reuses prepared catalog facts; explicit Refresh owns discovery.
+Session-scoped pickers evaluate model and runtime choices together after checking
+session access, and recheck access before returning the catalog.
 
 An agent can replace the inherited list through
 `agents.entries.<id>.models["provider/model"].pickerRuntimes`; an empty array removes
@@ -335,7 +337,7 @@ If an existing session's harness becomes unavailable, the failed turn reports
 the owner plugin when known and its activation or loading blocker. Follow the error's
 `openclaw doctor --fix` or `openclaw plugins inspect <id> --runtime --json`
 guidance, fix the plugin, and restart the Gateway before retrying. Gateway
-health probes remain independent of model execution. Use [Models status](/cli/models)
+health checks remain independent of model execution. Use [Models status](/cli/models)
 and [Doctor](/gateway/doctor) to diagnose the configured route.
 
 Choose the model when you create a session whenever possible. The Control UI's
@@ -426,9 +428,9 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 
 <AccordionGroup>
   <Accordion title="Scanning (OpenRouter free models)">
-    `openclaw models scan` inspects OpenRouter's public free-model catalog and can probe candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live probing and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
+    `openclaw models scan` inspects OpenRouter's public free-model catalog and can check candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live checking and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
 
-    Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, probed results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
+    Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, checked results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
 
   </Accordion>
 </AccordionGroup>

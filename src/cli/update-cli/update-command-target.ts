@@ -68,6 +68,7 @@ import { assertUpdatePackageActivationAdmission } from "./update-command-package
 import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
+import type { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
@@ -355,7 +356,7 @@ export async function resolveUpdateCommandTarget(
       let installedPackageName = DEFAULT_PACKAGE_NAME;
       let packageAlreadyCurrent = false;
       let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
-      let packageRuntimeTarget: { version: string; nodeEngine: string | null } | undefined;
+      let packageRuntimeTarget: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
       let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
       // The service runtime can differ even when its package root matches the shell.
       let managedServiceNodeRunner: string | undefined;

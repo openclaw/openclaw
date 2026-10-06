@@ -188,7 +188,7 @@ physical reservation; restarting is not proof that old descendants stopped.
 Older builds do not reinterpret the new certificate as lineage completion.
 
 macOS and retained Bun process-group owners still require kernel group
-disappearance. Permission-denied probes never prove absence. A completed command
+disappearance. Permission-denied checks never prove absence. A completed command
 or closed output pipe alone does not establish that its descendants stopped.
 Local TUI shell shutdown uses the same cleanup owner for its own commands.
 If the host was busy, cleanup processes queued native completion events before

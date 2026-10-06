@@ -201,9 +201,9 @@ export function bootstrapApplication(): ApplicationRuntime {
               : loadCurrentDeviceAuthToken(settings.gatewayUrl);
         })
       : null;
-  let warmBoot = bootRecord !== null && startsApplicationRouter && !hasPendingGateway;
+  let warmBoot = bootRecord !== null;
   const warmBootConnectionRevision = gateway.connectionRevision;
-  if (warmBoot && bootRecord) {
+  if (bootRecord) {
     prewarmBootChat(bootRecord, settings.sessionKey);
   }
   const stopWarmBootConnection = startsApplicationRouter

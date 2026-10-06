@@ -78,6 +78,7 @@ export type ChatHistoryPageParams = {
   canonicalKey: string;
   max: number;
   maxHistoryBytes: number;
+  responseHistoryBytes?: number;
   effectiveMaxChars: number;
   offset: number | undefined;
   messageId: string | undefined;

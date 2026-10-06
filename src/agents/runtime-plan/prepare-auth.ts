@@ -10,6 +10,7 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderResolveAuthProfileIdContext } from "../../plugins/provider-runtime.types.js";
 import { isPendingOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import {
   prependAuthProfilePin,
@@ -68,17 +69,9 @@ type PrepareAgentRuntimeAuthPlanParams = {
   harnessAuthBootstrap?: "harness";
   allowHarnessAuthProfileForwarding?: boolean;
   allowTransientCooldownProbe?: boolean;
-  resolveProviderPreferredProfileId?(context: {
-    config?: OpenClawConfig;
-    agentDir?: string;
-    workspaceDir?: string;
-    provider: string;
-    modelId: string;
-    preferredProfileId?: string;
-    lockedProfileId?: string;
-    profileOrder: string[];
-    authStore: AuthProfileStore;
-  }): string | undefined;
+  resolveProviderPreferredProfileId?(
+    context: ProviderResolveAuthProfileIdContext,
+  ): string | undefined;
 };
 
 export type PreparedAgentRuntimeAuthAttempt =

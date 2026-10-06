@@ -253,7 +253,6 @@ function emitAgentHarnessRunError(params: {
   );
 }
 
-/** Runs one harness attempt with diagnostics, tracing, and result classification. */
 export async function runAgentHarnessLifecycleAttempt(
   harness: AgentHarness,
   params: AgentHarnessAttemptParamsV2,
@@ -352,7 +351,6 @@ export async function runAgentHarnessLifecycleAttempt(
   return result;
 }
 
-/** Runs one isolated finalization with diagnostics and its narrow result validator. */
 export async function runAgentHarnessLifecycleFinalization(
   harness: AgentHarness,
   params: AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2>,

@@ -29,7 +29,7 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - `doctor` checks saved definitions for local setup problems such as missing stdio commands, invalid working directories, missing TLS files, disabled servers, literal sensitive header/env values, and incomplete OAuth authorization
     - `doctor --probe` adds the same live connection proof as `probe` after static checks pass
     - `probe` connects to the selected server or all configured servers, lists tools, and reports capabilities/diagnostics
-    - `add` builds a definition from flags and probes before saving unless `--no-probe` is set or OAuth authorization is needed first
+    - `add` builds a definition from flags and checks before saving unless `--no-probe` is set or OAuth authorization is needed first
     - runtime adapters decide which transport shapes they actually support at execution time
     - `enabled: false` keeps a server saved but excludes it from embedded runtime discovery
     - `requestTimeoutMs` and `connectionTimeoutMs` set per-server request and connection timeouts in milliseconds
@@ -78,7 +78,7 @@ Notes:
 - `show` without a name prints the full configured MCP server object.
 - `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
 - `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
-- `probe` connects to enabled saved servers and reports tool counts, resources/prompts support, list-change support, and diagnostics. If none are enabled, plain output explains that no servers can be probed and shows add/enable commands; `--json` keeps its empty result envelope. A named disabled server is rejected with an enable hint.
+- `probe` connects to enabled saved servers and reports tool counts, resources/prompts support, list-change support, and diagnostics. If none are enabled, plain output explains that no servers can be checked and shows add/enable commands; `--json` keeps its empty result envelope. A named disabled server is rejected with an enable hint.
 - `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
 - `set` expects one JSON object value on the command line.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.

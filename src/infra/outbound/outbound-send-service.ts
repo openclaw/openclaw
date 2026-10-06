@@ -1,5 +1,3 @@
-// Outbound send service chooses plugin-handled message actions or the core
-// message/poll path while preserving media policy and transcript mirrors.
 import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -139,7 +137,6 @@ async function tryHandleWithPluginAction(params: {
   };
 }
 
-/** Executes a message-tool send through plugin handlers or the core outbound path. */
 export async function executeSendAction(params: SendActionParams): Promise<{
   handledBy: "plugin" | "core";
   payload: unknown;
@@ -351,7 +348,6 @@ export async function executeSendAction(params: SendActionParams): Promise<{
   };
 }
 
-/** Executes a message-tool poll through plugin handlers or the core poll path. */
 export async function executePollAction(params: {
   ctx: OutboundSendContext;
   resolveCorePoll: () => {

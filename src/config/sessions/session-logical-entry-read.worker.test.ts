@@ -28,6 +28,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { loadExactSessionEntryReadOnly } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
@@ -45,6 +46,34 @@ beforeAll(async () => {
 afterAll(async () => {
   await state.cleanup();
 });
+
+it.each(["read", "admission"] as const)(
+  "joins concurrent first %s requests through the queued database owner",
+  async (kind) => {
+    const agentId = `first-${kind}`;
+    const scope = { agentId, env: state.env, sessionKey: `agent:${agentId}:missing` };
+    const databasePath = resolveOpenClawAgentSqlitePath(scope);
+    expect(fs.existsSync(databasePath)).toBe(false);
+    const results = await Promise.allSettled(
+      Array.from({ length: 15 }, async () => {
+        if (kind === "read") {
+          return await readSessionEntryInWorker(scope);
+        }
+        const loaded = await loadSessionEntryForAdmission(scope);
+        try {
+          loaded.databaseClaim.assertCurrent();
+          return loaded.entry;
+        } finally {
+          await loaded.databaseClaim.release();
+        }
+      }),
+    );
+    expect(results).toEqual(
+      Array.from({ length: 15 }, () => ({ status: "fulfilled", value: undefined })),
+    );
+    expect(fs.existsSync(databasePath)).toBe(true);
+  },
+);
 
 it("preserves logical and physical owners without parent SQLite calls", async () => {
   const custom = state.statePath("logical-read", "sessions.json");

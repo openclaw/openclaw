@@ -221,7 +221,7 @@ it.each([
 );
 
 it.each([false, true])(
-  "settles failed repair before restoration (data at risk=%s)",
+  "settles failed repair before restoring the Gateway (data at risk=%s)",
   async (unsafe) => {
     const maintenance = await begin();
     const failure = unsafe
@@ -229,10 +229,10 @@ it.each([false, true])(
       : new Error("diagnostic failed");
     try {
       await maintenance!.finish(undefined, undefined, failure);
-      expect(boundary.restart).toHaveBeenCalledTimes(unsafe ? 0 : 1);
-      expect(boundary.health).toHaveBeenCalledTimes(unsafe ? 0 : 1);
+      expect(boundary.restart).toHaveBeenCalledOnce();
+      expect(boundary.health).toHaveBeenCalledOnce();
       expect(boundary.close).toHaveBeenCalledOnce();
-      expect(boundary.resume).toHaveBeenCalledTimes(unsafe ? 0 : 1);
+      expect(boundary.resume).toHaveBeenCalledOnce();
     } finally {
       await maintenance?.release();
     }

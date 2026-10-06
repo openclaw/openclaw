@@ -251,32 +251,20 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
   if (params.targetIds.size === 0) {
     return Promise.resolve({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
   }
-  return resolveCommandSecretsFromSnapshot({
-    ...params,
-    activeSnapshot,
-  });
+  return resolveCommandSecretsFromSnapshot(activeSnapshot, { ...params });
 }
 
-async function resolveCommandSecretsFromSnapshot(params: {
-  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshotState>>;
-  commandName: string;
-  targetIds: ReadonlySet<string>;
-  allowedPaths?: ReadonlySet<string>;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
-  providerOverrides?: CommandSecretProviderOverrides;
-}): Promise<{
-  assignments: CommandSecretAssignment[];
-  diagnostics: string[];
-  inactiveRefPaths: string[];
-}> {
+async function resolveCommandSecretsFromSnapshot(
+  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshotState>>,
+  params: Parameters<typeof resolveCommandSecretsFromActiveRuntimeSnapshot>[0],
+): ReturnType<typeof resolveCommandSecretsFromActiveRuntimeSnapshot> {
   const hasOverrides = hasProviderOverrides(params.providerOverrides);
   const sourceConfig = applyProviderOverridesToConfig(
-    params.activeSnapshot.sourceConfig,
+    activeSnapshot.sourceConfig,
     params.providerOverrides,
   );
   const resolvedConfig = applyProviderOverridesToConfig(
-    params.activeSnapshot.config,
+    activeSnapshot.config,
     params.providerOverrides,
   );
   const context = hasOverrides
@@ -301,7 +289,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
     optionalActivePaths: params.optionalActivePaths,
   });
 
-  const warningSource = context?.warnings ?? params.activeSnapshot.warnings;
+  const warningSource = context?.warnings ?? activeSnapshot.warnings;
   let inactiveRefPaths = filterInactiveRefPaths({
     config: sourceConfig,
     providerOverrides: params.providerOverrides,

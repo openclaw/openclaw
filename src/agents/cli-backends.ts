@@ -1,6 +1,3 @@
-/**
- * Resolves CLI runtime backends registered by plugins or setup metadata.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
@@ -13,7 +10,6 @@ import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime
 import type { CliBackendNormalizeConfigContext, CliBackendPlugin } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
 
-/** Fully merged CLI backend definition used by agent runner execution. */
 export type ResolvedCliBackend = Pick<
   CliBackendPlugin,
   | "id"
@@ -53,7 +49,6 @@ type ResolvedCliBackendLiveTest = {
   dockerBinaryName?: string;
 };
 
-/** Binding between a model provider and the CLI runtime that serves it. */
 type CliRuntimeModelBackendBinding = {
   provider: string;
   runtime: string;
@@ -81,7 +76,6 @@ function addCliRuntimeModelBinding(
   });
 }
 
-/** Lists model-provider to CLI-runtime bindings from runtime and optional setup registries. */
 export function listCliRuntimeModelBackendBindings(
   params: {
     config?: OpenClawConfig;
@@ -108,7 +102,6 @@ export function listCliRuntimeModelBackendBindings(
   );
 }
 
-/** Lists CLI runtime ids that alias canonical model providers. */
 export function listCliRuntimeProviderIds(
   params: {
     config?: OpenClawConfig;
@@ -124,7 +117,6 @@ export function listCliRuntimeProviderIds(
   ].toSorted();
 }
 
-/** Resolves the canonical model provider served by a CLI runtime id. */
 export function resolveCliRuntimeCanonicalProvider(params: {
   runtime: string | undefined;
   config?: OpenClawConfig;
@@ -154,7 +146,6 @@ export function resolveCliRuntimeCanonicalProvider(params: {
   return setupBackend ? resolveCliBackendModelProvider(setupBackend.backend) : undefined;
 }
 
-/** Resolves the binding for one provider/runtime pair when registered. */
 export function resolveCliRuntimeModelBackendBinding(params: {
   provider: string | undefined;
   runtime: string | undefined;
@@ -191,7 +182,6 @@ export function resolveCliRuntimeModelBackendBinding(params: {
     : undefined;
 }
 
-/** Checks whether a runtime is registered to serve a model provider. */
 export function isCliRuntimeModelBackendForProvider(params: {
   provider: string | undefined;
   runtime: string | undefined;
@@ -200,7 +190,6 @@ export function isCliRuntimeModelBackendForProvider(params: {
   return resolveCliRuntimeModelBackendBinding(params) !== undefined;
 }
 
-/** Resolves live-test defaults advertised by a CLI backend plugin. */
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
   const normalized = normalizeProviderId(provider);
   const entry =
@@ -225,7 +214,6 @@ export function cliBackendSupportsSessionFork(provider: string, cfg?: OpenClawCo
   return Boolean(config?.forkArg && config.resumeAtArg);
 }
 
-/** Resolves the executable CLI backend registered by its owning plugin. */
 export function resolveCliBackendConfig(
   provider: string,
   cfg?: OpenClawConfig,

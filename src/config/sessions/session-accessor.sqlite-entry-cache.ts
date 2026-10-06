@@ -284,7 +284,7 @@ function publishSqliteSessionEntryCacheUpsert(
     return undefined;
   }
   const { sessionKey } = update;
-  let sideMetadata: SessionEntrySideMetadata | undefined;
+  let sideMetadata: SessionEntrySideMetadata;
   let entry: SessionEntry | undefined;
   try {
     // A tracked entry write leaves participants unchanged. Reuse only facts current
@@ -319,7 +319,7 @@ function publishSqliteSessionEntryCacheUpsert(
     // row in place without cloning every session map on each active-run write.
     let publishedEntry = entry;
     const currentEntry = cached.entries.get(sessionKey);
-    if (!update.entry && currentEntry && sideMetadata) {
+    if (!update.entry && currentEntry) {
       // Earlier publications in this transaction may have replaced the entry itself.
       const {
         owner: _owner,
@@ -371,7 +371,7 @@ export function publishSessionEntryCacheInvalidation(
   const entry = update.entry
     ? (cached?.entry ?? projectSessionEntryCacheUpdate(update.entryJson, update.sideMetadata))
     : undefined;
-  publishSessionSharingEntryChange(database, entry ? { ...update, entry } : update);
+  publishSessionSharingEntryChange(database, { ...update, facts, ...(entry ? { entry } : {}) });
   const identity = findOpenClawAgentDatabaseIdentity(database);
   const sharingChange =
     update.sharingUnchanged ||
@@ -410,7 +410,11 @@ export function publishSessionEntryCacheCategoryUpdate(
   publishTrackedCacheUpdate(database, () => {
     const cached = sessionEntryCaches.get(database.db);
     for (const { sessionKey, sessionId } of rows) {
-      recordCommittedSessionMetadataPublication(database, sessionKey);
+      recordCommittedSessionMetadataPublication(database, sessionKey, {
+        kind: "category",
+        sessionId,
+        category: category ?? null,
+      });
       const current = cached?.entries.get(sessionKey);
       if (!current || current.sessionId !== sessionId) {
         continue;

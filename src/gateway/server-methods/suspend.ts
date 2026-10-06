@@ -6,6 +6,8 @@ import {
   validateGatewaySuspendResumeParams,
   validateGatewaySuspendStatusParams,
   validateGatewaySuspendHandoffParams,
+  type GatewaySuspendPrepareResult,
+  type GatewaySuspendStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   armGatewaySuspendHandoff,
@@ -15,6 +17,7 @@ import {
 } from "../../infra/gateway-suspend-coordinator.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
+import type { GatewayRequestContext } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function invalidParams(method: string) {
@@ -27,6 +30,17 @@ function schedulerRecoveryError(retryAfterMs: number) {
     retryAfterMs,
     details: { reason: "scheduler-resume-failed" },
   });
+}
+
+function logDraining(
+  result: GatewaySuspendPrepareResult | GatewaySuspendStatusResult,
+  log: GatewayRequestContext["logGateway"],
+): void {
+  if (result.status === "draining") {
+    log.info(
+      `DRAINING activeCount=${result.activeCount} blockers=${result.blockers.map(({ kind, count }) => `${kind}:${count}`).join(",")} holders=${JSON.stringify(result.blockers.map(({ message }) => message))} custody=${result.writeCustody?.some(({ count }) => count > 0) ? "held" : "clear"}`,
+    );
+  }
 }
 
 export const suspendHandlers: GatewayRequestHandlers = {
@@ -97,9 +111,10 @@ export const suspendHandlers: GatewayRequestHandlers = {
       respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
       return;
     }
+    logDraining(result, context.logGateway);
     respond(true, result);
   },
-  "gateway.suspend.status": async ({ respond, params }) => {
+  "gateway.suspend.status": async ({ respond, params, context }) => {
     if (!validateGatewaySuspendStatusParams(params)) {
       respond(false, undefined, invalidParams("gateway.suspend.status"));
       return;
@@ -122,6 +137,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
       respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
       return;
     }
+    logDraining(result, context.logGateway);
     respond(true, result);
   },
   "gateway.suspend.resume": async ({ respond, params }) => {

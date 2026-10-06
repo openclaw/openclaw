@@ -28,7 +28,7 @@ import {
   type PluginCache,
 } from "./plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
-import { getPluginValueInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
@@ -206,53 +206,6 @@ function resolveLoadableSetupRuntimeSource(
       packageManifest: record.packageManifest,
     }),
   );
-}
-
-function resolveSetupRegistration(
-  record: PluginManifestRecord,
-  diagnostics: PluginSetupRegistryDiagnostic[],
-): {
-  setupSource: string;
-  instance?: PluginInstanceHandle;
-  register: (api: Parameters<typeof runPluginRegistration>[1]) => boolean;
-  initialize: ReturnType<typeof getPluginSetupModuleLoader>["initialize"];
-} | null {
-  const setupArtifact = resolveLoadableSetupRuntimeSource(record);
-  if (!setupArtifact) {
-    return null;
-  }
-  const setupSource = setupArtifact.source;
-
-  let mod: OpenClawPluginModule;
-  let moduleLoader: ReturnType<typeof getPluginSetupModuleLoader>;
-  try {
-    moduleLoader = getPluginSetupModuleLoader(record, setupSource, setupArtifact.rootDir);
-    mod = moduleLoader(setupSource) as OpenClawPluginModule;
-  } catch (error) {
-    // A broken setup entry silently removes the plugin's providers/CLI
-    // backends/migrations from onboarding; record why instead of vanishing.
-    diagnostics.push({
-      pluginId: record.id,
-      code: "setup-entry-load-failed",
-      message: `setup entry failed to load from ${setupSource}: ${formatErrorMessage(error)}`,
-    });
-    return null;
-  }
-
-  return {
-    setupSource,
-    instance: getPluginValueInstance(mod as object),
-    register(api) {
-      const resolved = resolvePluginModuleExport(mod);
-      if (!resolved.register || (resolved.definition?.id && resolved.definition.id !== record.id)) {
-        return false;
-      }
-      // Setup keeps a legacy async entry's synchronous prefix; later registration stays closed.
-      runPluginRegistration(resolved.register.bind(resolved.definition), api, "ignore");
-      return true;
-    },
-    initialize: moduleLoader.initialize,
-  };
 }
 
 function matchesProvider(provider: ProviderPlugin, providerId: string): boolean {
@@ -560,10 +513,27 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
       });
       continue;
     }
-    const setupRegistration = resolveSetupRegistration(record, diagnostics);
-    if (!setupRegistration) {
+    const setupArtifact = resolveLoadableSetupRuntimeSource(record);
+    if (!setupArtifact) {
       continue;
     }
+    const setupSource = setupArtifact.source;
+    let mod: OpenClawPluginModule;
+    let moduleLoader: ReturnType<typeof getPluginSetupModuleLoader>;
+    try {
+      moduleLoader = getPluginSetupModuleLoader(record, setupSource, setupArtifact.rootDir);
+      mod = moduleLoader(setupSource) as OpenClawPluginModule;
+    } catch (error) {
+      // A broken setup entry silently removes the plugin's providers/CLI
+      // backends/migrations from onboarding; record why instead of vanishing.
+      diagnostics.push({
+        pluginId: record.id,
+        code: "setup-entry-load-failed",
+        message: `setup entry failed to load from ${setupSource}: ${formatErrorMessage(error)}`,
+      });
+      continue;
+    }
+    const instance = getPluginValueInstance(mod as object);
 
     const recordProviders = new Map<string, SetupProviderEntry>();
     const recordCliBackends = new Map<string, SetupCliBackendEntry>();
@@ -574,7 +544,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
       name: record.name ?? record.id,
       version: record.version,
       description: record.description,
-      source: setupRegistration.setupSource,
+      source: setupSource,
       rootDir: record.rootDir,
       registrationMode: "setup-only",
       config: {},
@@ -613,9 +583,23 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
 
     try {
       if (
-        !setupRegistration.initialize(() =>
-          setupRegistration.register(instrumentPluginInstanceApi(api, setupRegistration.instance)),
-        )
+        !moduleLoader.initialize(() => {
+          const registrationApi = instrumentPluginInstanceApi(api, instance);
+          const resolved = resolvePluginModuleExport(mod);
+          if (
+            !resolved.register ||
+            (resolved.definition?.id && resolved.definition.id !== record.id)
+          ) {
+            return false;
+          }
+          // Setup keeps a legacy async entry's synchronous prefix; later registration stays closed.
+          runPluginRegistration(
+            resolved.register.bind(resolved.definition),
+            registrationApi,
+            "ignore",
+          );
+          return true;
+        })
       ) {
         continue;
       }

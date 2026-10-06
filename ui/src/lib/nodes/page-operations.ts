@@ -239,7 +239,6 @@ export async function rejectDevicePairing(state: DevicesState, requestId: string
   await runDeviceMutation(state, (client) => client.request("device.pair.reject", { requestId }));
 }
 
-/** Entry removal request resolved from the unified inventory row. */
 export type InventoryRemovalRequest = {
   id: string;
   name: string;
@@ -411,7 +410,6 @@ function classifyRotationOutcome(
   );
 }
 
-/** Rotates a device token and returns what the Gateway did with the replacement. */
 export async function rotateDeviceToken(
   state: DevicesState,
   params: { deviceId: string; gatewayUrl: string; role: string; scopes?: string[] },

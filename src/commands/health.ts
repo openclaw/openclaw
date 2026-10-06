@@ -261,7 +261,7 @@ export async function healthCommand(
         );
         runtime.log(`  ${channelId}: ${entries.join(" ")}`);
       }
-      runtime.log(info("[debug] gateway channel probes"));
+      runtime.log(info("[debug] gateway channel checks"));
       for (const [channelId, channelSummary] of Object.entries(summary.channels ?? {})) {
         const accounts = channelSummary.accounts ?? {};
         const probes = Object.entries(accounts).map(([accountId, accountSummary]) => {
@@ -363,7 +363,7 @@ export async function healthCommand(
     }
 
     if (Number.isFinite(summary.durationMs)) {
-      runtime.log(info(`Gateway probe duration: ${summary.durationMs}ms`));
+      runtime.log(info(`Gateway check duration: ${summary.durationMs}ms`));
     }
 
     if (resolvedAgents.length > 0) {

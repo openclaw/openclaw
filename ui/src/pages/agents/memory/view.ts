@@ -308,7 +308,7 @@ function flattenDiaryBody(body: string): string[] {
     body
       .split("\n")
       .map((line) => line.trim())
-      // Remove section headings that leak implementation
+      // Remove section headings that leak implementation.
       .filter(
         (line) =>
           line.length > 0 &&
@@ -317,11 +317,9 @@ function flattenDiaryBody(body: string): string[] {
           line !== "Candidates" &&
           line !== "Possible Lasting Updates",
       )
-      // Strip source citations [memory/...]
-      .map((line) => line.replace(/\s*\[memory\/[^\]]+\]/g, ""))
-      // Strip leading list markers and labels
       .map((line) =>
         line
+          .replace(/\s*\[memory\/[^\]]+\]/g, "")
           .replace(/^(?:\d+\.\s+|-\s+(?:\[[^\]]+\]\s+)?(?:[a-z_]+:\s+)?)/i, "")
           .replace(/^(?:likely_durable|likely_situational|unclear):\s+/i, "")
           .trim(),
@@ -545,8 +543,7 @@ async function openWikiPreview(lookup: string, props: DreamingProps): Promise<vo
     state.wikiPreviewPath = preview.path;
     state.wikiPreviewUpdatedAt = preview.updatedAt ?? null;
     state.wikiPreviewContent = preview.content;
-    state.wikiPreviewTotalLines =
-      typeof preview.totalLines === "number" ? preview.totalLines : null;
+    state.wikiPreviewTotalLines = preview.totalLines ?? null;
     state.wikiPreviewTruncated = preview.truncated === true;
   } catch (error) {
     if (state.wikiPreviewRequestId === requestId && state.wikiPreviewOpen) {

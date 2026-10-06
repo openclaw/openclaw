@@ -42,6 +42,8 @@ describe("isRetryableAssistantError", () => {
     ["bedrock-incomplete-terminal-stream", true],
     ["anthropic-incomplete-terminal-stream", true],
     ["google-incomplete-terminal-stream", true],
+    ["google-sse-eof-incomplete-frame", true],
+    ["google-sse-malformed-json-frame", false],
     ["mistral-incomplete-terminal-stream", true],
     ["openai-completions-incomplete-terminal-stream", true],
     ["openai-responses-incomplete-terminal-stream", true],

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
@@ -134,6 +135,16 @@ function catalogFixture(stateDir: string) {
     catalog,
     list,
     invoke,
+    hydrate: async () => {
+      const publications: Promise<void>[] = [];
+      await catalog.list({
+        allowPartialResults: true,
+        onHost: () => {},
+        waitUntil: (work) => publications.push(work),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all(publications);
+    },
     start: async () => {
       await Promise.all(
         services.map(async (service) => {
@@ -163,13 +174,18 @@ async function withCatalogFixture(
   run: (fixture: ReturnType<typeof catalogFixture>) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    vi.useFakeTimers();
     const fixture = catalogFixture(state.stateDir);
     try {
       await fixture.start();
       await run(fixture);
     } finally {
       // Stop all publishers before the fixture closes its private databases and environment.
-      await fixture.stop();
+      try {
+        await fixture.stop();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 }
@@ -219,13 +235,28 @@ describe("session-share node commands", () => {
       const counter = trackSqliteStatementExecutions(db, ["transcript"], (sql) =>
         /\btranscript_events\b/.test(sql) ? "transcript" : null,
       );
-      let first: Awaited<ReturnType<SessionCatalogProvider["list"]>>;
       try {
-        first = await receiver.catalog.list({ limitPerHost: 1 });
+        expect((await source.list({ limit: 1 })).sessions).toMatchObject([
+          { threadId: "agent:main:named", name: "Named session" },
+        ]);
         expect.soft(counter.counts.transcript).toBe(0);
       } finally {
         counter.restore();
       }
+      const responses = [
+        JSON.stringify(await source.list({ limit: 100 })),
+        JSON.stringify(await source.list({ limit: 100 })),
+      ];
+      const hashes = responses.map((response) =>
+        createHash("sha256").update(response).digest("hex"),
+      );
+      expect(hashes[1]).toBe(hashes[0]);
+      console.info("Session Share paired source response", {
+        bytes: responses.map((response) => Buffer.byteLength(response)),
+        hashes,
+      });
+      await receiver.hydrate();
+      const first = await receiver.catalog.list({ limitPerHost: 1 });
       expect(first[0]?.sessions).toMatchObject([
         { threadId: "agent:main:named", name: "Named session" },
       ]);
@@ -252,6 +283,7 @@ describe("session-share node commands", () => {
           { threadId: "agent:main:derived-2", name: "Derived title 2" },
         ]);
       }
+      expect(receiver.invoke).toHaveBeenCalledTimes(1);
       db.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
         "invalid-json",
         "derived-0",
@@ -829,6 +861,7 @@ describe("session-share receiver identity integration", () => {
           identity: { ...namespacedIdentity, id: "9999" },
         },
       };
+      await fixture.hydrate();
       expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([
         namespacedHuman,
         agent,
@@ -845,6 +878,7 @@ describe("session-share receiver identity integration", () => {
             entries: { "session-share": { config: { nodes: { [nodeId]: { owner } } } } },
           },
         });
+        await fixture.hydrate();
         const rows = (await fixture.catalog.list({}))[0]!.sessions;
         expect(rows[0]).toEqual(namespacedHuman);
         expect(rows[1]?.createdActor).toMatchObject({
@@ -862,6 +896,7 @@ describe("session-share receiver identity integration", () => {
           },
         },
       });
+      await fixture.hydrate();
       identityReads.mockClear();
       const linked = (await fixture.catalog.list({}))[0]!.sessions;
       expect.soft(fullIdentityScans()).toBe(1);

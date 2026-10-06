@@ -1,4 +1,3 @@
-/** Model selection, compression preparation, and provider execution for view_image. */
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -46,13 +45,17 @@ export function resolveImageModelConfigForOverride(params: {
   });
 }
 
-function resolveCompressionModelCandidates(params: {
+export async function prepareImageCompressionPolicy(params: {
+  abortSignal?: AbortSignal;
   cfg?: OpenClawConfig;
   imageModelConfig?: ImageModelConfig | null;
   modelOverride?: string;
+  imageCount: number;
+  agentDir?: string;
+  workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-}): Array<{ provider: string; model: string }> {
+}): Promise<ImageCompressionPolicy> {
   const overrideConfig = resolveImageModelConfigForOverride({
     cfg: params.cfg,
     modelOverride: params.modelOverride,
@@ -67,26 +70,12 @@ function resolveCompressionModelCandidates(params: {
   const effectiveCfg = effectiveImageModelConfig
     ? applyAgentDefaultModelConfig(params.cfg, "imageModel", effectiveImageModelConfig)
     : params.cfg;
-  return resolveAllowedImageFallbackCandidates({
+  const modelCandidates = resolveAllowedImageFallbackCandidates({
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     operatorAuthority: params.operatorAuthority,
     manifestPlugins: params.preparedModelRuntime?.metadataSnapshot,
   });
-}
-
-export async function prepareImageCompressionPolicy(params: {
-  abortSignal?: AbortSignal;
-  cfg?: OpenClawConfig;
-  imageModelConfig?: ImageModelConfig | null;
-  modelOverride?: string;
-  imageCount: number;
-  agentDir?: string;
-  workspaceDir?: string;
-  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-}): Promise<ImageCompressionPolicy> {
-  const modelCandidates = resolveCompressionModelCandidates(params);
   const quality = params.cfg?.agents?.defaults?.imageQuality;
   const models = await Promise.all(
     modelCandidates.map((candidate) =>
@@ -137,26 +126,6 @@ function matchesImageTimeoutEntry(params: {
     ? configuredModel.slice(providerPrefix.length)
     : configuredModel;
   return normalizedConfiguredModel === params.model;
-}
-
-function resolveImageToolTimeoutMs(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-  providerRegistry: Map<string, MediaUnderstandingProvider>;
-}): number {
-  const sharedEntry = params.cfg.tools?.media?.models?.find((entry) =>
-    matchesImageTimeoutEntry({
-      entry,
-      provider: params.provider,
-      model: params.model,
-      providerRegistry: params.providerRegistry,
-    }),
-  );
-  return resolveTimeoutMs(
-    sharedEntry?.timeoutSeconds ?? params.cfg.tools?.media?.image?.timeoutSeconds,
-    DEFAULT_TIMEOUT_SECONDS.image,
-  );
 }
 
 export async function runImagePrompt(params: {
@@ -232,12 +201,13 @@ export async function runImagePrompt(params: {
           providerCfg,
           preparedProviders ?? [],
         );
-        const timeoutMs = resolveImageToolTimeoutMs({
-          cfg: providerCfg,
-          provider,
-          model: modelId,
-          providerRegistry,
-        });
+        const sharedEntry = providerCfg.tools?.media?.models?.find((entry) =>
+          matchesImageTimeoutEntry({ entry, provider, model: modelId, providerRegistry }),
+        );
+        const timeoutMs = resolveTimeoutMs(
+          sharedEntry?.timeoutSeconds ?? providerCfg.tools?.media?.image?.timeoutSeconds,
+          DEFAULT_TIMEOUT_SECONDS.image,
+        );
         const imageProvider = getMediaUnderstandingProvider(provider, providerRegistry);
         const request = {
           provider,

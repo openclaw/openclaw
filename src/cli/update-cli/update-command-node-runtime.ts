@@ -124,7 +124,7 @@ export async function preparePackageUpdateRuntime(params: {
   managedService?: PreManagedServiceStop;
   packageUpdateNodeRunner?: string;
   packageInstallEnv?: NodeJS.ProcessEnv;
-  packageRuntimeTarget?: { version: string; nodeEngine: string | null };
+  packageRuntimeTarget?: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
   shouldRestart: boolean;
   opts: UpdateCommandOptions;
   executor: UpdateCommandExecutor;

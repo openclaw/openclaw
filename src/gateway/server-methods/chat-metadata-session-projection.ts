@@ -11,6 +11,11 @@ import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  settleCurrentReadPreparations,
+  withCurrentReadAuthority,
+  type CurrentReadAuthority,
+} from "../../shared/current-read-authority.js";
 import { resolveGatewaySessionRuntimeSelectionLocked } from "../session-utils-projection.js";
 import {
   type prepareChatAccountSelection,
@@ -89,19 +94,22 @@ export async function prepareChatMetadataModelProjection(params: {
   profileProvider?: string;
   runtimeOverride?: string;
   assertCurrent?: () => void;
+  withCurrent?: CurrentReadAuthority["withCurrent"];
 }): Promise<{
   modelCatalog: ModelCatalogEntry[];
   read: () => { models?: ModelChoice[] };
   isCurrent: () => boolean;
 }> {
-  const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
-    await import("./models-list-result.js");
+  const [{ prepareModelsListResult }, { createModelCatalogDecisions }] = await Promise.all([
+    import("./models-list-result.js"),
+    import("../../agents/model-catalog-decisions.js"),
+  ]);
   // A draft has no persisted session grant: recheck its live human before hydrating private auth.
-  params.assertCurrent?.();
+  await withCurrentReadAuthority(params, () => {});
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
   // models.list control-plane reads so a slow provider cannot delay chat startup.
   const snapshot = params.facts.modelCatalog;
-  const projector = createGatewayAgentModelCatalogProjector({
+  const projectorParams: Parameters<typeof createModelCatalogDecisions>[0] = {
     cfg: params.facts.owner.config,
     agentId: params.facts.agentId,
     snapshot,
@@ -121,22 +129,28 @@ export async function prepareChatMetadataModelProjection(params: {
     ...(params.pinnedProfileId ? { pinnedProfileId: params.pinnedProfileId } : {}),
     ...(params.profileProvider ? { profileProvider: params.profileProvider } : {}),
     ...(params.runtimeOverride ? { runtimeOverride: params.runtimeOverride } : {}),
-  });
-  const [modelCatalog, readModels] = await Promise.all([
-    projector.projectCatalog(),
+  };
+  const projector = await withCurrentReadAuthority(params, () =>
+    createModelCatalogDecisions(projectorParams),
+  );
+  const work = [
+    projector.projectCatalog(params),
     prepareModelsListResult({
       source: { kind: "gateway", context: params.context },
       agentId: params.facts.agentId,
-      params: { view: "configured" },
+      params: { view: "configured", includeDefaultModels: false },
       preloadedCatalog: {
         agentId: params.facts.agentId,
         config: params.facts.owner.config,
         snapshot,
       },
       preloadedOnly: true,
+      preparationAuthority: params,
       catalogProjector: projector,
     }),
-  ]);
+  ] as const;
+  const [modelCatalog, readModels] = await settleCurrentReadPreparations(work);
+  await withCurrentReadAuthority(params, () => {});
   return {
     modelCatalog,
     read: () => ({ models: readModels.read().models }),
@@ -209,12 +223,21 @@ export function projectSessionModelCatalog(
   config: OpenClawConfig,
 ): ModelChoice[] {
   const ownership = readSessionRuntimeOwnership({ ...readParams, config });
-  if (ownership?.auth !== "native") {
+  const nativeAuth = ownership?.auth === "native";
+  const entry = readParams.sessionEntry;
+  const authProfileSource = resolveCollapsedSessionAuthPinSource(entry);
+  const workerAuth =
+    readParams.workerInference === "worker" &&
+    !entry?.modelOverride?.trim() &&
+    !entry?.agentRuntimeOverride?.trim() &&
+    !(entry?.authProfileOverride?.trim() && authProfileSource === "user");
+  if (!nativeAuth && !workerAuth) {
     return models;
   }
-  // Pending native branches have no tuple. Omit host readiness without claiming native login.
+  // Pending native branches have no tuple. Worker inference uses the configured ambient model;
+  // explicit model, runtime, and personal-account choices retain Gateway availability checks.
   const renderedModel =
-    ownership.modelRef ??
+    ownership?.modelRef ??
     resolveSessionModelRef(config, readParams.sessionEntry, readParams.agentId, {
       allowPluginNormalization: false,
     });
@@ -222,13 +245,20 @@ export function projectSessionModelCatalog(
     if (model.provider !== renderedModel.provider || model.id !== renderedModel.model) {
       return model;
     }
+    if (
+      workerAuth &&
+      model.unavailableReason !== "missing-auth" &&
+      model.unavailableReason !== "auth-failed"
+    ) {
+      return model;
+    }
     const {
       available: _available,
       unavailableReason: _reason,
       unavailableUntil: _until,
-      ...native
+      ...available
     } = model;
-    return native;
+    return available;
   });
 }
 

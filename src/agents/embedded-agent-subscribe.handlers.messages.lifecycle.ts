@@ -1,12 +1,8 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-/**
- * Handles assistant message lifecycle boundaries, and final reconciliation.
- */
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
-import { coerceChatContentText } from "../shared/chat-content.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
 import {
   recordPendingAssistantReplyDirectives,
@@ -107,7 +103,7 @@ export function handleMessageEnd(
         event: "assistant_message_end",
         runId: ctx.params.runId,
         sessionId: (ctx.params.session as { id?: string }).id,
-        rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
+        rawText: extractEmbeddedAssistantText(assistantMessage),
         rawThinking: extractAssistantThinking(assistantMessage),
       }),
       ctx.params.sessionKey,
@@ -115,13 +111,12 @@ export function handleMessageEnd(
     emitAssistantCommentaryStreamData(ctx, assistantMessage, true);
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
-      ? extractAssistantThinking(assistantMessage).trim()
+      ? extractAssistantThinking(assistantMessage)
       : "";
     if (
       !ctx.params.silentExpected &&
       !suppressDeterministicApprovalOutput &&
       !suppressMessageToolOnlySourceReplyOutput &&
-      ctx.state.includeReasoning &&
       suppressedTrimmedReasoning &&
       ctx.params.onBlockReply &&
       suppressedTrimmedReasoning !== ctx.state.lastReasoningSent
@@ -135,8 +130,7 @@ export function handleMessageEnd(
   promoteThinkingTagsToBlocks(assistantMessage);
 
   let rawText: string | undefined;
-  const getRawText = () =>
-    (rawText ??= coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)));
+  const getRawText = () => (rawText ??= extractEmbeddedAssistantText(assistantMessage));
   const snapshot = extractAssistantStreamSnapshot(ctx, assistantMessage);
   const rawVisibleText = snapshot.text;
   appendRawStream(
@@ -173,7 +167,6 @@ export function handleMessageEnd(
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(getRawText())
       : "";
-  const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
   ctx.resetPartialReplyDirectives();
   const parsedText = parseReplyDirectives(text);
@@ -321,20 +314,20 @@ export function handleMessageEnd(
     !suppressDeterministicApprovalOutput &&
     !suppressMessageToolOnlySourceReplyOutput &&
     ctx.state.includeReasoning &&
-    trimmedReasoning &&
+    rawThinking &&
     onBlockReply &&
-    trimmedReasoning !== ctx.state.lastReasoningSent,
+    rawThinking !== ctx.state.lastReasoningSent,
   );
   const shouldEmitReasoningBeforeAnswer =
     shouldEmitReasoning && ctx.state.blockReplyBreak === "message_end" && !addedDuringMessage;
   const maybeEmitReasoning = () => {
-    if (!shouldEmitReasoning || !trimmedReasoning) {
+    if (!shouldEmitReasoning) {
       return;
     }
-    ctx.state.lastReasoningSent = trimmedReasoning;
+    ctx.state.lastReasoningSent = rawThinking;
     // Lane purity: the payload carries raw thinking only. Tool persistence is
     // the verbose lane's job; interleaving comes from arrival order.
-    ctx.emitBlockReply({ text: trimmedReasoning, isReasoning: true });
+    ctx.emitBlockReply({ text: rawThinking, isReasoning: true });
   };
 
   if (shouldEmitReasoningBeforeAnswer) {
