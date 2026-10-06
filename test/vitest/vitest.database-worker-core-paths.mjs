@@ -693,6 +693,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/command/delivery.custody.integration.test.ts",
   "src/agents/main-session-recovery/main-session-restart-recovery-admission.test.ts",
   "src/agents/main-session-recovery/main-session-restart-recovery.test.ts",
+  "src/agents/main-session-recovery/main-session-startup-recovery.test.ts",
   "src/auto-reply/reply/route-reply.prepared.test.ts",
   "src/auto-reply/reply/route-reply.recovery-owner.test.ts",
   "src/media/store.cleanup.test.ts",

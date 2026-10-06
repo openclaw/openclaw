@@ -13,17 +13,10 @@ import type {
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { AgentCreationClaimWitness } from "./agent-creation-claim.js";
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-registry-listing.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
 import type { RegisteredAgentWorkerOperations } from "./openclaw-agent-execution-operations.js";
-
-/** A retired owner refused new work; an admitted command's failure is never classified here. */
-export const AgentDatabaseExecutionAdmissionClosedError = resolveGlobalSingleton(
-  Symbol.for("openclaw.agentDatabaseExecutionAdmissionClosedError"),
-  () => class AdmissionClosedError extends Error {},
-);
 
 /** Recorded by the native owner; a descriptor never grants access to that owner. */
 export type AgentDatabaseFileExecutionIdentity = {

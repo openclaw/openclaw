@@ -51,7 +51,7 @@ export type { SessionSystemPromptReport } from "./session-system-prompt-report.j
 
 export type { SessionScope } from "../types.base.js";
 export type SessionChatType = ChatType;
-export type PersistedSessionRunStatus = SessionRunStatus;
+export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 
 export type SessionOrigin = {
@@ -653,9 +653,7 @@ export type InternalSessionEntryCore = SessionEntryCore & {
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}
 
-export function isTerminalSessionStatus(
-  status: unknown,
-): status is Exclude<NonNullable<SessionEntry["status"]>, "running"> {
+export function isTerminalSessionStatus(status: unknown): status is PersistedSessionRunStatus {
   return (
     status === "done" ||
     status === "failed" ||

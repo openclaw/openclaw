@@ -88,10 +88,10 @@ it("joins accepted lifecycle preparation after the close prelude aborts its sche
     await withinTest(closing, signal);
     expect(database.isOpen).toBe(false);
     expect(loadSessionEntryReadOnly(target)).toMatchObject({
-      status: "running",
       lifecycleRunId: "lifecycle-close-run",
       startedAt: 1_000,
     });
+    expect(loadSessionEntryReadOnly(target)?.status).toBeUndefined();
   } finally {
     release.resolve();
     await closing?.catch(() => undefined);

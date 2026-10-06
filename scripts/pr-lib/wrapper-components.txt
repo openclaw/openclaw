@@ -1581,6 +1581,7 @@ src/skills/skill-library-error.ts
 src/skills/lifecycle/upload-store-error.ts
 src/skills/runtime/refresh-watch-targets.types.ts
 src/state/agent-creation-claim.ts
+src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
 src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup.ts

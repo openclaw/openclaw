@@ -92,7 +92,6 @@ it("selects current work before pagination and represents an isolated cron run o
       const entry = await upsertSessionEntryCore(scope, {
         sessionId,
         updatedAt,
-        status: "running",
         visibility: "shared",
       });
       await replaceSessionEntry(scope, { ...entry!, updatedAt });
@@ -606,7 +605,7 @@ it.each([false, true])(
 
 it.each(
   (["configured", "inherited"] as const).flatMap((selection) =>
-    (["done", "running"] as const).map((storedStatus) => ({ selection, storedStatus })),
+    (["done", undefined] as const).map((storedStatus) => ({ selection, storedStatus })),
   ),
 )(
   "reconciles a completed fallback during projection ($selection selection, $storedStatus status)",
