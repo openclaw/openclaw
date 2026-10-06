@@ -398,6 +398,11 @@ describe("node stream close acknowledgement", () => {
     const targetPort = (targetServer.address() as AddressInfo).port;
     const controller = new AbortController();
     let failure: unknown;
+    let ack: (() => void) | undefined;
+    let markAckArmed: () => void = () => {};
+    const ackArmed = new Promise<void>((resolve) => {
+      markAckArmed = resolve;
+    });
     const running = runNodeStreamTransport({
       gatewayUrl: `ws://127.0.0.1:${gatewayPort}`,
       attachPath: `/node-desktop/attach?ticket=${ticket}`,
@@ -407,19 +412,28 @@ describe("node stream close acknowledgement", () => {
       streamName: "desktop",
       signal: controller.signal,
       closeAckMs: 40,
+      scheduleCloseAck: (callback, delayMs) => {
+        if (delayMs === 40) {
+          ack = callback;
+          markAckArmed();
+          return () => {
+            if (ack === callback) {
+              ack = undefined;
+            }
+          };
+        }
+        const timer = setTimeout(callback, delayMs);
+        return () => clearTimeout(timer);
+      },
     }).catch((error: unknown) => {
       failure = error;
     });
     try {
       await gotFrame.promise;
       targetPeer?.end();
-      const settled = await Promise.race([
-        running.then(() => "settled" as const),
-        new Promise<"pending">((resolve) => {
-          setTimeout(() => resolve("pending"), 2_000);
-        }),
-      ]);
-      expect(settled).toBe("settled");
+      await ackArmed;
+      ack?.();
+      await running;
       expect(failure).toBeUndefined();
       await expect
         .poll(async () => {

@@ -108,9 +108,16 @@ function createNodeStreamSplice(params: {
   streamName: string;
   diagnostics: NodeStreamDiagnostics;
   closeAckMs?: number;
+  scheduleCloseAck?: (callback: () => void, delayMs: number) => () => void;
 }) {
   let resumeTimer: ReturnType<typeof setInterval> | undefined;
-  let closeAckTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelCloseAck: (() => void) | undefined;
+  const scheduleCloseAck =
+    params.scheduleCloseAck ??
+    ((callback: () => void, delayMs: number) => {
+      const timer = setTimeout(callback, delayMs);
+      return () => clearTimeout(timer);
+    });
   let settled = false;
   let finish!: (trigger: NodeStreamCloseTrigger, error?: Error) => void;
   const resumeWebSocket = () => params.ws.resume();
@@ -143,8 +150,8 @@ function createNodeStreamSplice(params: {
       params.diagnostics.trigger ??= trigger;
       settled = true;
       clearInterval(resumeTimer);
-      clearTimeout(closeAckTimer);
-      closeAckTimer = undefined;
+      cancelCloseAck?.();
+      cancelCloseAck = undefined;
       stopInbound();
       if (error) {
         reject(error);
@@ -185,7 +192,7 @@ function createNodeStreamSplice(params: {
         const closeAckMs = params.closeAckMs ?? STREAM_CLOSE_ACK_MS;
         const flushDeadline = Date.now() + STREAM_CLOSE_FLUSH_MS;
         const retireUnacknowledged = () => {
-          closeAckTimer = undefined;
+          cancelCloseAck = undefined;
           finish("websocket-close");
           if (
             params.ws.readyState === WEBSOCKET_OPEN ||
@@ -198,11 +205,12 @@ function createNodeStreamSplice(params: {
           if (settled) {
             return;
           }
+          cancelCloseAck?.();
           if (params.ws.bufferedAmount > 0 && Date.now() < flushDeadline) {
-            closeAckTimer = setTimeout(armCloseAck, RESUME_CHECK_MS);
+            cancelCloseAck = scheduleCloseAck(armCloseAck, RESUME_CHECK_MS);
             return;
           }
-          closeAckTimer = setTimeout(retireUnacknowledged, closeAckMs);
+          cancelCloseAck = scheduleCloseAck(retireUnacknowledged, closeAckMs);
         };
         armCloseAck();
       } else {
@@ -238,6 +246,7 @@ export async function runNodeStreamTransport(params: {
   signal: AbortSignal;
   emitStatus?: (status: string) => Promise<void>;
   closeAckMs?: number;
+  scheduleCloseAck?: (callback: () => void, delayMs: number) => () => void;
 }): Promise<void> {
   const socket = "stream" in params.target ? params.target.stream : new net.Socket();
   // Loopback peers may send immediately; retain their first bytes until metadata is accepted.
@@ -301,6 +310,7 @@ export async function runNodeStreamTransport(params: {
       streamName: params.streamName,
       diagnostics,
       closeAckMs: params.closeAckMs,
+      scheduleCloseAck: params.scheduleCloseAck,
     });
     await sendAttachMetadata(ws, params.metadata);
     void params.emitStatus?.(`${params.streamName} stream attached\n`).catch(() => undefined);
