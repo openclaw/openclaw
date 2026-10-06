@@ -1100,7 +1100,7 @@ export async function getReplyFromConfig(
   }
   const { resolvedThinkLevel, resolvedReasoningLevel } = await resolveRunModelLevels();
 
-  let stagedAttachmentPaths = hasStagedMediaFacts(finalized.media)
+  let stagedAttachmentPaths: ReadonlyMap<number, string> = hasStagedMediaFacts(finalized.media)
     ? new Map(
         normalizeMediaFacts(finalized.media).flatMap((fact, index) =>
           fact.path ? [[index, fact.path] as const] : [],
