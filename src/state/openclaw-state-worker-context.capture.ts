@@ -13,7 +13,14 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 export function captureOpenClawStateReadContextWithAdmission(
   pathname: string,
   captureAdmission: (pathname: string) => OpenClawStateWorkerContext["admission"],
-) {
+): Pick<
+  OpenClawStateWorkerContext,
+  | "admission"
+  | "maintenanceScope"
+  | "existingSchemaPath"
+  | "runInCapturedSchemaScope"
+  | "stateIntegrity"
+> & { assertPublicationCurrent: () => void } {
   const schema = captureOpenClawStateSchemaReadAdmission(pathname);
   const capturedAdmission = captureAdmission(pathname);
   const integrity = capturedAdmission.captureIntegrity?.();
