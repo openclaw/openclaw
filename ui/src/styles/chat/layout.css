@@ -1,8 +1,3 @@
-/* =============================================
-   CHAT CARD LAYOUT - Flex container with sticky compose
-   ============================================= */
-
-/* Main chat card - flex column layout, transparent background */
 openclaw-chat-page,
 openclaw-pending-session-create {
   display: flex;
@@ -752,7 +747,6 @@ openclaw-pending-session-create {
   opacity: 0.9;
 }
 
-/* Loading "comet": a soft accent sweep converging on the label from both rules. */
 .chat-history-boundary__line::after {
   content: "";
   position: absolute;
@@ -898,7 +892,6 @@ openclaw-pending-session-create {
   flex-shrink: 0;
 }
 
-/* Context usage instrument - compact dial with an on-demand session readout. */
 .context-usage {
   position: relative;
   display: inline-flex;
@@ -1434,7 +1427,6 @@ openclaw-chat-video-player {
   }
 }
 
-/* Right-click reply context menu */
 .chat-reply-context-menu,
 .chat-selection-popup {
   position: fixed;

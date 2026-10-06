@@ -269,17 +269,11 @@ export class ModelProviderProfileActionsController {
     if (!data || !authStatus) {
       return;
     }
-    const providers = [...authStatus.providers];
-    for (const [index, candidate] of providers.entries()) {
-      if ((candidate.authProvider ?? candidate.provider) !== provider) {
-        continue;
-      }
-      providers[index] = {
-        ...candidate,
-        profileOrder: [...profileIds],
-        profileOrderStored: true,
-      };
-    }
+    const providers = authStatus.providers.map((candidate) =>
+      (candidate.authProvider ?? candidate.provider) === provider
+        ? { ...candidate, profileOrder: [...profileIds], profileOrderStored: true }
+        : candidate,
+    );
     this.options.setData({ ...data, authStatus: { ...authStatus, providers } });
   }
 }

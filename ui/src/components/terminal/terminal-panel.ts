@@ -53,7 +53,6 @@ type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
 const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
 
-/** `<openclaw-terminal-panel>` — the dockable Control UI shell surface. */
 export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHostedTabsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
@@ -75,9 +74,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
   @property({ type: Boolean }) available = false;
   /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
   @property({ type: Boolean }) suppressed = false;
-  /** Active Control UI color mode, mirrored into the terminal theme. */
   @property({ attribute: false }) themeMode: "dark" | "light" = "dark";
-  /** Configured Control UI mount prefix used by document links. */
   @property({ attribute: false }) basePath = "";
   /**
    * Focused terminal document mode (`/focus/terminal`): fills the

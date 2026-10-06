@@ -63,9 +63,7 @@ function inventorySummary(
 }
 
 export function renderDeviceInventory(props: DevicesProps) {
-  const list = props.devicesList ?? { pending: [], paired: [] };
-  const pending = Array.isArray(list.pending) ? list.pending : [];
-  const paired = Array.isArray(list.paired) ? list.paired : [];
+  const { pending, paired } = props.devicesList ?? { pending: [], paired: [] };
   const groups = buildDeviceInventory({ paired, nodes: props.nodes, presence: props.presence });
   const gatewayPresence = findGatewayPresence(props.presence);
   const unpairedPresence = listUnpairedPresence(props.presence, groups);
@@ -201,16 +199,10 @@ function entryWarnStatuses(
   const statuses: TemplateResult[] = [];
   const isApprovedNode = isApprovedNodeEntry(entry);
   const nodeVersion = resolveNodeCoreVersion(entry);
-  const normalizedGatewayVersion = normalizeOptionalString(gatewayVersion);
-  if (
-    isApprovedNode &&
-    nodeVersion &&
-    normalizedGatewayVersion &&
-    nodeVersion !== normalizedGatewayVersion
-  ) {
+  if (isApprovedNode && nodeVersion && gatewayVersion && nodeVersion !== gatewayVersion) {
     const title = t("devices.inventory.versionDriftTitle", {
       nodeVersion,
-      gatewayVersion: normalizedGatewayVersion,
+      gatewayVersion,
     });
     statuses.push(
       html`<span title=${title}>

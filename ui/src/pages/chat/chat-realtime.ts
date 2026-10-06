@@ -419,10 +419,8 @@ export function attachChatRealtimeActions(
     }
     await startRealtimeTalk();
   };
-  state.toggleRealtimeTalkCamera = async () => {
-    const enabled = state.realtimeTalkVideoStream === null;
-    await setRealtimeTalkCameraEnabled(enabled);
-  };
+  state.toggleRealtimeTalkCamera = async () =>
+    setRealtimeTalkCameraEnabled(state.realtimeTalkVideoStream === null);
   state.switchRealtimeTalkCamera = async () => {
     const session = state.realtimeTalkSession;
     const stream = state.realtimeTalkVideoStream;

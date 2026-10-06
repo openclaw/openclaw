@@ -1,4 +1,3 @@
-// Chat-item projection, expansion, reply hydration, and guarded row rendering.
 import { html, nothing } from "lit";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";

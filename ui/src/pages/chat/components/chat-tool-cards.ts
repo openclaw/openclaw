@@ -53,9 +53,6 @@ export function renderBrowserTabPreviews(
         .map((card) => ({ card, groupKey: group.key })),
     ),
   );
-  if (cards.length === 0) {
-    return [];
-  }
   // Select each tab's final state before collapsing reopened pages. A newer
   // blank/non-web result must still retire that tab's older web preview.
   const seenTabs = new Set<string>();
@@ -136,8 +133,6 @@ export function renderToolIcon(
   // SAFETY: Unknown display icon names produce undefined and use the fallback.
   return icons[name as IconName] ?? icons.puzzle;
 }
-
-// ── Kind-aware tool rows (command / read / edit / write / search / fetch) ──
 
 const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
   read: "chat.toolCards.verbs.read",

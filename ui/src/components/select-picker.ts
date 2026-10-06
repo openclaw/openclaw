@@ -49,11 +49,6 @@ export type PickerParams<Option extends PickerOption> = {
 
 let pickerCount = 0;
 
-function nextPickerId() {
-  pickerCount += 1;
-  return `openclaw-picker-${pickerCount}`;
-}
-
 export class SelectPicker<
   Option extends PickerOption = PickerOption,
 > extends OpenClawLightDomElement {
@@ -66,7 +61,7 @@ export class SelectPicker<
 
   @state() private collapsedGroups = new Set<string>();
 
-  private readonly listboxId = nextPickerId();
+  private readonly listboxId = `openclaw-picker-${++pickerCount}`;
   private typeahead = "";
   private typeaheadAt = 0;
   private renderedSections: PickerSection<Option>[] = [];
@@ -198,7 +193,6 @@ export class SelectPicker<
     }
   }
 
-  // Fades mark the edges of a list that scrolls past them.
   private readonly syncScrollFade = () => {
     const list = this.querySelector<HTMLElement>(".picker-select__options");
     if (list) {

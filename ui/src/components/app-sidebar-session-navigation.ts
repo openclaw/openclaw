@@ -94,7 +94,6 @@ import {
   SidebarProjectionMemo,
 } from "./sidebar-projection-memo.ts";
 
-/** Session-row projection, selection, sorting, and agent scope navigation. */
 export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   @state() rosterSessionSource: {
     result: SessionsListResult | null;
@@ -290,10 +289,10 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     for (const session of pending) {
       pending.push(...session.children);
       if (
-        (session.childLoadParentKeys?.length ?? 0) > 0 &&
+        session.childLoadParentKeys?.length &&
         (session.visuallyActive || this.isSessionChildrenExpanded(session))
       ) {
-        for (const key of session.childLoadParentKeys ?? [session.key]) {
+        for (const key of session.childLoadParentKeys) {
           revalidating.add(key);
         }
       }
@@ -695,7 +694,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       : (this.sessionData.sessionResultsByAgent[selected] ?? null);
   }
 
-  /** Canonical main-session key for the selected (or given) agent. */
   selectedAgentMainSessionKey(agentId?: string): string {
     return resolveSidebarMainSessionKey({
       agentId: agentId ?? this.expandedAgentId(),

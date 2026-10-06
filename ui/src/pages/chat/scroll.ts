@@ -4,7 +4,6 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
-/** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
 /** Shared semantic boundary for treating the transcript as settled at its end. */
 export const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;

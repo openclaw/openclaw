@@ -301,8 +301,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
         this.persistSessions();
       }
     } catch {
-      // terminal.list failed (older gateway, surface flapping): fall through
-      // to a fresh session below.
+      // A failed restore falls through to a fresh session below.
     } finally {
       if (this.isTerminalOperationCurrent(operation, restore)) {
         this.pendingRestore = null;
@@ -329,8 +328,8 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     return this.isTerminalOperationCurrent(operation) ? sessions : null;
   }
 
-  async attachSessionById(sessionId: string, agentOwned = false): Promise<void> {
-    await this.intentQueue.queue({ kind: "attach", sessionId, agentOwned });
+  attachSessionById(sessionId: string, agentOwned = false): Promise<void> {
+    return this.intentQueue.queue({ kind: "attach", sessionId, agentOwned });
   }
 
   private async attachSessionNow(
@@ -361,7 +360,6 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     }
   }
 
-  /** Boots a tab with a libterminal controller, ready for an open or attach RPC. */
   private async bootTab(
     operation: TerminalOperation,
     options: {
@@ -391,7 +389,6 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     return boot;
   }
 
-  /** Binds a freshly opened or attached gateway session to its tab. */
   private adoptSession(
     tab: TerminalPanelSessionTab,
     result: TerminalOpenResult,
@@ -512,7 +509,6 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     }
   }
 
-  /** Reattaches one session and reports whether adoption succeeded. */
   private async attachSession(
     sessionId: string,
     operation: TerminalOperation,

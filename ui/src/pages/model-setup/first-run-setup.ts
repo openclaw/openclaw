@@ -467,17 +467,13 @@ export class FirstRunSetup {
   async useCurrentModel(): Promise<void> {
     const page = this.host.pageState();
     const pending = this.pending;
-    if (
-      !pending ||
-      page.phase !== "ready" ||
-      !this.configuredActivationModel(page.result) ||
-      this.host.actionsDisabled()
-    ) {
+    const modelRef =
+      page.phase === "ready" ? this.configuredActivationModel(page.result) : undefined;
+    if (!pending || !modelRef || this.host.actionsDisabled()) {
       return;
     }
     // The operator explicitly selects this exact model; do not turn a failed
     // or late verification into permission to adopt whichever model appears next.
-    const modelRef = this.configuredActivationModel(page.result);
     const owner = this.owner(pending.owner.firstRun);
     const outcome = await this.verify();
     if (!this.owns(owner) || this.pending !== pending || !outcome || "error" in outcome) {

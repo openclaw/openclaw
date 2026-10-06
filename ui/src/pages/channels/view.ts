@@ -1,5 +1,3 @@
-// Channels hub: connected-channel rows, add-a-channel gallery, setup wizard,
-// and a per-channel detail overlay with the full config form.
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import "../../styles/channels.css";
@@ -20,12 +18,12 @@ import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
 import { renderChannelRefreshAction, resolveChannelDisplayState } from "./view.shared.ts";
-import type { ChannelKey, ChannelsProps } from "./view.types.ts";
+import type { ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
 type ChannelCardState = "running" | "configured" | "attention";
 
-const RECOMMENDED_CHANNEL_ORDER: ChannelKey[] = [
+const RECOMMENDED_CHANNEL_ORDER: string[] = [
   "whatsapp",
   "telegram",
   "discord",
@@ -159,7 +157,7 @@ export function renderChannels(props: ChannelsProps) {
   `;
 }
 
-export function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
+export function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): string[] {
   const statusOrder = snapshot?.channelMeta?.length
     ? snapshot.channelMeta.map((entry) => entry.id)
     : (snapshot?.channelOrder ?? []);
@@ -190,7 +188,7 @@ function resolveChannelDetailLabel(props: ChannelsProps, key: string): string | 
   return detail && detail !== resolveChannelLabel(props, key) ? detail : null;
 }
 
-function resolveRowState(key: ChannelKey, props: ChannelsProps): ChannelCardState {
+function resolveRowState(key: string, props: ChannelsProps): ChannelCardState {
   const displayState = resolveChannelDisplayState(key, props);
   const lastError =
     typeof displayState.status?.lastError === "string" && displayState.status.lastError.trim()
@@ -220,7 +218,7 @@ function rowStatus(state: ChannelCardState) {
   }
 }
 
-function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null {
+function lastActivityLine(key: string, props: ChannelsProps): string | null {
   const lastInbound = resolveChannelAccounts(
     props.channels.channelsSnapshot?.channelAccounts,
     key,
@@ -231,7 +229,7 @@ function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null 
   return t("channels.hub.lastMessageAgo", { ago: formatRelativeTimestamp(lastInbound) });
 }
 
-function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
+function renderConnectedRow(key: string, props: ChannelsProps) {
   const label = resolveChannelLabel(props, key);
   const statusIssue = props.channels.channelsSnapshot?.statusIssues?.find(
     (issue) => issue.channel === key,
@@ -262,7 +260,7 @@ function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
   `;
 }
 
-function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
+function renderAvailableRow(key: string, props: ChannelsProps) {
   const plugin = resolveChannelPlugin(props, key);
   const label = resolveChannelLabel(props, key);
   const description =
