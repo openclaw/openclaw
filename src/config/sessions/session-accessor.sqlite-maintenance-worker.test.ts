@@ -28,7 +28,10 @@ import {
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
-import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
+import type {
+  SessionEntryMaintenanceResult,
+  SqliteSessionReclamationPlan,
+} from "./session-accessor.sqlite-lifecycle-types.js";
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
 import { registerSessionMaintenanceProtectionTests } from "./session-accessor.sqlite-maintenance-protection.test-support.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
@@ -44,16 +47,10 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 afterEach(() => vi.restoreAllMocks());
 
 function observeMaintenance(
-  accept: (
-    result: Awaited<
-      ReturnType<
-        typeof maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort
-      >
-    >,
-  ) => boolean = () => true,
+  accept: (result: SessionEntryMaintenanceResult) => boolean = () => true,
 ) {
   const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
-  const completed = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
+  const completed = createDeferredCore<SessionEntryMaintenanceResult>();
   vi.spyOn(
     maintenance,
     "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
@@ -255,7 +252,7 @@ it.runIf(process.platform !== "win32")(
         return result;
       });
       const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
-      const completed = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
+      const completed = createDeferredCore<SessionEntryMaintenanceResult>();
       vi.spyOn(
         maintenance,
         "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
@@ -599,7 +596,6 @@ it.each([
       });
       await completed;
       expect(changed).toBe(true);
-      expect(workerThreadIds.length).toBeGreaterThan(0);
       expect(workerThreadIds[0]).toBeGreaterThan(0);
       expect(new Set(workerThreadIds).size).toBe(1);
       if (warm) {
