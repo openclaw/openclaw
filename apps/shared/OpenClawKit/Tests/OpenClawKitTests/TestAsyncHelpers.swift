@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 struct AsyncWaitTimeoutError: Error, CustomStringConvertible {
     let label: String
@@ -24,4 +25,14 @@ func waitUntil(
     // Completion can arrive during the final suspension, before this waiter resumes.
     if await condition() { return }
     throw AsyncWaitTimeoutError(label: label)
+}
+
+/// Wakes on observed view-model mutations instead of a wall-clock deadline, for work no handle can reach.
+@MainActor
+func waitForObservedState(_ condition: @escaping @MainActor () -> Bool) async {
+    while !condition() {
+        await withCheckedContinuation { continuation in
+            withObservationTracking { _ = condition() } onChange: { continuation.resume() }
+        }
+    }
 }

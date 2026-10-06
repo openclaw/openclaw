@@ -15,18 +15,23 @@ import {
   UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
   resolveUpdateCandidateStatePath,
 } from "./update-candidate-paths.js";
+import {
+  createUpdateStateInspectionDiagnostics,
+  type UpdateStateInspectionProgress,
+} from "./update-candidate-state.diagnostics.js";
 import { UpdateCandidateSnapshotInventorySchema } from "./update-candidate-state.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
 it.each([
+  "missing plugin dependency",
   "install record",
   "locator symlink",
   "database registration",
   "added file",
   "enlarged file",
-])("keeps snapshot bytes within inventory after %s changes", async (change) => {
+])("keeps snapshot boundaries and failure attribution after %s changes", async (change) => {
   const root = dirs.make("candidate-inventory-drift-");
   const stateDir = path.join(root, "source");
   const inventoryRoot = path.join(root, "inventory");
@@ -77,8 +82,15 @@ it.each([
   };
   setRecord(change === "locator symlink" ? locator : initial.directory);
   let databaseInventory: string[] = [];
-  const run = (mode: "inventory" | "snapshot") =>
-    runCommandBuffered(
+  const run = async (mode: "inventory" | "snapshot") => {
+    const progress: UpdateStateInspectionProgress[] = [];
+    const diagnostics = createUpdateStateInspectionDiagnostics({
+      operation: "State snapshot",
+      phase: mode,
+      paths: [stateDir],
+      onProgress: (value) => progress.push(value),
+    });
+    const result = await runCommandBuffered(
       [
         process.execPath,
         ...resolveRuntimeWorkerArgv(
@@ -101,6 +113,46 @@ it.each([
         maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
       },
     );
+    diagnostics.onOutputChunk(result.stderr, "stderr");
+    return { ...result, diagnostics, progress };
+  };
+  const expectFailurePhase = (
+    result: Awaited<ReturnType<typeof run>>,
+    phase: string,
+    source = stateDir,
+  ) => {
+    const message = result.diagnostics.failure(
+      result.diagnostics.stderr() || result.stderr.toString("utf8"),
+      result.termination,
+    ).message;
+    expect(message).toContain(`during ${phase} for ${source} (scope:`);
+    expect(message).toContain("source paths");
+    expect(message).toContain("Check access to the reported source");
+    expect(message).not.toContain("Check database access");
+  };
+  if (change === "missing plugin dependency") {
+    // An external missing target must fail inventory rather than survive as an internal link.
+    await fs.symlink(
+      path.join(root, "missing-dependency"),
+      path.join(path.dirname(initial.directory), "missing"),
+      "junction",
+    );
+    const sourceDatabase = await fs.readFile(shared);
+    const inventoried = await run("inventory");
+    expect(inventoried.code).not.toBe(0);
+    expect(inventoried.stderr.toString("utf8")).toContain(
+      "Cannot privately copy plugin dependency",
+    );
+    expect(inventoried.progress).toContainEqual(
+      expect.objectContaining({
+        phase: "shared database snapshot",
+        snapshot: expect.objectContaining({ status: "completed" }),
+      }),
+    );
+    expect((await fs.readFile(shared)).equals(sourceDatabase)).toBe(true);
+    expectFailurePhase(inventoried, "plugin inventory");
+    return;
+  }
   const inventoried = await run("inventory");
   expect(inventoried.code, inventoried.stderr.toString("utf8")).toBe(0);
   const inventory = UpdateCandidateSnapshotInventorySchema.parse(
@@ -157,12 +209,17 @@ it.each([
       copiedNewOwner,
     }),
   );
-  expect(await fs.readFile(shared)).toEqual(sourceDatabase);
+  expect((await fs.readFile(shared)).equals(sourceDatabase)).toBe(true);
   if (change === "added file") {
     expect(snapshot.code, snapshot.stderr.toString("utf8")).toBe(0);
   } else {
     expect(snapshot.code, "snapshot must refuse uninventoried bytes").not.toBe(0);
     expect(snapshot.stderr.toString("utf8")).toContain("changed after snapshot inventory");
+    expectFailurePhase(
+      snapshot,
+      change === "database registration" ? "database snapshot" : "plugin snapshot",
+      change === "database registration" ? shared : stateDir,
+    );
   }
   expect(copiedNewOwner).toBe(false);
 });

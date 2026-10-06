@@ -38,19 +38,10 @@ export function shouldPrintHelp(argv: readonly string[]): boolean {
     if (arg === "--") {
       return false;
     }
-    if (arg === "--limit") {
-      const value = argv[index + 1];
+    if (arg === "--limit" || arg.startsWith("--limit=")) {
       try {
+        const value = arg === "--limit" ? argv[++index] : arg.slice("--limit=".length);
         parsePositiveInt(value ?? "", "--limit");
-      } catch {
-        return false;
-      }
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--limit=")) {
-      try {
-        parsePositiveInt(arg.slice("--limit=".length), "--limit");
       } catch {
         return false;
       }
@@ -63,9 +54,6 @@ export function shouldPrintHelp(argv: readonly string[]): boolean {
   return false;
 }
 
-/**
- * Parses CPU profile file paths and --limit.
- */
 export function parseArgs(argv: readonly string[]): { files: string[]; limit: number } {
   const files: string[] = [];
   let limit = DEFAULT_LIMIT;
@@ -150,7 +138,7 @@ function summarizeProfile(file: string, limit: number): void {
   const profile: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
   validateProfile(profile, file);
   const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
-  const samples = Array.isArray(profile.samples) ? profile.samples : [];
+  const samples = profile.samples;
   const deltas = Array.isArray(profile.timeDeltas) ? profile.timeDeltas : [];
   const byFrame = new Map<string, number>();
   const byModule = new Map<string, number>();
@@ -178,17 +166,16 @@ function summarizeProfile(file: string, limit: number): void {
   const durationMs = (profile.endTime - profile.startTime) / 1000;
   console.log(`\n${file}`);
   console.log(`duration_ms: ${durationMs.toFixed(1)} samples: ${samples.length}`);
-  console.log("top_frames:");
-  for (const [key, micros] of [...byFrame.entries()]
-    .toSorted((left, right) => right[1] - left[1])
-    .slice(0, limit)) {
-    console.log(`${(micros / 1000).toFixed(1)}ms\t${key}`);
-  }
-  console.log("top_modules:");
-  for (const [key, micros] of [...byModule.entries()]
-    .toSorted((left, right) => right[1] - left[1])
-    .slice(0, limit)) {
-    console.log(`${(micros / 1000).toFixed(1)}ms\t${key}`);
+  for (const [label, totals] of [
+    ["top_frames", byFrame],
+    ["top_modules", byModule],
+  ] as const) {
+    console.log(`${label}:`);
+    for (const [key, micros] of [...totals.entries()]
+      .toSorted((left, right) => right[1] - left[1])
+      .slice(0, limit)) {
+      console.log(`${(micros / 1000).toFixed(1)}ms\t${key}`);
+    }
   }
 }
 
@@ -197,18 +184,12 @@ function main(): void {
     console.log(usage());
     return;
   }
-  let options: { files: string[]; limit: number };
   try {
-    options = parseArgs(process.argv.slice(2));
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  }
-  if (options.files.length === 0) {
-    console.error(usage());
-    process.exit(2);
-  }
-  try {
+    const options = parseArgs(process.argv.slice(2));
+    if (options.files.length === 0) {
+      console.error(usage());
+      process.exit(2);
+    }
     for (const file of options.files) {
       summarizeProfile(file, options.limit);
     }

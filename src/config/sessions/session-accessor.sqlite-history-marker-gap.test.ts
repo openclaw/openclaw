@@ -4,6 +4,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendTranscriptMessage, replaceTranscriptEvents } from "./session-accessor.js";
 import { readSessionTranscriptHistoryEventPage } from "./session-accessor.sqlite-history-events.js";
+import { readSessionTranscriptHistoryEventCount } from "./session-accessor.sqlite-history.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -13,8 +14,9 @@ afterEach(() => {
 
 it.each([
   {
-    name: "mixed interior and trailing",
+    name: "leading, interior, and trailing",
     layout: [
+      "notice",
       "message",
       "notice",
       "notice",
@@ -25,12 +27,7 @@ it.each([
       "notice",
       "notice",
     ],
-    expected: ["row-0", "row-1", "row-2", "row-4", "row-5", "row-6", "row-7", "row-8"],
-  },
-  {
-    name: "leading",
-    layout: ["notice", "message", "notice", "message"],
-    expected: ["row-0", "row-1", "row-2", "row-3"],
+    expected: ["row-0", "row-1", "row-2", "row-3", "row-5", "row-6", "row-7", "row-8", "row-9"],
   },
   {
     name: "message-free",
@@ -59,6 +56,14 @@ it.each([
           }),
     })),
   ]);
+  expect(readSessionTranscriptHistoryEventCount(scope)).toBe(expected.length);
+  const sibling = { ...scope, sessionId: "sibling", sessionKey: "agent:main:sibling" };
+  await replaceTranscriptEvents(sibling, [
+    { type: "message", id: "seed", parentId: null, message: { role: "user", content: "seed" } },
+    { type: "compaction", id: "summary", parentId: "seed", summary: "sibling summary" },
+  ]);
+  expect(readSessionTranscriptHistoryEventCount(sibling)).toBe(2);
+  expect(readSessionTranscriptHistoryEventCount(scope)).toBe(expected.length);
   for (const offset of [0, 2, 4, 6].filter((pageOffset) => pageOffset < expected.length)) {
     const page = readSessionTranscriptHistoryEventPage(scope, { maxMessages: 3, offset });
     const end = expected.length - offset;
@@ -77,6 +82,8 @@ it.each([
     message: { role: "assistant", content: "fresh" },
   });
   const fresh = readSessionTranscriptHistoryEventPage(scope, { maxMessages: 3, offset: 0 });
+  expect(readSessionTranscriptHistoryEventCount(scope)).toBe(expected.length + 1);
+  expect(readSessionTranscriptHistoryEventCount(sibling)).toBe(2);
   expect(fresh.totalMessages).toBe(expected.length + 1);
   expect(fresh.events.map(({ event }) => event)).toEqual(
     [...expected.slice(-2), "new-tail"].map((id) => expect.objectContaining({ id })),

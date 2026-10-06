@@ -287,7 +287,9 @@ suite.define(() => {
           page,
           `failed-topology-${value.replace(":", "-")}.png`,
           {
-            surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+            surface: page.locator(
+              '.new-session-page__where-popover > dialog > wa-popup > [part="popup"]',
+            ),
             content: [selectedDevice, automaticDevice],
           },
         );
@@ -429,9 +431,10 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
+        // Pending remote isolation is not a provisional Local checkout selection.
         await expect
           .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
-          .toBe("true");
+          .toBe("false");
         if (preference.kind === "cloud") {
           await page.evaluate(() => {
             window.dispatchEvent(new Event("test-release-recovery-scope"));
@@ -452,6 +455,9 @@ suite.define(() => {
         await expect.poll(() => where.getAttribute(attribute)).toBe(value);
         await expect.poll(() => start.isEnabled()).toBe(true);
         await start.click();
+        await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+          params: { worktree: true },
+        });
         await expect(gateway.waitForRequest("sessions.dispatch")).resolves.toMatchObject({
           params: { key: sessionKey, agentId: "main", ...target },
         });

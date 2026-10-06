@@ -1,4 +1,3 @@
-// Formats status summaries shown in the TUI header and overlays.
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { formatTokenCount } from "../utils/token-format.js";
 import { formatContextUsageLine } from "./tui-formatters.js";
@@ -62,7 +61,7 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
   lines.push(`Default model: ${defaultModel}${defaultCtx}`);
 
   const sessionCount = summary.sessions?.count ?? 0;
-  lines.push(`Active sessions: ${sessionCount}`);
+  lines.push(`Stored sessions: ${sessionCount}`);
 
   const recent = Array.isArray(summary.sessions?.recent) ? summary.sessions?.recent : [];
   if (recent.length > 0) {

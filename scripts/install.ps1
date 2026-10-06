@@ -13,6 +13,8 @@ param(
     [switch]$DryRun,
     [switch]$NodeOnly,
     [string]$NodePrefix,
+    [ValidatePattern("^\d+\.\d+\.\d+$")]
+    [string]$NodeVersion,
     [switch]$Help
 )
 
@@ -38,6 +40,7 @@ Options:
   -DryRun                 Print actions only
   -NodeOnly               Install only a private Node.js runtime; do not change PATH
   -NodePrefix <path>      Absolute private directory for -NodeOnly (required)
+  -NodeVersion <version>  Exact private Node.js version for -NodeOnly
   -Help                   Show this help
 "@ | Write-Output
     return
@@ -372,7 +375,7 @@ process.stdout.write(JSON.stringify(result));
                 Write-Host "[!] Node $nodeVersion`: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
                 return $false
             } elseif ($sqlite.error -or -not $sqlite.blob -or -not $sqlite.json) {
-                Write-Host "[!] Node $nodeVersion`: node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
+                Write-Host "[!] Node $nodeVersion`: node:sqlite NUL round-trip capability check failed; use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
                 return $false
             } elseif (Test-NodeVersionSupported -Version $nodeVersion) {
                 $sqliteVersionLabel = if ([string]::IsNullOrWhiteSpace($sqliteVersion)) {
@@ -520,15 +523,16 @@ function Save-InstallerDownload {
 }
 
 function Resolve-PortableNodeDownload {
+    param([string]$Version)
     $architecture = Get-WindowsPortableArchitecture
     $requestTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-RestMethod"
     $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" @requestTimeouts
     $release = $index |
-        Where-Object { $_.version -match '^v26\.' } |
+        Where-Object { if ($Version) { $_.version -eq "v$Version" } else { $_.version -match '^v26\.' } } |
         Select-Object -First 1
 
     if (-not $release -or -not $release.version) {
-        throw "Could not resolve latest Node.js 26 release metadata."
+        throw "Could not resolve Node.js release metadata for $(if ($Version) { $Version } else { 'latest 26' })."
     }
 
     $fileKey = "win-$architecture-zip"
@@ -596,7 +600,7 @@ function Install-PortableNode {
         return
     }
 
-    Write-Host "  No package manager found; bootstrapping user-local portable Node.js..." -ForegroundColor Gray
+    Write-Host "  Bootstrapping user-local portable Node.js..." -ForegroundColor Gray
 
     $download = Resolve-PortableNodeDownload
     $portableRoot = Get-PortableNodeRoot
@@ -627,10 +631,39 @@ function Install-PortableNode {
     Write-Host "[OK] User-local Node.js ready: $nodeVersion" -ForegroundColor Green
 }
 
-function Install-PrivateNode {
-    param([Parameter(Mandatory = $true)][string]$Prefix)
+function Invoke-NodePackageManagerInstall {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$InstallCommand,
+        [switch]$DiscoverProgramFilesNode
+    )
 
-    $download = Resolve-PortableNodeDownload
+    Write-Host "  Using $Name..." -ForegroundColor Gray
+    try {
+        & $InstallCommand
+    } catch {
+        Write-Host "[!] $Name could not install Node.js: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+
+    Refresh-ProcessPath
+    if ($DiscoverProgramFilesNode) {
+        Add-InstalledNodeToProcessPath | Out-Null
+    }
+    if (Check-Node) {
+        Write-Host "[OK] Node.js installed via $Name" -ForegroundColor Green
+        return $true
+    }
+
+    Write-Host "[!] $Name did not make a supported Node.js runtime available" -ForegroundColor Yellow
+    return $false
+}
+
+function Install-PrivateNode {
+    param([Parameter(Mandatory = $true)][string]$Prefix, [string]$Version)
+
+    $download = Resolve-PortableNodeDownload -Version $Version
     $temporaryRoot = Join-Path $script:InstallerTempDirectory ("openclaw-private-node-" + [guid]::NewGuid().ToString("N"))
     $archive = Join-Path $temporaryRoot $download.Name
     $checksums = Join-Path $temporaryRoot "SHASUMS256.txt"
@@ -692,51 +725,60 @@ function Install-Node {
 
     # Try winget first (Windows 11 / Windows 10 with App Installer)
     if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Write-Host "  Using winget..." -ForegroundColor Gray
-        winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements | Out-Host
-
-        # Refresh PATH
-        Refresh-ProcessPath
-        Add-InstalledNodeToProcessPath | Out-Null
-        if (Check-Node) {
-            Write-Host "[OK] Node.js installed via winget" -ForegroundColor Green
+        # Share the exit code across the callback scope; Check-Node can overwrite LASTEXITCODE.
+        $wingetAttempt = @{ ExitCode = $null }
+        $installed = Invoke-NodePackageManagerInstall -Name "winget" -DiscoverProgramFilesNode -InstallCommand {
+            winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements | Out-Host
+            $wingetAttempt.ExitCode = $LASTEXITCODE
+            if ($LASTEXITCODE -ne 0) {
+                throw "winget exited with code $LASTEXITCODE"
+            }
+        }
+        if ($installed) {
             return $true
         }
-        Write-Host "[!] winget completed, but Node.js is still unavailable in this shell" -ForegroundColor Yellow
-        Write-Host "Restart PowerShell and re-run the installer if Node.js was installed successfully." -ForegroundColor Yellow
-        return $false
+        if ($wingetAttempt.ExitCode -eq -1978335189) { # 0x8A15002B
+            Write-Host "  Repairing the existing winget Node.js registration..." -ForegroundColor Gray
+            winget repair --id OpenJS.NodeJS.LTS --exact --source winget --accept-package-agreements --accept-source-agreements | Out-Host
+            $wingetRepairExitCode = $LASTEXITCODE
+            Refresh-ProcessPath
+            Add-InstalledNodeToProcessPath | Out-Null
+            $nodeReady = Check-Node
+            if ($wingetRepairExitCode -eq 0 -and $nodeReady) {
+                Write-Host "[OK] Node.js repaired via winget" -ForegroundColor Green
+                return $true
+            }
+            # Repair failed; an independently validated fallback may still install Node.js.
+            Write-Host "[!] winget could not repair a supported Node.js runtime" -ForegroundColor Yellow
+        }
     }
 
     # Try Chocolatey
     if (Get-Command choco -ErrorAction SilentlyContinue) {
-        Write-Host "  Using Chocolatey..." -ForegroundColor Gray
-        choco upgrade nodejs-lts -y --install-if-not-installed | Out-Host
-
-        # Refresh PATH
-        Refresh-ProcessPath
-        if (Check-Node) {
-            Write-Host "[OK] Node.js installed via Chocolatey" -ForegroundColor Green
+        $installed = Invoke-NodePackageManagerInstall -Name "Chocolatey" -InstallCommand {
+            choco upgrade nodejs-lts -y --install-if-not-installed | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                throw "Chocolatey exited with code $LASTEXITCODE"
+            }
+        }
+        if ($installed) {
             return $true
         }
-        Write-Host "[!] Chocolatey completed, but the installed Node.js runtime is unsupported" -ForegroundColor Yellow
-        return $false
     }
 
     # Try Scoop
     if (Get-Command scoop -ErrorAction SilentlyContinue) {
-        Write-Host "  Using Scoop..." -ForegroundColor Gray
-        scoop update | Out-Host
-        scoop install nodejs-lts | Out-Host
-        scoop update nodejs-lts | Out-Host
-
-        # Refresh PATH
-        Refresh-ProcessPath
-        if (Check-Node) {
-            Write-Host "[OK] Node.js installed via Scoop" -ForegroundColor Green
+        $installed = Invoke-NodePackageManagerInstall -Name "Scoop" -InstallCommand {
+            scoop update | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "Scoop update exited with code $LASTEXITCODE" }
+            scoop install nodejs-lts | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "Scoop install exited with code $LASTEXITCODE" }
+            scoop update nodejs-lts | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "Scoop Node.js update exited with code $LASTEXITCODE" }
+        }
+        if ($installed) {
             return $true
         }
-        Write-Host "[!] Scoop completed, but the installed Node.js runtime is unsupported" -ForegroundColor Yellow
-        return $false
     }
 
     try {
@@ -1715,12 +1757,7 @@ function Install-OpenClaw {
         return $false
     }
 
-    # Use openclaw package for beta, openclaw for stable
-    $packageName = "openclaw"
-    if ($Tag -eq "beta" -or $Tag -match "^beta\.") {
-        $packageName = "openclaw"
-    }
-    $installSpec = Resolve-NpmOpenClawInstallSpec -PackageName $packageName -RequestedTag $Tag
+    $installSpec = Resolve-NpmOpenClawInstallSpec -PackageName "openclaw" -RequestedTag $Tag
     $npmCommand = Get-NpmCommandPath
     $npmCwd = Get-WindowsCommandSafeDirectory
     $lifecycleArgument = Get-NpmLifecycleAllowArgument -NpmCommand $npmCommand -InstallSpec $installSpec -NpmCwd $npmCwd
@@ -1937,7 +1974,6 @@ function Install-OpenClawFromGit {
     } else {
         Write-Host "[!] Git update disabled; skipping git pull" -ForegroundColor Yellow
     }
-    Remove-LegacySubmodule -RepoDir $RepoDir
 
     $prevPnpmChildConcurrency = $env:PNPM_CONFIG_CHILD_CONCURRENCY
     $prevPnpmNetworkConcurrency = $env:PNPM_CONFIG_NETWORK_CONCURRENCY
@@ -2106,28 +2142,6 @@ function Refresh-GatewayServiceIfLoaded {
     }
 }
 
-function Get-LegacyRepoDir {
-    if (-not [string]::IsNullOrWhiteSpace($env:OPENCLAW_GIT_DIR)) {
-        return $env:OPENCLAW_GIT_DIR
-    }
-    $userHome = [Environment]::GetFolderPath("UserProfile")
-    return (Join-Path $userHome "openclaw")
-}
-
-function Remove-LegacySubmodule {
-    param(
-        [string]$RepoDir
-    )
-    if ([string]::IsNullOrWhiteSpace($RepoDir)) {
-        $RepoDir = Get-LegacyRepoDir
-    }
-    $legacyDir = Join-Path $RepoDir "Peekaboo"
-    if (Test-Path $legacyDir) {
-        Write-Host "[!] Removing legacy submodule checkout: $legacyDir" -ForegroundColor Yellow
-        Remove-Item -Recurse -Force $legacyDir
-    }
-}
-
 function Test-PreviousGitWrapper {
     $wrapper = Join-Path (Join-Path $env:USERPROFILE ".local\bin") "openclaw.cmd"
     if (-not (Test-Path -LiteralPath $wrapper -PathType Leaf)) { return $false }
@@ -2227,15 +2241,15 @@ function Main {
             return $true
         }
         try {
-            Install-PrivateNode -Prefix ([System.IO.Path]::GetFullPath($NodePrefix))
+            Install-PrivateNode -Prefix ([System.IO.Path]::GetFullPath($NodePrefix)) -Version $NodeVersion
         } catch {
             Write-Host "Error: Node.js update failed: $($_.Exception.Message)" -ForegroundColor Red
             Fail-Install
         }
         return
     }
-    if (-not [string]::IsNullOrWhiteSpace($NodePrefix)) {
-        Write-Host "Error: -NodePrefix requires -NodeOnly." -ForegroundColor Red
+    if (-not [string]::IsNullOrWhiteSpace($NodePrefix) -or -not [string]::IsNullOrWhiteSpace($NodeVersion)) {
+        Write-Host "Error: -NodePrefix and -NodeVersion require -NodeOnly." -ForegroundColor Red
         Fail-Install -Code 2
         return
     }
@@ -2364,8 +2378,9 @@ function Main {
     }
 
     if (-not (Ensure-OpenClawOnPath)) {
-        Write-Host "Install completed, but OpenClaw is not on PATH yet." -ForegroundColor Yellow
+        Write-Host "OpenClaw was installed, but its command is not on PATH." -ForegroundColor Yellow
         Write-Host "Open a new terminal, then run: openclaw doctor" -ForegroundColor Cyan
+        Fail-Install
         return
     }
 

@@ -1,4 +1,3 @@
-// Locates root memory files that seed agent context.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../infra/errno.js";
@@ -22,10 +21,6 @@ export function resolveLegacyRootMemoryPath(workspaceDir: string): string {
 /** Resolves the repair directory used while migrating root memory files. */
 export function resolveRootMemoryRepairDir(workspaceDir: string): string {
   return path.join(workspaceDir, ".openclaw-repair", "root-memory");
-}
-
-function normalizeWorkspaceRelativePath(value: string): string {
-  return value.trim().replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
 /** Checks for an exact directory entry without case-folded path lookup. */
@@ -68,7 +63,7 @@ export function shouldSkipRootMemoryAuxiliaryPath(params: {
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     return false;
   }
-  const normalized = normalizeWorkspaceRelativePath(relative);
+  const normalized = relative.trim().replace(/\\/g, "/").replace(/^\.\//, "");
   return (
     normalized === LEGACY_ROOT_MEMORY_FILENAME ||
     normalized === ROOT_MEMORY_REPAIR_RELATIVE_DIR ||

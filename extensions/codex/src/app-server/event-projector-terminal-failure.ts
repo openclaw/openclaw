@@ -11,11 +11,24 @@ export class CodexTerminalFailureProjection {
   record(params: {
     message: string | undefined;
     codexErrorInfo: JsonValue | null | undefined;
+    misalignment?: unknown;
+    nativeThreadId?: string;
+    nativeTurnId?: string;
     rateLimits: JsonValue | undefined;
     fallbackMessage: string;
     promptErrorSource: AttemptFailureSource;
   }): void {
-    this.providerRefusal ??= readCodexProviderRefusal(params.message, params.codexErrorInfo);
+    const refusal = readCodexProviderRefusal(params.message, params.codexErrorInfo, params);
+    // Error notifications can precede a richer terminal snapshot for this same turn.
+    // Explicitly changed details also retire a previously valid continuation.
+    if (
+      !this.providerRefusal ||
+      (refusal?.category === "misalignment" &&
+        this.providerRefusal.category === "misalignment" &&
+        params.misalignment != null)
+    ) {
+      this.providerRefusal = refusal;
+    }
     if (this.providerRefusal) {
       return;
     }

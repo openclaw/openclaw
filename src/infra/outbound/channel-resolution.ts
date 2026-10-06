@@ -1,8 +1,6 @@
-// Channel resolution exposes read-only outbound runtime facades and performs
-// optional bootstrap for deliverable channels that are not loaded yet.
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -12,7 +10,10 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { bootstrapOutboundChannelPlugin } from "./channel-bootstrap.runtime.js";
+import {
+  bootstrapOutboundChannelPlugin,
+  bootstrapOutboundChannelPluginAsync,
+} from "./channel-bootstrap.runtime.js";
 import { findChannelPluginInRegistry } from "./runtime-visible-channels.js";
 
 /** Normalizes a raw channel id and rejects non-deliverable/internal channels. */
@@ -28,16 +29,24 @@ function getOutboundRuntimeRegistry(): PluginRegistry | null {
   return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
 }
 
-function normalizeOutboundChannelForResolution(params: {
+type OutboundChannelResolutionParams = {
   channel: string;
   cfg?: OpenClawConfig;
   agentId?: string;
   allowBootstrap?: boolean;
-}): {
-  channel?: string;
-  didBootstrap: boolean;
-  bootstrapRegistry?: PluginRegistry;
-} {
+};
+
+type BootstrapRequest = Parameters<typeof bootstrapOutboundChannelPlugin>[0];
+
+function* normalizeOutboundChannelForResolution(params: OutboundChannelResolutionParams): Generator<
+  BootstrapRequest,
+  {
+    channel?: string;
+    didBootstrap: boolean;
+    bootstrapRegistry?: PluginRegistry;
+  },
+  PluginRegistry | undefined
+> {
   const normalized = normalizeMessageChannel(params.channel);
   const deliverable =
     normalized && isDeliverableMessageChannel(normalized) ? normalized : undefined;
@@ -45,9 +54,10 @@ function normalizeOutboundChannelForResolution(params: {
     return { channel: deliverable, didBootstrap: false };
   }
 
-  const activeRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistry(
+  const activeRuntimePlugin = resolveOutboundPluginFromRuntimeRegistry(
     normalized,
     getOutboundRuntimeRegistry() ?? undefined,
+    true,
   );
   if (activeRuntimePlugin) {
     return {
@@ -61,14 +71,15 @@ function normalizeOutboundChannelForResolution(params: {
 
   // External channel ids remain normalized before their runtime is registered.
   // Bootstrap first, then let the runtime candidate lookup confirm sendability.
-  const bootstrapRegistry = bootstrapOutboundChannelPlugin({
+  const bootstrapRegistry = yield {
     channel: normalized,
     cfg: params.cfg,
     agentId: params.agentId,
-  });
-  const bootstrappedRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistry(
+  };
+  const bootstrappedRuntimePlugin = resolveOutboundPluginFromRuntimeRegistry(
     normalized,
     bootstrapRegistry,
+    true,
   );
   return {
     channel: bootstrappedRuntimePlugin?.id ?? normalized,
@@ -96,82 +107,44 @@ function channelPluginHasActivatedOutboundSurface(plugin: ChannelPlugin | undefi
   );
 }
 
-function resolveRuntimeOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
-  return channelPluginHasRuntimeOutboundSurface(plugin) ? plugin : undefined;
-}
-
-function resolveActivatedOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
-  return channelPluginHasActivatedOutboundSurface(plugin) ? plugin : undefined;
-}
-
 function resolveRuntimeOutboundPluginCandidate(params: {
   loaded?: ChannelPlugin;
   runtime?: ChannelPlugin;
   setupFallback?: ChannelPlugin;
   bundled?: ChannelPlugin;
-  allowSetupShell?: boolean;
   requireActivatedRuntime?: boolean;
 }): ChannelPlugin | undefined {
   const hasRuntimeSurface = params.requireActivatedRuntime
     ? channelPluginHasActivatedOutboundSurface
     : channelPluginHasRuntimeOutboundSurface;
-  if (hasRuntimeSurface(params.loaded)) {
-    return params.loaded;
-  }
-  if (hasRuntimeSurface(params.runtime)) {
-    return params.runtime;
-  }
-  if (hasRuntimeSurface(params.bundled)) {
-    return params.bundled;
-  }
-  if (params.allowSetupShell) {
-    return params.loaded ?? params.setupFallback ?? params.bundled;
-  }
-  return undefined;
+  return (
+    [params.loaded, params.runtime, params.bundled].find(hasRuntimeSurface) ??
+    (params.requireActivatedRuntime
+      ? undefined
+      : (params.loaded ?? params.setupFallback ?? params.bundled))
+  );
 }
 
-function resolveValueFromRuntimeRegistry<TValue>(
+function resolveOutboundPluginFromRuntimeRegistry(
   channel: string,
-  resolveValue: (plugin: ChannelPlugin) => TValue | undefined,
   registry: PluginRegistry | null | undefined = getOutboundRuntimeRegistry(),
-): TValue | undefined {
+  requireActivatedRuntime = false,
+): ChannelPlugin | undefined {
   const plugin = findChannelPluginInRegistry(registry, channel);
-  return plugin ? resolveValue(plugin) : undefined;
+  const hasSurface = requireActivatedRuntime
+    ? channelPluginHasActivatedOutboundSurface
+    : channelPluginHasRuntimeOutboundSurface;
+  return hasSurface(plugin) ? plugin : undefined;
 }
 
-function resolveDirectFromRuntimeRegistry(
-  channel: string,
-  registry?: PluginRegistry,
-): ChannelPlugin | undefined {
-  return resolveValueFromRuntimeRegistry(channel, (plugin) => plugin, registry);
-}
-
-function resolveRuntimeOutboundPluginFromRuntimeRegistry(
-  channel: string,
-  registry?: PluginRegistry,
-): ChannelPlugin | undefined {
-  return resolveValueFromRuntimeRegistry(channel, resolveRuntimeOutboundPlugin, registry);
-}
-
-function resolveActivatedOutboundPluginFromRuntimeRegistry(
-  channel: string,
-  registry?: PluginRegistry,
-): ChannelPlugin | undefined {
-  return resolveValueFromRuntimeRegistry(channel, resolveActivatedOutboundPlugin, registry);
-}
-
-/** Resolves a deliverable outbound channel plugin, optionally bootstrapping it. */
-export function resolveOutboundChannelPlugin(params: {
-  channel: string;
-  cfg?: OpenClawConfig;
-  agentId?: string;
-  allowBootstrap?: boolean;
-}): ChannelPlugin | undefined {
+function* resolveOutboundChannelPluginSteps(
+  params: OutboundChannelResolutionParams,
+): Generator<BootstrapRequest, ChannelPlugin | undefined, PluginRegistry | undefined> {
   const {
     channel: normalized,
     didBootstrap,
     bootstrapRegistry,
-  } = normalizeOutboundChannelForResolution(params);
+  } = yield* normalizeOutboundChannelForResolution(params);
   if (!normalized) {
     return undefined;
   }
@@ -189,27 +162,30 @@ export function resolveOutboundChannelPlugin(params: {
     if (didBootstrap) {
       return undefined;
     }
-    return resolveActivatedOutboundPluginFromRuntimeRegistry(
+    return resolveOutboundPluginFromRuntimeRegistry(
       normalized,
-      bootstrapOutboundChannelPlugin({ ...params, channel: normalized }),
+      yield { ...params, channel: normalized },
+      true,
     );
   }
 
-  const resolveLoaded = () => getLoadedChannelPlugin(normalized);
-  const resolve = () => getChannelPlugin(normalized);
-  const current = resolveLoaded();
+  const current = getLoadedChannelPlugin(normalized);
   const requireActivatedRuntime = params.allowBootstrap === true;
-  const runtimeCurrent = requireActivatedRuntime
-    ? resolveActivatedOutboundPluginFromRuntimeRegistry(normalized, bootstrapRegistry)
-    : resolveRuntimeOutboundPluginFromRuntimeRegistry(normalized, bootstrapRegistry);
-  const setupFallback = resolveDirectFromRuntimeRegistry(normalized, bootstrapRegistry);
-  const bundledCurrent = resolve();
+  const runtimeCurrent = resolveOutboundPluginFromRuntimeRegistry(
+    normalized,
+    bootstrapRegistry,
+    requireActivatedRuntime,
+  );
+  const setupFallback = findChannelPluginInRegistry(
+    bootstrapRegistry ?? getOutboundRuntimeRegistry(),
+    normalized,
+  );
+  const bundledCurrent = getChannelPlugin(normalized);
   const candidate = resolveRuntimeOutboundPluginCandidate({
     loaded: current,
     runtime: runtimeCurrent,
     setupFallback,
     bundled: bundledCurrent,
-    allowSetupShell: params.allowBootstrap !== true,
     requireActivatedRuntime,
   });
   if (candidate) {
@@ -220,26 +196,53 @@ export function resolveOutboundChannelPlugin(params: {
     return undefined;
   }
 
-  const registry = bootstrapOutboundChannelPlugin({
+  const registry = yield {
     channel: normalized,
     cfg: params.cfg,
     agentId: params.agentId,
-  });
+  };
   return resolveRuntimeOutboundPluginCandidate({
-    loaded: resolveLoaded(),
-    runtime: resolveActivatedOutboundPluginFromRuntimeRegistry(normalized, registry),
-    setupFallback: resolveDirectFromRuntimeRegistry(normalized, registry),
-    bundled: resolve(),
+    loaded: getLoadedChannelPlugin(normalized),
+    runtime: resolveOutboundPluginFromRuntimeRegistry(normalized, registry, true),
+    bundled: getChannelPlugin(normalized),
     requireActivatedRuntime: true,
   });
 }
 
-/** Resolves the message adapter for a deliverable outbound channel. */
-export function resolveOutboundChannelMessageAdapter(params: {
-  channel: string;
-  cfg?: OpenClawConfig;
-  agentId?: string;
-  allowBootstrap?: boolean;
-}): ChannelMessageAdapterShape | undefined {
-  return resolveSendCapableMessageAdapter(resolveOutboundChannelPlugin(params));
+/** Resolves a deliverable outbound channel plugin, optionally bootstrapping it. */
+export function resolveOutboundChannelPlugin(
+  params: OutboundChannelResolutionParams,
+): ChannelPlugin | undefined {
+  const steps = resolveOutboundChannelPluginSteps(params);
+  let step = steps.next();
+  while (!step.done) {
+    step = steps.next(bootstrapOutboundChannelPlugin(step.value));
+  }
+  return step.value;
+}
+
+async function resolveOutboundChannelPluginAsync(
+  params: OutboundChannelResolutionParams & { assertCurrent?: () => void },
+): Promise<ChannelPlugin | undefined> {
+  params.assertCurrent?.();
+  const steps = resolveOutboundChannelPluginSteps(params);
+  let step = steps.next();
+  while (!step.done) {
+    const registry = await bootstrapOutboundChannelPluginAsync({
+      ...step.value,
+      assertCurrent: params.assertCurrent,
+    });
+    params.assertCurrent?.();
+    step = steps.next(registry);
+  }
+  return step.value;
+}
+
+/** Resolves the message adapter after any required bootstrap metadata is ready. */
+export async function resolveOutboundChannelMessageAdapter(
+  params: OutboundChannelResolutionParams & { assertCurrent?: () => void },
+): Promise<ChannelMessageAdapterShape | undefined> {
+  const plugin = await resolveOutboundChannelPluginAsync(params);
+  params.assertCurrent?.();
+  return resolveSendCapableMessageAdapter(plugin);
 }

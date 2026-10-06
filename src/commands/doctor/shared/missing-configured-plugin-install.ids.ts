@@ -17,7 +17,7 @@ import {
 } from "../../../plugins/web-search-install-catalog.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
-import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
+import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-owners.js";
 
 function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   if (typeof value !== "string") {
@@ -25,70 +25,6 @@ function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   }
   const pluginId = value.trim();
   if (pluginId) {
-    ids.add(pluginId);
-  }
-}
-
-function addConfiguredAgentRuntimePluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
-  for (const runtime of collectConfiguredRuntimePluginIds(cfg)) {
-    addConfiguredPluginId(ids, runtime);
-  }
-}
-
-function addConfiguredMemoryEmbeddingProviderPluginIds(
-  ids: Set<string>,
-  cfg: OpenClawConfig,
-): void {
-  const configuredProviderIds = collectConfiguredMemoryEmbeddingProviderIds(cfg);
-  if (configuredProviderIds.size === 0) {
-    return;
-  }
-  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-    contract: "embeddingProviders",
-    providerIds: configuredProviderIds,
-  })) {
-    ids.add(pluginId);
-  }
-}
-
-function addConfiguredSpeechProviderPluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
-  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-    contract: "speechProviders",
-    providerIds: collectConfiguredSpeechProviderIds(cfg),
-  })) {
-    ids.add(pluginId);
-  }
-}
-
-function addConfiguredWebFetchProviderPluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
-  const webFetch = cfg.tools?.web?.fetch;
-  if (webFetch?.enabled === false) {
-    return;
-  }
-  const providerId = normalizeOptionalLowercaseString(webFetch?.provider);
-  if (!providerId) {
-    return;
-  }
-  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-    contract: "webFetchProviders",
-    providerIds: new Set([providerId]),
-  })) {
-    ids.add(pluginId);
-  }
-}
-
-function addEnvWebFetchProviderPluginIds(
-  ids: Set<string>,
-  cfg: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-): void {
-  if (cfg.tools?.web?.fetch?.enabled === false) {
-    return;
-  }
-  for (const pluginId of resolveOfficialExternalWebProviderContractPluginIdsForEnv({
-    contract: "webFetchProviders",
-    env: env ?? process.env,
-  })) {
     ids.add(pluginId);
   }
 }
@@ -124,14 +60,45 @@ export function collectConfiguredPluginIds(
       ids.add(entry.pluginId);
     }
   }
-  addConfiguredAgentRuntimePluginIds(ids, cfg);
+  for (const pluginId of collectConfiguredRuntimePluginIds(cfg, { env })) {
+    ids.add(pluginId);
+  }
   for (const pluginId of collectConfiguredProviderPluginIds({ cfg, env })) {
     ids.add(pluginId);
   }
-  addConfiguredMemoryEmbeddingProviderPluginIds(ids, cfg);
-  addConfiguredSpeechProviderPluginIds(ids, cfg);
-  addConfiguredWebFetchProviderPluginIds(ids, cfg);
-  addEnvWebFetchProviderPluginIds(ids, cfg, env);
+  const embeddingProviderIds = collectConfiguredMemoryEmbeddingProviderIds(cfg);
+  if (embeddingProviderIds.size > 0) {
+    for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
+      contract: "embeddingProviders",
+      providerIds: embeddingProviderIds,
+    })) {
+      ids.add(pluginId);
+    }
+  }
+  for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
+    contract: "speechProviders",
+    providerIds: collectConfiguredSpeechProviderIds(cfg),
+  })) {
+    ids.add(pluginId);
+  }
+  const webFetch = cfg.tools?.web?.fetch;
+  if (webFetch?.enabled !== false) {
+    const providerId = normalizeOptionalLowercaseString(webFetch?.provider);
+    if (providerId) {
+      for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
+        contract: "webFetchProviders",
+        providerIds: new Set([providerId]),
+      })) {
+        ids.add(pluginId);
+      }
+    }
+    for (const pluginId of resolveOfficialExternalWebProviderContractPluginIdsForEnv({
+      contract: "webFetchProviders",
+      env: env ?? process.env,
+    })) {
+      ids.add(pluginId);
+    }
+  }
   return ids;
 }
 
@@ -140,15 +107,13 @@ export function collectBlockedPluginIds(cfg: OpenClawConfig): Set<string> {
   const deny = cfg.plugins?.deny;
   if (Array.isArray(deny)) {
     for (const pluginId of deny) {
-      if (typeof pluginId === "string" && pluginId.trim()) {
-        ids.add(pluginId.trim());
-      }
+      addConfiguredPluginId(ids, pluginId);
     }
   }
   const entries = asNullableRecord(cfg.plugins?.entries);
   for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (pluginId.trim() && asNullableRecord(entry)?.enabled === false) {
-      ids.add(pluginId.trim());
+    if (asNullableRecord(entry)?.enabled === false) {
+      addConfiguredPluginId(ids, pluginId);
     }
   }
   return ids;

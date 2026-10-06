@@ -1,5 +1,6 @@
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 // Plans deterministic Gateway startup plugin activation from prepared registry metadata.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { getConfiguredDecisionProviderIds } from "../agents/decision-model-setting.js";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
@@ -32,8 +33,10 @@ import {
 } from "./gateway-startup-plugin-providers.js";
 import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-providers.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import { collectConfiguredStorageProviderIds } from "./storage-provider-manifest.js";
 import { collectConfiguredWorkerProviderIds } from "./worker-provider-config.js";
 import { normalizeWorkerProviderIds } from "./worker-provider-id.js";
 
@@ -111,10 +114,16 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const configuredVoiceProviderIds = collectConfiguredVoiceProviderIds(activationSourceConfig);
   const configuredMemoryEmbeddingProviderIds =
     collectConfiguredMemoryEmbeddingProviderIds(activationSourceConfig);
+  const configuredDecisionProviderIds = new Set(
+    getConfiguredDecisionProviderIds(activationSourceConfig),
+  );
   const configuredWorkerProviderIds = new Set([
     ...collectConfiguredWorkerProviderIds(activationSourceConfig),
     ...normalizeWorkerProviderIds(params.workerProviderIds ?? []),
   ]);
+  const configuredStorageProviderIds = new Set(
+    collectConfiguredStorageProviderIds(activationSourceConfig),
+  );
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
@@ -136,6 +145,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   });
   const pluginIds: string[] = [];
   for (const plugin of params.index.plugins) {
+    const policyId = normalizePluginPolicyId(plugin.pluginId);
     const manifest = manifestLookup.get(plugin.pluginId);
     const manifestChannelIds = manifest?.channels ?? [];
     const hasEnabledManifestChannel =
@@ -152,8 +162,8 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     const hasExplicitlyEnabledNonBundledChannel =
       plugin.origin !== "bundled" &&
       hasEnabledManifestChannel &&
-      pluginsConfig.entries[plugin.pluginId]?.enabled === true &&
-      !pluginsConfig.deny.includes(plugin.pluginId);
+      pluginsConfig.entries[policyId]?.enabled === true &&
+      !pluginsConfig.deny.includes(policyId);
     if (
       manifestChannelIds.some((channelId) => configuredChannelIds.has(channelId)) ||
       hasExplicitlyEnabledNonBundledChannel
@@ -182,12 +192,14 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         env: params.env,
         requiredAgentHarnessRuntimes,
         configuredWorkerProviderIds,
+        configuredStorageProviderIds,
         configuredSpeechProviderIds,
         configuredWebSearchProviderIds,
         configuredModelProviderIds,
         configuredGenerationProviderIds,
         configuredVoiceProviderIds,
         configuredMemoryEmbeddingProviderIds,
+        configuredDecisionProviderIds,
         platform: params.platform,
       })
     ) {

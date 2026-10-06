@@ -9,7 +9,7 @@ import type { AuthProfileCredential } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { runCliAgent } from "./cli-runner.js";
 import { isFailoverError } from "./failover-error.js";
-import { renderBillingReplyCopy } from "./failover/user-copy.js";
+import { formatBillingErrorMessage, renderBillingReplyCopy } from "./failover/user-copy.js";
 import { recordFailedCandidateAttempt } from "./model-fallback-attempt.js";
 import type { FallbackAttempt } from "./model-fallback.types.js";
 
@@ -79,7 +79,7 @@ describe("CLI billing recovery", () => {
             ...(plugin
               ? {
                   prepareExecution: async () => ({
-                    execute: async function* () {
+                    async *execute() {
                       yield { type: "result", is_error: true, result: "Credit balance is too low" };
                     },
                   }),
@@ -110,7 +110,7 @@ describe("CLI billing recovery", () => {
         timeoutMs: 5_000,
         runId: "billing-run",
         config: { agents: { defaults: { workspace: dir } } },
-      }).catch((error: unknown) => error);
+      }).catch((caught: unknown) => caught);
       expect(isFailoverError(error)).toBe(true);
       expect(error).toMatchObject({ reason: "billing", authMode });
       const attempts: FallbackAttempt[] = [];
@@ -125,9 +125,16 @@ describe("CLI billing recovery", () => {
         fallbackConfigured: false,
       });
       expect(attempts[0]).toMatchObject({ reason: "billing", authMode });
-      const reply = renderBillingReplyCopy({ attempts });
+      const reply = renderBillingReplyCopy({
+        attempts: attempts.map((attempt) => ({
+          provider: attempt.provider,
+          model: attempt.model,
+          authMode: attempt.authMode,
+          reason: attempt.reason ?? "unknown",
+        })),
+      });
       if (authMode === "api_key") {
-        expect(reply).toContain("your API key has run out of credits");
+        expect(reply).toBe(formatBillingErrorMessage());
       } else {
         expect(reply).not.toContain("API key");
         expect(reply).toContain(

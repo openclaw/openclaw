@@ -6,7 +6,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createInvalidConfigError, isInvalidConfigError } from "../../config/io.invalid-config.js";
 import { mergeDeep } from "../../infra/deep-merge.js";
 import { getAgentDir } from "../config.js";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.js";
@@ -24,19 +25,12 @@ import {
   type WarningSettings,
 } from "./settings-storage.js";
 
-export { FileSettingsStorage, InMemorySettingsStorage } from "./settings-storage.js";
 export type {
-  BranchSummarySettings,
-  ImageSettings,
-  MarkdownSettings,
   PackageSource,
-  ProviderRetrySettings,
-  RetrySettings,
   Settings,
   SettingsError,
   SettingsScope,
   SettingsStorage,
-  TerminalSettings,
   ThinkingBudgetsSettings,
   TransportSetting,
   WarningSettings,
@@ -45,6 +39,38 @@ export type {
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
 function deepMergeSettings(base: Settings, overrides: Settings): Settings {
   return mergeDeep(base, overrides) as Settings;
+}
+
+function requireSupportedSettings(value: unknown, scope: SettingsScope): Settings {
+  if (!isRecord(value)) {
+    throw new TypeError("Session settings must be an object");
+  }
+  const retired: string[] = [];
+  if (Object.hasOwn(value, "queueMode")) {
+    retired.push("queueMode: use steeringMode");
+  }
+  if (Object.hasOwn(value, "websockets")) {
+    retired.push('websockets: use transport (true becomes "websocket", false becomes "sse")');
+  }
+  if (isRecord(value.skills)) {
+    retired.push(
+      "skills: use its customDirectories array (or []), and move skills.enableSkillCommands to top-level enableSkillCommands if present",
+    );
+  }
+  if (isRecord(value.retry) && Object.hasOwn(value.retry, "maxDelayMs")) {
+    retired.push("retry.maxDelayMs: use retry.provider.maxRetryDelayMs");
+  }
+  if (retired.length > 0) {
+    throw createInvalidConfigError(
+      `${scope} session settings.json`,
+      `Retired session settings: ${retired.join("; ")}. ` +
+        "Preserve the original file and replace the retired forms while retaining existing canonical values before retrying. " +
+        "For a staged upgrade, OpenClaw 2026.9.7 retains the former settings reader. " +
+        "See https://docs.openclaw.ai/gateway/doctor/config-migrations#session-settings.",
+      { recovery: "manual" },
+    );
+  }
+  return value as Settings;
 }
 
 interface SettingsScopeState {
@@ -71,13 +97,10 @@ export class SettingsManager {
     this.recomputeSettings();
   }
 
-  /** Create a SettingsManager that loads from files */
   static create(cwd: string, agentDir: string = getAgentDir()): SettingsManager {
-    const storage = new FileSettingsStorage(cwd, agentDir);
-    return SettingsManager.fromStorage(storage);
+    return SettingsManager.fromStorage(new FileSettingsStorage(cwd, agentDir));
   }
 
-  /** Create a SettingsManager from an arbitrary storage backend */
   static fromStorage(storage: SettingsStorage): SettingsManager {
     return new SettingsManager(storage, {
       global: SettingsManager.loadScope(storage, "global"),
@@ -85,12 +108,9 @@ export class SettingsManager {
     });
   }
 
-  /** Create an in-memory SettingsManager (no file I/O) */
   static inMemory(settings: Partial<Settings> = {}): SettingsManager {
     const storage = new InMemorySettingsStorage();
-    const initialSettings = SettingsManager.migrateSettings(
-      structuredClone(settings) as Record<string, unknown>,
-    );
+    const initialSettings = requireSupportedSettings(structuredClone(settings), "global");
     storage.withLock("global", () => JSON.stringify(initialSettings, null, 2));
     return SettingsManager.fromStorage(storage);
   }
@@ -106,11 +126,12 @@ export class SettingsManager {
           return undefined;
         });
       }
-      const settings = content
-        ? SettingsManager.migrateSettings(JSON.parse(content) as Record<string, unknown>)
-        : {};
+      const settings = content ? requireSupportedSettings(JSON.parse(content), scope) : {};
       return SettingsManager.createScopeState(settings);
     } catch (error) {
+      if (isInvalidConfigError(error)) {
+        throw error;
+      }
       return SettingsManager.createScopeState({}, error as Error);
     }
   }
@@ -124,58 +145,6 @@ export class SettingsManager {
       modified: new Map(),
       loadError,
     };
-  }
-
-  /** Migrate old settings format to new format */
-  private static migrateSettings(settings: Record<string, unknown>): Settings {
-    // Migrate queueMode -> steeringMode
-    if ("queueMode" in settings && !("steeringMode" in settings)) {
-      settings.steeringMode = settings.queueMode;
-      delete settings.queueMode;
-    }
-
-    // Migrate legacy websockets boolean -> transport enum
-    if (!("transport" in settings) && typeof settings.websockets === "boolean") {
-      settings.transport = settings.websockets ? "websocket" : "sse";
-      delete settings.websockets;
-    }
-
-    // Migrate old skills object format to new array format
-    if (isRecord(settings.skills)) {
-      const skillsSettings = settings.skills;
-      if (
-        skillsSettings.enableSkillCommands !== undefined &&
-        settings.enableSkillCommands === undefined
-      ) {
-        settings.enableSkillCommands = skillsSettings.enableSkillCommands;
-      }
-      if (
-        Array.isArray(skillsSettings.customDirectories) &&
-        skillsSettings.customDirectories.length > 0
-      ) {
-        settings.skills = skillsSettings.customDirectories;
-      } else {
-        delete settings.skills;
-      }
-    }
-
-    // Migrate retry.maxDelayMs -> retry.provider.maxRetryDelayMs
-    if (isRecord(settings.retry)) {
-      const retrySettings = settings.retry;
-      const providerSettings = asOptionalObjectRecord(retrySettings.provider);
-      if (
-        typeof retrySettings.maxDelayMs === "number" &&
-        providerSettings?.maxRetryDelayMs == null
-      ) {
-        retrySettings.provider = {
-          ...providerSettings,
-          maxRetryDelayMs: retrySettings.maxDelayMs,
-        };
-      }
-      delete retrySettings.maxDelayMs;
-    }
-
-    return settings as Settings;
   }
 
   getGlobalSettings(): Settings {
@@ -234,17 +203,6 @@ export class SettingsManager {
     this.errors.push({ scope, error: normalizedError });
   }
 
-  private enqueueWrite(scope: SettingsScope, task: () => void): void {
-    this.writeQueue = this.writeQueue
-      .then(() => {
-        task();
-        this.scopes[scope].modified.clear();
-      })
-      .catch((error: unknown) => {
-        this.recordError(scope, error);
-      });
-  }
-
   private persistScopedSettings(
     scope: SettingsScope,
     snapshotSettings: Settings,
@@ -252,7 +210,7 @@ export class SettingsManager {
   ): void {
     this.storage.withLock(scope, (current) => {
       const currentFileSettings = current
-        ? SettingsManager.migrateSettings(JSON.parse(current) as Record<string, unknown>)
+        ? requireSupportedSettings(JSON.parse(current), scope)
         : {};
       const mergedSettings: Settings = { ...currentFileSettings };
       for (const [field, nestedModified] of modified) {
@@ -284,9 +242,14 @@ export class SettingsManager {
     const modified = new Map(
       [...state.modified].map(([field, nested]) => [field, nested && new Set(nested)]),
     );
-    this.enqueueWrite(scope, () => {
-      this.persistScopedSettings(scope, snapshotSettings, modified);
-    });
+    this.writeQueue = this.writeQueue
+      .then(() => {
+        this.persistScopedSettings(scope, snapshotSettings, modified);
+        state.modified.clear();
+      })
+      .catch((error: unknown) => {
+        this.recordError(scope, error);
+      });
   }
 
   private setScopedSetting<K extends keyof Settings>(
@@ -317,7 +280,7 @@ export class SettingsManager {
   }
 
   drainErrors(): SettingsError[] {
-    const drained = [...this.errors];
+    const drained = this.errors;
     this.errors = [];
     return drained;
   }

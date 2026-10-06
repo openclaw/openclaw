@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { z } from "zod";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -18,6 +19,7 @@ import {
   githubOAuthDeviceFields,
   validGitHubDeviceTiming,
 } from "../shared/github-oauth-values.js";
+import { registerListener } from "../shared/listeners.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import {
@@ -25,8 +27,8 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { selectResolvedUserProfileById } from "./user-profiles-internal.js";
-import type { UserProfilesDatabase } from "./user-profiles-schema.js";
+import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
+import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 const tokenPair = z.strictObject({
   accessToken: secret,
@@ -106,10 +108,7 @@ const retirementObservers = new Set<(profileIds: readonly string[]) => void>();
 export function observeUserGitHubProfileRetirement(
   observer: (profileIds: readonly string[]) => void,
 ): () => void {
-  retirementObservers.add(observer);
-  return () => {
-    retirementObservers.delete(observer);
-  };
+  return registerListener(retirementObservers, observer);
 }
 
 function retireAfterCommit(db: DatabaseSync, ids: string[]): void {
@@ -123,13 +122,7 @@ function retireAfterCommit(db: DatabaseSync, ids: string[]): void {
 }
 
 function parseConnection(raw: string): UserGitHubConnection {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new PersonalGitHubStateError();
-  }
-  const result = connectionSchema.safeParse(parsed);
+  const result = connectionSchema.safeParse(safeParseJson(raw));
   if (!result.success) {
     throw new PersonalGitHubStateError();
   }
@@ -162,7 +155,7 @@ export function resolvePersonalGitHubOwner(
   if (!tableExists(db, "user_profiles")) {
     return undefined;
   }
-  const resolved = selectResolvedUserProfileById(db, profile);
+  const resolved = selectResolvedUserProfileMetadataById(db, profile);
   return resolved && !resolved.merged_into ? resolved.id : undefined;
 }
 

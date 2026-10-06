@@ -1,16 +1,25 @@
+import { PATH_ALIAS_POLICIES } from "@openclaw/fs-safe/advanced";
 /**
  * Shell plans for pinned sandbox filesystem operations.
  *
  * Selects the local interpreter and supplies quoted Python source to local and remote transports.
  */
-import { PATH_ALIAS_POLICIES } from "../../infra/path-alias-guards.js";
-import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-python.js";
+import { GUEST_FILESYSTEM_PYTHON } from "@openclaw/fs-safe/guest";
 import type {
   PathSafetyCheck,
   PinnedSandboxDirectoryEntry,
   PinnedSandboxEntry,
 } from "./fs-bridge-path-safety.js";
-import type { SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
+
+// Plans carry path-safety checks alongside the command so rechecks and execution stay coupled.
+export type SandboxFsCommandPlan = {
+  checks: PathSafetyCheck[];
+  script: string;
+  args?: string[];
+  stdin?: Buffer | string;
+  recheckBeforeCommand?: boolean;
+  allowFailure?: boolean;
+};
 
 const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
   "/usr/bin/python3",
@@ -19,7 +28,15 @@ const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
   "/bin/python3",
 ] as const;
 
-export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${SANDBOX_PINNED_MUTATION_PYTHON.replaceAll("'", `'\\''`)}'`;
+export const PINNED_MUTATION_ACTION_LABELS = {
+  write: "write files",
+  create: "create files",
+  mkdir: "create directories",
+  remove: "remove files",
+  "copy-destination": "copy files",
+} as const;
+
+export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${GUEST_FILESYSTEM_PYTHON.replaceAll("'", `'\\''`)}'`;
 
 export type PinnedSandboxOperation =
   | {

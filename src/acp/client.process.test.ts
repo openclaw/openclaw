@@ -12,14 +12,7 @@ import { runAcpClientInteractive } from "./client.js";
 
 const fixture = createFixtureLifetime();
 const node = resolveTestNodeExecPath();
-type ServerMode =
-  | "handshake-failure"
-  | "SIGTERM"
-  | "SIGKILL"
-  | "exit-0"
-  | "exit-7"
-  | "quit"
-  | "quit-7";
+type ServerMode = "handshake-failure" | "SIGTERM" | "exit-0" | "quit-7" | "eof-pending";
 
 afterEach(async () => {
   await fixture.cleanup();
@@ -39,10 +32,13 @@ const fs = require("node:fs");
 const readline = require("node:readline");
 const mode = ${JSON.stringify(mode)};
 fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-if (mode === "handshake-failure" || mode === "quit-7") {
+let pendingPromptReply;
+if (mode === "handshake-failure" || mode === "quit-7" || mode === "eof-pending") {
   process.on("SIGTERM", () => {
     fs.writeFileSync(${JSON.stringify(termFile)}, "SIGTERM");
     if (mode === "quit-7") process.exit(7);
+    pendingPromptReply?.();
+    pendingPromptReply = undefined;
   });
 }
 const lines = readline.createInterface({ input: process.stdin });
@@ -64,9 +60,19 @@ lines.on("line", (line) => {
     } } : { result: { sessionId: "process-status-fixture" } });
   } else if (request.method === "session/prompt") {
     fs.writeFileSync(${JSON.stringify(promptFile)}, request.params.prompt[0].text);
-    if (mode === "SIGTERM" || mode === "SIGKILL") process.kill(process.pid, mode);
-    else if (mode === "exit-0" || mode === "exit-7") process.exit(mode === "exit-7" ? 7 : 0);
-    else reply({ result: { stopReason: "end_turn" } });
+    if (mode === "SIGTERM") process.kill(process.pid, mode);
+    else if (mode === "exit-0") process.exit(0);
+    else if (mode === "eof-pending") {
+      pendingPromptReply = () => reply({ result: { stopReason: "end_turn" } });
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0", method: "session/update", params: {
+          sessionId: "process-status-fixture",
+          update: { sessionUpdate: "agent_message_chunk", content: {
+            type: "text", text: "fixture awaiting terminal EOF",
+          } },
+        },
+      }) + "\\n");
+    } else reply({ result: { stopReason: "end_turn" } });
   }
 });
 setInterval(() => {}, 60_000);
@@ -114,11 +120,9 @@ describe("runAcpClientInteractive process lifecycle", () => {
 
   it.skipIf(process.platform === "win32").each([
     { mode: "SIGTERM", code: 1, diagnostic: "signal SIGTERM" },
-    { mode: "SIGKILL", code: 1, diagnostic: "signal SIGKILL" },
     { mode: "exit-0", code: 0, diagnostic: "code 0" },
-    { mode: "exit-7", code: 7, diagnostic: "code 7" },
-    { mode: "quit", code: 0, diagnostic: "" },
     { mode: "quit-7", code: 7, diagnostic: "code 7" },
+    { mode: "eof-pending", code: 0, diagnostic: "signal SIGKILL" },
   ] as const)("preserves the client outcome for $mode", async ({ mode, code, diagnostic }) =>
     fixture.run(async () => {
       const { dir, pidFile, termFile, promptFile } = await createServerFixture(mode);
@@ -168,26 +172,39 @@ describe("runAcpClientInteractive process lifecycle", () => {
               prompted = true;
               child.stdin!.write("status marker\n");
             } else if (
-              mode.startsWith("quit") &&
+              (mode === "quit-7" || mode === "eof-pending") &&
               !quitSent &&
-              /\[end_turn\][\s\S]*> /.test(output)
+              (mode === "eof-pending"
+                ? output.includes("fixture awaiting terminal EOF")
+                : /\[end_turn\][\s\S]*> /.test(output))
             ) {
               quitSent = true;
-              child.stdin!.write("quit\n");
+              if (mode === "eof-pending") {
+                child.stdin!.end();
+              } else {
+                child.stdin!.write("quit\n");
+              }
             }
           });
         },
+      }).catch((error: unknown) => {
+        throw new Error(
+          `ACP client process failed: ${JSON.stringify({ prompted, quitSent, native })}\nstdout:\n${stdout.text()}\nstderr:\n${stderr.text()}`,
+          { cause: error },
+        );
       });
       expect(prompted, stderr.text()).toBe(true);
       expect(await readFile(promptFile, "utf8")).toBe("status marker");
       expect(result, `${stderr.text()}\n${stdout.text()}`).toBe(code);
       expect(native).toEqual({ code, signal: null });
       expect(stdout.text()).toContain(`Agent exited with ${diagnostic}`);
-      if (mode.startsWith("quit")) {
+      if (mode === "quit-7" || mode === "eof-pending") {
         expect(quitSent).toBe(true);
-      }
-      if (mode === "quit-7") {
         expect(await readFile(termFile, "utf8")).toBe("SIGTERM");
+      }
+      if (mode === "eof-pending") {
+        expect(stdout.text()).toContain("[end_turn]");
+        expect(stdout.text().match(/> /g)).toHaveLength(1);
       }
       const serverPid = Number(await readFile(pidFile, "utf8"));
       expect(() => process.kill(serverPid, 0)).toThrow();

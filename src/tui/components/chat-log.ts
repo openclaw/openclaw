@@ -1,6 +1,6 @@
-// Chat log component lays out conversation messages for the TUI viewport.
 import type { Component } from "@earendil-works/pi-tui";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import type { AgentActivityItem as AgentItemEventData } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { tuiTheme as theme } from "../theme/theme.js";
 import { sanitizeRenderableText } from "../tui-formatters.js";
 import type { TuiImageSource } from "../tui-images.js";
@@ -36,7 +36,6 @@ type RepeatableSystemMessage = {
 type TrackedTool = {
   component: ToolExecutionComponent;
   runId?: string;
-  active: boolean;
 };
 
 type TrackedAssistantRun = {
@@ -157,7 +156,7 @@ export class ChatLog extends Container {
     const streaming = runId ? this.assistantRuns.get(runId)?.streaming : undefined;
     const completedTools = new Set<ToolExecutionComponent>();
     for (const tool of this.tools.values()) {
-      if (!tool.active) {
+      if (!tool.component.isActive) {
         completedTools.add(tool.component);
       }
     }
@@ -307,9 +306,7 @@ export class ChatLog extends Container {
   ) {
     const existing = this.userComponents.get(options.messageId);
     if (existing) {
-      existing.setText(text);
-      existing.setImages(options.images ?? []);
-      return existing;
+      return this.addUser(text, options);
     }
 
     // Persisted execution ownership can differ from the originating send;
@@ -405,10 +402,6 @@ export class ChatLog extends Container {
     return this.pendingUsers.size;
   }
 
-  private resolveRunId(runId?: string) {
-    return runId ?? "default";
-  }
-
   private getAssistantRun(runId: string): TrackedAssistantRun {
     let run = this.assistantRuns.get(runId);
     if (!run) {
@@ -487,7 +480,7 @@ export class ChatLog extends Container {
   }
 
   startAssistant(text: string, runId?: string) {
-    const effectiveRunId = this.resolveRunId(runId);
+    const effectiveRunId = runId ?? "default";
     const run = this.getAssistantRun(effectiveRunId);
     run.finalized.clear();
     run.latestText = text;
@@ -504,7 +497,7 @@ export class ChatLog extends Container {
   }
 
   reserveAssistantSlot(runId?: string) {
-    const effectiveRunId = this.resolveRunId(runId);
+    const effectiveRunId = runId ?? "default";
     const existing = this.assistantRuns.get(effectiveRunId)?.streaming;
     if (existing) {
       return existing;
@@ -513,7 +506,7 @@ export class ChatLog extends Container {
   }
 
   updateAssistant(text: string, runId?: string) {
-    const effectiveRunId = this.resolveRunId(runId);
+    const effectiveRunId = runId ?? "default";
     const run = this.getAssistantRun(effectiveRunId);
     run.latestText = text;
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
@@ -529,7 +522,7 @@ export class ChatLog extends Container {
   }
 
   finalizeAssistant(text: string, runId?: string, images: readonly TuiImageSource[] = []) {
-    const effectiveRunId = this.resolveRunId(runId);
+    const effectiveRunId = runId ?? "default";
     const run = this.getAssistantRun(effectiveRunId);
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
     const existing = run.streaming;
@@ -571,7 +564,7 @@ export class ChatLog extends Container {
   }
 
   dropAssistant(runId?: string) {
-    const effectiveRunId = this.resolveRunId(runId);
+    const effectiveRunId = runId ?? "default";
     const run = this.assistantRuns.get(effectiveRunId);
     if (!run) {
       return;
@@ -612,17 +605,31 @@ export class ChatLog extends Container {
     return this.btwMessage !== null;
   }
 
-  startTool(toolCallId: string, toolName: string, args: unknown, runId?: string) {
+  startTool(
+    toolCallId: string,
+    toolName: string,
+    args: unknown,
+    runId?: string,
+    activity?: AgentItemEventData | null,
+  ) {
     const existing = this.tools.get(toolCallId);
     if (existing) {
-      existing.component.setArgs(args);
+      if (args !== undefined) {
+        existing.component.setArgs(args);
+      }
+      if (activity !== undefined) {
+        existing.component.setActivity(activity);
+      }
       return existing.component;
     }
     const owningRunId = runId ?? this.resolveSingleStreamingRunId();
     this.freezeStreamingAssistants();
     const component = new ToolExecutionComponent(toolName, args, this.imageRenderer);
+    if (activity !== undefined) {
+      component.setActivity(activity);
+    }
     component.setExpanded(this.toolsExpanded);
-    this.tools.set(toolCallId, { component, runId: owningRunId, active: true });
+    this.tools.set(toolCallId, { component, runId: owningRunId });
     this.appendNonSystem(component);
     return component;
   }
@@ -632,19 +639,7 @@ export class ChatLog extends Container {
     result: unknown,
     opts?: { isError?: boolean; partial?: boolean },
   ) {
-    const existing = this.tools.get(toolCallId);
-    if (!existing) {
-      return;
-    }
-    if (opts?.partial) {
-      existing.active = true;
-      existing.component.setPartialResult(result as Record<string, unknown>);
-      return;
-    }
-    existing.active = false;
-    existing.component.setResult(result as Record<string, unknown>, {
-      isError: opts?.isError,
-    });
+    this.tools.get(toolCallId)?.component.setResult(result as Record<string, unknown>, opts);
   }
 
   setToolsExpanded(expanded: boolean) {

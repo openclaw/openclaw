@@ -1,29 +1,39 @@
-/**
- * Centralized date/time formatting utilities.
- *
- * All formatters are timezone-aware, using Intl.DateTimeFormat.
- * Consolidates duplicated formatUtcTimestamp / formatZonedTimestamp / resolveExplicitTimezone
- * that previously lived in envelope.ts and session-updates.ts.
- */
+type TimeZoneFormatter = {
+  timeZone: string;
+  dateTimeFormatConstructor: typeof Intl.DateTimeFormat;
+  formatter: Intl.DateTimeFormat;
+};
+
+let timezoneValidationFormatter: TimeZoneFormatter | undefined;
+
 /**
  * Validate an IANA timezone string. Returns the string if valid, undefined otherwise.
  */
 export function resolveTimezone(value: string): string | undefined {
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+    const DateTimeFormat = Intl.DateTimeFormat;
+    const cached = timezoneValidationFormatter;
+    const formatter =
+      typeof value === "string" &&
+      cached?.timeZone === value &&
+      cached.dateTimeFormatConstructor === DateTimeFormat
+        ? cached.formatter
+        : new DateTimeFormat("en-US", { timeZone: value });
+    formatter.format(new Date());
+    if (typeof value === "string" && formatter !== cached?.formatter) {
+      timezoneValidationFormatter = {
+        timeZone: value,
+        dateTimeFormatConstructor: DateTimeFormat,
+        formatter,
+      };
+    }
     return value;
   } catch {
     return undefined;
   }
 }
 
-let timeZoneDayKeyFormatter:
-  | {
-      timeZone: string;
-      dateTimeFormatConstructor: typeof Intl.DateTimeFormat;
-      formatter: Intl.DateTimeFormat;
-    }
-  | undefined;
+let timeZoneDayKeyFormatter: TimeZoneFormatter | undefined;
 
 /** Build a stable YYYY-MM-DD formatter for instants in one IANA timezone. */
 export function createTimeZoneDayKeyFormatter(timeZone: string): (date: Date) => string {
@@ -65,9 +75,6 @@ export function resolveTimeZoneDayStartMs(dayKey: string, timeZone: string): num
     return undefined;
   }
   const naiveUtcMs = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  if (!Number.isFinite(naiveUtcMs)) {
-    return undefined;
-  }
 
   const formatDayKey = createTimeZoneDayKeyFormatter(timeZone);
   const searchWindowMs = 2 * 24 * 60 * 60 * 1000;

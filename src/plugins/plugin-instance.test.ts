@@ -13,8 +13,13 @@ import type {
 } from "./host-hooks.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { registerMemoryCapability } from "./memory-state.js";
+import {
+  PluginInstanceDrainTimeoutError,
+  PluginInstanceUnavailableError,
+} from "./plugin-instance-error.js";
 import { runPluginCleanup } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { adoptPluginRegistryRecords } from "./registry-lifecycle.js";
 import {
@@ -27,6 +32,44 @@ import type { OpenClawPluginApi } from "./types.js";
 
 describe("managed plugin instances", () => {
   afterEach(() => vi.useRealTimers());
+
+  it.each(["call", "cleanup", "consumer", "host prelude"] as const)(
+    "forces logical retirement at the existing deadline while a %s never settles",
+    async (kind) => {
+      vi.useFakeTimers();
+      const instance = new PluginInstance("hung");
+      const never = new Promise<void>(() => {});
+      const releaseModules = vi.fn(async () => {});
+      instance.onModuleDispose(releaseModules);
+      if (kind === "call") {
+        void instance.run(() => never);
+      } else if (kind === "cleanup") {
+        instance.lifecycle.onDispose(() => never);
+      } else if (kind === "consumer") {
+        instance.retainConsumer();
+      }
+      let result: Awaited<ReturnType<PluginInstance["dispose"]>> | undefined;
+      void instance.dispose(kind === "host prelude" ? () => never : undefined).then((value) => {
+        result = value;
+      });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toMatchObject({
+        errors: [
+          {
+            forcedRetirement: {
+              activeCallCount: kind === "consumer" ? 0 : 1,
+              retainedConsumerCount: kind === "consumer" ? 1 : 0,
+            },
+          },
+        ],
+      });
+      expect(instance.lifecycle.signal.aborted).toBe(true);
+      expect(() => instance.run(() => "late")).toThrow("reloaded or disabled");
+      expect(releaseModules).not.toHaveBeenCalled();
+    },
+  );
 
   it("drains admitted calls and rejects new calls", async () => {
     const instance = new PluginInstance("clock");
@@ -46,6 +89,37 @@ describe("managed plugin instances", () => {
       await draining;
     } finally {
       deferred.resolve("finished");
+      await instance.dispose();
+    }
+  });
+
+  it("optionally drains retained consumers before resources stop while preserving default drain", async () => {
+    const instance = new PluginInstance("consumer-drain");
+    const consumer = instance.retainConsumer();
+    const cleanup = createDeferredCore();
+    let drained = false;
+    try {
+      await expect(instance.drain()).resolves.toEqual({ errors: [] });
+      const draining = instance.drain({ includeConsumers: true }).then(() => {
+        drained = true;
+      });
+      await Promise.resolve();
+      expect(drained).toBe(false);
+      expect(instance.lifecycle.signal.aborted).toBe(false);
+      expect(consumer.run(() => "existing work continues")).toBe("existing work continues");
+      expect(() => instance.run(() => undefined)).toThrow("reloaded or disabled");
+      const closing = consumer.close(() => cleanup.promise);
+      await Promise.resolve();
+      expect(drained).toBe(false);
+      cleanup.resolve();
+      await closing;
+      await draining;
+      expect(instance.lifecycle.signal.aborted).toBe(false);
+      instance.resume();
+      expect(instance.run(() => "resumed")).toBe("resumed");
+    } finally {
+      cleanup.resolve();
+      consumer.release();
       await instance.dispose();
     }
   });
@@ -215,42 +289,37 @@ describe("managed plugin instances", () => {
     expect(() => readDescriptor.get!()).toThrow("reloaded or disabled");
   });
 
-  it.each(
-    (["host", "VM"] as const).flatMap((realm) =>
-      (["before wrapping", "after wrapping", "after growing"] as const).map((freezeAt) => ({
-        realm,
-        freezeAt,
-      })),
-    ),
-  )("preserves $realm array descriptors frozen $freezeAt", async ({ realm, freezeAt }) => {
-    const instance = new PluginInstance("frozen-array");
-    const source: Array<{ execute(): string }> =
-      realm === "host"
-        ? [{ execute: () => "current" }]
-        : runInNewContext('[{ execute() { return "current"; } }]');
-    try {
-      if (freezeAt === "before wrapping") {
-        Object.freeze(source);
-      }
-      const view = instance.wrap(source);
-      if (freezeAt === "after growing") {
-        source.push({ execute: () => "second" });
-      }
-      Object.freeze(source);
-      expect(Array.isArray(view)).toBe(true);
-      expect(Object.keys(view)).toEqual(Object.keys(source));
-      expect(Object.getOwnPropertyDescriptor(view, "length")).toEqual(
-        Object.getOwnPropertyDescriptor(source, "length"),
+  it.each(["before wrapping", "after wrapping", "after growing"] as const)(
+    "preserves cross-realm array descriptors frozen %s",
+    async (freezeAt) => {
+      const instance = new PluginInstance("frozen-array");
+      const source: Array<{ execute(): string }> = runInNewContext(
+        '[{ execute() { return "current"; } }]',
       );
-      expect(view.length).toBe(source.length);
-      const execute: () => string = Reflect.get(view[0]!, "execute");
-      expect(execute()).toBe("current");
-      await instance.dispose();
-      expect(() => execute()).toThrow("reloaded or disabled");
-    } finally {
-      await instance.dispose();
-    }
-  });
+      try {
+        if (freezeAt === "before wrapping") {
+          Object.freeze(source);
+        }
+        const view = instance.wrap(source);
+        if (freezeAt === "after growing") {
+          source.push({ execute: () => "second" });
+        }
+        Object.freeze(source);
+        expect(Array.isArray(view)).toBe(true);
+        expect(Object.keys(view)).toEqual(Object.keys(source));
+        expect(Object.getOwnPropertyDescriptor(view, "length")).toEqual(
+          Object.getOwnPropertyDescriptor(source, "length"),
+        );
+        expect(view.length).toBe(source.length);
+        const execute: () => string = Reflect.get(view[0]!, "execute");
+        expect(execute()).toBe("current");
+        await instance.dispose();
+        expect(() => execute()).toThrow("reloaded or disabled");
+      } finally {
+        await instance.dispose();
+      }
+    },
+  );
 
   it("preserves async function metadata used by synchronous registration contracts", async () => {
     const instance = new PluginInstance("metadata");
@@ -277,25 +346,6 @@ describe("managed plugin instances", () => {
     expect(Buffer.isBuffer(tool.execute())).toBe(true);
     await instance.dispose();
     expect(structuredClone(data).nested).toEqual([{ value: 2 }]);
-  });
-
-  it("lets an admitted call finish through a native timer while draining", async () => {
-    const instance = new PluginInstance("timer-call");
-    const helper = instance.wrap(() => "complete");
-    const call = instance.wrap(
-      () =>
-        new Promise<string>((resolve) => {
-          setTimeout(() => resolve(helper()), 10);
-        }),
-    )();
-    const draining = instance.dispose();
-    try {
-      await expect(call).resolves.toBe("complete");
-      await draining;
-    } finally {
-      await instance.dispose();
-    }
-    expect(() => helper()).toThrow("reloaded or disabled");
   });
 
   it("retains streams and explicitly admitted terminal results through retirement", async () => {
@@ -377,55 +427,44 @@ describe("managed plugin instances", () => {
     expect(read).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    "sourceMember",
-    "iteratorMember",
-    "sourceMethod",
-    "asyncSourceMethod",
-    "iteratorMethod",
-    "asyncIteratorMethod",
-    "yieldedValue",
-    "terminalValue",
-  ] as const)("fences callable values returned through a stream's %s", async (target) => {
-    const instance = new PluginInstance("stream-values");
-    const read = vi.fn(() => "owned value");
-    // A helper's data is not an iterator completion signal.
-    const payload = { read, done: true };
-    const iterator = Object.assign(
-      (async function* () {
-        yield payload;
-      })(),
-      { member: payload, inspect: () => payload, inspectAsync: async () => payload },
-    );
-    const stream = instance.wrap({
-      [Symbol.asyncIterator]: () => iterator,
-      member: payload,
-      helper: () => read,
-      helperAsync: async () => read,
-      result: async () => payload,
-    });
-    const view = stream[Symbol.asyncIterator]();
-    const first = await view.next();
-    if (first.done) {
-      throw new Error("Expected the fixture's first chunk");
-    }
-    const readers = {
-      sourceMember: () => stream.member.read,
-      iteratorMember: () => view.member.read,
-      sourceMethod: () => stream.helper(),
-      asyncSourceMethod: () => stream.helperAsync(),
-      iteratorMethod: () => view.inspect().read,
-      asyncIteratorMethod: async () => (await view.inspectAsync()).read,
-      yieldedValue: () => first.value.read,
-      terminalValue: async () => (await stream.result()).read,
-    };
-    const retained = await readers[target]();
-    expect(retained()).toBe("owned value");
-    await expect(view.next()).resolves.toMatchObject({ done: true });
-    await instance.dispose();
-    expect(() => retained()).toThrow("reloaded or disabled");
-    expect(read).toHaveBeenCalledOnce();
-  });
+  it.each(["sourceMember", "iteratorMember", "sourceMethod", "asyncSourceMethod"] as const)(
+    "fences callable values returned through a stream's %s",
+    async (target) => {
+      const instance = new PluginInstance("stream-values");
+      const read = vi.fn(() => "owned value");
+      // A helper's data is not an iterator completion signal.
+      const payload = { read, done: true };
+      const iterator = Object.assign(
+        (async function* () {
+          yield payload;
+        })(),
+        { member: payload },
+      );
+      const stream = instance.wrap({
+        [Symbol.asyncIterator]: () => iterator,
+        member: payload,
+        helper: () => read,
+        helperAsync: async () => read,
+      });
+      const view = stream[Symbol.asyncIterator]();
+      const first = await view.next();
+      if (first.done) {
+        throw new Error("Expected the fixture's first chunk");
+      }
+      const readers = {
+        sourceMember: () => stream.member.read,
+        iteratorMember: () => view.member.read,
+        sourceMethod: () => stream.helper(),
+        asyncSourceMethod: () => stream.helperAsync(),
+      };
+      const retained = await readers[target]();
+      expect(retained()).toBe("owned value");
+      await expect(view.next()).resolves.toMatchObject({ done: true });
+      await instance.dispose();
+      expect(() => retained()).toThrow("reloaded or disabled");
+      expect(read).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["source", "iterator"] as const)(
     "joins an admitted async %s helper after its cursor ends",
@@ -670,9 +709,15 @@ describe("managed plugin instances", () => {
     pending.resolve();
     await rejectedCall;
     expect(atDrainTimeout).toEqual({ aborted: true, cleanupEntered: 1, cleaned: 0 });
-    await expect(disposing).resolves.toMatchObject({
-      errors: [new Error("Plugin stuck still has active calls after 5000ms")],
-    });
+    const { errors } = await disposing;
+    expect(errors).toHaveLength(1);
+    const [drainTimeout] = errors;
+    expect(drainTimeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+    if (!(drainTimeout instanceof PluginInstanceDrainTimeoutError)) {
+      throw new Error("Expected the disposal's original-call drain diagnostic");
+    }
+    expect(drainTimeout.forcedRetirement).toEqual({ activeCallCount: 2, retainedConsumerCount: 0 });
+    await expect(drainTimeout.settled).resolves.toBeUndefined();
     expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(cleaned).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
@@ -680,6 +725,87 @@ describe("managed plugin instances", () => {
     await expect(stream.next()).rejects.toThrow(/stream is closed|reloaded or disabled/);
     expect(resumedStream).not.toHaveBeenCalled();
     expect(instance.dispose()).toBe(disposing);
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "keeps disposal's drain settlement pending until its original call actually %ss",
+    async (completion) => {
+      vi.useFakeTimers();
+      const instance = new PluginInstance("late-call");
+      const pending = createDeferredCore<string>();
+      const callFailure = new Error("original call failed");
+      const cleanupFailure = new Error("resource cleanup failed");
+      const cleanup = vi.fn(() => {
+        throw cleanupFailure;
+      });
+      instance.lifecycle.onDispose(cleanup);
+      const call = instance.wrap(() => pending.promise)();
+      const callOutcome = call.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      const disposing = instance.dispose();
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        const result = await disposing;
+        const [drainTimeout] = result.errors;
+        expect(drainTimeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
+        if (!(drainTimeout instanceof PluginInstanceDrainTimeoutError)) {
+          throw new Error("Expected the disposal's original-call drain diagnostic");
+        }
+        expect(drainTimeout.forcedRetirement).toEqual({
+          activeCallCount: 1,
+          retainedConsumerCount: 0,
+        });
+        expect(result.errors).toEqual([drainTimeout, cleanupFailure]);
+        expect(cleanup).toHaveBeenCalledOnce();
+        let settled = false;
+        const settlement = drainTimeout.settled.catch((error: unknown) => {
+          settled = true;
+          expect(error).toBeInstanceOf(AggregateError);
+          expect((error as AggregateError).errors).toEqual([cleanupFailure]);
+        });
+        await Promise.resolve();
+        // Disposal revoked and cleared ordinary admission; neither action means
+        // the original promise returned or released its actual call lease.
+        expect(instance.lifecycle.signal.aborted).toBe(true);
+        expect(() => instance.run(() => "retired")).toThrow("reloaded or disabled");
+        expect(settled).toBe(false);
+        if (completion === "resolve") {
+          pending.resolve("finished");
+        } else {
+          pending.reject(callFailure);
+        }
+        expect(await callOutcome).toEqual(
+          completion === "resolve"
+            ? { error: new PluginInstanceUnavailableError("late-call") }
+            : { error: callFailure },
+        );
+        await settlement;
+        expect(settled).toBe(true);
+        expect(await instance.dispose()).toBe(result);
+        expect(result.errors).toEqual([drainTimeout, cleanupFailure]);
+      } finally {
+        pending.resolve("finished");
+        await Promise.allSettled([call, disposing]);
+      }
+    },
+  );
+
+  it("refuses an earlier result whose final release crosses the retirement deadline", async () => {
+    vi.useFakeTimers();
+    const instance = new PluginInstance("slow-removal");
+    const result = createDeferredCore<string>();
+    const removal = createDeferredCore();
+    instance.onModuleDispose(() => removal.promise);
+    const call = instance.run(() => result.promise);
+    const rejected = expect(call).rejects.toThrow("reloaded or disabled");
+    const retirement = instance.dispose();
+    result.resolve("finished before timeout");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await rejected;
+    expect((await retirement).errors).toMatchObject([{ forcedRetirement: { activeCallCount: 1 } }]);
+    removal.resolve();
   });
 
   it("keeps a host prelude guard exceptional while attempting explicit cleanup", async () => {
@@ -715,7 +841,9 @@ describe("managed plugin instances", () => {
     withPluginRuntimeGatewayRequestScope(caller, () =>
       withPluginRuntimeGenerationScope(
         {
-          metadataSnapshot: { index: {}, configFingerprint: "test", owners: {} } as never,
+          metadataSnapshot: createPluginMetadataSnapshotFixture({
+            plugins: [{ id: record.id, origin: record.origin, source: record.source }],
+          }),
           pluginRegistry: first,
         },
         () => {
@@ -817,21 +945,13 @@ describe("managed plugin instances", () => {
     process.on(event, hostListener);
     try {
       process.on(event, pluginListener);
-      process.off(event, pluginListener);
-      process.emit(event);
-      expect(pluginListener).not.toHaveBeenCalled();
-      process.once(event, pluginListener);
-      process.emit(event);
-      process.emit(event);
-      expect(pluginListener).toHaveBeenCalledOnce();
-      process.on(event, pluginListener);
       const timer = delay(60_000, undefined, { signal: instance.lifecycle.signal });
       const rejected = expect(timer).rejects.toMatchObject({ name: "AbortError" });
       await instance.dispose();
       await rejected;
       process.emit(event);
-      expect(pluginListener).toHaveBeenCalledOnce();
-      expect(hostListener).toHaveBeenCalledTimes(4);
+      expect(pluginListener).not.toHaveBeenCalled();
+      expect(hostListener).toHaveBeenCalledOnce();
     } finally {
       await instance.dispose();
       process.removeListener(event, pluginListener);

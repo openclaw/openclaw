@@ -1,6 +1,9 @@
 import os from "node:os";
 import { lowercasePreservingWhitespace } from "@openclaw/normalization-core";
-import { resolveEffectiveHomeDir } from "@openclaw/normalization-core/home-dir";
+import {
+  normalizeHomeDirValue,
+  resolveEffectiveHomeDir,
+} from "@openclaw/normalization-core/home-dir";
 
 // Display-safe string helpers for shortening user home paths.
 
@@ -12,7 +15,7 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   if (!home) {
     return undefined;
   }
-  const explicitHome = process.env.OPENCLAW_HOME?.trim();
+  const explicitHome = normalizeHomeDirValue(process.env.OPENCLAW_HOME);
   return explicitHome ? { home, prefix: "$OPENCLAW_HOME" } : { home, prefix: "~" };
 }
 

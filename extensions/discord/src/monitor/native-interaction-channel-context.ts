@@ -1,4 +1,3 @@
-// Discord plugin module implements native interaction channel context behavior.
 import { ChannelType } from "../internal/discord.js";
 import type { DiscordChannelInfoClient } from "./message-channel-info.js";
 import { resolveDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
@@ -8,25 +7,12 @@ type DiscordInteractionChannel = {
   type?: ChannelType;
 };
 
-type DiscordNativeInteractionChannelContext = {
-  channelType?: ChannelType;
-  isDirectMessage: boolean;
-  isGroupDm: boolean;
-  isThreadChannel: boolean;
-  channelName?: string;
-  channelSlug: string;
-  rawChannelId: string;
-  threadParentId?: string;
-  threadParentName?: string;
-  threadParentSlug: string;
-};
-
 export async function resolveDiscordNativeInteractionChannelContext(params: {
   channel: DiscordInteractionChannel | null | undefined;
   client: DiscordChannelInfoClient;
   hasGuild: boolean;
   channelIdFallback: string;
-}): Promise<DiscordNativeInteractionChannelContext> {
+}) {
   const channelContext = await resolveDiscordThreadLikeChannelContext({
     client: params.client,
     channel: params.channel,

@@ -1,13 +1,14 @@
 /** Serializes run-owned transcript callbacks and bounds teardown settlement. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "../../../infra/errors.js";
+import { settlesWithin } from "../../../shared/settle-within.js";
 import { log } from "../logger.js";
 
 const TRANSCRIPT_TEARDOWN_BUDGET_MS = 30_000;
 
-type LifecycleOwner = {
+/** Per-attempt transcript write state carried by the owned AsyncLocalStorage. */
+export type LifecycleOwner = {
   active: boolean;
-  nestedPending: number;
   nestedTail: Promise<void>;
   pendingOperations: Set<Promise<void>>;
 };
@@ -18,22 +19,26 @@ export type EmbeddedAttemptTranscriptLifecycle = {
   dispose(): Promise<void>;
 };
 
-export function createEmbeddedAttemptTranscriptLifecycle(params: {
-  runId?: string;
-  sessionId?: string;
-}): EmbeddedAttemptTranscriptLifecycle {
+export function createEmbeddedAttemptTranscriptLifecycle(
+  params: {
+    runId?: string;
+    sessionId?: string;
+  },
+  deps: {
+    /** Override how the lifecycle owner store is constructed, so tests can hold a reference to the per-attempt AsyncLocalStorage. Defaults to an owned instance. */
+    createLifecycleStore?: () => AsyncLocalStorage<LifecycleOwner>;
+  } = {},
+): EmbeddedAttemptTranscriptLifecycle {
   let cleanupRequested = false;
   let disposed = false;
   let lifecycle = Promise.resolve();
   let cleanupDrain: Promise<void> | undefined;
   let disposePromise: Promise<void> | undefined;
   let pendingWrites = 0;
-  let teardownBudgetLogged = false;
-  const lifecycleOwner = new AsyncLocalStorage<LifecycleOwner>();
+  const lifecycleOwner = deps.createLifecycleStore?.() ?? new AsyncLocalStorage<LifecycleOwner>();
 
   const createLifecycleOwner = (): LifecycleOwner => ({
     active: true,
-    nestedPending: 0,
     nestedTail: Promise.resolve(),
     pendingOperations: new Set(),
   });
@@ -93,10 +98,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(params: {
   const serializeLifecycle = async <T>(run: () => Promise<T> | T): Promise<T> => {
     const inheritedOwner = lifecycleOwner.getStore();
     if (inheritedOwner?.active) {
-      const waitForPrevious =
-        inheritedOwner.nestedPending > 0 ? inheritedOwner.nestedTail : Promise.resolve();
-      inheritedOwner.nestedPending += 1;
-      const operation = waitForPrevious.then(async () => {
+      const operation = inheritedOwner.nestedTail.then(async () => {
         const childOwner = createLifecycleOwner();
         return await runLifecycleOwner(childOwner, run);
       });
@@ -108,9 +110,6 @@ export function createEmbeddedAttemptTranscriptLifecycle(params: {
       void propagated.catch(() => {});
       inheritedOwner.nestedTail = queueTail;
       inheritedOwner.pendingOperations.add(propagated);
-      void queueTail.finally(() => {
-        inheritedOwner.nestedPending -= 1;
-      });
       return await operation;
     }
 
@@ -127,32 +126,13 @@ export function createEmbeddedAttemptTranscriptLifecycle(params: {
       release();
     }
   };
-  const logTeardownBudgetExpiry = (): void => {
-    if (teardownBudgetLogged) {
-      return;
-    }
-    teardownBudgetLogged = true;
-    log.error(
-      `transcript teardown budget expired: runId=${params.runId ?? "unknown"} ` +
-        `sessionId=${params.sessionId ?? "unknown"} pendingWrites=${pendingWrites} ` +
-        `timeoutMs=${TRANSCRIPT_TEARDOWN_BUDGET_MS}`,
-    );
-  };
   const settleWithinTeardownBudget = async (operation: Promise<void>): Promise<void> => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const settled = await Promise.race([
-      operation.then(() => true),
-      new Promise<false>((resolve) => {
-        timeout = setTimeout(() => resolve(false), TRANSCRIPT_TEARDOWN_BUDGET_MS);
-        timeout.unref?.();
-      }),
-    ]);
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    if (!settled) {
-      void operation.catch(() => {});
-      logTeardownBudgetExpiry();
+    if (!(await settlesWithin(operation, TRANSCRIPT_TEARDOWN_BUDGET_MS))) {
+      log.error(
+        `transcript teardown budget expired: runId=${params.runId ?? "unknown"} ` +
+          `sessionId=${params.sessionId ?? "unknown"} pendingWrites=${pendingWrites} ` +
+          `timeoutMs=${TRANSCRIPT_TEARDOWN_BUDGET_MS}`,
+      );
     }
   };
   const beginCleanup = async (): Promise<void> => {
@@ -167,7 +147,18 @@ export function createEmbeddedAttemptTranscriptLifecycle(params: {
       return;
     }
     cleanupRequested = true;
-    cleanupDrain = settleWithinTeardownBudget(serializeLifecycle(() => {}));
+    // Release the owned AsyncLocalStorage only after the serialized drain actually
+    // settles, never when the bounded teardown budget merely expires. Disabling it
+    // early would make a still-running transcript callback lose its store (its
+    // nested writes would be rejected as disposed) and, once that callback finishes,
+    // the queued drain would re-run() the instance with no later disable to release
+    // it. Attaching the release to the drain itself keeps bounded teardown and only
+    // frees context that no admitted callback can still observe. See #141122.
+    cleanupDrain = settleWithinTeardownBudget(
+      serializeLifecycle(() => {
+        lifecycleOwner.disable();
+      }),
+    );
     await cleanupDrain;
   };
 

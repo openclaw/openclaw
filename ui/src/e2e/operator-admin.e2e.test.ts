@@ -34,8 +34,10 @@ const agentRoster = [
 
 const operatorConfig = {
   agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
     entries: {
-      main: { default: true, name: "Main" },
+      main: { name: "Main" },
       reviewer: { name: "Reviewer" },
     },
   },
@@ -132,7 +134,7 @@ async function createContext(): Promise<BrowserContext> {
 }
 
 async function selectAgentOnAgentsPage(page: Page, name: string) {
-  const select = page.locator(".agents-control-select openclaw-agent-select");
+  const select = page.locator(".settings-sidebar__agent openclaw-agent-select");
   await select.locator(".agent-select__trigger").click();
   await select.locator("wa-dropdown-item[data-agent-option]").filter({ hasText: name }).click();
   await expect
@@ -232,7 +234,7 @@ suite.define(() => {
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator("wa-dropdown.sidebar-agent-menu")
-        .getByRole("menuitemradio", { name: "Reviewer" })
+        .getByRole("menuitem", { name: "Reviewer" })
         .click();
       await waitForRequest(gateway, "skills.status", (params) => params.agentId === "reviewer");
       expect(new URL(page.url()).pathname).toBe("/skills");
@@ -242,7 +244,7 @@ suite.define(() => {
 
       await page.getByRole("button", { name: "Skill settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");
-      const agentSelect = page.locator('openclaw-agent-select[name="skills-agent"]');
+      const agentSelect = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await expect
         .poll(async () => (await agentSelect.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");
@@ -399,7 +401,9 @@ suite.define(() => {
       await page.locator("#agents-tab-overview").click();
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
-      const identitySave = page.locator(".agent-identity-editor__actions button");
+      const identitySave = page
+        .locator(".agent-identity-editor__actions")
+        .getByRole("button", { name: "Save", exact: true });
       await expect.poll(async () => (await identitySave.textContent())?.trim()).toBe("Save");
       await expect.poll(() => identitySave.isDisabled()).toBe(true);
       await setDefault.click({ force: true });

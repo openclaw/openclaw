@@ -1,8 +1,7 @@
-import { setImmediate } from "node:timers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SHORT_TERM_META_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
@@ -77,7 +76,7 @@ describe("memory forget phase-signal failures", () => {
         { key, lightHits: 2, remHits: 1, lastLightAt: observedAt, lastRemAt: observedAt },
       ]),
     );
-    recordMemoryEntryOrigins({
+    await recordMemoryEntryOrigins({
       agentId: "main",
       origins: keys.map((entryKey) => ({
         entryKey,
@@ -98,7 +97,7 @@ describe("memory forget phase-signal failures", () => {
       updatedAt: observedAt,
       entries: phases,
     });
-    return { recalls, phases, origins: listMemoryEntryOrigins({ agentId: "main" }) };
+    return { recalls, phases, origins: await listMemoryEntryOrigins({ agentId: "main" }) };
   }
 
   it("preserves a later phase write after phase metadata failure", async () => {
@@ -113,35 +112,33 @@ describe("memory forget phase-signal failures", () => {
     });
     const db = openOpenClawStateDatabase().db;
     const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
-    const deletionSettled = createDeferred<void>();
-    let metadataFailureObserved = false;
-    db.function("observe_phase_metadata_failure", () => {
-      metadataFailureObserved = true;
-      return 0;
-    });
-    db.function("observe_target_phase_deletion", () => {
-      // Only two deletions remain after the 11 registrations, with no further
-      // store yield. This callback joins their committed microtask continuations.
-      setImmediate(deletionSettled.resolve);
-      return 0;
-    });
+    const rowsSettled = createDeferred<void>();
     db.exec(`
-      CREATE TEMP TRIGGER abort_phase_metadata BEFORE UPDATE ON plugin_state_entries
+      CREATE TRIGGER abort_phase_metadata BEFORE UPDATE ON plugin_state_entries
       WHEN OLD.plugin_id = 'memory-core'
         AND OLD.namespace = '${SHORT_TERM_META_NAMESPACE}'
         AND json_extract(OLD.value_json, '$.workspaceKey') = '${workspaceKey}'
         AND json_extract(OLD.value_json, '$.key') = 'phase'
       BEGIN
-        SELECT observe_phase_metadata_failure();
         SELECT RAISE(ABORT, 'synthetic phase metadata failure');
       END;
-      CREATE TEMP TRIGGER observe_target_phase_delete AFTER DELETE ON plugin_state_entries
-      WHEN OLD.plugin_id = 'memory-core'
-        AND OLD.namespace = '${SHORT_TERM_PHASE_SIGNAL_NAMESPACE}'
-        AND json_extract(OLD.value_json, '$.workspaceKey') = '${workspaceKey}'
-        AND json_extract(OLD.value_json, '$.key') = 'target-entry'
-      BEGIN SELECT observe_target_phase_deletion(); END;
     `);
+    const writeEntries = writeMemoryCoreWorkspaceEntries;
+    let rowsStarted = false;
+    const rowWrites = vi
+      .spyOn(await import("./dreaming-state.js"), "writeMemoryCoreWorkspaceEntries")
+      .mockImplementation(async (params) => {
+        if (params.namespace === SHORT_TERM_PHASE_SIGNAL_NAMESPACE) {
+          rowsStarted = true;
+        }
+        try {
+          await writeEntries(params);
+        } finally {
+          if (params.namespace === SHORT_TERM_PHASE_SIGNAL_NAMESPACE) {
+            rowsSettled.resolve();
+          }
+        }
+      });
     const laterPhase: ShortTermPhaseSignalEntry = {
       key: "later-entry",
       lightHits: 7,
@@ -168,9 +165,7 @@ describe("memory forget phase-signal failures", () => {
           value: laterPhase,
         }),
       );
-      if (metadataFailureObserved) {
-        await deletionSettled.promise;
-      }
+      await rowsSettled.promise;
       expect(outcome).toMatchObject({
         status: "rejected",
         error: { cause: { message: "synthetic phase metadata failure" } },
@@ -187,8 +182,8 @@ describe("memory forget phase-signal failures", () => {
           workspaceDir,
         }),
       ).toEqual(expect.arrayContaining(before.recalls));
-      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(before.origins);
-      const tombstones = listMemorySessionTombstones({ agentId: "main" });
+      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before.origins);
+      const tombstones = await listMemorySessionTombstones({ agentId: "main" });
       expect(tombstones).toMatchObject([{ sessionId: "target", reason: "forgotten" }]);
 
       await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
@@ -200,17 +195,17 @@ describe("memory forget phase-signal failures", () => {
           })
         ).map(({ key }) => key),
       ).not.toContain("target-entry");
-      expect(listMemoryEntryOrigins({ agentId: "main", sessionIds: ["target"] })).toEqual([]);
-      expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+      expect(await listMemoryEntryOrigins({ agentId: "main", sessionIds: ["target"] })).toEqual([]);
+      expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
       expect((await readPhaseSignalStore(workspaceDir, observedAt)).entries).toEqual(
         phases.entries,
       );
     } finally {
       db.exec("DROP TRIGGER IF EXISTS abort_phase_metadata");
-      if (metadataFailureObserved) {
-        await deletionSettled.promise;
+      if (rowsStarted) {
+        await rowsSettled.promise;
       }
-      db.exec("DROP TRIGGER observe_target_phase_delete");
+      rowWrites.mockRestore();
     }
   });
 
@@ -224,7 +219,7 @@ describe("memory forget phase-signal failures", () => {
       const db = openOpenClawStateDatabase().db;
       const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
       db.exec(`
-        CREATE TEMP TRIGGER abort_target_delete BEFORE DELETE ON plugin_state_entries
+        CREATE TRIGGER abort_target_delete BEFORE DELETE ON plugin_state_entries
         WHEN OLD.plugin_id = 'memory-core'
           AND OLD.namespace = '${namespace}'
           AND json_extract(OLD.value_json, '$.workspaceKey') = '${workspaceKey}'
@@ -244,13 +239,13 @@ describe("memory forget phase-signal failures", () => {
           workspaceDir,
         }),
       ).toEqual(expect.arrayContaining(before.recalls));
-      expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(before.origins);
+      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(before.origins);
       const phases = await readPhaseSignalStore(workspaceDir, observedAt);
       expect(phases.entries["target-entry"]).toEqual(
         targetPhaseRemains ? before.phases["target-entry"] : undefined,
       );
       expect(phases.entries["survivor-entry"]).toEqual(before.phases["survivor-entry"]);
-      const tombstones = listMemorySessionTombstones({ agentId: "main" });
+      const tombstones = await listMemorySessionTombstones({ agentId: "main" });
       expect(tombstones).toMatchObject([{ sessionId: "target", reason: "forgotten" }]);
 
       await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
@@ -263,11 +258,11 @@ describe("memory forget phase-signal failures", () => {
       expect((await readPhaseSignalStore(workspaceDir, observedAt)).entries).toEqual({
         "survivor-entry": before.phases["survivor-entry"],
       });
-      expect(listMemoryEntryOrigins({ agentId: "main", sessionIds: ["target"] })).toEqual([]);
-      expect(listMemoryEntryOrigins({ agentId: "main", sessionIds: ["survivor"] })).toEqual(
+      expect(await listMemoryEntryOrigins({ agentId: "main", sessionIds: ["target"] })).toEqual([]);
+      expect(await listMemoryEntryOrigins({ agentId: "main", sessionIds: ["survivor"] })).toEqual(
         before.origins.filter(({ sessionId }) => sessionId === "survivor"),
       );
-      expect(listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
+      expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual(tombstones);
     },
   );
 });

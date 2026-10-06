@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
+import {
+  renderBillingReplyCopy,
+  renderFailoverCodeUserCopy,
+} from "../../agents/failover/user-copy.js";
 import * as providerFailover from "../../plugins/provider-failover.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 
@@ -10,6 +13,56 @@ const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }));
 vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
 
 describe("createAgentLifecycleTerminalBackstop", () => {
+  it.each(["cli", "oauth", "token", "api_key"])(
+    "captures %s billing recovery before serializing the terminal error",
+    (authMode) => {
+      emitAgentEvent.mockClear();
+      const error = new FailoverError("Credit balance is too low", {
+        reason: "billing",
+        provider: "fixture",
+        model: "model",
+        authMode,
+      });
+      const terminal = createAgentLifecycleTerminalBackstop({
+        runId: "billing",
+        getLifecycleGeneration: () => "generation",
+        resolveTerminationFields: () => ({}),
+      });
+      terminal.capture("error", error);
+      terminal.emit("error", new Error("Later unrelated error"));
+      expect(emitAgentEvent.mock.calls[0]?.[0]?.data.error).toBe(renderBillingReplyCopy(error));
+    },
+  );
+
+  it.each([false, true])("keeps only the selected attempt receipt (retry=%s)", (retry) => {
+    emitAgentEvent.mockClear();
+    const terminal = createAgentLifecycleTerminalBackstop({
+      runId: "run",
+      getLifecycleGeneration: () => "generation",
+      resolveTerminationFields: () => ({}),
+    });
+    terminal.note({
+      stream: "lifecycle",
+      data: {
+        phase: "finishing",
+        error: "first failure",
+        assistantTranscriptIdempotencyKey: "saved-A",
+      },
+    });
+    terminal.capture("error", new Error("first failure"));
+    expect(emitAgentEvent).not.toHaveBeenCalled();
+    if (retry) {
+      // Preparation fails before the next lifecycle start can be emitted.
+      terminal.beginAttempt();
+    }
+    terminal.emit("error", new Error(retry ? "preparation failed" : "first failure"));
+    expect(emitAgentEvent).toHaveBeenCalledOnce();
+    const data = emitAgentEvent.mock.calls[0]?.[0]?.data;
+    expect(data.assistantTranscriptIdempotencyKey).toBe(retry ? undefined : "saved-A");
+    expect(data.error).toBe(retry ? "preparation failed" : "first failure");
+    expect(data.executionSettled).toBe(true);
+  });
+
   it("publishes the provider-owned OAuth summary instead of the wrapped diagnostic", () => {
     emitAgentEvent.mockClear();
     const summary =

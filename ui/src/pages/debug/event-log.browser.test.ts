@@ -46,7 +46,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Debug event log", () => {
           return () => listeners.delete(listener);
         },
       },
-      agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
+      settingsAgentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
     } as unknown as ApplicationContext;
     document.body.append(page);
     await page.updateComplete;

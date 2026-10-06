@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
@@ -43,6 +43,50 @@ function renderStrip(options: {
     container,
   );
   return container;
+}
+
+function tabMeasurementClock() {
+  let nextFrame = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  const observers = new Set<ControlledResizeObserver>();
+  class ControlledResizeObserver implements ResizeObserver {
+    readonly targets = new Set<Element>();
+    constructor(readonly callback: ResizeObserverCallback) {
+      observers.add(this);
+    }
+    observe(target: Element) {
+      this.targets.add(target);
+    }
+    unobserve(target: Element) {
+      this.targets.delete(target);
+    }
+    disconnect() {
+      this.targets.clear();
+    }
+  }
+  vi.stubGlobal("ResizeObserver", ControlledResizeObserver);
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.set(++nextFrame, callback);
+    return nextFrame;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (frame: number) => frames.delete(frame));
+  return {
+    flush() {
+      const pending = [...frames.values()];
+      frames.clear();
+      pending.forEach((callback) => callback(0));
+    },
+    resize(target: Element) {
+      for (const observer of observers) {
+        if (observer.targets.has(target)) {
+          observer.callback([], observer);
+        }
+      }
+    },
+    observed(target: Element) {
+      return [...observers].some((observer) => observer.targets.has(target));
+    },
+  };
 }
 
 afterEach(() => {
@@ -166,10 +210,149 @@ describe("renderPanelTabStrip", () => {
     expect(onClose).toHaveBeenCalledWith(TAB.id);
   });
 
-  // The scroll-edge ref installs its listener and observer after awaiting the
-  // group's first render. Every render swaps the ref, so a swap inside that
-  // window must cancel the pending install: otherwise each render leaves one
-  // more live listener and observer that no cleanup can ever reach.
+  it("batches overflow reads after content commits and skips unchanged renders", async () => {
+    const clock = tabMeasurementClock();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const tabs = [TAB, { ...TAB, id: "tab-2", domId: "test-tab-2" }];
+    renderStrip({ tabs, container });
+    const group = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "wa-tab-group",
+    )!;
+    const labels = [...group.querySelectorAll<HTMLElement>(".tabstrip-tab__label")];
+    const operations: string[] = [];
+    for (const [index, label] of labels.entries()) {
+      Object.defineProperties(label, {
+        clientWidth: { configurable: true, value: 100 },
+        scrollWidth: {
+          configurable: true,
+          get: () => {
+            operations.push(`read ${index}`);
+            return label.textContent!.startsWith("Long") ? 200 : 80;
+          },
+        },
+      });
+      const toggle = label.classList.toggle.bind(label.classList);
+      vi.spyOn(label.classList, "toggle").mockImplementation((name, force) => {
+        operations.push(`write ${index}`);
+        return toggle(name, force);
+      });
+    }
+    await group.updateComplete;
+    clock.flush();
+    operations.length = 0;
+
+    renderStrip({ tabs, container });
+    await Promise.resolve();
+    clock.flush();
+    expect(operations).toEqual([]);
+
+    renderStrip({
+      tabs: tabs.map((tab) => Object.assign({}, tab, { label: "Long label" })),
+      container,
+    });
+    expect(operations).toEqual([]);
+    await Promise.resolve();
+    clock.flush();
+    expect(operations).toEqual(["read 0", "read 1", "write 0", "write 1"]);
+    expect(labels.every((label) => label.hasAttribute("data-tooltip-overflow"))).toBe(true);
+    expect(
+      labels.every((label) => label.parentElement?.classList.contains("has-label-overflow")),
+    ).toBe(true);
+
+    renderStrip({
+      tabs: tabs.map((tab) =>
+        Object.assign({}, tab, { label: "Long label", className: "is-exited" }),
+      ),
+      container,
+    });
+    clock.flush();
+    expect(
+      labels.every((label) => label.parentElement?.classList.contains("has-label-overflow")),
+    ).toBe(true);
+
+    Object.defineProperty(labels[0]!, "clientWidth", { configurable: true, value: 250 });
+    clock.resize(labels[0]!);
+    clock.resize(labels[0]!);
+    operations.length = 0;
+    clock.flush();
+    expect(operations.filter((operation) => operation.startsWith("read"))).toEqual([
+      "read 0",
+      "read 1",
+    ]);
+    expect(labels[0]!.hasAttribute("data-tooltip-overflow")).toBe(false);
+    render(nothing, container);
+  });
+
+  it.each(["ltr", "rtl"])(
+    "refreshes physical scroll edges and releases measurements across connection changes (%s)",
+    async (dir) => {
+      document.documentElement.dir = dir;
+      const clock = tabMeasurementClock();
+      const container = document.createElement("div");
+      document.body.append(container);
+      const template = renderPanelTabStrip({
+        tabs: [TAB],
+        activeId: TAB.id,
+        ariaControls: "test-tab-panel",
+        onSelect: vi.fn(),
+        onClose: vi.fn(),
+        onNew: vi.fn(),
+        newLabel: "New tab",
+      });
+      const root = render(template, container);
+      const group = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+        "wa-tab-group",
+      )!;
+      await group.updateComplete;
+      const scroller = group.shadowRoot!.querySelector<HTMLElement>('[part~="tabs"]')!;
+      vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue({
+        left: 0,
+        right: 100,
+      } as DOMRect);
+      let contentLeft = 0;
+      let contentRight = 200;
+      const reads = [...group.children].map((child) =>
+        vi
+          .spyOn(child, "getBoundingClientRect")
+          .mockImplementation(() => ({ left: contentLeft, right: contentRight }) as DOMRect),
+      );
+      clock.flush();
+      expect(group.classList.contains("has-scroll-left")).toBe(false);
+      expect(group.classList.contains("has-scroll-right")).toBe(true);
+      reads.forEach((read) => read.mockClear());
+
+      contentLeft = -100;
+      contentRight = 100;
+      scroller.dispatchEvent(new Event("scroll"));
+      scroller.dispatchEvent(new Event("scroll"));
+      expect(reads.every((read) => read.mock.calls.length === 0)).toBe(true);
+      clock.flush();
+      expect(reads.every((read) => read.mock.calls.length === 1)).toBe(true);
+      expect(group.classList.contains("has-scroll-left")).toBe(true);
+      expect(group.classList.contains("has-scroll-right")).toBe(false);
+
+      scroller.dispatchEvent(new Event("scroll"));
+      root.setConnected(false);
+      expect(clock.observed(scroller)).toBe(false);
+      reads.forEach((read) => read.mockClear());
+      clock.flush();
+      scroller.dispatchEvent(new Event("scroll"));
+      clock.flush();
+      expect(reads.every((read) => read.mock.calls.length === 0)).toBe(true);
+
+      contentLeft = 0;
+      root.setConnected(true);
+      await group.updateComplete;
+      clock.flush();
+      expect(clock.observed(scroller)).toBe(true);
+      expect(group.classList.contains("has-scroll-left")).toBe(false);
+      render(nothing, container);
+    },
+  );
+
+  // Installation waits for the group's shadow scroller. Renders during that
+  // wait must not accumulate subscriptions that cleanup can no longer reach.
   it("keeps one live scroll-edge listener no matter how many renders race", async () => {
     const gate = createDeferred<boolean>();
     const groupPrototype = customElements.get("wa-tab-group")?.prototype;

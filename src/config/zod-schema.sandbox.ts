@@ -12,8 +12,8 @@ function validateSandboxBindEntries(
     return;
   }
   for (let i = 0; i < binds.length; i += 1) {
-    const bind = binds[i]?.trim() ?? "";
-    if (!bind) {
+    const bind = binds[i] ?? "";
+    if (!bind.trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["binds", i],
@@ -22,7 +22,7 @@ function validateSandboxBindEntries(
       continue;
     }
     const parsed = splitSandboxBindSpec(bind);
-    const source = (parsed ? parsed.host : bind).trim();
+    const source = parsed ? parsed.host : bind;
     if (!isSandboxHostPathAbsolute(source)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -36,7 +36,7 @@ function validateSandboxBindEntries(
 }
 
 export const SandboxDockerSchema = z
-  .object({
+  .strictObject({
     image: z.string().optional(),
     containerPrefix: z.string().optional(),
     workdir: z.string().optional(),
@@ -62,12 +62,10 @@ export const SandboxDockerSchema = z
         z.union([
           z.string(),
           z.number(),
-          z
-            .object({
-              soft: z.number().int().nonnegative().optional(),
-              hard: z.number().int().nonnegative().optional(),
-            })
-            .strict(),
+          z.strictObject({
+            soft: z.number().int().nonnegative().optional(),
+            hard: z.number().int().nonnegative().optional(),
+          }),
         ]),
       )
       .optional(),
@@ -80,7 +78,6 @@ export const SandboxDockerSchema = z
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
     dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
   })
-  .strict()
   .superRefine((data, ctx) => {
     validateSandboxBindEntries(data.binds, ctx);
     const blockedNetworkReason = getBlockedNetworkModeReason({
@@ -157,9 +154,8 @@ export const SandboxBrowserSchema = z
   .optional();
 
 export const SandboxPruneSchema = z
-  .object({
+  .strictObject({
     idleHours: z.number().int().nonnegative().optional(),
     maxAgeDays: z.number().int().nonnegative().optional(),
   })
-  .strict()
   .optional();

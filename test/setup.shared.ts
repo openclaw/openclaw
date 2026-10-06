@@ -1,5 +1,8 @@
-// Shared test setup installs common Vitest mocks and cleanup behavior.
+// Native-loader projects replace execArgv, so their setup also owns SQLite admission.
+import "./vitest/vitest.sqlite-preload.mts";
 import { vi } from "vitest";
+import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
+import { withIsolatedTestHome } from "./test-env.js";
 
 const openAiCodexTokenRefreshTestHook = "__OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__";
 type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {
@@ -50,9 +53,6 @@ if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MA
   process.setMaxListeners(TEST_PROCESS_MAX_LISTENERS);
 }
 
-import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
-import { withIsolatedTestHome } from "./test-env.js";
-
 type SharedTestSetupOptions = {
   loadProfileEnv?: boolean;
 };
@@ -89,6 +89,7 @@ export function installSharedTestSetup(options?: SharedTestSetupOptions): {
         return;
       }
       cleaned = true;
+      process.removeListener("exit", handle.cleanup);
       testEnv.cleanup();
       delete globalState[SHARED_TEST_SETUP];
     },

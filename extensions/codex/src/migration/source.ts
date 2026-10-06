@@ -1,7 +1,7 @@
-// Codex plugin module implements source behavior.
 import path from "node:path";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   defaultCodexAppInventoryCache,
   type CodexAppInventoryRequest,
@@ -10,7 +10,8 @@ import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import type { CodexAppServerStartOptions } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import {
-  isOpenAiCuratedMarketplace,
+  isOpenAiCuratedMarketplaceName,
+  marketplaceRef,
   pluginReadParams,
   type CodexPluginMarketplaceRef,
 } from "../app-server/plugin-inventory.js";
@@ -23,7 +24,7 @@ import {
   withCodexAppServerJsonClient,
   type CodexAppServerScopedRequest,
 } from "../app-server/request.js";
-import { exists, isDirectory, resolveHomePath, resolveUserHomeDir } from "./helpers.js";
+import { isDirectory, resolveHomePath, resolveUserHomeDir } from "./helpers.js";
 import {
   discoverCodexMemorySources,
   discoverPluginDirs,
@@ -34,8 +35,6 @@ import {
   type CodexPluginSource,
   type CodexSkillSource,
 } from "./source-files.js";
-
-export type { CodexPluginSource } from "./source-files.js";
 
 type CodexArchiveSource = {
   id: string;
@@ -79,26 +78,12 @@ type InstalledCuratedPlugin = {
   remote: boolean;
 };
 
-type PluginReadResult =
-  | {
-      ok: true;
-      detail: v2.PluginDetail;
-    }
-  | {
-      ok: false;
-      error: string;
-    };
-
 export function defaultCodexHome(): string {
   const configuredHome = process.env.CODEX_HOME;
   // Codex preserves nonempty CODEX_HOME verbatim; --from remains trimmed below as CLI convenience.
   return resolveHomePath(
     configuredHome !== undefined && configuredHome.length > 0 ? configuredHome : "~/.codex",
   );
-}
-
-function personalAgentsSkillsDir(): string {
-  return path.join(resolveUserHomeDir(), ".agents", "skills");
 }
 
 async function discoverInstalledCuratedPlugins(
@@ -177,28 +162,12 @@ function sourceCodexAppServerStartOptions(codexHome: string): CodexAppServerStar
   };
 }
 
-function buildInstalledPluginSource(plugin: v2.PluginSummary): CodexPluginSource | undefined {
-  const pluginName = pluginNameFromSummary(plugin);
-  if (!pluginName) {
-    return undefined;
-  }
-  return {
-    name: plugin.name,
-    pluginName,
-    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-    source: `${CODEX_PLUGINS_MARKETPLACE_NAME}/${pluginName}`,
-    migratable: true,
-    installed: plugin.installed,
-    enabled: plugin.enabled,
-  };
-}
-
 function discoverInstalledCuratedPluginSources(
   response: v2.PluginInstalledResponse,
 ): InstalledCuratedPlugin[] {
   const installedByName = new Map<string, InstalledCuratedPlugin>();
   for (const marketplace of response.marketplaces) {
-    if (!isOpenAiCuratedMarketplace(marketplace)) {
+    if (!isOpenAiCuratedMarketplaceName(marketplace.name)) {
       continue;
     }
     // Remote catalog entries carry no local path; the API-key curated variant
@@ -209,33 +178,31 @@ function discoverInstalledCuratedPluginSources(
       if (!summary.installed) {
         continue;
       }
-      const plugin = buildInstalledPluginSource(summary);
-      if (!plugin?.pluginName) {
+      const pluginName = pluginNameFromSummary(summary);
+      if (!pluginName) {
         continue;
       }
-      const existing = installedByName.get(plugin.pluginName);
+      const existing = installedByName.get(pluginName);
       if (existing && (!remote || existing.remote)) {
         continue;
       }
-      installedByName.set(plugin.pluginName, {
-        plugin,
-        marketplace: marketplaceRef(marketplace),
-        ...(remote
-          ? { readPluginName: summary.remotePluginId?.trim() || undefined }
-          : { readPluginName: plugin.pluginName }),
+      installedByName.set(pluginName, {
+        plugin: {
+          name: summary.name,
+          pluginName,
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          source: `${CODEX_PLUGINS_MARKETPLACE_NAME}/${pluginName}`,
+          migratable: true,
+          installed: summary.installed,
+          enabled: summary.enabled,
+        },
+        marketplace: marketplaceRef(marketplace, CODEX_PLUGINS_MARKETPLACE_NAME),
+        readPluginName: remote ? summary.remotePluginId?.trim() || undefined : pluginName,
         remote,
       });
     }
   }
   return Array.from(installedByName.values());
-}
-
-function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMarketplaceRef {
-  return {
-    name: CODEX_PLUGINS_MARKETPLACE_NAME,
-    ...(marketplace.path ? { path: marketplace.path } : {}),
-    ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
-  };
 }
 
 async function withPluginMigrationEligibility(params: {
@@ -257,23 +224,31 @@ async function withPluginMigrationEligibility(params: {
       continue;
     }
 
-    const detail = await readPluginDetail(
-      params.requestOptions,
-      marketplace,
-      plugin,
-      readPluginName,
-    );
-    if (!detail.ok) {
+    let detail: v2.PluginDetail;
+    try {
+      if (!readPluginName) {
+        throw new Error(
+          `Codex remote plugin "${plugin.pluginName ?? plugin.name}" has no readable remote plugin id.`,
+        );
+      }
+      detail = (
+        await params.requestOptions.request<v2.PluginReadResponse>({
+          method: "plugin/read",
+          requestParams: pluginReadParams(marketplace, readPluginName),
+        })
+      ).plugin;
+    } catch (error) {
+      const message = coerceErrorMessage(error);
       evaluated.push({
         ...plugin,
         migratable: false,
-        migrationBlock: { code: "plugin_read_unavailable", error: detail.error },
-        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" detail could not be read: ${detail.error}`,
+        migrationBlock: { code: "plugin_read_unavailable", error: message },
+        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" detail could not be read: ${message}`,
       });
       continue;
     }
 
-    if (detail.detail.apps.length === 0) {
+    if (detail.apps.length === 0) {
       evaluated.push({
         ...plugin,
         migratable: true,
@@ -281,8 +256,8 @@ async function withPluginMigrationEligibility(params: {
       continue;
     }
 
-    const apps = detail.detail.apps
-      .map(sourcePluginAppFact)
+    const apps = detail.apps
+      .map(({ id, name }) => ({ id, name }))
       .toSorted((left, right) => left.id.localeCompare(right.id));
     pending.push({ plugin, apps });
   }
@@ -301,74 +276,52 @@ async function withPluginMigrationEligibility(params: {
   } catch (error) {
     sourceAccountError = coerceErrorMessage(error);
   }
-  if (sourceAccountError && !params.verifyPluginApps) {
-    for (const { plugin, apps } of pending) {
-      evaluated.push({
+  const unavailable = (
+    code: CodexPluginMigrationBlockCode,
+    reason: string,
+    error?: string,
+  ): CodexPluginSource[] =>
+    evaluated.concat(
+      pending.map(({ plugin, apps }) => ({
         ...plugin,
         migratable: false,
-        migrationBlock: { code: "codex_account_unavailable", apps, error: sourceAccountError },
-        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but the source Codex app-server account could not be read: ${sourceAccountError}`,
-      });
-    }
-    return evaluated;
+        migrationBlock: { code, apps, ...(error !== undefined ? { error } : {}) },
+        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but ${reason}`,
+      })),
+    );
+  if (sourceAccountError && !params.verifyPluginApps) {
+    return unavailable(
+      "codex_account_unavailable",
+      `the source Codex app-server account could not be read: ${sourceAccountError}`,
+      sourceAccountError,
+    );
   }
   if (sourceAccount === "non_chatgpt") {
-    for (const { plugin, apps } of pending) {
-      evaluated.push({
-        ...plugin,
-        migratable: false,
-        migrationBlock: { code: "codex_subscription_required", apps },
-        message: codexSubscriptionRequiredMessage(plugin),
-      });
-    }
-    return evaluated;
+    return unavailable("codex_subscription_required", codexPluginMigrationSubscriptionWarning());
   }
-
   if (!params.verifyPluginApps) {
-    for (const { plugin, apps } of pending) {
-      evaluated.push({
-        ...plugin,
-        apps,
-        migratable: true,
-      });
-    }
-    return evaluated;
+    return evaluated.concat(
+      pending.map(({ plugin, apps }) => ({ ...plugin, apps, migratable: true })),
+    );
   }
-
-  const snapshot = await refreshSourceAppInventory(params.requestOptions).catch(
-    (error: unknown) => {
-      const message = coerceErrorMessage(error);
-      for (const { plugin, apps } of pending) {
-        evaluated.push({
-          ...plugin,
-          migratable: false,
-          migrationBlock: {
-            code: "app_inventory_unavailable",
-            apps,
-            error: message,
-          },
-          message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but source app inventory could not be read: ${message}`,
-        });
-      }
-      return undefined;
-    },
-  );
-  if (!snapshot) {
-    return evaluated;
+  let snapshot: Awaited<ReturnType<typeof refreshSourceAppInventory>>;
+  try {
+    snapshot = await refreshSourceAppInventory(params.requestOptions);
+  } catch (error) {
+    const message = coerceErrorMessage(error);
+    return unavailable(
+      "app_inventory_unavailable",
+      `source app inventory could not be read: ${message}`,
+      message,
+    );
   }
 
   const appInfoById = new Map(snapshot.apps.map((app) => [app.id, app] as const));
   const installedAppsById = new Map(snapshot.installedApps.map((app) => [app.id, app] as const));
   for (const { plugin, apps: declaredApps } of pending) {
-    const apps = declaredApps
-      .map((app) =>
-        sourcePluginAppFactWithInventory(
-          app,
-          appInfoById.get(app.id),
-          installedAppsById.get(app.id),
-        ),
-      )
-      .toSorted((left, right) => left.id.localeCompare(right.id));
+    const apps = declaredApps.map((app) =>
+      sourcePluginAppFactWithInventory(app, appInfoById.get(app.id), installedAppsById.get(app.id)),
+    );
     const blockCode = migrationBlockCodeForApps(apps);
     if (!blockCode) {
       evaluated.push({ ...plugin, apps, migratable: true });
@@ -392,14 +345,7 @@ async function readSourceCodexAccount(
     method: "account/read",
     requestParams: { refreshToken: false },
   });
-  if (
-    !response.account ||
-    typeof response.account !== "object" ||
-    Array.isArray(response.account)
-  ) {
-    return "missing";
-  }
-  switch (response.account.type) {
+  switch (response.account?.type) {
     case "chatgpt":
       return "chatgpt";
     case "apiKey":
@@ -407,29 +353,6 @@ async function readSourceCodexAccount(
       return "non_chatgpt";
     default:
       return "missing";
-  }
-}
-
-async function readPluginDetail(
-  options: SourceAppServerRequestOptions,
-  marketplace: CodexPluginMarketplaceRef,
-  plugin: CodexPluginSource,
-  readPluginName: string | undefined,
-): Promise<PluginReadResult> {
-  if (!readPluginName) {
-    return {
-      ok: false,
-      error: `Codex remote plugin "${plugin.pluginName ?? plugin.name}" has no readable remote plugin id.`,
-    };
-  }
-  try {
-    const response = await options.request<v2.PluginReadResponse>({
-      method: "plugin/read",
-      requestParams: pluginReadParams(marketplace, readPluginName),
-    });
-    return { ok: true, detail: response.plugin };
-  } catch (error) {
-    return { ok: false, error: coerceErrorMessage(error) };
   }
 }
 
@@ -451,20 +374,13 @@ async function refreshSourceAppInventory(
   });
 }
 
-function sourcePluginAppFact(app: v2.AppSummary): CodexPluginMigrationAppFact {
-  return {
-    id: app.id,
-    name: app.name,
-  };
-}
-
 type SourcePluginRuntimeAppFact = CodexPluginMigrationAppFact & {
   isCallable?: false;
 };
 
 function sourcePluginAppFactWithInventory(
   app: CodexPluginMigrationAppFact,
-  info: v2.AppInfo | undefined,
+  info: CodexAppServerRequestResult<"app/read">["apps"][number] | undefined,
   installedApp?: v2.InstalledApp,
 ): SourcePluginRuntimeAppFact {
   if (!installedApp) {
@@ -476,14 +392,14 @@ function sourcePluginAppFactWithInventory(
       : { ...app, isEnabled: false };
   }
   if (!installedApp.enabled) {
-    return { ...app, isAccessible: info.isAccessible, isEnabled: false };
+    return { ...app, isAccessible: true, isEnabled: false };
   }
   return {
     ...app,
     // Metadata proves authorization, but only the committed runtime proves
     // that this enabled app actually exposes a model-callable tool.
-    isAccessible: info.isAccessible && installedApp.callable,
-    isEnabled: info.isEnabled,
+    isAccessible: installedApp.callable,
+    isEnabled: installedApp.enabled,
     ...(!installedApp.callable ? { isCallable: false as const } : {}),
   };
 }
@@ -532,10 +448,6 @@ export function codexPluginMigrationSubscriptionWarning(): string {
   return "Codex app-backed plugin migration requires the Codex app-server source account to be logged in with a ChatGPT subscription account. Log in to the Codex app with subscription auth; OpenClaw auth or API-key auth does not satisfy Codex app connector access.";
 }
 
-function codexSubscriptionRequiredMessage(plugin: CodexPluginSource): string {
-  return `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but ${codexPluginMigrationSubscriptionWarning()}`;
-}
-
 function pluginNameFromSummary(summary: v2.PluginSummary): string | undefined {
   const candidates = [summary.name, summary.id];
   for (const candidate of candidates) {
@@ -565,7 +477,7 @@ export async function discoverCodexSource(
 ): Promise<CodexSource> {
   const codexHome = resolveHomePath(options.input?.trim() || defaultCodexHome());
   const codexSkillsDir = path.join(codexHome, "skills");
-  const agentsSkillsDir = personalAgentsSkillsDir();
+  const agentsSkillsDir = path.join(resolveUserHomeDir(), ".agents", "skills");
   const configPath = path.join(codexHome, "config.toml");
   const authPath = path.join(codexHome, "auth.json");
   const modelsCachePath = path.join(codexHome, "models_cache.json");
@@ -601,7 +513,7 @@ export async function discoverCodexSource(
     a.source.localeCompare(b.source),
   );
   const archivePaths: CodexArchiveSource[] = [];
-  if (!skipAssets && (await exists(configPath))) {
+  if (!skipAssets && (await pathExists(configPath))) {
     archivePaths.push({
       id: "archive:config.toml",
       path: configPath,
@@ -609,7 +521,7 @@ export async function discoverCodexSource(
       message: "Codex config is archived for manual review; it is not activated automatically",
     });
   }
-  if (!skipAssets && (await exists(hooksPath))) {
+  if (!skipAssets && (await pathExists(hooksPath))) {
     archivePaths.push({
       id: "archive:hooks/hooks.json",
       path: hooksPath,
@@ -621,7 +533,7 @@ export async function discoverCodexSource(
   const skills = [...codexSkills, ...personalAgentSkills].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
-  const hasAuth = !options.memoryOnly && (await exists(authPath));
+  const hasAuth = !options.memoryOnly && (await pathExists(authPath));
   const high = Boolean(
     memoryFiles.length || codexSkills.length || plugins.length || archivePaths.length || hasAuth,
   );
@@ -633,7 +545,7 @@ export async function discoverCodexSource(
     ...((await isDirectory(codexSkillsDir)) ? { codexSkillsDir } : {}),
     ...((await isDirectory(agentsSkillsDir)) ? { personalAgentsSkillsDir: agentsSkillsDir } : {}),
     ...(hasAuth ? { authPath } : {}),
-    ...((await exists(modelsCachePath)) ? { modelsCachePath } : {}),
+    ...((await pathExists(modelsCachePath)) ? { modelsCachePath } : {}),
     memoryFiles,
     skills,
     plugins,

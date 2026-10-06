@@ -11,10 +11,7 @@ import { confirmNonClawHubInstall } from "./non-clawhub-install-acknowledgement.
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { createPluginInstallLogger } from "./plugins-command-helpers.js";
 import { createGatewayPluginInstaller } from "./plugins-install-gateway.js";
-import {
-  installPluginWithHookFallback,
-  resolveInstallSafetyOverrides,
-} from "./plugins-install-hook-fallback.js";
+import { installPluginWithHookFallback } from "./plugins-install-hook-fallback.js";
 import {
   resolvePluginInstallPreflight,
   type RunPluginInstallCommandParams,
@@ -77,7 +74,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       runtime.log(theme.warn(sourcePlan.warning));
     }
     result = await installPluginWithHookFallback({
-      request,
+      request: { ...request, ...(opts.enable === false ? { enable: false } : {}) },
       snapshot,
       runtime,
       applyRuntime: params.applyRuntime,
@@ -92,14 +89,15 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
         action: "install",
         runtime,
       }),
-      safetyOverrides: resolveInstallSafetyOverrides({
-        ...opts,
+      safetyOverrides: {
         config: snapshot.config,
+        onInstallPolicyWarning: opts.onInstallPolicyWarning,
+        trustedSourceLinkedOfficialInstall: opts.trustedSourceLinkedOfficialInstall,
         ...resolveInstallPolicyWarningAcknowledgementCliOptions({
           acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
           allowPrompt: params.allowInstallPolicyWarningPrompt,
         }),
-      }),
+      },
     });
   } catch (error) {
     runtime.error(formatErrorMessage(error));

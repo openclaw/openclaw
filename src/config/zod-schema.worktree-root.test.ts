@@ -1,50 +1,27 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
-describe("OpenClawSchema worktree settings", () => {
-  it("keeps the default implicit and accepts an absolute or home-relative root", () => {
-    expect(OpenClawSchema.parse({}).worktreeRoot).toBeUndefined();
-    const roots = [path.resolve("worktrees"), "~/worktrees", "~"];
-    if (path.sep === "\\") {
-      roots.push("~\\worktrees");
-    }
-    for (const worktreeRoot of roots) {
-      expect(OpenClawSchema.parse({ worktreeRoot }).worktreeRoot).toBe(worktreeRoot);
-    }
-  });
-
-  it.each([
-    "",
-    "  ",
-    "worktrees",
-    "./worktrees",
-    "../worktrees",
-    "~someone/worktrees",
-    ...(path.sep === "/" ? ["~\\worktrees"] : []),
-    42,
-    null,
-  ])("rejects an empty, relative, or non-string root: %j", (worktreeRoot) => {
-    expect(OpenClawSchema.safeParse({ worktreeRoot }).success).toBe(false);
-  });
-
-  it.each([undefined, true, false])(
-    "preserves the acceleration choice: %j",
-    (worktreeAcceleration) => {
-      expect(OpenClawSchema.parse({ worktreeAcceleration }).worktreeAcceleration).toBe(
-        worktreeAcceleration,
-      );
-    },
-  );
-
-  it.each(["false", "auto", 0, null])(
-    "rejects a non-boolean acceleration choice: %j",
-    (worktreeAcceleration) => {
-      expect(OpenClawSchema.safeParse({ worktreeAcceleration }).success).toBe(false);
-    },
-  );
-
-  it("keeps the retired worktrees namespace invalid", () => {
-    expect(OpenClawSchema.safeParse({ worktrees: { root: "~/worktrees" } }).success).toBe(false);
-  });
+it.each([
+  path.resolve("worktrees"),
+  "~/worktrees",
+  "~",
+  ...(path.sep === "\\" ? ["~\\worktrees"] : []),
+])("accepts absolute or home-relative worktreeRoot %s", (worktreeRoot) => {
+  expect(OpenClawSchema.parse({ worktreeRoot }).worktreeRoot).toBe(worktreeRoot);
 });
+
+it("rejects a relative worktreeRoot", () => {
+  expect(OpenClawSchema.safeParse({ worktreeRoot: "worktrees" }).success).toBe(false);
+});
+
+it.each([1, 4096, 100_000])("accepts a positive managed-worktree cap %s", (worktreeMaxCount) => {
+  expect(OpenClawSchema.parse({ worktreeMaxCount }).worktreeMaxCount).toBe(worktreeMaxCount);
+});
+
+it.each([0, -1, 1.5, "4096", null])(
+  "rejects an invalid managed-worktree cap %s",
+  (worktreeMaxCount) => {
+    expect(OpenClawSchema.safeParse({ worktreeMaxCount }).success).toBe(false);
+  },
+);

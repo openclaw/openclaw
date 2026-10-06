@@ -14,22 +14,16 @@ import { buildWidgetThemeMessage, postWidgetTheme } from "../../../lib/widget-th
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 
 type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
-type SessionDiscussionOpener = (sessionKey: string) => Promise<SessionDiscussionInfo>;
 type SessionDiscussionStateListener = (
   sessionKey: string,
   discussionState: SessionDiscussionState,
   openUrl: string | null,
 ) => void;
 
-type SessionDiscussionTaskResult = {
-  sessionKey: string;
-  info: SessionDiscussionInfo;
-};
-
 type OpeningDiscussion = {
   sessionKey: string;
   loader: SessionDiscussionInfoLoader;
-  opener: SessionDiscussionOpener | null;
+  opener: SessionDiscussionInfoLoader | null;
   sourceGeneration: number;
   canOpen: boolean;
 };
@@ -39,20 +33,13 @@ export type SessionDiscussionPanelConfig = {
   canOpen: boolean;
   openUrl: string | null;
   loadInfo: SessionDiscussionInfoLoader;
-  openDiscussion: SessionDiscussionOpener;
+  openDiscussion: SessionDiscussionInfoLoader;
   onStateChange: SessionDiscussionStateListener;
 };
 
 function resolveDiscussionUrl(value: string | undefined): string | null {
-  if (!value?.trim()) {
-    return null;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
-  } catch {
-    return null;
-  }
+  const url = value ? URL.parse(value) : null;
+  return url && (url.protocol === "https:" || url.protocol === "http:") ? url.href : null;
 }
 
 // The frame runs with allow-scripts + allow-same-origin (cookies must flow for
@@ -93,7 +80,7 @@ function resolveDiscussionEmbedUrl(value: string | undefined): string | null {
 class SessionDiscussionPanel extends OpenClawLightDomElement {
   @property() sessionKey = "";
   @property({ attribute: false }) loadInfo: SessionDiscussionInfoLoader | null = null;
-  @property({ attribute: false }) openDiscussion: SessionDiscussionOpener | null = null;
+  @property({ attribute: false }) openDiscussion: SessionDiscussionInfoLoader | null = null;
   @property({ attribute: false }) onStateChange: SessionDiscussionStateListener | null = null;
   @property({ type: Boolean }) canOpen = true;
   @property({ type: Number }) sourceGeneration = 0;
@@ -139,7 +126,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
       if (!this.isOpeningCurrent(opening)) {
         return initialState;
       }
-      return { sessionKey, info } satisfies SessionDiscussionTaskResult;
+      return { sessionKey, info };
     },
     onComplete: (result) => {
       this.openingDiscussion = null;
@@ -265,17 +252,15 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
       return nothing;
     }
     if (info.state === "available") {
-      return this.canOpen
-        ? renderPanelEmptyState({
-            icon: icons.messageSquare,
-            heading: t("chat.sidePanel.discussion"),
-            description: t("chat.sessionDiscussion.unavailable"),
-          })
-        : renderPanelEmptyState({
-            icon: icons.messageSquare,
-            heading: t("chat.sidePanel.discussion"),
-            description: t("chat.sessionDiscussion.requiresWriteAccess"),
-          });
+      return renderPanelEmptyState({
+        icon: icons.messageSquare,
+        heading: t("chat.sidePanel.discussion"),
+        description: t(
+          this.canOpen
+            ? "chat.sessionDiscussion.unavailable"
+            : "chat.sessionDiscussion.requiresWriteAccess",
+        ),
+      });
     }
     return this.renderOpen(info);
   }

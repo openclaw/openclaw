@@ -1,5 +1,5 @@
 // Native GPT-Live browser sessions: WebRTC offer broker plus gateway-owned sideband control.
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -11,6 +11,7 @@ import type {
   RealtimeVoiceGatewayControl,
   RealtimeVoiceProviderCapabilities,
 } from "openclaw/plugin-sdk/realtime-voice";
+import type { RealtimeVoiceAgentConsultTranscriptEntry } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
 import WebSocket, { type RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
@@ -29,16 +30,14 @@ import {
   releaseOpenAIQuicksilverSession,
   reserveOpenAIQuicksilverSession,
 } from "./realtime-quicksilver-session-limit.js";
-import {
-  connectOpenAIQuicksilverSideband,
-  type OpenAIQuicksilverSocketFactory,
-} from "./realtime-quicksilver-sideband.js";
+import { connectOpenAIQuicksilverSideband } from "./realtime-quicksilver-sideband.js";
+import type { OpenAIQuicksilverSocketFactory } from "./realtime-quicksilver-socket.shared.js";
 import {
   buildOpenAIQuicksilverSession,
   createOpenAIQuicksilverCall,
+  createOpenAIQuicksilverRequestIds,
   hangupOpenAIRealtimeCall,
   type OpenAIQuicksilverAuth,
-  type OpenAIQuicksilverInitialItem,
   type OpenAIQuicksilverRequestIds,
 } from "./realtime-quicksilver-wire.js";
 import {
@@ -60,7 +59,7 @@ const OPENAI_QUICKSILVER_MAX_SDP_BYTES = 256 * 1024;
 const OPENAI_QUICKSILVER_UPSTREAM_TIMEOUT_MS = 30_000;
 
 type OpenAIQuicksilverSessionRequest = {
-  initialItems?: OpenAIQuicksilverInitialItem[];
+  initialItems?: RealtimeVoiceAgentConsultTranscriptEntry[];
   ownerConnId?: string;
 } & (
   | (RealtimeVoiceBrowserSessionCreateRequest & {
@@ -98,6 +97,15 @@ type PendingOffer = {
   timer: NodeJS.Timeout;
 };
 
+export type OpenAIQuicksilverBrowserSessionBroker = {
+  capabilities: Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };
+  createBrowserSession: (
+    request: OpenAIQuicksilverSessionRequest,
+    auth: OpenAIQuicksilverAuth,
+  ) => Promise<RealtimeVoiceBrowserSession>;
+  cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
+};
+
 export function createOpenAIQuicksilverBrowserSessionBroker(
   params: {
     getConfig: () => OpenClawConfig | undefined;
@@ -107,24 +115,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     onCleanupComplete?: () => void;
   },
   context: OpenAIRealtimeHost,
-): {
-  broker: {
-    capabilities: Partial<RealtimeVoiceProviderCapabilities> & { handlesAgentConsult: true };
-    createBrowserSession: (
-      request: OpenAIQuicksilverSessionRequest,
-      auth: OpenAIQuicksilverAuth,
-    ) => Promise<RealtimeVoiceBrowserSession>;
-    cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
-  };
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-  cleanup: () => Promise<void>;
-  getSessionCounts: () => {
-    pending: number;
-    inFlight: number;
-    active: number;
-    reservations: number;
-  };
-} {
+) {
   const pendingOffers = new Map<string, PendingOffer>();
   const inFlightOffers = new Map<
     string,
@@ -204,7 +195,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
     }
   };
 
-  const broker = {
+  const broker: OpenAIQuicksilverBrowserSessionBroker = {
     capabilities: OPENAI_QUICKSILVER_CAPABILITIES,
     createBrowserSession: async (
       request: OpenAIQuicksilverSessionRequest,
@@ -249,11 +240,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
       const offer: PendingOffer = {
         auth,
         expiresAt,
-        requestIds: {
-          realtimeSessionId: randomUUID(),
-          sessionId: randomUUID(),
-          threadId: randomUUID(),
-        },
+        requestIds: createOpenAIQuicksilverRequestIds(),
         request: { ...request, model, voice },
         nativeControl,
         timer: setTimeout(
@@ -627,8 +614,9 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
       if (activeSessions.get(token) !== session) {
         throw new Error("OpenAI GPT-Live sideband failed during startup");
       }
-      // The call was configured at creation; attaching its sideband needs no new session.started.
-      nativeControl?.onReady?.();
+      // Lifecycle-only hosts need readiness too. The call was configured at creation,
+      // so attaching its sideband needs no new session.started.
+      offer.request.gatewayControl?.onReady?.();
       if (lifecycleSignal.aborted || activeSessions.get(token) !== session) {
         throw new Error("OpenAI GPT-Live session closed during readiness notification");
       }

@@ -1,4 +1,3 @@
-/** Harness-facing materialization of configured MCP tools. */
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -15,7 +14,7 @@ import {
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
 import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
-import type { McpToolCatalog, RequesterMcpConnect } from "./agent-bundle-mcp-types.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
 import type { CodexMcpServersConfig } from "./codex-mcp-config.types.js";
 import {
   resolveConversationCapabilityProfile,
@@ -29,6 +28,7 @@ import {
   requiresMcpCodexToolApproval,
   resolveProjectedMcpCodexToolApprovalMode,
 } from "./mcp-codex-tool-approval.js";
+import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type RequesterScopedHarnessMcpTools = {
@@ -43,7 +43,6 @@ type RequesterScopedHarnessMcpTools = {
 };
 
 type StaticHarnessMcpTools = {
-  /** Final executable static MCP tools for this turn. */
   tools: AnyAgentTool[];
   /** Bounded model/operator warning when configured servers or final policy were incomplete. */
   diagnosticNotice?: string;
@@ -192,9 +191,25 @@ function notConnectedToolResult(serverName: string, toolName: string) {
   };
 }
 
+function resolveHarnessCapabilityProfile(
+  params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
+) {
+  return (
+    params.conversationCapabilityProfile ??
+    (params.policyContext
+      ? resolveConversationCapabilityProfile({
+          ...params.policyContext,
+          runtimeToolAllowlist: params.toolsAllow,
+        })
+      : undefined)
+  );
+}
+
 function applyHarnessToolPolicy(
   tools: AnyAgentTool[],
-  params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
+  params: MaterializeRequesterScopedMcpToolsForHarnessRunParams & {
+    onFilter?: (event: ToolPolicyFilterEvent) => void;
+  },
 ): AnyAgentTool[] {
   if (tools.length === 0) {
     return tools;
@@ -202,14 +217,7 @@ function applyHarnessToolPolicy(
   const allowed = applyEmbeddedAttemptToolsAllow(tools, params.toolsAllow, {
     toolMeta: (tool) => getPluginToolMeta(tool),
   });
-  const profile =
-    params.conversationCapabilityProfile ??
-    (params.policyContext
-      ? resolveConversationCapabilityProfile({
-          ...params.policyContext,
-          runtimeToolAllowlist: params.toolsAllow,
-        })
-      : undefined);
+  const profile = params.conversationCapabilityProfile;
   if (!profile) {
     return allowed;
   }
@@ -218,23 +226,7 @@ function applyHarnessToolPolicy(
     config: params.policyContext?.config ?? params.cfg,
     conversationCapabilityProfile: profile,
     warn: params.warn ?? (() => undefined),
-  });
-}
-
-function buildCatalogTools(
-  catalog: McpToolCatalog,
-  params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
-  requesterConnect?: RequesterMcpConnect,
-): AnyAgentTool[] {
-  return buildBundleMcpToolsFromCatalog({
-    catalog,
-    reservedToolNames: params.reservedToolNames ? Array.from(params.reservedToolNames) : undefined,
-    createExecute: (tool) => {
-      return (
-        requesterConnect?.createExecute(tool.serverName) ??
-        (async () => notConnectedToolResult(tool.serverName, tool.toolName))
-      );
-    },
+    onFilter: params.onFilter,
   });
 }
 
@@ -247,19 +239,13 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     MaterializeRequesterScopedMcpToolsForHarnessRunParams,
     "requesterSenderId" | "agentAccountId" | "messageChannel"
   > & {
-    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-    /** Exact established Codex yolo predicate; no other profile bypasses approval metadata. */
-    autoApproveCodexAppServerApprovals?: boolean;
     /** Prepared native projection carries exact persisted per-tool approval grants. */
     projectedMcpServers?: CodexMcpServersConfig;
-    /** Interactive turns request approval before the original MCP executor runs. */
-    requestInteractiveCodexApproval?: (
-      params: InteractiveConfiguredMcpApprovalRequest,
-    ) => Promise<void>;
     /** Mutation-only probes retire their isolated runtime after the snapshot. */
     retireSessionRuntimeAfterDispose?: boolean;
   },
 ): Promise<StaticHarnessMcpTools> {
+  const conversationCapabilityProfile = resolveHarnessCapabilityProfile(params);
   const acquisition = await acquireSessionMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -268,6 +254,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
     toolOverrides: params.toolOverrides,
+    toolDenylist: conversationCapabilityProfile?.policy.explicitToolDenylist,
   });
   const retireSnapshotRuntime = params.retireSessionRuntimeAfterDispose
     ? async () => {
@@ -290,12 +277,18 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     throw error;
   }
   try {
-    const policyWarnings: string[] = [];
+    // Policy warnings describe inputs; only actual omissions make configured MCP incomplete.
+    const omissions: string[] = [];
     const policyParams = {
       ...params,
-      warn: (message: string) => {
-        policyWarnings.push(message);
-        params.warn?.(message);
+      conversationCapabilityProfile,
+      onFilter: (event: ToolPolicyFilterEvent) => {
+        const omittedCount = event.before.length - event.after.length;
+        if (omittedCount > 0) {
+          omissions.push(
+            `${event.step.label}: ${omittedCount} configured MCP tool(s) omitted by policy`,
+          );
+        }
       },
     };
     const fullPermission = params.autoApproveCodexAppServerApprovals === true;
@@ -309,7 +302,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
       ...(params.requestInteractiveCodexApproval
         ? { requestApproval: params.requestInteractiveCodexApproval }
         : {}),
-      onOmitted: (message) => policyWarnings.push(message),
+      onOmitted: (message) => omissions.push(message),
     });
     // App views outlive this attempt, so bind their callable surface to the
     // same complete catalog and final policy before any model tool can mint one.
@@ -321,7 +314,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
           ...projectedApproval,
           ...(params.requestInteractiveCodexApproval
             ? {}
-            : { onOmitted: (message: string) => policyWarnings.push(message) }),
+            : { onOmitted: (message: string) => omissions.push(message) }),
         },
       ),
     );
@@ -330,7 +323,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
         ...(liveRuntime.diagnostics ?? []).map(
           (diagnostic) => `${diagnostic.serverName}: ${diagnostic.message}`,
         ),
-        ...policyWarnings,
+        ...omissions,
       ],
       params.requestInteractiveCodexApproval ? "this run" : "this scheduled run",
     );
@@ -360,6 +353,10 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
 export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
+  const policyParams = {
+    ...params,
+    conversationCapabilityProfile: resolveHarnessCapabilityProfile(params),
+  };
   const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -371,6 +368,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     requesterSenderId: params.requesterSenderId,
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel,
+    toolDenylist: policyParams.conversationCapabilityProfile?.policy.explicitToolDenylist,
   });
   const scopedRuntime = scopedRuntimeHandle?.runtime;
 
@@ -403,17 +401,20 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     const reservedToolNames = params.reservedToolNames
       ? Array.from(params.reservedToolNames)
       : undefined;
-    const advertisedTools = buildCatalogTools(
-      advertisedCatalog,
-      { ...params, reservedToolNames },
-      scopedRuntime?.requesterConnect,
-    );
+    const requesterConnect = scopedRuntime?.requesterConnect;
+    const advertisedTools = buildBundleMcpToolsFromCatalog({
+      catalog: advertisedCatalog,
+      reservedToolNames,
+      createExecute: (tool) =>
+        requesterConnect?.createExecute(tool.serverName) ??
+        (async () => notConnectedToolResult(tool.serverName, tool.toolName)),
+    });
     const liveByName = new Map((liveRuntime?.tools ?? []).map((tool) => [tool.name, tool]));
     // Live tools supply execution; advertised catalog supplies the stable name/schema surface.
     const tools = advertisedTools.map((tool) => liveByName.get(tool.name) ?? tool);
 
-    const filteredTools = applyHarnessToolPolicy(tools, params);
-    const filteredAdvertised = applyHarnessToolPolicy(advertisedTools, params);
+    const filteredTools = applyHarnessToolPolicy(tools, policyParams);
+    const filteredAdvertised = applyHarnessToolPolicy(advertisedTools, policyParams);
     // Requester-scoped tools run as dynamic tools, so every prompt-required MCP
     // call passes the same per-call approval gate as the configured path before
     // the bridge dispatches it — whenever the caller provides an approval

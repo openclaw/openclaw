@@ -2,7 +2,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
@@ -14,6 +13,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -241,13 +241,17 @@ catalogSuite.define(() => {
           await page.goto(url.toString());
           await waitForControlUiGatewayReady(page);
           const editor = page.locator("openclaw-agents-page");
-          const picker = editor.locator(".model-picker__select");
+          const picker = editor.locator(
+            'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
+          );
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);
-          await editor
-            .locator(".agent-identity-editor__fields input[maxlength='64']")
-            .fill("Keep this identity draft");
+          const identityName = editor.getByRole("textbox", { name: "Display name", exact: true });
+          // Identity hydration can replace the selection between fill's browser and keyboard steps.
+          await expect.poll(() => identityName.inputValue()).toBe("Assistant");
+          await identityName.fill("Keep this identity draft");
+          expect(await identityName.inputValue()).toBe("Keep this identity draft");
           await picker.locator(".picker-select__trigger").click();
           await picker.locator('[role="option"][data-value="fixture/selected"]').click();
           const fallbackInput = editor.locator("openclaw-multi-select.agent-fallbacks input");
@@ -355,7 +359,11 @@ catalogSuite.define(() => {
           ).toBe(0);
 
           rejectCatalog = true;
-          await publish("held");
+          // Refresh the same catalog owner; a config write retires its display facts.
+          inventoryModel = "inventory-read-failure";
+          const failedReadRefresh = await refreshInventory();
+          commands.push({ args: refreshInventoryArgs, publishedInventory: failedReadRefresh });
+          expect(failedReadRefresh.stdout).toContain("inventory-read-failure");
           const error = editor
             .getByRole("alert")
             .filter({ hasText: "Catalog transport unavailable" });
@@ -376,11 +384,7 @@ catalogSuite.define(() => {
             .toBe(1);
           await error.waitFor({ state: "hidden" });
           expect(await selected()).toBe("fixture/selected");
-          expect(
-            await editor
-              .locator(".agent-identity-editor__fields input[maxlength='64']")
-              .inputValue(),
-          ).toBe("Keep this identity draft");
+          expect(await identityName.inputValue()).toBe("Keep this identity draft");
           expect(
             await editor
               .locator(".multi-select__chip")
@@ -469,12 +473,19 @@ suite.define(() => {
         signal.throwIfAborted();
         await state.writeConfig({
           agents: {
-            defaults: { workspace: mainWorkspace },
+            ownership: "explicit",
+            defaults: {
+              workspace: mainWorkspace,
+              systemAgent: { agentId: "main" },
+              heartbeat: { agentId: "main" },
+              sessionStore: { agentId: "main" },
+            },
             entries: {
-              main: { default: true, workspace: mainWorkspace },
+              main: { workspace: mainWorkspace },
               writer: { workspace: writerWorkspace },
             },
           },
+          talk: { agentId: "main" },
           gateway: {
             auth: { mode: "none" },
             controlUi: {

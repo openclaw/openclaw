@@ -1,31 +1,36 @@
-import type { DatabaseSync } from "node:sqlite";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  sqliteStringSet,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type { ForgetIndexPlan, ForgetIndexReadInput } from "./memory-forget-index-task.js";
 
-type MemoryIndexSource = { path: string; source: string };
+const loadMemoryCpuWorkerRuntime = createLazyRuntimeModule(
+  () => import("./memory/manager-cpu-worker-runtime.js"),
+);
 
-// The forget owner supplies its selected rows and retains the purge transaction.
-export function deleteMemoryIndexSources(
-  database: DatabaseSync,
-  sources: readonly MemoryIndexSource[],
-): void {
-  const db = getNodeSqliteKysely<{ memory_index_sources: MemoryIndexSource }>(database);
-  for (let start = 0; start < sources.length;) {
-    const source = sources[start]!;
-    let end = start + 1;
-    while (end < sources.length && sources[end]!.source === source.source) {
-      end += 1;
-    }
-    executeSqliteQuerySync(
-      database,
-      db
-        .deleteFrom("memory_index_sources")
-        .where("path", "in", sqliteStringSet(sources.slice(start, end).map((row) => row.path)))
-        .where("source", "=", source.source),
-    );
-    start = end;
-  }
+export async function planMemoryIndex(
+  params: {
+    agentId: string;
+    changedPaths: ReadonlySet<string>;
+    removedPaths: ReadonlySet<string>;
+    sessionIds: ReadonlySet<string>;
+    excludedSessionIds: ReadonlySet<string>;
+    entryKeys: ReadonlySet<string>;
+    corpusSnippets: ReadonlySet<string>;
+  },
+  options: Parameters<typeof resolveOpenClawAgentSqlitePath>[0],
+): Promise<ForgetIndexPlan> {
+  const request: ForgetIndexReadInput = {
+    kind: "forget-index-plan",
+    agentId: params.agentId,
+    databasePath: resolveOpenClawAgentSqlitePath(options),
+    stateDir: resolveStateDir(options.env),
+    changedPaths: [...params.changedPaths],
+    removedPaths: [...params.removedPaths],
+    sessionIds: [...params.sessionIds],
+    excludedSessionIds: [...params.excludedSessionIds],
+    entryKeys: [...params.entryKeys],
+    corpusSnippets: [...params.corpusSnippets],
+  };
+  const { runMemoryForgetIndexPlan } = await loadMemoryCpuWorkerRuntime();
+  return runMemoryForgetIndexPlan(request);
 }

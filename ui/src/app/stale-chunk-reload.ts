@@ -1,6 +1,6 @@
 // Stale hashed-chunk recovery for lazy routes and the entry stylesheet.
 //
-// A gateway update replaces `ui/dist` in place, so a document loaded before the
+// A gateway update replaces `dist/control-ui` in place, so a document loaded before the
 // update still references the old hashed chunk URLs; the first visit to a lazy
 // route after the update 404s and the dynamic import rejects ("Importing a
 // module script failed"). Secure-context browsers recover through the service
@@ -8,6 +8,7 @@
 // but WKWebView (macOS/iOS apps) and plain-HTTP LAN origins never register a
 // service worker, so reloading against the freshly served index.html is the
 // only recovery path there.
+import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
@@ -19,26 +20,20 @@ const ATTEMPT_COOLDOWN_MS = 5_000;
 // Keep timeout below the cooldown so a timed-out retry re-render cannot start
 // another probe immediately while the gateway is still unreachable.
 const DOCUMENT_PROBE_TIMEOUT_MS = 3_000;
+const BUILD_RELOAD_JITTER_MS = 2_000;
 
 // WebKit, Chromium, Firefox, and Vite's preload helper use these four phrases.
 const MODULE_IMPORT_ERROR_PATTERN =
   /importing a module script failed|failed to fetch dynamically imported module|error loading dynamically imported module|unable to preload css/i;
 
 type StaleChunkReloadDeps = {
-  now?: () => number;
   buildId?: string;
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
   reload?: () => void;
   canReload?: () => boolean;
 };
 
-type MissingStylesheetRecoveryDeps = {
-  isCssApplied?: () => boolean;
-  schedule?: () => Promise<boolean>;
-  retry?: () => Promise<boolean>;
-};
-
-type ReloadAttempt = { attemptedAt: number; active: number };
+type ReloadAttempt = { attemptedAt: number; active: number; ready?: Promise<void> };
 type RecoveryState = [attemptsByBuild: Map<string, ReloadAttempt>, pendingBuildId: string | null];
 
 const recoveryByStorage = new WeakMap<object, RecoveryState>();
@@ -47,6 +42,7 @@ const unavailableStorage = {};
 // Admit one navigation before either path can replace the guard or reload.
 let inFlightDocumentProbe: Promise<boolean> | null = null;
 
+// These browser errors identify failed assets, not whether the deployed build changed.
 export function isStaleChunkImportError(error: unknown): boolean {
   return error instanceof Error && MODULE_IMPORT_ERROR_PATTERN.test(error.message);
 }
@@ -124,7 +120,7 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   } catch {
     // Unreadable storage follows the same safe path as unavailable storage.
   }
-  const now = deps.now?.() ?? Date.now();
+  const now = Date.now();
   const storageIdentity = storage ?? unavailableStorage;
   const recovery = recoveryByStorage.get(storageIdentity) ?? [
     new Map<string, ReloadAttempt>(),
@@ -154,11 +150,21 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
     return false;
   }
   const attempt = previous ?? { attemptedAt: now, active: 0 };
+  if (!previous && deps.buildId !== undefined) {
+    // Sample once per target so reconnecting owners join the same wait instead of postponing it.
+    const delayMs = Math.floor(Math.random() * BUILD_RELOAD_JITTER_MS);
+    if (delayMs > 0) {
+      attempt.ready = sleepWithAbort(delayMs);
+    }
+  }
   attempt.active += 1;
   attemptsByBuild.set(buildId, attempt);
   recovery[1] = buildId;
   recoveryByStorage.set(storageIdentity, recovery);
   try {
+    if (attempt.ready) {
+      await attempt.ready;
+    }
     if (
       !(await waitForReachableControlUiDocument(
         { timeoutMs: deps.buildId === undefined ? 0 : undefined },
@@ -170,7 +176,7 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
     }
   } finally {
     attempt.active -= 1;
-    attempt.attemptedAt = deps.now?.() ?? Date.now();
+    attempt.attemptedAt = Date.now();
   }
   // A reload resets the in-memory state, so without a persisted guard a broken
   // build would reload forever. When storage is unavailable or rejects the
@@ -195,59 +201,28 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
 const REACHABLE_WAIT_TIMEOUT_MS = 30_000;
 const REACHABLE_WAIT_INTERVAL_MS = 1_000;
 
-/**
- * Keeps the advertised bound local instead of trusting the probe to time out:
- * the default probe aborts itself, but a caller-supplied one need not, and a
- * probe that never settles would strand the caller's pending UI forever.
- */
-async function probeWithinDeadline(
-  probe: () => Promise<boolean>,
-  remainingMs: number,
-): Promise<boolean> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(false), remainingMs);
-  });
-  try {
-    return await Promise.race([probe(), expired]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 type ReachableReloadDeps = StaleChunkReloadDeps & {
   timeoutMs?: number;
-  intervalMs?: number;
-  probe?: () => Promise<boolean>;
-  wait?: (ms: number) => Promise<void>;
 };
 
 async function waitForReachableControlUiDocument(
   deps: ReachableReloadDeps,
   isCurrent: () => boolean,
 ): Promise<boolean> {
-  const now = deps.now ?? Date.now;
-  const probe = deps.probe ?? probeControlUiDocument;
-  const wait =
-    deps.wait ??
-    ((ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
-  const intervalMs = deps.intervalMs ?? REACHABLE_WAIT_INTERVAL_MS;
-  const deadline = now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
+  const deadline = Date.now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
   for (let attempt = 0; ; attempt += 1) {
     if (!isCurrent()) {
       return false;
     }
-    const remaining = deadline - now();
+    const remaining = deadline - Date.now();
     if (attempt > 0 && remaining <= 0) {
       return false;
     }
-    // timeoutMs: 0 remains one request; bound caller-supplied probes as well.
-    const reachable = await probeWithinDeadline(
-      probe,
+    // timeoutMs: 0 remains one bounded request.
+    const reachable = await raceWithTimeout(
+      probeControlUiDocument,
       remaining > 0 ? remaining : DOCUMENT_PROBE_TIMEOUT_MS,
+      () => false,
     );
     if (!isCurrent()) {
       return false;
@@ -255,11 +230,11 @@ async function waitForReachableControlUiDocument(
     if (reachable) {
       return true;
     }
-    const remainingWait = deadline - now();
+    const remainingWait = deadline - Date.now();
     if (remainingWait <= 0) {
       return false;
     }
-    await wait(Math.min(intervalMs, remainingWait));
+    await sleepWithAbort(Math.min(REACHABLE_WAIT_INTERVAL_MS, remainingWait));
   }
 }
 
@@ -300,32 +275,19 @@ export async function retryStaleChunkReloadWhenReachable(
  * including ordinary module evaluation errors — reload only for recognized
  * stale-asset failures so a plain code bug cannot trigger a reload loop.
  */
-export function installStaleChunkReloadListener(
-  schedule: (deps?: StaleChunkReloadDeps) => Promise<boolean> = scheduleStaleChunkReload,
-): () => void {
+export function installStaleChunkReloadListener(): () => void {
   const onPreloadError = (event: Event) => {
     const payload = (event as Event & { payload?: unknown }).payload;
     if (!isStaleChunkImportError(payload)) {
       return;
     }
-    void schedule();
+    void scheduleStaleChunkReload();
   };
   window.addEventListener("vite:preloadError", onPreloadError);
   return () => window.removeEventListener("vite:preloadError", onPreloadError);
 }
 
-export function installMissingStylesheetRecovery(
-  deps: MissingStylesheetRecoveryDeps = {},
-): () => void {
-  const isCssApplied =
-    deps.isCssApplied ??
-    (() =>
-      getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
-      "1");
-  const schedule = deps.schedule ?? scheduleStaleChunkReload;
-  // Single-shot (timeoutMs: 0) keeps the stylesheet banner's existing
-  // behavior; only the lazy-route button waits out a restart.
-  const retry = deps.retry ?? (() => retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }));
+export function installMissingStylesheetRecovery(): () => void {
   let detected = false;
   let uninstalled = false;
   let banner: HTMLDivElement | null = null;
@@ -346,7 +308,10 @@ export function installMissingStylesheetRecovery(
       "position:fixed;inset:0 0 auto;z-index:2147483647;padding:12px;text-align:center;background:#1f2937;color:#fff;font:14px system-ui";
     const reloadButton = document.createElement("button");
     reloadButton.textContent = t("common.reload");
-    reloadButton.addEventListener("click", () => void retry());
+    reloadButton.addEventListener(
+      "click",
+      () => void retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }),
+    );
     banner.append(t("lazyView.stylesFailed"), " ", reloadButton);
     document.body.append(banner);
   };
@@ -357,14 +322,17 @@ export function installMissingStylesheetRecovery(
     }
     detected = true;
     removeListeners();
-    const reloaded = await schedule();
+    const reloaded = await scheduleStaleChunkReload();
     if (!reloaded) {
       showBanner();
     }
   };
 
   function checkStylesheet() {
-    if (isCssApplied()) {
+    if (
+      getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
+      "1"
+    ) {
       removeListeners();
       return;
     }

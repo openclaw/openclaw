@@ -1,4 +1,3 @@
-// Policy plugin data, secret, and auth evidence.
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import {
@@ -10,15 +9,15 @@ import { collectPolicyConfiguredAgents, ocPathSegment } from "./policy-state-hel
 import type {
   PolicyAuthProfileEvidence,
   PolicyDataHandlingEvidence,
+  PolicyEvidenceBuilder,
   PolicySecretEvidence,
   SecretRefDefaults,
-  SecretRefEvidence,
 } from "./policy-state-types.js";
 
 export function scanPolicySecrets(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
-  return [...scanPolicySecretProviders(cfg), ...scanPolicySecretInputs(cfg)].toSorted((a, b) =>
-    a.source.localeCompare(b.source),
-  );
+  const entries = [...scanPolicySecretProviders(cfg)];
+  collectSecretInputs(entries, cfg, [], secretRefDefaults(asNonArrayRecord(cfg.secrets).defaults));
+  return entries.toSorted((a, b) => a.source.localeCompare(b.source));
 }
 
 export function scanPolicyAuthProfiles(
@@ -29,13 +28,7 @@ export function scanPolicyAuthProfiles(
   return Object.entries(profiles)
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([id, value]) => {
-      const entry: {
-        id: string;
-        source: string;
-        validMetadata: boolean;
-        provider?: string;
-        mode?: string;
-      } = {
+      const entry: PolicyEvidenceBuilder<PolicyAuthProfileEvidence> = {
         id,
         source: `oc://openclaw.config/auth/profiles/${ocPathSegment(id)}`,
         validMetadata: isValidAuthProfileMetadata(value),
@@ -111,13 +104,7 @@ function telemetryContentCaptureEnabled(
   if (value === true) {
     return signals.tracesEnabled || signals.logsEnabled;
   }
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (!signals.tracesEnabled) {
-    return false;
-  }
-  if (value.enabled !== true) {
+  if (!isRecord(value) || !signals.tracesEnabled || value.enabled !== true) {
     return false;
   }
   return (
@@ -138,9 +125,7 @@ function pushMemorySessionTranscriptIndexing(
   const defaultsMemorySearch = asNonArrayRecord(memory.search);
   const defaultSessionMemory = memorySearchSessionTranscriptIndexing(defaultsMemorySearch);
   if (defaultSessionMemory !== undefined) {
-    const defaultExperimental = isRecord(defaultsMemorySearch.experimental)
-      ? defaultsMemorySearch.experimental
-      : {};
+    const defaultExperimental = asNonArrayRecord(defaultsMemorySearch.experimental);
     entries.push({
       id: "agents-defaults-memory-session-transcripts",
       kind: "memorySessionTranscriptIndexing",
@@ -156,11 +141,7 @@ function pushMemorySessionTranscriptIndexing(
   }
 
   const agents = asNonArrayRecord(cfg.agents);
-  const configuredAgents = collectPolicyConfiguredAgents(agents);
-  if (configuredAgents.length === 0) {
-    return;
-  }
-  configuredAgents.forEach((configured) => {
+  collectPolicyConfiguredAgents(agents).forEach((configured) => {
     const { agentId, value: rawAgent } = configured;
     if (!isRecord(rawAgent)) {
       return;
@@ -215,7 +196,6 @@ function memorySearchSessionTranscriptIndexing(
     false;
   if (
     rememberAcrossConversations === undefined &&
-    readBoolean(experimental.sessionMemory) === undefined &&
     memorySearchSourcesIncludeSessions(memorySearch) === undefined &&
     readBoolean(memorySearch.enabled) === undefined
   ) {
@@ -255,14 +235,7 @@ function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly Polic
   const secrets = asNonArrayRecord(cfg.secrets);
   const providers = asNonArrayRecord(secrets.providers);
   return Object.entries(providers).map(([id, value]) => {
-    const insecure = secretProviderInsecureFlags(value);
-    const entry: {
-      id: string;
-      kind: "provider";
-      source: string;
-      providerSource?: string;
-      insecure?: readonly string[];
-    } = {
+    const entry: PolicyEvidenceBuilder<PolicySecretEvidence> = {
       id,
       kind: "provider",
       source: `oc://openclaw.config/secrets/providers/${ocPathSegment(id)}`,
@@ -270,18 +243,8 @@ function scanPolicySecretProviders(cfg: Record<string, unknown>): readonly Polic
     if (isRecord(value) && typeof value.source === "string") {
       entry.providerSource = value.source;
     }
-    if (insecure.length > 0) {
-      entry.insecure = insecure;
-    }
     return entry;
   });
-}
-
-function scanPolicySecretInputs(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
-  const entries: PolicySecretEvidence[] = [];
-  const secrets = asNonArrayRecord(cfg.secrets);
-  collectSecretInputs(entries, cfg, [], secretRefDefaults(secrets.defaults));
-  return entries;
 }
 
 function collectSecretInputs(
@@ -301,10 +264,10 @@ function collectSecretInputs(
   }
   for (const [key, child] of Object.entries(value)) {
     const childPath = [...path, key];
-    const source = configPathSource(childPath);
+    const source = `oc://openclaw.config/${childPath.map(ocPathSegment).join("/")}`;
     const secretInputPath = isSecretInputPath(childPath);
-    const ref = secretInputPath ? secretRefEvidence(child, defaults) : undefined;
-    if (ref !== undefined) {
+    const ref = secretInputPath ? coerceSecretRef(child, defaults) : null;
+    if (ref !== null) {
       entries.push({
         id: source,
         kind: "input",
@@ -319,10 +282,6 @@ function collectSecretInputs(
   }
 }
 
-function configPathSource(path: readonly string[]): string {
-  return `oc://openclaw.config/${path.map(ocPathSegment).join("/")}`;
-}
-
 function isSecretInputPath(path: readonly string[]): boolean {
   const key = path.at(-1);
   if (key === undefined) {
@@ -333,7 +292,7 @@ function isSecretInputPath(path: readonly string[]): boolean {
   ) {
     return true;
   }
-  if (isRawEnvMapValuePath(path)) {
+  if (path.at(-2) === "env") {
     return false;
   }
   if (isSecretInputKey(key)) {
@@ -366,10 +325,6 @@ function isSecretInputPath(path: readonly string[]): boolean {
     ]) ||
     matchesConfigPath(path, ["diagnostics", "otel", "headers", "*"])
   );
-}
-
-function isRawEnvMapValuePath(path: readonly string[]): boolean {
-  return path.length >= 2 && path.at(-2) === "env";
 }
 
 function isMediaConfiguredProviderRequestSecretPath(path: readonly string[]): boolean {
@@ -444,14 +399,9 @@ function isConfiguredProviderAuthSecretKey(key: string | undefined): boolean {
 function isSecretInputKey(key: string): boolean {
   const normalized = key.toLowerCase();
   return (
-    normalized === "apikey" ||
     normalized === "keyref" ||
-    normalized === "token" ||
     normalized === "tokenref" ||
-    normalized === "password" ||
-    normalized === "secret" ||
     normalized === "encryptkey" ||
-    normalized === "webhooksecret" ||
     normalized === "serviceaccount" ||
     normalized === "serviceaccountref" ||
     normalized === "privatekey" ||
@@ -472,32 +422,12 @@ function secretRefDefaults(value: unknown): SecretRefDefaults | undefined {
     return undefined;
   }
   const defaults: SecretRefDefaults = {};
-  if (typeof value.env === "string") {
-    defaults.env = value.env;
-  }
-  if (typeof value.file === "string") {
-    defaults.file = value.file;
-  }
-  if (typeof value.exec === "string") {
-    defaults.exec = value.exec;
-  }
-  if (typeof value.store === "string") {
-    defaults.store = value.store;
+  for (const source of ["env", "file", "exec", "store"] as const) {
+    if (typeof value[source] === "string") {
+      defaults[source] = value[source];
+    }
   }
   return defaults;
-}
-
-function secretRefEvidence(
-  value: unknown,
-  defaults: SecretRefDefaults | undefined,
-): SecretRefEvidence | undefined {
-  const ref = coerceSecretRef(value, defaults);
-  return ref === null ? undefined : { source: ref.source, provider: ref.provider, id: ref.id };
-}
-
-function secretProviderInsecureFlags(value: unknown): readonly string[] {
-  void value;
-  return [];
 }
 
 function isValidAuthProfileMetadata(value: unknown): boolean {

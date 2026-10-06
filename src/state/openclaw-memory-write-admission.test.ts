@@ -14,6 +14,7 @@ import {
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { recordAgentDatabaseAdmissions } from "./agent-database-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -22,7 +23,7 @@ import {
   runOpenClawAgentWriteAdmission,
   SQLITE_SESSION_WRITER_QUEUES,
 } from "./openclaw-agent-write-admission.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
 
 const { configureMemoryCoreDreamingState, getMemorySearchManager, memoryRuntime } =
   await vi.importActual<{
@@ -56,7 +57,7 @@ describe("memory manager state owner capture", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", originalEnv.OPENCLAW_STATE_DIR);
     config = {
       plugins: { enabled: false },
-      agents: { defaults: { workspace }, list: [{ id: "main" }] },
+      agents: { defaults: { workspace }, entries: { main: {} } },
       memory: { search: { provider: "none", store: { vector: { enabled: false } } } },
     };
     openOpenClawAgentDatabase({ agentId: "main", env: originalEnv });
@@ -72,11 +73,12 @@ describe("memory manager state owner capture", () => {
     recordAgentDatabaseAdmissions([], { env: originalEnv });
     recordAgentDatabaseAdmissions([], { env: otherEnv });
     await memoryRuntime.closeAllMemorySearchManagers?.();
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    closeOpenClawAgentDatabasesForTest();
-    resetPluginStateStoreForTests();
-    closeOpenClawStateDatabaseForTest();
     configureMemoryCoreDreamingState(() => {
       throw new Error("memory test state is closed");
     });

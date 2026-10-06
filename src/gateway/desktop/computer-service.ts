@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ComputerInvokeParams } from "../../../packages/gateway-protocol/src/schema/computer.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -13,7 +14,6 @@ import { computerRunOwner } from "./computer-owner.js";
 import { startComputerHostProcess, type ComputerHostProcess } from "./computer-process.js";
 import {
   ComputerHostFinalizationError,
-  type ComputerHostCommand,
   type ComputerHostExecutionClose,
 } from "./computer-protocol.js";
 import type { HostDesktopService } from "./host-source.js";
@@ -27,30 +27,17 @@ export type GatewayComputerStatus = {
   computerUse?: ComputerUseCapabilityDescriptor;
   error?: string;
 };
-type ComputerInvokeRequest = {
-  command: ComputerHostCommand;
-  params: Record<string, unknown>;
-  generation: string;
+type ComputerInvokeRequest = ComputerInvokeParams & {
   owner: string;
   signal?: AbortSignal;
   ownerSignal?: AbortSignal;
   assertCurrent(): void;
-  timeoutMs?: number;
-  idempotencyKey: string;
 };
-export type GatewayComputerService = {
-  status(): Promise<GatewayComputerStatus>;
-  invoke(request: ComputerInvokeRequest): Promise<unknown>;
-  close(): Promise<void>;
-  revokeRunAuthority(authority: AgentRunDelegatedAuthority): void;
-  preparePluginReload: (params: { changedPluginIds: ReadonlySet<string> }) => {
-    drain: () => Promise<void>;
-    resume: () => void;
-  };
-};
+export type GatewayComputerService = ReturnType<typeof createGatewayComputerService>;
 
 type HostRuntime = {
   provider: PluginNodeHostCommandRegistration;
+  desktopTarget: "native" | "managed";
   prepared: Promise<ComputerUseCapabilityDescriptor>;
   process?: ComputerHostProcess;
   desktop?: DesktopComputerLease;
@@ -72,7 +59,7 @@ export function createGatewayComputerService(options: {
   getConfig(): OpenClawConfig;
   getPluginRegistry(): PluginRegistry;
   hostDesktopService?: HostDesktopService;
-}): GatewayComputerService {
+}) {
   let current: HostRuntime | undefined;
   let stopped = false;
   let paused = false;
@@ -93,6 +80,10 @@ export function createGatewayComputerService(options: {
       );
     });
   };
+  const configuredDesktopTarget = (): HostRuntime["desktopTarget"] => {
+    const desktop = options.getConfig().desktop?.host;
+    return desktop?.enabled && desktop.managed && desktop.port === undefined ? "managed" : "native";
+  };
   const assertRuntime = (runtime: HostRuntime) => {
     if (
       stopped ||
@@ -100,6 +91,7 @@ export function createGatewayComputerService(options: {
       runtime.closed ||
       current !== runtime ||
       configuredProvider()?.command !== runtime.provider.command ||
+      runtime.desktopTarget !== configuredDesktopTarget() ||
       runtime.desktop?.isCurrent() === false ||
       runtime.process?.isCurrent() === false
     ) {
@@ -177,6 +169,7 @@ export function createGatewayComputerService(options: {
     if (current) {
       if (
         current.provider.command === provider?.command &&
+        current.desktopTarget === configuredDesktopTarget() &&
         !current.closed &&
         current.desktop?.isCurrent() !== false &&
         current.process?.isCurrent() !== false
@@ -195,14 +188,14 @@ export function createGatewayComputerService(options: {
     const prepared = createDeferredCore<ComputerUseCapabilityDescriptor>();
     const runtime: HostRuntime = {
       provider,
+      desktopTarget: configuredDesktopTarget(),
       closed: false,
       prepared: prepared.promise,
     };
     current = runtime;
     const preparation = (async () => {
       let env = process.env;
-      const desktop = options.getConfig().desktop?.host;
-      if (desktop?.enabled && desktop.managed && desktop.port === undefined) {
+      if (runtime.desktopTarget === "managed") {
         if (!options.hostDesktopService) {
           throw new Error("Managed Gateway desktop is unavailable");
         }
@@ -234,7 +227,16 @@ export function createGatewayComputerService(options: {
   };
 
   return {
-    preparePluginReload({ changedPluginIds }) {
+    async reconcileRuntimePolicy() {
+      const runtime = current;
+      if (runtime && runtime.desktopTarget !== configuredDesktopTarget()) {
+        await retireForShutdown(runtime);
+      }
+    },
+    preparePluginReload(
+      this: void,
+      { changedPluginIds }: { changedPluginIds: ReadonlySet<string> },
+    ) {
       const provider = current?.provider ?? configuredProvider();
       const affected = provider !== undefined && changedPluginIds.has(provider.pluginId);
       if (affected) {
@@ -254,7 +256,7 @@ export function createGatewayComputerService(options: {
         },
       };
     },
-    async status() {
+    async status(): Promise<GatewayComputerStatus> {
       const configured = configuredProvider() !== undefined;
       try {
         const runtime = await prepare();
@@ -269,7 +271,7 @@ export function createGatewayComputerService(options: {
         };
       }
     },
-    async invoke(request) {
+    async invoke(request: ComputerInvokeRequest): Promise<unknown> {
       const isClose =
         request.command === "computer.act" && request.params.action === "__close_execution";
       const input = parseNodeWorkerComputerInput(
@@ -322,7 +324,12 @@ export function createGatewayComputerService(options: {
         await retire(runtime, { executionId: existing.physicalId, reason: input.reason });
         return { ok: true };
       }
-      if (runtime.closed || !child.isCurrent() || runtime.desktop?.isCurrent() === false) {
+      if (
+        runtime.closed ||
+        runtime.desktopTarget !== configuredDesktopTarget() ||
+        !child.isCurrent() ||
+        runtime.desktop?.isCurrent() === false
+      ) {
         throw new Error("COMPUTER_STALE_OBSERVATION: refresh the Gateway computer before acting");
       }
       assertRuntime(runtime);
@@ -378,7 +385,7 @@ export function createGatewayComputerService(options: {
         await retireForShutdown(current);
       }
     },
-    revokeRunAuthority(authority) {
+    revokeRunAuthority(authority: AgentRunDelegatedAuthority) {
       const runtime = current;
       if (runtime?.execution?.owner === computerRunOwner(authority)) {
         retireInBackground(runtime);

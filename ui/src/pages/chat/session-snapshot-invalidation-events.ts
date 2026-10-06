@@ -1,8 +1,9 @@
 export type SessionSnapshotInvalidationReason = "cache-eviction";
 
 type SnapshotInvalidation =
-  | { sessionKey: string; reason?: SessionSnapshotInvalidationReason }
-  | { sessionKey?: undefined; reason?: undefined };
+  | { sessionKey: string; scopePrefix?: undefined; reason?: SessionSnapshotInvalidationReason }
+  | { sessionKey?: undefined; scopePrefix: string; reason?: undefined }
+  | { sessionKey?: undefined; scopePrefix?: undefined; reason?: undefined };
 
 type SnapshotInvalidationListener = (invalidation: SnapshotInvalidation) => void | Promise<void>;
 
@@ -11,7 +12,7 @@ const invalidationListeners = new Set<SnapshotInvalidationListener>();
 export let snapshotStoreGeneration = 0;
 
 function notifySnapshotInvalidation(invalidation: SnapshotInvalidation): Promise<void> {
-  if (!invalidation.sessionKey) {
+  if (!invalidation.sessionKey && !invalidation.scopePrefix) {
     snapshotStoreGeneration += 1;
   }
   return Promise.all(
@@ -29,6 +30,15 @@ function broadcastSnapshotInvalidation(invalidation: SnapshotInvalidation): void
 function parseSnapshotInvalidation(value: string): SnapshotInvalidation {
   try {
     const parsed: unknown = JSON.parse(value);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "scopePrefix" in parsed &&
+      typeof parsed.scopePrefix === "string" &&
+      parsed.scopePrefix.startsWith("scope:[")
+    ) {
+      return { scopePrefix: parsed.scopePrefix };
+    }
     if (
       parsed !== null &&
       typeof parsed === "object" &&

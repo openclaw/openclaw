@@ -93,8 +93,8 @@ SQLite pairing store. When that list is empty, it falls back to the QR scanner's
 saved user ID. If neither provides a user ID, its sender check admits any sender
 whose message reaches the plugin.
 
-On current OpenClaw, startup migration and `openclaw doctor --fix` import legacy
-approvals into SQLite and remove the source file. Previously approved secondary
+On current OpenClaw, `openclaw doctor --fix` imports legacy approvals into SQLite
+and removes the source file. Previously approved secondary
 senders can therefore lose access in version `2.4.8`. Revoking an approval in
 SQLite does not revoke access granted by the plugin's legacy file or scanner
 fallback.

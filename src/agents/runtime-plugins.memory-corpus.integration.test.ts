@@ -9,7 +9,6 @@ import {
   cleanupPluginLoaderFixturesForTest,
   makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
-  useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
 import {
@@ -27,8 +26,10 @@ afterAll(() => {
   cleanupPluginLoaderFixturesForTest();
 });
 
-it("keeps root-owned memory sidecars in a direct agent registry", async () => {
-  useNoBundledPlugins();
+it("keeps auto-enabled bundled root-owned memory sidecars in a direct agent registry", async () => {
+  const bundledRoot = makePluginLoaderTempDir();
+  delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
   const pluginId = "memory-corpus-sidecar";
   const configSchema = {
     type: "object",
@@ -37,10 +38,14 @@ it("keeps root-owned memory sidecars in a direct agent registry", async () => {
   };
   const plugin = writePlugin({
     id: pluginId,
+    dir: path.join(bundledRoot, pluginId),
+    filename: "index.cjs",
     configSchema,
     body: `module.exports = {
   id: ${JSON.stringify(pluginId)},
   register(api) {
+    api.registerProvider({ id: ${JSON.stringify(pluginId)}, label: "Memory fixture", auth: [] });
+    if (api.registrationMode !== "full") return;
     api.registerMemoryPromptSupplement(() => ["runtime wiki guidance"]);
     api.registerMemoryPromptPreparation(async () => ["runtime wiki digest"]);
     api.registerMemoryCorpusSupplement({
@@ -52,19 +57,24 @@ it("keeps root-owned memory sidecars in a direct agent registry", async () => {
   });
   fs.writeFileSync(
     path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({ id: pluginId, configSchema, contracts: { tools: ["corpus_probe"] } }),
+    JSON.stringify({
+      id: pluginId,
+      configSchema,
+      contracts: { tools: ["corpus_probe"] },
+      providers: [pluginId],
+    }),
     "utf8",
   );
   const config = {
     plugins: {
       entries: { [pluginId]: { config: { source: "runtime" } } },
-      load: { paths: [plugin.dir] },
     },
   } satisfies OpenClawConfig;
+  const selections = [{ provider: pluginId, modelId: "fixture-model" }];
   const workspaceDir = makePluginLoaderTempDir();
   const rootConfig = applyPluginAutoEnable({ config, env: process.env }).config;
   expect(rootConfig.plugins?.entries?.[pluginId]?.enabled).toBe(true);
-  const root = loadAndActivateRootPluginRegistry({
+  const root = await loadAndActivateRootPluginRegistry({
     cache: false,
     config: rootConfig,
     onlyPluginIds: [pluginId],
@@ -74,10 +84,12 @@ it("keeps root-owned memory sidecars in a direct agent registry", async () => {
   expect(root.memoryCorpusSupplements.map((entry) => entry.pluginId)).toEqual([pluginId]);
   const rootSupplement = root.memoryCorpusSupplements[0]?.supplement;
   await withAgentPluginRegistry({
+    selections,
     config,
     workspaceDir,
     run: async () => {
       expect(listMemoryCorpusSupplements().map((entry) => entry.pluginId)).toEqual([pluginId]);
+      expect(listMemoryCorpusSupplements()[0]?.supplement).toBe(rootSupplement);
       const promptParams = { availableTools: new Set(["memory_search"]) };
       const prepared = await prepareMemoryPromptSection(promptParams);
       expect(buildMemoryPromptSection(promptParams, prepared)).toEqual([
@@ -87,17 +99,17 @@ it("keeps root-owned memory sidecars in a direct agent registry", async () => {
     },
   });
   await withAgentPluginRegistry({
+    selections,
     config,
     workspaceDir: makePluginLoaderTempDir(),
     run: async () => {
-      // A direct scope for a different workspace loads the configured plugin fresh instead
-      // of adopting the root's sidecar instance; adoption only applies on workspace match.
       const supplements = listMemoryCorpusSupplements();
-      expect(supplements.map((entry) => entry.pluginId)).toEqual([pluginId]);
+      expect(supplements.map((entry) => entry.pluginId)).toEqual([]);
       expect(supplements[0]?.supplement).not.toBe(rootSupplement);
     },
   });
   await withAgentPluginRegistry({
+    selections,
     config: { plugins: { enabled: false } },
     workspaceDir,
     run: async () => {

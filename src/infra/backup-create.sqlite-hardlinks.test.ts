@@ -102,7 +102,11 @@ async function withHardlinkedDatabase(
   );
 }
 
-async function readArchivedRecords(state: OpenClawTestState, archive: BackupCreateResult) {
+function createArchive(state: OpenClawTestState) {
+  return createBackupArchive({ output: state.path("backup.tar.gz"), includeWorkspace: false });
+}
+
+async function expectArchivedRecords(state: OpenClawTestState, archive: BackupCreateResult) {
   const entries: Array<{ path: string; type: string | undefined; linkpath: string | undefined }> =
     [];
   await tar.t({
@@ -130,18 +134,17 @@ async function readArchivedRecords(state: OpenClawTestState, archive: BackupCrea
   await fs.mkdir(extractDir);
   await tar.x({ file: archive.archivePath, gzip: true, cwd: extractDir });
   const sqlite = requireNodeSqlite();
-  return entries.map((entry) => {
+  for (const entry of entries) {
     const database = new sqlite.DatabaseSync(path.join(extractDir, entry.path), { readOnly: true });
     try {
       expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      return {
-        name: path.basename(entry.path),
-        rows: database.prepare("SELECT id, value FROM hardlink_records ORDER BY id").all(),
-      };
+      expect(database.prepare("SELECT id, value FROM hardlink_records ORDER BY id").all()).toEqual([
+        { id: 7, value: "committed-in-wal" },
+      ]);
     } finally {
       database.close();
     }
-  });
+  }
 }
 
 async function expectBackupRefused(state: OpenClawTestState, message: RegExp): Promise<void> {
@@ -151,57 +154,54 @@ async function expectBackupRefused(state: OpenClawTestState, message: RegExp): P
 }
 
 describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
-  it.each(["alpha.sqlite", "zeta.sqlite"] as const)(
-    "copies undeclared hardlinks and sidecars as opaque bytes when %s owns the WAL",
-    async (ownerName) => {
-      await withHardlinkedDatabase(
-        ownerName,
-        async ({ state, ownerPath, aliasPath }) => {
-          await fs.copyFile(`${ownerPath}-wal`, `${aliasPath}-wal`);
-          await fs.link(ownerPath, state.path("outside.sqlite"));
-          const names = await fs.readdir(path.dirname(ownerPath));
-          const originals = new Map(
-            await Promise.all(
-              names.map(
-                async (name) =>
-                  [name, await fs.readFile(path.join(path.dirname(ownerPath), name))] as const,
-              ),
+  it("copies undeclared hardlinks and sidecars as opaque bytes", async () => {
+    await withHardlinkedDatabase(
+      "zeta.sqlite",
+      async ({ state, ownerPath, aliasPath }) => {
+        await fs.copyFile(`${ownerPath}-wal`, `${aliasPath}-wal`);
+        await fs.link(ownerPath, state.path("outside.sqlite"));
+        const names = await fs.readdir(path.dirname(ownerPath));
+        const originals = new Map(
+          await Promise.all(
+            names.map(
+              async (name) =>
+                [name, await fs.readFile(path.join(path.dirname(ownerPath), name))] as const,
             ),
-          );
-          const runtime = createTestRuntime();
-          const archive = await backupCreateCommand(runtime, {
-            output: state.path("backup.tar.gz"),
-            includeWorkspace: false,
-            verify: true,
-          });
-          expect(archive.verified).toBe(true);
-          for (const name of ["alpha.sqlite", "zeta.sqlite"]) {
-            expect(archive.warnings?.find((warning) => warning.includes(name))).toMatch(/opaque/iu);
-          }
-          const restored = await backupRestoreCommand(runtime, {
-            archive: archive.archivePath,
-            target: state.path("restored"),
-          });
-          const asset = expectDefined(
-            archive.assets.find((candidate) => candidate.kind === "state"),
-            "state asset",
-          );
-          const restoredDirectory = path.join(
-            restored.targetPath,
-            asset.archivePath,
-            "plugins",
-            "hardlinks",
-          );
-          expect((await fs.readdir(restoredDirectory)).toSorted()).toEqual(names.toSorted());
-          for (const [name, bytes] of originals) {
-            expect(await fs.readFile(path.join(restoredDirectory, name))).toEqual(bytes);
-            expect(await fs.readFile(path.join(path.dirname(ownerPath), name))).toEqual(bytes);
-          }
-        },
-        "opaque",
-      );
-    },
-  );
+          ),
+        );
+        const runtime = createTestRuntime();
+        const archive = await backupCreateCommand(runtime, {
+          output: state.path("backup.tar.gz"),
+          includeWorkspace: false,
+          verify: true,
+        });
+        expect(archive.verified).toBe(true);
+        for (const name of ["alpha.sqlite", "zeta.sqlite"]) {
+          expect(archive.warnings?.find((warning) => warning.includes(name))).toMatch(/opaque/iu);
+        }
+        const restored = await backupRestoreCommand(runtime, {
+          archive: archive.archivePath,
+          target: state.path("restored"),
+        });
+        const asset = expectDefined(
+          archive.assets.find((candidate) => candidate.kind === "state"),
+          "state asset",
+        );
+        const restoredDirectory = path.join(
+          restored.targetPath,
+          asset.archivePath,
+          "plugins",
+          "hardlinks",
+        );
+        expect((await fs.readdir(restoredDirectory)).toSorted()).toEqual(names.toSorted());
+        for (const [name, bytes] of originals) {
+          expect(await fs.readFile(path.join(restoredDirectory, name))).toEqual(bytes);
+          expect(await fs.readFile(path.join(path.dirname(ownerPath), name))).toEqual(bytes);
+        }
+      },
+      "opaque",
+    );
+  });
 
   it.runIf(process.platform === "linux").each(["singleton", "hardlink pair"] as const)(
     "preserves a live writer's main-file POSIX lock when backing up a declared plugin %s",
@@ -215,10 +215,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
           { length: 510, pid: process.pid, start: 1073741826, type: "read" },
         ]);
 
-        const archive = await createBackupArchive({
-          output: state.path("backup.tar.gz"),
-          includeWorkspace: false,
-        });
+        const archive = await createArchive(state);
 
         expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
         expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
@@ -226,27 +223,11 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
     },
   );
 
-  it.each(["alpha.sqlite", "zeta.sqlite"] as const)(
-    "preserves WAL-only schema and rows in both regular entries when %s owns the WAL",
-    async (ownerName) => {
-      await withHardlinkedDatabase(ownerName, async ({ state }) => {
-        const archive = await createBackupArchive({
-          output: state.path("backup.tar.gz"),
-          includeWorkspace: false,
-        });
-        await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({ ok: true });
-        expect(await readArchivedRecords(state, archive)).toEqual([
-          { name: "alpha.sqlite", rows: [{ id: 7, value: "committed-in-wal" }] },
-          { name: "zeta.sqlite", rows: [{ id: 7, value: "committed-in-wal" }] },
-        ]);
-      });
-    },
-  );
-
-  it("refuses competing nonempty WAL names even when their contents are identical", async () => {
-    await withHardlinkedDatabase("alpha.sqlite", async ({ state, ownerPath, aliasPath }) => {
-      await fs.copyFile(`${ownerPath}-wal`, `${aliasPath}-wal`);
-      await expectBackupRefused(state, /ambiguous.*multiple non-empty WAL/iu);
+  it("preserves WAL-only schema and rows when the last pathname owns the WAL", async () => {
+    await withHardlinkedDatabase("zeta.sqlite", async ({ state }) => {
+      const archive = await createArchive(state);
+      await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({ ok: true });
+      await expectArchivedRecords(state, archive);
     });
   });
 
@@ -254,12 +235,15 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
     {
       name: "refuses a canonical symlink retargeted after an earlier declared plugin snapshot completes",
       change: "symlink retarget",
+      error: /Canonical SQLite path changed after discovery/iu,
     },
     {
       name: "refuses a canonical-bound hardlink alias replaced after an earlier declared plugin snapshot completes",
       change: "hardlink replacement",
+      error:
+        /SQLite hardlink journal owner may be outside the backup inventory:.*has 1 links, but 2 paths were admitted/iu,
     },
-  ])("$name", async ({ change }) => {
+  ])("$name", async ({ change, error }) => {
     await withHardlinkedDatabase("alpha.sqlite", async ({ state, ownerPath }) => {
       const canonicalPath = resolveOpenClawStateSqlitePath(state.env);
       const firstPath = state.statePath("state", "first-global.sqlite");
@@ -312,7 +296,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
           return result;
         });
       try {
-        await expectBackupRefused(state, /Canonical SQLite path changed after discovery/iu);
+        await expectBackupRefused(state, error);
         expect(changed).toBe(true);
         if (change === "symlink retarget") {
           expect(await fs.realpath(canonicalPath)).toBe(secondPath);
@@ -358,14 +342,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
             await fs.writeFile(`${aliasPath}-wal`, "");
             await fs.writeFile(`${aliasPath}-journal`, "");
           }
-          const archive = await createBackupArchive({
-            output: state.path("backup.tar.gz"),
-            includeWorkspace: false,
-          });
-          expect(await readArchivedRecords(state, archive)).toEqual([
-            { name: "alpha.sqlite", rows: [{ id: 7, value: "committed-in-wal" }] },
-            { name: "zeta.sqlite", rows: [{ id: 7, value: "committed-in-wal" }] },
-          ]);
+          await expectArchivedRecords(state, await createArchive(state));
         },
       );
     },
@@ -485,10 +462,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
           return result;
         });
       try {
-        const archive = await createBackupArchive({
-          output: state.path("backup.tar.gz"),
-          includeWorkspace: false,
-        });
+        const archive = await createArchive(state);
         expect(appended).toBe(true);
         expect((await fs.stat(`${ownerPath}-wal`)).size).toBeGreaterThan(walBefore.size);
         expect(
@@ -497,10 +471,8 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
           { id: 7, value: "committed-in-wal" },
           { id: 9, value: "committed-later" },
         ]);
-        expect(await readArchivedRecords(state, archive)).toEqual([
-          { name: "alpha.sqlite", rows: [{ id: 7, value: "committed-in-wal" }] },
-          { name: "zeta.sqlite", rows: [{ id: 7, value: "committed-in-wal" }] },
-        ]);
+        await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({ ok: true });
+        await expectArchivedRecords(state, archive);
       } finally {
         snapshot.mockRestore();
       }

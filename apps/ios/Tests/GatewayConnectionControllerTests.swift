@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Observation
 import OpenClawChatUI
 import os
 import Testing
@@ -37,46 +38,25 @@ struct GatewayRegistryTestIsolation {
         "preferredStableID",
         "lastDiscoveredStableID",
     ]
-    private static let legacyDefaultsKeys = [
-        "gateway.last.kind",
-        "gateway.last.host",
-        "gateway.last.port",
-        "gateway.last.tls",
-        "gateway.last.stableID",
-    ]
-
     private let previousKeychain: [String: String?]
-    private let previousDefaults: [String: Any?]
     private let previousRelay: ShareGatewayRelayConfig?
 
     init() {
         gatewayPersistenceTestSemaphore.wait()
         self.previousKeychain = Dictionary(uniqueKeysWithValues: Self.keychainAccounts.map { account in
-            (account, KeychainStore.loadString(service: Self.service, account: account))
-        })
-        self.previousDefaults = Dictionary(uniqueKeysWithValues: Self.legacyDefaultsKeys.map { key in
-            (key, UserDefaults.standard.object(forKey: key))
+            (account, GenericPasswordKeychainStore.loadString(service: Self.service, account: account))
         })
         self.previousRelay = ShareGatewayRelaySettings.loadConfig()
         for account in Self.keychainAccounts {
-            _ = KeychainStore.delete(service: Self.service, account: account)
-        }
-        for key in Self.legacyDefaultsKeys {
-            UserDefaults.standard.removeObject(forKey: key)
+            _ = GenericPasswordKeychainStore.delete(service: Self.service, account: account)
         }
     }
 
     func restore() {
         for (account, value) in self.previousKeychain {
-            _ = KeychainStore.delete(service: Self.service, account: account)
+            _ = GenericPasswordKeychainStore.delete(service: Self.service, account: account)
             if let value {
-                _ = KeychainStore.saveString(value, service: Self.service, account: account)
-            }
-        }
-        for (key, value) in self.previousDefaults {
-            UserDefaults.standard.removeObject(forKey: key)
-            if let value {
-                UserDefaults.standard.set(value, forKey: key)
+                _ = GenericPasswordKeychainStore.saveString(value, service: Self.service, account: account)
             }
         }
         ShareGatewayRelaySettings.clearConfig()
@@ -299,8 +279,8 @@ private func waitUntil(
         }
     }
 
-    @Test @MainActor func `current caps reflect toggles`() {
-        withUserDefaults([
+    @Test @MainActor func `registration preserves capability toggles and command wire order`() async {
+        await withUserDefaults([
             "node.instanceId": "ios-test",
             "node.displayName": "Test Node",
             "camera.enabled": true,
@@ -309,18 +289,37 @@ private func waitUntil(
         ]) {
             let appModel = NodeAppModel()
             let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
-            let caps = Set(controller._test_currentCaps())
+            let options = await controller.makeConnectOptions(deviceAuthGatewayID: nil)
+            let caps = Set(options.caps)
 
             #expect(!caps.contains(OpenClawCapability.canvas.rawValue))
             #expect(caps.contains(OpenClawCapability.screen.rawValue))
             #expect(!caps.contains(OpenClawGatewayClientCapability.inlineWidgets))
+            #expect(!caps.contains(OpenClawGatewayClientCapability.modelSelectionPolicy))
             #expect(caps.contains(OpenClawCapability.camera.rawValue))
             #expect(caps.contains(OpenClawCapability.location.rawValue))
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
             #expect(caps.contains(OpenClawCapability.talk.rawValue))
 
-            let commands = controller._test_currentCommands()
-            #expect(!commands.contains(where: { $0.hasPrefix("canvas.") }))
+            var expectedCommands = [
+                "screen.record", "system.notify", "chat.push",
+                "talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once",
+                "camera.list", "camera.snap", "camera.clip", "location.get", "device.status", "device.info",
+            ]
+            if caps.contains("watch") {
+                expectedCommands += ["watch.status", "watch.notify"]
+            }
+            expectedCommands += [
+                "photos.latest", "contacts.search", "contacts.add", "calendar.events", "calendar.add",
+                "reminders.list", "reminders.add",
+            ]
+            if caps.contains("motion") {
+                expectedCommands += ["motion.activity", "motion.pedometer"]
+            }
+            if caps.contains("health") {
+                expectedCommands += ["health.summary"]
+            }
+            #expect(options.commands == expectedCommands)
         }
     }
 
@@ -412,6 +411,8 @@ private func waitUntil(
         #expect(withoutApprovalScope.caps == [
             OpenClawGatewayClientCapability.agentKind,
             OpenClawGatewayClientCapability.inlineWidgets,
+            OpenClawGatewayClientCapability.modelSelectionPolicy,
+            OpenClawGatewayClientCapability.ultrafast,
         ])
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))
@@ -492,17 +493,17 @@ private func waitUntil(
     }
 
     @Test func `stored device token scope gap uses gateway scope compatibility`() {
-        #expect(!GatewayChannelActor._test_requestedScopesExceedStoredToken(
+        #expect(!GatewayChannelActor.requestedScopesExceedStoredToken(
             role: "operator",
             requestedScopes: ["operator.read", "operator.write", "operator.talk.secrets"],
             storedToken: "stored-device-token",
             storedScopes: ["operator.admin"]))
-        #expect(!GatewayChannelActor._test_requestedScopesExceedStoredToken(
+        #expect(!GatewayChannelActor.requestedScopesExceedStoredToken(
             role: "operator",
             requestedScopes: ["operator.read"],
             storedToken: "stored-device-token",
             storedScopes: []))
-        #expect(GatewayChannelActor._test_requestedScopesExceedStoredToken(
+        #expect(GatewayChannelActor.requestedScopesExceedStoredToken(
             role: "operator",
             requestedScopes: ["operator.admin"],
             storedToken: "stored-device-token",
@@ -1156,7 +1157,7 @@ private func waitUntil(
         #expect(credentials.token == "proven-relay-token")
         #expect(credentials.password == "proven-relay-password")
         #expect(!credentials.suppressStoredDeviceAuth)
-        #expect(KeychainStore.loadString(
+        #expect(GenericPasswordKeychainStore.loadString(
             service: gatewayService,
             account: "gateway-token.\(instanceID)") == nil)
 
@@ -1704,7 +1705,7 @@ private func waitUntil(
             tailnetDns: nil,
             gatewayPort: nil,
             tlsEnabled: true,
-            tlsFingerprintSha256: nil,
+            tlsFingerprintSha256: "untrusted-txt-fingerprint",
             cliPath: nil)
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
@@ -1721,9 +1722,12 @@ private func waitUntil(
             })
 
         #expect(await controller.connectWithDiagnostics(gateway) == nil)
+        #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "exact-owner-fingerprint")
         await controller.acceptPendingTrustPrompt(controller.pendingTrustPrompt)
         await waitUntil(timeout: .seconds(1)) { appModel.activeGatewayConnectConfig != nil }
 
+        #expect(appModel.activeGatewayConnectConfig?.tls?.expectedFingerprint == "exact-owner-fingerprint")
+        #expect(appModel.activeGatewayConnectConfig?.tls?.allowTOFU == false)
         #expect(persistedOwnerBytes.withLock { $0 } == Array(stableID.utf8))
         #expect(appModel.activeGatewayConnectConfig.map { Array($0.stableID.utf8) } == Array(stableID.utf8))
         #expect(appModel.activeGatewayConnectConfig
@@ -2106,9 +2110,12 @@ private func waitUntil(
             probe.results.continuation.finish()
             await connectTask.value
             #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "explicit-fingerprint")
+            #expect(controller.hasPendingConnectionHandoff)
 
             controller.declinePendingTrustPrompt(controller.pendingTrustPrompt)
+            await waitUntil { !controller.hasPendingConnectionHandoff }
 
+            #expect(!controller.hasPendingConnectionHandoff)
             #expect(!controller._test_didAutoConnect())
             #expect(!controller._test_isAutoConnectSuppressed())
             #expect(appModel.activeGatewayConnectConfig == nil)
@@ -2144,11 +2151,6 @@ private func waitUntil(
             "gateway.manual.port": 443,
             "gateway.manual.tls": true,
             "node.instanceId": "ios-test",
-            "gateway.last.host": nil,
-            "gateway.last.port": nil,
-            "gateway.last.tls": nil,
-            "gateway.last.stableID": nil,
-            "gateway.last.kind": nil,
             "gateway.preferredStableID": nil,
             "gateway.lastDiscoveredStableID": nil,
         ]) {
@@ -2449,8 +2451,8 @@ private func waitUntil(
         let lastAccount = "lastDiscoveredStableID"
         let forgottenID = "bonjour|forgotten"
         let keptID = "bonjour|kept"
-        _ = KeychainStore.saveString(forgottenID, service: service, account: preferredAccount)
-        _ = KeychainStore.saveString(keptID, service: service, account: lastAccount)
+        _ = GenericPasswordKeychainStore.saveString(forgottenID, service: service, account: preferredAccount)
+        _ = GenericPasswordKeychainStore.saveString(keptID, service: service, account: lastAccount)
 
         await withUserDefaults([
             "gateway.preferredStableID": forgottenID,
@@ -2465,8 +2467,8 @@ private func waitUntil(
             let defaults = UserDefaults.standard
             #expect(defaults.object(forKey: "gateway.preferredStableID") == nil)
             #expect(defaults.string(forKey: "gateway.lastDiscoveredStableID") == keptID)
-            #expect(KeychainStore.loadString(service: service, account: preferredAccount) == nil)
-            #expect(KeychainStore.loadString(service: service, account: lastAccount) == keptID)
+            #expect(GenericPasswordKeychainStore.loadString(service: service, account: preferredAccount) == nil)
+            #expect(GenericPasswordKeychainStore.loadString(service: service, account: lastAccount) == keptID)
         }
     }
 
@@ -2764,6 +2766,98 @@ private func waitUntil(
         #expect(appModel._test_hasGatewayLoopTasks().operator)
     }
 
+    private enum PickerHandoffOutcome: CaseIterable {
+        case commit
+        case cancel
+        case supersede
+        case failure
+    }
+
+    @Test(arguments: PickerHandoffOutcome.allCases)
+    @MainActor
+    private func `picker protection outlives acceptance until handoff or cancellation finishes`(
+        outcome: PickerHandoffOutcome) async throws
+    {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let currentID = "manual|127.0.0.1|1"
+        let targetID = "manual|127.0.0.1|2"
+        #expect(saveActiveManualGateway(host: "127.0.0.1", port: 1, useTLS: false, stableID: currentID))
+        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: targetID,
+            kind: .manual,
+            name: "Target",
+            host: "127.0.0.1",
+            port: 2,
+            useTLS: false,
+            lastConnectedAtMs: nil)))
+        let appModel = NodeAppModel()
+        let resetRelease = AsyncStream<Void>.makeStream()
+        defer {
+            resetRelease.continuation.finish()
+            appModel._test_setGatewaySessionResetTask(nil)
+            appModel.disconnectGateway()
+        }
+        let config = try Self.makeGatewayConnectConfig(
+            url: #require(URL(string: "ws://127.0.0.1:1")),
+            stableID: currentID)
+        appModel.applyGatewayConnectConfig(config)
+        let previousOwnerID = appModel.chatViewModelOwnerID
+        appModel._test_setGatewaySessionResetTask(Task {
+            for await _ in resetRelease.stream {
+                return
+            }
+        })
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            forceReconnectReset: { _ in })
+
+        appModel.isGatewayPickerRequestInFlight = true
+        let result = await controller.switchToGateway(stableID: targetID)
+        // Mirror the picker request's defer. This must not unlock Chat: the
+        // connection owner still has a queued handoff behind the reset barrier.
+        appModel.isGatewayPickerRequestInFlight = false
+        #expect(result == .accepted)
+        #expect(controller.hasPendingConnectionHandoff)
+        #expect(appModel.chatViewModelOwnerID == previousOwnerID)
+
+        let expectedID: String
+        switch outcome {
+        case .commit:
+            expectedID = targetID
+        case .cancel:
+            controller.cancelPendingConnectionAttempts()
+            expectedID = currentID
+        case .supersede:
+            let replacement = await controller.connectManual(host: "127.0.0.1", port: 3, useTLS: false)
+            #expect(replacement == .accepted)
+            expectedID = "manual|127.0.0.1|3"
+        case .failure:
+            let failed = await controller.connectManual(host: "127.0.0.1", port: 70000, useTLS: false)
+            #expect(failed == .failed("This paired gateway has an invalid saved endpoint."))
+            expectedID = currentID
+        }
+        #expect(controller.hasPendingConnectionHandoff)
+        #expect(appModel.chatViewModelOwnerID == previousOwnerID)
+
+        // In cancellation/failure cases only the queued restoration generation
+        // remains. Its completion must invalidate a SwiftUI observation too.
+        let invalidated = OSAllocatedUnfairLock(initialState: false)
+        withObservationTracking {
+            _ = controller.hasPendingConnectionHandoff
+        } onChange: {
+            invalidated.withLock { $0 = true }
+        }
+        resetRelease.continuation.yield()
+        resetRelease.continuation.finish()
+        await waitUntil { !controller.hasPendingConnectionHandoff }
+
+        #expect(!controller.hasPendingConnectionHandoff)
+        #expect(invalidated.withLock { $0 })
+        #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == expectedID)
+    }
+
     @Test @MainActor func `switch to manual gateway applies its stable I D and URL`() async {
         let registryIsolation = GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
@@ -2875,6 +2969,8 @@ private func waitUntil(
         var ownerlessPrefixed = session
         ownerlessPrefixed.key = "agent:main:legacy"
         ownerlessPrefixed.agentId = nil
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        session.snoozedUntil = now.addingTimeInterval(3600).timeIntervalSince1970 * 1000
         appModel.gatewayDefaultAgentId = "main"
 
         await appModel.storeCachedChatSessions(
@@ -2898,6 +2994,14 @@ private func waitUntil(
             matchingBare,
             expectedPrefixed,
         ])
+        #expect(!appModel.isOperatorGatewayConnected)
+        let roster = try await appModel.loadChatSessionRoster(limit: 200)
+        #expect(roster.isCached)
+        #expect(roster.sessions == cachedSessions)
+        #expect(SessionStatusScope.available(isConnected: appModel.isOperatorGatewayConnected).contains(.snoozed))
+        let snoozed = roster.sessions.filter { SessionStatusScope.snoozed.includes($0, at: now) }
+        #expect(snoozed == [session])
+        #expect(CommandCenterTab.sessionDetail(session, now: now).hasPrefix("Wakes "))
         appModel.selectedAgentId = "work"
         #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "work") == [workGlobal])
     }

@@ -1,36 +1,11 @@
-/**
- * Builds tool-search execution plans from allowlists and available controls.
- */
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createToolPolicyMatcher } from "../../tool-policy-match.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
-import {
-  collectUniqueCatalogToolNames,
-  TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
-} from "../../tool-search.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
+import { collectUniqueCatalogToolNames } from "../../tool-search.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 
-/** Tool-search control tools that may be auto-added when tool search is enabled. */
-export const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_CALL_RAW_TOOL_NAME,
-];
-
 type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
-
-/** Derived tool allowlists used for visible prompt tools, replay tools, and empty-allowlist checks. */
-type ToolSearchRunPlan = {
-  visibleAllowedToolNames: Set<string>;
-  replayAllowedToolNames: Set<string>;
-  liveAllowedToolNames: Set<string>;
-  capabilityToolNames: Set<string>;
-  hasCallableTools: boolean;
-};
 
 function hasExplicitlyAllowedClientTool(params: {
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
@@ -46,14 +21,6 @@ function hasExplicitlyAllowedClientTool(params: {
     createToolPolicyMatcher({ allow: source.entries }),
   );
   return names.some((name) => matchers.some((matches) => matches(name)));
-}
-
-function collectOpenClawCapabilityToolNames(
-  tools: CollectAllowedToolNamesParams["tools"],
-): Set<string> {
-  return collectAllowedToolNames({
-    tools: tools.filter((tool) => getPluginToolMeta(tool)?.pluginId !== "bundle-mcp"),
-  });
 }
 
 /**
@@ -72,7 +39,8 @@ export function buildToolSearchRunPlan(params: {
   deferredToolsCallable?: boolean;
   controlNames?: readonly string[];
   explicitAllowlistSources: Array<{ entries: string[] }>;
-}): ToolSearchRunPlan {
+}) {
+  const controlNames = params.controlNames ?? [...TOOL_SEARCH_CONTROL_TOOL_NAMES];
   const visibleAllowedToolNames = collectAllowedToolNames({
     tools: params.visibleTools,
     clientTools: params.clientToolsCataloged ? undefined : params.clientTools,
@@ -81,14 +49,16 @@ export function buildToolSearchRunPlan(params: {
     tools: params.uncompactedTools,
     clientTools: params.clientTools,
   });
-  const capabilityToolNames = collectOpenClawCapabilityToolNames([
-    ...(params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools),
-    ...(params.catalogCapabilityTools ?? []),
-  ]);
+  const capabilityToolNames = collectAllowedToolNames({
+    tools: [
+      ...(params.deferredToolsCallable ? params.uncompactedTools : params.visibleTools),
+      ...(params.catalogCapabilityTools ?? []),
+    ].filter((tool) => getPluginToolMeta(tool)?.pluginId !== "bundle-mcp"),
+  });
   if (params.controlsEnabled) {
     // A control that was visible in the compacted prompt must remain allowed
     // during replay even when the uncompacted tool set would otherwise omit it.
-    for (const controlName of params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES) {
+    for (const controlName of controlNames) {
       if (visibleAllowedToolNames.has(controlName)) {
         replayAllowedToolNames.add(controlName);
       }
@@ -100,7 +70,7 @@ export function buildToolSearchRunPlan(params: {
   if (params.deferredToolsCallable) {
     // Deferred resolution can hydrate catalog tools, but Tool Search controls
     // excluded from the visible surface are not catalog entries.
-    for (const controlName of TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES) {
+    for (const controlName of TOOL_SEARCH_CONTROL_TOOL_NAMES) {
       if (!visibleAllowedToolNames.has(controlName)) {
         liveAllowedToolNames.delete(controlName);
         capabilityToolNames.delete(controlName);
@@ -116,10 +86,7 @@ export function buildToolSearchRunPlan(params: {
     ),
   );
   const autoAddedControlNames = new Set(
-    (params.controlsEnabled
-      ? (params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES)
-      : []
-    ).filter(
+    (params.controlsEnabled ? controlNames : []).filter(
       (controlName) => !explicitControlAllowlistNames.has(normalizeToolPolicyName(controlName)),
     ),
   );

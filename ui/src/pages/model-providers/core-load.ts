@@ -1,7 +1,11 @@
 import { initialState, Task } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelCatalogResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
+import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
@@ -15,17 +19,21 @@ type CoreRequest = {
 type CoreLoadOptions = {
   onStart: (reason: ModelProviderRefreshReason) => void;
   onComplete: (result: CoreRequest & { data: ModelProvidersData }) => void;
-  isCatalogLoading: () => boolean;
+  onCatalogComplete: (result: ModelCatalogResult) => void;
   refreshPublication: () => void;
 };
 
 export class ModelProviderCoreLoader {
   private active = false;
   private publicationPending = false;
+  private catalogRequest: AbortController | null = null;
+  catalogError: string | null = null;
+  // The latest explicit Retry includes one that has already settled.
+  catalogGeneration = 0;
   private readonly task: Task<[CoreRequest | null], CoreRequest & { data: ModelProvidersData }>;
 
   constructor(
-    host: ReactiveControllerHost,
+    private readonly host: ReactiveControllerHost,
     private readonly options: CoreLoadOptions,
   ) {
     this.task = new Task(host, {
@@ -50,8 +58,60 @@ export class ModelProviderCoreLoader {
     return this.active;
   }
 
+  get catalogLoading(): boolean {
+    return this.catalogRequest !== null;
+  }
+
+  resetCatalog(): void {
+    const retired = this.catalogRequest;
+    this.catalogRequest = null;
+    this.catalogError = null;
+    retired?.abort();
+    this.host.requestUpdate();
+  }
+
+  async discoverCatalog(
+    client: GatewayBrowserClient,
+    agentId: string,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    if (this.catalogRequest) {
+      return;
+    }
+    const request = new AbortController();
+    const ownsResult = () => this.catalogRequest === request && isCurrent();
+    this.catalogRequest = request;
+    this.catalogGeneration += 1;
+    this.catalogError = null;
+    this.host.requestUpdate();
+    try {
+      const result = await loadModelCatalog(client, {
+        agentId,
+        refresh: true,
+        signal: request.signal,
+      });
+      if (ownsResult()) {
+        this.catalogError = modelCatalogRefreshError(
+          result,
+          t("modelProviders.defaults.discoverFailed"),
+        );
+        this.options.onCatalogComplete(result);
+      }
+    } catch (failure) {
+      if (ownsResult()) {
+        this.catalogError = formatUiError(failure, "request failed");
+      }
+    } finally {
+      if (this.catalogRequest === request) {
+        this.catalogRequest = null;
+        this.host.requestUpdate();
+        this.flushPublication();
+      }
+    }
+  }
+
   refresh(client: GatewayBrowserClient, agentId: string, reason: ModelProviderRefreshReason) {
-    if (reason === "publication" && (this.active || this.options.isCatalogLoading())) {
+    if (reason === "publication" && (this.active || this.catalogLoading)) {
       this.publicationPending = true;
       return Promise.resolve();
     }
@@ -63,11 +123,15 @@ export class ModelProviderCoreLoader {
       this.publicationPending = false;
     }
     this.active = true;
+    if (reason !== "publication") {
+      this.resetCatalog();
+    }
     this.options.onStart(reason);
     return this.task.run([{ client, agentId, reason }]);
   }
 
   invalidate(): void {
+    this.resetCatalog();
     this.publicationPending = false;
     this.active = false;
     void this.task.run([null]);
@@ -78,10 +142,10 @@ export class ModelProviderCoreLoader {
     this.flushPublication();
   }
 
-  flushPublication(): void {
+  private flushPublication(): void {
     // Task commits its status and value after onComplete/onError returns.
     queueMicrotask(() => {
-      if (this.publicationPending && !this.active && !this.options.isCatalogLoading()) {
+      if (this.publicationPending && !this.active && !this.catalogLoading) {
         this.options.refreshPublication();
       }
     });

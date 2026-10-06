@@ -1,4 +1,3 @@
-// Slack plugin module implements preview finalize behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { editSlackRenderedMessage } from "../../actions.js";
@@ -97,35 +96,21 @@ async function readSlackMessageAfterEditError(params: {
   messageId: string;
   threadTs?: string;
 }): Promise<SlackReadbackMessage | null> {
-  if (params.threadTs) {
-    const replyResult = await params.client.conversations.replies({
-      token: params.token,
-      channel: params.channelId,
-      ts: params.threadTs,
-      latest: params.messageId,
-      oldest: params.messageId,
-      inclusive: true,
-      limit: 1,
-    });
-    const reply = (replyResult.messages ?? []).find(
-      (message) => (message as SlackReadbackMessage | undefined)?.ts === params.messageId,
-    ) as SlackReadbackMessage | undefined;
-    return reply ?? null;
-  }
-
-  const historyResult = await params.client.conversations.history({
+  const query = {
     token: params.token,
     channel: params.channelId,
     latest: params.messageId,
     oldest: params.messageId,
     inclusive: true,
     limit: 1,
-  });
-  const message = historyResult.messages?.[0] as SlackReadbackMessage | undefined;
-  if (!message?.ts || message.ts !== params.messageId) {
-    return null;
-  }
-  return message;
+  };
+  const result = params.threadTs
+    ? await params.client.conversations.replies({ ...query, ts: params.threadTs })
+    : await params.client.conversations.history(query);
+  const message = params.threadTs
+    ? result.messages?.find((entry) => entry?.ts === params.messageId)
+    : result.messages?.[0];
+  return message?.ts && message.ts === params.messageId ? message : null;
 }
 
 async function didSlackPreviewEditApplyAfterError(params: {
@@ -175,15 +160,7 @@ export async function finalizeSlackPreviewEdit(params: {
     });
   } catch (err) {
     try {
-      const applied = await didSlackPreviewEditApplyAfterError({
-        client: params.client,
-        token: params.token,
-        channelId: params.channelId,
-        messageId: params.messageId,
-        text: params.text,
-        blocks: params.blocks,
-        threadTs: params.threadTs,
-      });
+      const applied = await didSlackPreviewEditApplyAfterError(params);
       if (applied) {
         logVerbose(
           `slack: preview final edit response failed but readback matched message ${params.channelId}/${params.messageId}; suppressing duplicate fallback send`,

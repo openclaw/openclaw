@@ -7,6 +7,7 @@ type SessionMcpRuntimeOwner = {
   isCurrent: () => boolean;
   replace: (params: Parameters<CreateSessionMcpRuntime>[0]) => SessionMcpRuntime;
   reload: (params: SessionMcpConfigReload) => Promise<void>;
+  retireUnusedServers: (retainedServerNames: ReadonlySet<string>) => Promise<void>;
 };
 
 // SDK facades and the Gateway can load separate bundles of this module.

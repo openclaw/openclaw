@@ -44,6 +44,7 @@ class ConnectionManager internal constructor(
     internal const val AGENT_KIND_CLIENT_CAPABILITY = "agent-kind"
     internal const val INLINE_WIDGETS_CLIENT_CAPABILITY = "inline-widgets"
     internal const val USAGE_REFRESHING_CLIENT_CAPABILITY = "usage-refreshing"
+    internal const val MODEL_SELECTION_POLICY_CLIENT_CAPABILITY = "model-selection-policy"
 
     internal fun operatorScopesForStoredDeviceToken(storedScopes: List<String>): List<String> {
       val normalized =
@@ -90,7 +91,6 @@ class ConnectionManager internal constructor(
     }
   }
 
-  /** Builds the current independently grantable Android permission surface. */
   fun buildPermissions(): Map<String, Boolean> = permissionSnapshot().gatewayPermissions()
 
   /**
@@ -105,16 +105,12 @@ class ConnectionManager internal constructor(
     }
   }
 
-  /** Human-readable Android device model used in gateway client metadata. */
   fun resolveModelIdentifier(): String? =
     listOfNotNull(Build.MANUFACTURER, Build.MODEL)
       .joinToString(" ")
       .trim()
       .ifEmpty { null }
 
-  /**
-   * User-Agent used for gateway telemetry and troubleshooting.
-   */
   fun buildUserAgent(): String {
     val version = resolvedVersionName()
     val release =
@@ -141,7 +137,6 @@ class ConnectionManager internal constructor(
       modelIdentifier = resolveModelIdentifier(),
     )
 
-  /** Connect options for the Android node session that exposes phone capabilities. */
   fun buildNodeConnectOptions(): GatewayConnectOptions =
     GatewayConnectOptions(
       role = "node",
@@ -153,7 +148,6 @@ class ConnectionManager internal constructor(
       userAgent = buildUserAgent(),
     )
 
-  /** Connect options for the Android operator session that drives approvals and UI actions. */
   fun buildOperatorConnectOptions(
     scopes: List<String> = nativeClientOperatorScopes,
   ): GatewayConnectOptions =
@@ -165,6 +159,7 @@ class ConnectionManager internal constructor(
           add(AGENT_KIND_CLIENT_CAPABILITY)
           if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
           add(USAGE_REFRESHING_CLIENT_CAPABILITY)
+          add(MODEL_SELECTION_POLICY_CLIENT_CAPABILITY)
         },
       commands = emptyList(),
       permissions = emptyMap(),
@@ -172,7 +167,6 @@ class ConnectionManager internal constructor(
       userAgent = buildUserAgent(),
     )
 
-  /** Resolves persisted TLS pin policy for a concrete gateway endpoint. */
   fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
     val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)
     return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls(endpoint))

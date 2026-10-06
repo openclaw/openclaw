@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { waitForAbortSignal } from "../../infra/abort-signal.js";
@@ -8,13 +11,20 @@ import {
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import {
-  beginSessionWorkAdmission,
-  cancelSessionWorkAdmissionHandoff,
-} from "../../sessions/session-lifecycle-admission.js";
-import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery-admission.js";
+  isSessionStoreTopologyChange,
+  sessionChanges,
+} from "../../sessions/session-row-changes.js";
+import {
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
+import { runWithMainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
 import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
-import { restartRecoveryStoreTargetKey } from "./main-session-restart-recovery-diagnostics.js";
+import {
+  restartRecoveryStoreTargetKey,
+  type MainSessionRecoverySkipReason,
+} from "./main-session-restart-recovery-diagnostics.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import {
   DEFAULT_RECOVERY_DELAY_MS,
@@ -26,8 +36,6 @@ import {
   discoverRestartRecoveryStoreTargets,
 } from "./main-session-restart-recovery-shared.js";
 import {
-  type ExpectedRestartRecoveryClaim,
-  loadExpectedRestartRecoveryClaim,
   loadExpectedRestartRecoveryTarget,
   recoverStore,
 } from "./main-session-restart-recovery-store.js";
@@ -71,6 +79,7 @@ async function runRecoveryRetries(params: {
 
 export async function recoverRestartAbortedMainSessions(params: {
   cfg?: OpenClawConfig;
+  agentIds?: ReadonlySet<string>;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   stateDir?: string;
   handledSessionKeys?: Set<string>;
@@ -82,6 +91,8 @@ export async function recoverRestartAbortedMainSessions(params: {
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<RecoveryCounts> {
   const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
+  const passId = randomUUID();
+  const skipReasons = new Map<MainSessionRecoverySkipReason, number>();
   const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
 
   for (const target of await discoverRestartRecoveryStoreTargets({
@@ -89,16 +100,20 @@ export async function recoverRestartAbortedMainSessions(params: {
     statuses: ["running"],
   })) {
     if (params.shouldContinue?.() === false) {
-      return result;
+      break;
     }
     if (params.excludedStoreTargets?.has(restartRecoveryStoreTargetKey(target))) {
       continue;
     }
     const storeResult = await recoverStore({
       ...params,
+      passId,
       storePath: target.storePath,
       storeAgentId: target.agentId,
       handledSessionKeys,
+      onSkipped: (reason) => {
+        skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
+      },
     });
     result.started += storeResult.started;
     result.settled += storeResult.settled;
@@ -106,9 +121,16 @@ export async function recoverRestartAbortedMainSessions(params: {
     result.skipped += storeResult.skipped;
   }
 
-  if (result.started > 0 || result.settled > 0 || result.failed > 0) {
+  if (result.started > 0 || result.settled > 0 || result.failed > 0 || result.skipped > 0) {
+    const skipSummary =
+      skipReasons.size > 0
+        ? ` skipReasons=${[...skipReasons]
+            .toSorted(([left], [right]) => left.localeCompare(right))
+            .map(([reason, count]) => `${reason}:${count}`)
+            .join(",")}`
+        : "";
     mainSessionRecoveryLog.info(
-      `main-session restart recovery startup complete: started=${result.started} settled=${result.settled} failed=${result.failed} skipped=${result.skipped}`,
+      `main-session restart recovery startup complete: started=${result.started} settled=${result.settled} failed=${result.failed} skipped=${result.skipped}${skipSummary} boot=${params.lifecycleGeneration ?? getAgentEventLifecycleGeneration()} pass=${passId}`,
     );
   }
   return result;
@@ -126,31 +148,25 @@ export async function retryRestartAbortedMainSessionRecovery(
     gatewayRuntime: GatewayRecoveryRuntime;
   },
 ): Promise<RecoveryCounts> {
-  const expected = {
-    agentId: params.agentId,
-    canonicalSessionKey: params.canonicalSessionKey,
-    sessionId: params.expectedSessionId,
-    sessionKey: params.sessionKey,
-  };
-  const expectedClaim: ExpectedRestartRecoveryClaim | undefined =
-    params.expectedRecoveryRunId && params.expectedRecoverySourceRunId
-      ? {
-          ...expected,
-          recoveryRunId: params.expectedRecoveryRunId,
-          recoverySourceRunId: params.expectedRecoverySourceRunId,
-        }
-      : undefined;
   return await recoverExpectedRestartRecovery({
     ...params,
-    ...(expectedClaim ? { expectedClaim } : { expectedTarget: expected }),
+    expectedTarget: {
+      agentId: params.agentId,
+      canonicalSessionKey: params.canonicalSessionKey,
+      sessionId: params.expectedSessionId,
+      sessionKey: params.sessionKey,
+      claim:
+        params.expectedRecoveryRunId && params.expectedRecoverySourceRunId
+          ? { runId: params.expectedRecoveryRunId, sourceRunId: params.expectedRecoverySourceRunId }
+          : undefined,
+    },
   });
 }
 
 async function recoverExpectedRestartRecovery(
   params: MainSessionRecoveryStoreTarget & {
     cfg?: OpenClawConfig;
-    expectedClaim?: ExpectedRestartRecoveryClaim;
-    expectedTarget?: ExpectedRestartRecoveryTarget;
+    expectedTarget: ExpectedRestartRecoveryTarget;
     lifecycleGeneration?: string;
     observationOnly?: boolean;
     shouldContinue?: () => boolean;
@@ -158,49 +174,27 @@ async function recoverExpectedRestartRecovery(
     gatewayRuntime: GatewayRecoveryRuntime;
   },
 ): Promise<RecoveryCounts> {
+  const expected = params.expectedTarget;
   const loadExpected = () =>
-    params.expectedClaim
-      ? loadExpectedRestartRecoveryClaim({
-          expected: params.expectedClaim,
-          storePath: params.storePath,
-        })
-      : params.expectedTarget
-        ? loadExpectedRestartRecoveryTarget({
-            expected: params.expectedTarget,
-            storePath: params.storePath,
-          })
-        : undefined;
+    loadExpectedRestartRecoveryTarget({ expected, storePath: params.storePath });
   if (!loadExpected()) {
     return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
-  const assertExpectedCurrent = () => {
-    if (!loadExpected()) {
-      throw new Error("restart recovery session ownership changed before dispatch");
-    }
-  };
-  const expectedSessionId = (params.expectedClaim ?? params.expectedTarget)!.sessionId;
-  // Keep lifecycle replacement behind accepted recovery dispatch. The RPC
-  // adopts this lease, so another admission cannot deadlock behind its active work.
-  const admission = await beginSessionWorkAdmission({
-    scope: params.storePath,
-    identities: [params.sessionKey, params.expectedClaim?.canonicalSessionKey, expectedSessionId],
-    owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
-    assertAllowed: assertExpectedCurrent,
-    revalidateAllowed: assertExpectedCurrent,
-  });
-  const handoffId = admission.createHandoff();
-  try {
-    return await admission.run(
-      async () =>
-        await recoverStore({
+  return (
+    (await runWithMainSessionRecoveryAdmission({
+      ...params,
+      canonicalSessionKey: expected.canonicalSessionKey,
+      sessionId: expected.sessionId,
+      isCurrent: () => Boolean(loadExpected()),
+      run: (recoveryAdmission) =>
+        recoverStore({
           ...params,
+          shouldContinue: recoveryAdmission.shouldContinue,
           handledSessionKeys: new Set<string>(),
-          sessionWorkAdmissionHandoffId: handoffId,
+          recoveryAdmission,
         }),
-    );
-  } finally {
-    cancelSessionWorkAdmissionHandoff(handoffId);
-  }
+    })) ?? { started: 0, settled: 0, failed: 0, skipped: 1 }
+  );
 }
 
 export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(
@@ -284,18 +278,21 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   const startupCheckedStorePaths = params.startupCheckedStorePaths ?? new Set<string>();
   const runRecoveryAttempt = async (
     exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
+    agentIds?: ReadonlySet<string>,
   ): Promise<RecoveryCounts> => {
     return await runWithGatewayIndependentRootWorkAdmission(
       async () => {
         const cfg = params.getConfig();
         const marking = await markStartupOrphanedMainSessionsForRecovery({
           cfg,
+          agentIds,
           stateDir: params.stateDir,
           startupCheckedStorePaths,
           updatedBeforeMs: startupRecoveryCutoffMs,
         });
         const result = await recoverRestartAbortedMainSessions({
           cfg,
+          agentIds,
           onExhaustedTarget: (target) => {
             exhaustedTargets.set(
               JSON.stringify([
@@ -357,7 +354,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     }
   };
   let exhaustedTargets = new Map<string, ExhaustedRestartRecoveryTarget>();
-  const run = Promise.resolve().then(async () => {
+  const runRecovery = async (agentIds?: ReadonlySet<string>) => {
     if (params.waitForStart) {
       await Promise.race([params.waitForStart(), waitForAbortSignal(abortController.signal)]);
     }
@@ -368,7 +365,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       signal: abortController.signal,
       attempt: async (finalAttempt) => {
         exhaustedTargets = new Map();
-        const result = await runRecoveryAttempt(exhaustedTargets);
+        const result = await runRecoveryAttempt(exhaustedTargets, agentIds);
         if (result.failed === 0) {
           return true;
         }
@@ -386,9 +383,49 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         }
       },
     });
-  });
+  };
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: params.stateDir ?? resolveStateDir(process.env),
+  };
+  const pendingAgents = new Set(
+    listAgentDatabaseAdmissionRefusals({ env })
+      .filter((refusal) => refusal.code === "agent-database-inspection-pending")
+      .map((refusal) => refusal.agentId),
+  );
+  let run = Promise.resolve().then(() => runRecovery());
+  const unsubscribe = sessionChanges.subscribe(
+    AsyncLocalStorage.bind((change) => {
+      if (!shouldContinue() || !isSessionStoreTopologyChange(change)) {
+        return;
+      }
+      const admitted = new Set<string>();
+      for (const agentId of pendingAgents) {
+        const refusal = readAgentDatabaseAdmissionRefusal(agentId, { env });
+        if (refusal?.code === "agent-database-inspection-pending") {
+          continue;
+        }
+        pendingAgents.delete(agentId);
+        if (!refusal) {
+          admitted.add(agentId);
+        }
+      }
+      if (pendingAgents.size === 0) {
+        unsubscribe();
+      }
+      if (admitted.size > 0) {
+        // Admission can finish after the first scan. Retain this startup's
+        // cutoff and serial preparation without borrowing the publisher's scope.
+        run = run.then(() => runRecovery(admitted));
+      }
+    }),
+  );
+  if (pendingAgents.size === 0) {
+    unsubscribe();
+  }
   return {
     stop: async () => {
+      unsubscribe();
       // Restart recovery belongs to its startup generation; stale timers must
       // never claim a session after that gateway begins draining.
       abortController.abort();

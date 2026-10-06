@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
 import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
 import {
@@ -18,6 +18,7 @@ import {
   clearPluginLoaderCache,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -100,9 +101,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   clearRuntimeConfigSnapshot();
   clearPluginLoaderCache();
   clearPluginMetadataLifecycleCaches();
+  // Capture retirement still owns its SQLite token beneath the fixture root.
+  await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
   await state?.cleanup();
 });
 
@@ -137,6 +141,8 @@ describe("cron preparation plugin ownership", () => {
   it.each(["gateway", "standalone"] as const)(
     "preserves %s artifact selection through both real preparation loads",
     async (owner) => {
+      // Artifact selection must not depend on how long cold module loading takes.
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       const metadataSnapshot = loadPluginMetadataSnapshot({
         config,
         workspaceDir: state.workspaceDir,

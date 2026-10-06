@@ -1,9 +1,7 @@
-// Whatsapp plugin module prepares inbound text, context, and downloaded media.
 import type { proto, WAMessage, WASocket } from "baileys";
 import {
   formatInboundMediaUnavailableText,
   formatLocationText,
-  type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -68,27 +66,16 @@ function logMediaMaterializationFailure(params: {
   });
 }
 
-export type WhatsAppEnrichedInboundMessage = {
-  body: string;
-  commandBody: string;
-  location?: ReturnType<typeof extractLocationData>;
-  contactContext?: ReturnType<typeof extractContactContext>;
-  externalAdReplyContext?: ReturnType<typeof extractExternalAdReplyContext>;
-  replyContext?: ReturnType<typeof describeReplyContext>;
-  mediaPath?: string;
-  mediaType?: string;
-  mediaFileName?: string;
-  mediaKind?: NonNullable<ReturnType<typeof extractMediaKind>>;
-  nativeMedia?: MediaPlaceholderTextFact;
-  mentionedJids?: string[];
-};
+export type WhatsAppEnrichedInboundMessage = NonNullable<
+  Awaited<ReturnType<typeof enrichWhatsAppInboundMessage>>
+>;
 
 export async function enrichWhatsAppInboundMessage(params: {
   msg: WAMessage;
   sock: WASocket;
   mediaMaxMb?: number;
   logVerbose: (message: string) => void;
-}): Promise<WhatsAppEnrichedInboundMessage | null> {
+}) {
   const { msg, sock } = params;
   const messageProjection = projectWhatsAppInboundMessage(msg.message ?? undefined);
   const location = extractLocationData(messageProjection);

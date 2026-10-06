@@ -29,6 +29,7 @@ private struct OnboardingRecommendedInstallCard: View {
             if let website = OnboardingProviderAuthLink.safeURL(self.install.website) {
                 Link(destination: website) { self.content }
                     .buttonStyle(.plain)
+                    .environment(\.openURL, AppActivation.shared.openURLAction)
             } else {
                 self.content
             }
@@ -311,7 +312,7 @@ struct OnboardingAISetupView: View {
     private func candidateRow(_ candidate: OnboardingAISetupModel.Candidate) -> some View {
         let status = self.model.statuses[candidate.kind] ?? .untried
         let selected = self.model.selectedKind == candidate.kind
-        let presentation = self.model.candidatePresentation[candidate.kind]
+        let presentation = self.model.candidates.first { $0.kind == candidate.kind }
         return VStack(alignment: .leading, spacing: 0) {
             Button {
                 self.model.userSelect(kind: candidate.kind)
@@ -324,6 +325,11 @@ struct OnboardingAISetupView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(candidate.label)
                             .font(.callout.weight(.semibold))
+                        if candidate.modelTarget == .utility {
+                            Text("Setup & utility")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
                         Text(self.subtitle(for: candidate, status: status))
                             .font(.caption)
                             .foregroundStyle(self.subtitleStyle(for: status))
@@ -332,6 +338,11 @@ struct OnboardingAISetupView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 0)
+                    if candidate.modelTarget == .utility, status == .untried {
+                        Text("Use for setup")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
                     self.trailingIndicator(status: status, selected: selected)
                 }
                 // Plain buttons hit-test only opaque label pixels; without this the
@@ -348,7 +359,9 @@ struct OnboardingAISetupView: View {
                     .padding(.top, 6)
             }
         }
-        .openClawSelectableRowChrome(selected: selected && !Self.isFailed(status))
+        .openClawSelectableRowChrome(
+            selected: selected && !Self.isFailed(status),
+            enabled: self.model.canSelectCandidate(kind: candidate.kind))
     }
 
     private func subtitle(
@@ -436,33 +449,16 @@ struct OnboardingAISetupView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(self.model.prepareOptions) { option in
-                    Button {
+                    self.providerChoiceRow(
+                        icon: option.icon,
+                        brandCandidates: [option.brandId, option.id],
+                        label: option.label,
+                        hint: option.hint,
+                        fallbackSymbol: "arrow.down.circle",
+                        actionLabel: Text(option.actionLabel ?? String(localized: "Connect / Set up")))
+                    {
                         self.model.startProviderPrepare(option)
-                    } label: {
-                        HStack(spacing: 10) {
-                            OnboardingProviderArtwork(
-                                icon: option.icon,
-                                brandCandidates: [option.brandId, option.id],
-                                fallbackSymbol: "arrow.down.circle")
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(option.label)
-                                    .font(.callout.weight(.semibold))
-                                if let hint = option.hint, !hint.isEmpty {
-                                    Text(hint)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .multilineTextAlignment(.leading)
-                                }
-                            }
-                            Spacer(minLength: 0)
-                            Text(option.actionLabel ?? String(localized: "Connect / Set up"))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(Color.accentColor)
-                        }
-                        .openClawSelectableRowChrome(selected: false)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(self.model.isBusy)
                 }
             }
             .padding(12)
@@ -574,18 +570,37 @@ struct OnboardingAISetupView: View {
         case "custom": "Configure…"
         default: "Sign in"
         }
-        return Button {
-            self.model.startProviderAuth(option)
-        } label: {
+        return self.providerChoiceRow(
+            icon: option.icon,
+            brandCandidates: [option.brandId, option.id],
+            label: option.label,
+            hint: option.hint,
+            fallbackSymbol: fallbackSymbol,
+            actionLabel: Text(actionLabel))
+        {
+            self.model.startProviderWizard(option, kind: .auth)
+        }
+    }
+
+    private func providerChoiceRow(
+        icon: String?,
+        brandCandidates: [String?],
+        label: String,
+        hint: String?,
+        fallbackSymbol: String,
+        actionLabel: Text,
+        action: @escaping () -> Void) -> some View
+    {
+        Button(action: action) {
             HStack(spacing: 10) {
                 OnboardingProviderArtwork(
-                    icon: option.icon,
-                    brandCandidates: [option.brandId, option.id],
+                    icon: icon,
+                    brandCandidates: brandCandidates,
                     fallbackSymbol: fallbackSymbol)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(option.label)
+                    Text(label)
                         .font(.callout.weight(.semibold))
-                    if let hint = option.hint, !hint.isEmpty {
+                    if let hint, !hint.isEmpty {
                         Text(hint)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -593,7 +608,7 @@ struct OnboardingAISetupView: View {
                     }
                 }
                 Spacer(minLength: 0)
-                Text(actionLabel)
+                actionLabel
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }
@@ -737,7 +752,7 @@ struct OnboardingErrorCard: View {
                     }
                     Button("Open help…") {
                         if let url = URL(string: "https://docs.openclaw.ai/\(docsSlug)") {
-                            NSWorkspace.shared.open(url)
+                            AppActivation.shared.open(url)
                         }
                     }
                     .buttonStyle(.link)

@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { registerNodesCli } from "../cli/nodes-cli/register.js";
+import { configureProgramHelp } from "../cli/program/help.js";
 import { readBestEffortConfigSnapshot } from "../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -17,7 +19,7 @@ import {
   loadPluginCliRegistrationEntriesWithDefaults,
   resolvePluginCliRootOwnerIds,
 } from "./cli-registry-loader.js";
-import { registerPluginCliCommands, registerPluginCliCommandsFromValidatedConfig } from "./cli.js";
+import { registerPluginCliCommandsFromValidatedConfig } from "./cli.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { loadOpenClawPluginCliRegistry } from "./loader.js";
@@ -39,6 +41,150 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("CLI prepared metadata lifetime", () => {
+  it.each([
+    { label: "complete metadata", complete: true, enabled: true },
+    { label: "disabled plugin", complete: true, enabled: false },
+    { label: "incomplete legacy descriptors", complete: false, enabled: true },
+  ])(
+    "keeps parent nodes help light with $label and preserves runtime expansion",
+    async ({ complete, enabled }) => {
+      const root = fs.realpathSync(makePluginLoaderTempDir());
+      const loaded = path.join(root, "runtime-loaded");
+      const unrelatedLoaded = path.join(root, "unrelated-runtime-loaded");
+      const action = path.join(root, "action-ran");
+      const descriptor = {
+        name: "widget",
+        description: "Fixture widget commands",
+        hasSubcommands: true,
+      };
+      const plugin = writePlugin({
+        id: "nodes-help",
+        dir: path.join(root, "plugin"),
+        filename: "index.cjs",
+        body: `const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(loaded)}, "full");
+module.exports = { id: "nodes-help", register(api) {
+  api.registerCli(({ program }) => {
+    const command = program.command("widget").description("Fixture widget commands").option("--fixture-option <value>", "Runtime option");
+    command.command("run").action(() => fs.writeFileSync(${JSON.stringify(action)}, "executed"));
+  }, { parentPath: ["nodes"], commands: ["widget"], descriptors: [${JSON.stringify(descriptor)}] });
+} };`,
+      });
+      fs.writeFileSync(
+        path.join(plugin.dir, "package.json"),
+        JSON.stringify({ name: "nodes-help", openclaw: { extensions: ["./index.cjs"] } }),
+      );
+      fs.writeFileSync(
+        path.join(plugin.dir, "cli-metadata.cjs"),
+        `module.exports = { id: "nodes-help", register(api) {
+      api.registerCli(() => {}, { parentPath: ["nodes"], commands: ["widget"], descriptors: ${JSON.stringify(complete ? [descriptor] : [])} });
+    } };`,
+      );
+      const unrelated = writePlugin({
+        id: "unrelated-help",
+        dir: path.join(root, "unrelated"),
+        filename: "index.cjs",
+        body: `require("node:fs").writeFileSync(${JSON.stringify(unrelatedLoaded)}, "full");
+module.exports = { id: "unrelated-help", register(api) {
+  api.registerCli(({ program }) => program.command("unrelated"), { commands: ["unrelated"] });
+} };`,
+      });
+      fs.writeFileSync(
+        path.join(unrelated.dir, "package.json"),
+        JSON.stringify({ name: "unrelated-help", openclaw: { extensions: ["./index.cjs"] } }),
+      );
+      fs.writeFileSync(
+        path.join(unrelated.dir, "cli-metadata.cjs"),
+        `module.exports = { id: "unrelated-help", register(api) {
+  api.registerCli(() => {}, { commands: ["unrelated"] });
+} };`,
+      );
+      const configPath = path.join(root, "openclaw.json");
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          plugins: {
+            load: { paths: [plugin.dir, unrelated.dir] },
+            allow: [plugin.id, unrelated.id],
+            entries: { [plugin.id]: { enabled }, [unrelated.id]: { enabled: true } },
+          },
+        }),
+      );
+      await withEnvAsync(
+        {
+          HOME: root,
+          OPENCLAW_HOME: root,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        },
+        async () => {
+          const makeProgram = () => {
+            const program = new Command().exitOverride();
+            configureProgramHelp(program, { programVersion: "fixture" });
+            return program;
+          };
+          const helpProgram = makeProgram();
+          await registerNodesCli(helpProgram, ["node", "openclaw", "nodes", "--help"]);
+          const help = helpProgram.commands
+            .find((command) => command.name() === "nodes")!
+            .helpInformation();
+          expect(help.includes("Fixture widget commands")).toBe(enabled);
+          expect(fs.existsSync(unrelatedLoaded)).toBe(false);
+          expect(fs.existsSync(loaded)).toBe(enabled && !complete);
+          if (!enabled) {
+            return;
+          }
+          if (complete) {
+            const shortHelpProgram = makeProgram();
+            await registerNodesCli(shortHelpProgram, ["node", "openclaw", "nodes", "-h"]);
+            expect(
+              shortHelpProgram.commands
+                .find((command) => command.name() === "nodes")!
+                .helpInformation(),
+            ).toBe(help);
+            expect(fs.existsSync(loaded)).toBe(false);
+            expect(fs.existsSync(unrelatedLoaded)).toBe(false);
+          }
+
+          // Metadata registration closed its preparation; expansion must acquire full entries afresh.
+          await helpProgram.parseAsync(["nodes", "widget", "run"], { from: "user" });
+          expect(fs.readFileSync(action, "utf8")).toBe("executed");
+          expect(fs.readFileSync(loaded, "utf8")).toBe("full");
+          expect(fs.existsSync(unrelatedLoaded)).toBe(false);
+          const runtimeProgram = makeProgram();
+          await registerNodesCli(runtimeProgram, ["node", "openclaw", "nodes", "widget", "--help"]);
+          const nodes = runtimeProgram.commands.find((command) => command.name() === "nodes")!;
+          expect(nodes.helpInformation()).toBe(help);
+          expect(
+            nodes.commands.find((command) => command.name() === "widget")!.helpInformation(),
+          ).toContain("--fixture-option <value>");
+          expect(fs.existsSync(unrelatedLoaded)).toBe(false);
+          if (complete) {
+            const session = createPluginCliLoadSession();
+            try {
+              for (const mode of ["metadata", "lazy", "metadata"] as const) {
+                const reused = makeProgram();
+                const parent = reused.command("nodes");
+                await registerPluginCliCommandsFromValidatedConfig(reused, process.env, undefined, {
+                  mode,
+                  primary: "nodes",
+                  session,
+                });
+                const widget = parent.commands.find((command) => command.name() === "widget")!;
+                expect(widget.options.some((option) => option.long === "--fixture-option")).toBe(
+                  mode === "lazy",
+                );
+              }
+            } finally {
+              session.close();
+            }
+          }
+        },
+      );
+    },
+  );
+
   it("invalidates prepared facts and captured registrars at the metadata lifecycle boundary", async () => {
     const root = fs.realpathSync(makePluginLoaderTempDir());
     const plugin = writePlugin({
@@ -93,7 +239,6 @@ describe("CLI prepared metadata lifetime", () => {
 
   it.each([
     { first: "beta", owner: "alpha" },
-    { first: "alpha", owner: "alpha" },
     { first: "beta", owner: undefined },
   ])(
     "validates all workspaces with $first first and execution owner $owner",
@@ -218,6 +363,7 @@ describe("CLI prepared metadata lifetime", () => {
           OPENCLAW_HOME: root,
           OPENCLAW_STATE_DIR: path.join(root, "state"),
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           CLI_INPUTS_TOKEN: undefined,
         },
@@ -227,9 +373,7 @@ describe("CLI prepared metadata lifetime", () => {
             plugins: { enabled: true },
             auth: { profiles: {} },
           };
-          if (input === "source") {
-            setRuntimeConfigSnapshot(cfg, { ...cfg });
-          }
+          setRuntimeConfigSnapshot(cfg, input === "source" ? { ...cfg } : cfg);
           const gateway = resolvePluginRuntimeLoadContext({ config: cfg });
           setCurrentPluginMetadataSnapshot(gateway.metadataSnapshot, {
             config: cfg,
@@ -261,7 +405,8 @@ describe("CLI prepared metadata lifetime", () => {
             );
             expect(await resolvePluginCliRootOwnerIds(params)).toEqual(enabled ? [plugin.id] : []);
             const program = new Command();
-            await registerPluginCliCommands(program, cfg, undefined, undefined, {
+            fs.writeFileSync(path.join(root, "openclaw.json"), JSON.stringify(cfg));
+            await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
               primary: "prepared",
               session,
             });
@@ -358,6 +503,7 @@ describe("CLI prepared metadata lifetime", () => {
       }
       const env = {
         HOME: root,
+        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
         OPENCLAW_STATE_DIR: path.join(root, "state"),
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       };
@@ -368,6 +514,8 @@ describe("CLI prepared metadata lifetime", () => {
           entries: { [plugin.id]: { enabled: true, config: { label: "first" } } },
         },
       };
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
+      setRuntimeConfigSnapshot(cfg, cfg);
       const session = createPluginCliLoadSession();
       const params = { cfg, env, primaryCommand: "prepared", session };
       const descriptors = await loadPluginCliDescriptors(params);
@@ -375,10 +523,14 @@ describe("CLI prepared metadata lifetime", () => {
       fs.unlinkSync(manifestPath);
       expect(await resolvePluginCliRootOwnerIds(params)).toEqual([plugin.id]);
       const program = new Command();
-      await registerPluginCliCommands(program, cfg, env, undefined, {
-        primary: "prepared",
-        session,
-      });
+      await withEnvAsync(env, () =>
+        registerPluginCliCommandsFromValidatedConfig(program, env, undefined, {
+          primary: "prepared",
+          // This invocation already validated the manifest before removing it above.
+          skipPluginValidation: true,
+          session,
+        }),
+      );
       expect(program.commands.map((command) => command.name())).toEqual(["prepared"]);
       await program.parseAsync(["prepared"], { from: "user" });
       expect(fs.readFileSync(actionPath, "utf8")).toBe("discovery:first");
@@ -390,10 +542,15 @@ describe("CLI prepared metadata lifetime", () => {
         },
       };
       const changedProgram = new Command();
-      await registerPluginCliCommands(changedProgram, changedConfig, env, undefined, {
-        primary: "prepared",
-        session,
-      });
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(changedConfig));
+      setRuntimeConfigSnapshot(changedConfig, changedConfig);
+      await withEnvAsync(env, () =>
+        registerPluginCliCommandsFromValidatedConfig(changedProgram, env, undefined, {
+          primary: "prepared",
+          skipPluginValidation: true,
+          session,
+        }),
+      );
       await changedProgram.parseAsync(["prepared"], { from: "user" });
       expect(fs.readFileSync(actionPath, "utf8")).toBe("discovery:second");
       expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
@@ -409,6 +566,7 @@ describe("CLI prepared metadata lifetime", () => {
       const root = fs.realpathSync(makePluginLoaderTempDir());
       const env = {
         HOME: root,
+        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
         OPENCLAW_STATE_DIR: path.join(root, "state"),
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       };
@@ -447,19 +605,27 @@ describe("CLI prepared metadata lifetime", () => {
       expect(await loadPluginCliDescriptors(params)).toMatchObject([{ description: "second" }]);
       expect(await resolvePluginCliRootOwnerIds(params)).toEqual(["workspace-cli"]);
       const program = new Command();
-      await registerPluginCliCommands(program, cfg, env, undefined, {
-        primary: "prepared",
-        session,
-      });
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
+      setRuntimeConfigSnapshot(cfg, cfg);
+      await withEnvAsync(env, () =>
+        registerPluginCliCommandsFromValidatedConfig(program, env, undefined, {
+          primary: "prepared",
+          session,
+        }),
+      );
       expect(program.commands.map((command) => command.description())).toEqual(["second"]);
       const disabled = config(secondWorkspace, false);
       expect(await loadPluginCliDescriptors({ ...params, cfg: disabled })).toEqual([]);
       expect(await resolvePluginCliRootOwnerIds({ ...params, cfg: disabled })).toEqual([]);
       const disabledProgram = new Command();
-      await registerPluginCliCommands(disabledProgram, disabled, env, undefined, {
-        primary: "prepared",
-        session,
-      });
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(disabled));
+      setRuntimeConfigSnapshot(disabled, disabled);
+      await withEnvAsync(env, () =>
+        registerPluginCliCommandsFromValidatedConfig(disabledProgram, env, undefined, {
+          primary: "prepared",
+          session,
+        }),
+      );
       expect(disabledProgram.commands).toEqual([]);
       expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
     },

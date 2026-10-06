@@ -72,6 +72,16 @@ export function readTemplate(
   return row ? rowToRecord(row) : undefined;
 }
 
+export function hasTemplates(env: NodeJS.ProcessEnv): boolean {
+  const db = openTemplateDatabase(env);
+  return (
+    executeSqliteQuerySync(
+      db,
+      kyselyFor(db).selectFrom("worktree_templates").select("cache_key").limit(1),
+    ).rows.length > 0
+  );
+}
+
 export function listTemplates(env: NodeJS.ProcessEnv): WorktreeTemplateRecord[] {
   const db = openTemplateDatabase(env);
   return executeSqliteQuerySync(

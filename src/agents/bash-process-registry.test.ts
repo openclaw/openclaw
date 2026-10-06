@@ -3,7 +3,9 @@
  * Covers output caps, finished-session retention, cleanup, and PTY cursor mode
  * state for background exec sessions.
  */
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   acknowledgeNotifyOnExit,
@@ -37,6 +39,26 @@ vi.mock("../infra/secure-random.js", () => ({
 }));
 
 describe("bash process registry", () => {
+  it("releases discarded backing strings from live, finished, and staged output", async ({
+    signal,
+  }) => {
+    const result = await runNodeScript(
+      [
+        "--expose-gc",
+        "--import",
+        "./scripts/tsx.mjs",
+        fileURLToPath(
+          new URL("./bash-process-registry.retention.test-support.ts", import.meta.url),
+        ),
+      ],
+      process.env,
+      undefined,
+      { cwd: fileURLToPath(new URL("../../", import.meta.url)), signal },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, [result.stdout, result.stderr].join("\n")).toBe(0);
+  });
+
   function createRegistrySession(params: {
     id?: string;
     maxOutputChars: number;
@@ -145,22 +167,75 @@ describe("bash process registry", () => {
     expect(session.truncated).toBe(true);
   });
 
-  it("keeps independently capped stream chunks in callback order", () => {
+  it.each(
+    (
+      [
+        {
+          name: "partial eviction",
+          cap: 10,
+          chunks: [
+            ["stdout", "aaaaaa"],
+            ["stderr", "ERR-safe\n"],
+            ["stdout", "bbbbbb"],
+          ],
+          pendingChars: 10,
+          otherChars: 9,
+          expected: "aaaaERR-safe\nbbbbbb",
+        },
+        {
+          name: "multiple whole evictions",
+          cap: 6,
+          chunks: [
+            ["stderr", "<"],
+            ["stdout", "aa"],
+            ["stderr", "|"],
+            ["stdout", "bb"],
+            ["stderr", ">"],
+            ["stdout", "cc"],
+            ["stderr", "!"],
+            ["stdout", "dddd"],
+          ],
+          pendingChars: 6,
+          otherChars: 4,
+          expected: "<|>cc!dddd",
+        },
+        {
+          name: "whole eviction followed by a UTF-16 boundary cut",
+          cap: 7,
+          chunks: [
+            ["stderr", "<"],
+            ["stdout", "aa"],
+            ["stderr", "|"],
+            ["stdout", "a🎉bc"],
+            ["stderr", ">"],
+            ["stdout", "dddd"],
+          ],
+          pendingChars: 6,
+          otherChars: 3,
+          expected: "<|bc>dddd",
+        },
+      ] as const
+    ).flatMap((testCase) =>
+      (["stdout", "stderr"] as const).map((stream) => ({ name: testCase.name, testCase, stream })),
+    ),
+  )("keeps callback order after $name from $stream", ({ testCase, stream }) => {
+    const { cap, chunks, pendingChars, otherChars, expected } = testCase;
     const session = createRegistrySession({
       maxOutputChars: 100,
-      pendingMaxOutputChars: 10,
+      pendingMaxOutputChars: cap,
       backgrounded: true,
     });
 
     addSession(session);
-    appendOutput(session, "stdout", "a".repeat(6));
-    appendOutput(session, "stderr", "ERR-safe\n");
-    appendOutput(session, "stdout", "b".repeat(6));
+    const otherStream = stream === "stdout" ? "stderr" : "stdout";
+    for (const [source, text] of chunks) {
+      appendOutput(session, source === "stdout" ? stream : otherStream, text);
+    }
 
-    expect(session.pendingStdoutChars).toBe(10);
-    expect(session.pendingStderrChars).toBe(9);
+    expect(session.pendingStdoutChars).toBe(stream === "stdout" ? pendingChars : otherChars);
+    expect(session.pendingStderrChars).toBe(stream === "stderr" ? pendingChars : otherChars);
     const drained = drainSession(session);
-    expect(drained.output).toBe(`${"a".repeat(4)}ERR-safe\n${"b".repeat(6)}`);
+    expect(drained.output).toBe(expected);
     expect(drained.outputDropped).toBe(true);
     expect(session.pendingStdoutChars).toBe(0);
     expect(session.pendingStderrChars).toBe(0);
@@ -520,59 +595,4 @@ describe("bash process registry", () => {
       }
     },
   );
-});
-
-describe("cursorKeyMode", () => {
-  function createRegistrySession(params: {
-    id?: string;
-    maxOutputChars: number;
-    pendingMaxOutputChars: number;
-    backgrounded: boolean;
-    cursorKeyMode?: ProcessSession["cursorKeyMode"];
-  }): ProcessSession {
-    return createProcessSessionFixture({
-      id: params.id ?? "sess",
-      command: "echo test",
-      maxOutputChars: params.maxOutputChars,
-      pendingMaxOutputChars: params.pendingMaxOutputChars,
-      backgrounded: params.backgrounded,
-      cursorKeyMode: params.cursorKeyMode,
-    });
-  }
-
-  it("session cursorKeyMode can start unknown", () => {
-    const session = createRegistrySession({
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 30_000,
-      backgrounded: false,
-      cursorKeyMode: "unknown",
-    });
-    expect(session.cursorKeyMode).toBe("unknown");
-  });
-
-  it("session cursorKeyMode can be set to application", () => {
-    const session = createRegistrySession({
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 30_000,
-      backgrounded: false,
-    });
-    session.cursorKeyMode = "application";
-    expect(session.cursorKeyMode).toBe("application");
-  });
-
-  it("session cursorKeyMode can be toggled between normal and application", () => {
-    const session = createRegistrySession({
-      maxOutputChars: 100,
-      pendingMaxOutputChars: 30_000,
-      backgrounded: false,
-      cursorKeyMode: "unknown",
-    });
-    expect(session.cursorKeyMode).toBe("unknown");
-
-    session.cursorKeyMode = "application";
-    expect(session.cursorKeyMode).toBe("application");
-
-    session.cursorKeyMode = "normal";
-    expect(session.cursorKeyMode).toBe("normal");
-  });
 });

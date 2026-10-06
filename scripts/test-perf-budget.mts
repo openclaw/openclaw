@@ -8,6 +8,7 @@ import {
   stringFlag,
 } from "./lib/arg-utils.mts";
 import { budgetFloatFlag, readBudgetEnvNumber } from "./lib/budget-number-args.mts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import { formatMs } from "./lib/vitest-report-cli-utils.mts";
 import { readJsonFile, runVitestJsonReport } from "./test-report-utils.mts";
@@ -96,22 +97,20 @@ function main() {
       ? opts.baselineWallMs * (1 + (opts.maxRegressionPct ?? 0) / 100)
       : null;
 
-  let failed = false;
+  const violations: string[] = [];
   if (opts.maxWallMs !== null && elapsedMs > opts.maxWallMs) {
-    console.error(
+    violations.push(
       `[test-perf-budget] wall time ${formatMs(elapsedMs)} exceeded max ${formatMs(
         opts.maxWallMs,
       )}.`,
     );
-    failed = true;
   }
   if (allowedByBaseline !== null && elapsedMs > allowedByBaseline) {
-    console.error(
+    violations.push(
       `[test-perf-budget] wall time ${formatMs(elapsedMs)} exceeded baseline budget ${formatMs(
         allowedByBaseline,
       )} (baseline ${formatMs(opts.baselineWallMs ?? 0)}, +${String(opts.maxRegressionPct)}%).`,
     );
-    failed = true;
   }
 
   console.log(
@@ -120,7 +119,11 @@ function main() {
     )} files=${String(reportStats.fileCount)}`,
   );
 
-  if (failed) {
+  if (
+    reportLimitViolations(
+      violations.map((message) => ({ file: opts.config, title: "Test wall-time budget", message })),
+    )
+  ) {
     process.exit(1);
   }
 }

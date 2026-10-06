@@ -1,9 +1,5 @@
-/**
- * nodes built-in tool.
- *
- * Manages node pairing, notifications, device state, media capture, and approved command invocation.
- */
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readConnectPairingRequiredMessage } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,10 +17,10 @@ import {
 } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
-import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { executeNodeCommandAction } from "./nodes-tool-commands.js";
 import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
-import { executeNodeMediaAction, MEDIA_INVOKE_ACTIONS } from "./nodes-tool-media.js";
+import { executeNodeMediaAction } from "./nodes-tool-media.js";
 import { resolveAgentNodeId } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
@@ -58,11 +54,6 @@ const NOTIFICATIONS_ACTIONS = ["open", "dismiss", "reply"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
 const CAMERA_PTZ_OPERATIONS = ["status", "set", "move", "home"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
-type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
-
-function resolveApproveScopes(commands: unknown): OperatorScope[] {
-  return resolveNodePairApprovalScopes(commands) as OperatorScope[];
-}
 
 async function resolveNodePairApproveScopes(
   gatewayOpts: GatewayCallOptions,
@@ -86,7 +77,7 @@ async function resolveNodePairApproveScopes(
       return scopes;
     }
   }
-  return resolveApproveScopes(match?.commands);
+  return resolveNodePairApprovalScopes(match?.commands);
 }
 
 // Flattened schema: runtime validates per-action requirements.
@@ -100,13 +91,11 @@ const NodesToolSchema = Type.Object({
     }),
   ),
   requestId: Type.Optional(Type.String()),
-  // notify
   title: Type.Optional(Type.String()),
   body: Type.Optional(Type.String()),
   sound: Type.Optional(Type.String()),
   priority: optionalStringEnum(NOTIFY_PRIORITIES),
   delivery: optionalStringEnum(NOTIFY_DELIVERIES),
-  // camera_snap / camera_clip / photos_latest / screen_snapshot
   facing: optionalStringEnum(CAMERA_FACING, {
     description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),
@@ -119,7 +108,6 @@ const NodesToolSchema = Type.Object({
         "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
     }),
   ),
-  // camera_ptz
   ptzOperation: optionalStringEnum(CAMERA_PTZ_OPERATIONS, {
     description:
       "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
@@ -140,19 +128,15 @@ const NodesToolSchema = Type.Object({
   duration: Type.Optional(Type.String()),
   durationMs: optionalPositiveIntegerSchema({ maximum: 300_000 }),
   includeAudio: Type.Optional(Type.Boolean()),
-  // screen_record
   fps: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
   screenIndex: optionalNonNegativeIntegerSchema(),
   outPath: Type.Optional(Type.String()),
-  // location_get
   maxAgeMs: optionalNonNegativeIntegerSchema(),
   locationTimeoutMs: optionalPositiveIntegerSchema(),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
-  // notifications_action
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
   notificationKey: Type.Optional(Type.String()),
   notificationReplyText: Type.Optional(Type.String()),
-  // which
   bins: Type.Optional(
     Type.Array(Type.String({ minLength: 1 }), {
       minItems: 1,
@@ -160,7 +144,6 @@ const NodesToolSchema = Type.Object({
       description: "which: executable names to resolve on the selected node.",
     }),
   ),
-  // invoke
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
   invokeTimeoutMs: optionalPositiveIntegerSchema(),
@@ -169,10 +152,6 @@ const NodesToolSchema = Type.Object({
 export function createNodesTool(options?: {
   agentSessionKey?: string;
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string | number;
   config?: OpenClawConfig;
   modelHasVision?: boolean;
   allowMediaInvokeCommands?: boolean;
@@ -288,19 +267,14 @@ export function createNodesTool(options?: {
               gatewayOpts,
               agentSessionKey: options?.agentSessionKey,
               allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
           }
           default:
             throw new Error(`Unknown action: ${action}`);
         }
       } catch (err) {
-        const nodeLabel =
-          typeof params.node === "string" && params.node.trim() ? params.node.trim() : "auto";
-        const gatewayLabel =
-          gatewayOpts.gatewayUrl && gatewayOpts.gatewayUrl.trim()
-            ? gatewayOpts.gatewayUrl.trim()
-            : "default";
+        const nodeLabel = normalizeOptionalString(params.node) ?? "auto";
+        const gatewayLabel = normalizeOptionalString(gatewayOpts.gatewayUrl) ?? "default";
         const agentLabel = agentId ?? "unknown";
         let message = formatErrorMessage(err);
         const pairing =

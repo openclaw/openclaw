@@ -1,6 +1,7 @@
 // Placement-scoped standing grants for dangerous plugin-owned node launches.
 // Grants live only for this Gateway process; the durable parent approval and
 // current placement remain the authorization owners at every use.
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -70,12 +71,8 @@ export type PlacementStandingGrantRuntime = {
 };
 
 function hasExactAttachedSession(value: string, sessionId: string): boolean {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) && parsed.length === 1 && parsed[0] === sessionId;
-  } catch {
-    return false;
-  }
+  const parsed = safeParseJson(value);
+  return Array.isArray(parsed) && parsed.length === 1 && parsed[0] === sessionId;
 }
 
 function isPlacementBindingCurrent(
@@ -248,6 +245,14 @@ export function createPlacementStandingGrantRuntime(params: {
 }): PlacementStandingGrantRuntime {
   const grants = new Map<string, PlacementStandingGrantRecord>();
   const now = params.now ?? Date.now;
+  const resolve = (binding: PlacementStandingGrantMintSpec) =>
+    resolveRetainedGrant({
+      grants,
+      binding,
+      runtimeEpoch: params.runtimeEpoch,
+      nowMs: now(),
+      databaseOptions: params.databaseOptions,
+    });
   return {
     resolveBinding: (input) =>
       resolvePlacementStandingGrantBinding({ ...input, databaseOptions: params.databaseOptions }),
@@ -303,21 +308,7 @@ export function createPlacementStandingGrantRuntime(params: {
         return false;
       }
     },
-    validate: (binding) =>
-      resolveRetainedGrant({
-        grants,
-        binding,
-        runtimeEpoch: params.runtimeEpoch,
-        nowMs: now(),
-        databaseOptions: params.databaseOptions,
-      }),
-    consume: (binding) =>
-      resolveRetainedGrant({
-        grants,
-        binding,
-        runtimeEpoch: params.runtimeEpoch,
-        nowMs: now(),
-        databaseOptions: params.databaseOptions,
-      }),
+    validate: resolve,
+    consume: resolve,
   };
 }

@@ -1,4 +1,3 @@
-// Minimax plugin module implements oauth behavior.
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   MAX_DATE_TIMESTAMP_MS,
@@ -12,7 +11,10 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
-import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
+import {
+  ensureGlobalUndiciEnvProxyDispatcher,
+  sleepWithAbort,
+} from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type MiniMaxRegion = "cn" | "global";
@@ -64,40 +66,17 @@ type MiniMaxOAuthToken = {
   notification_message?: string;
 };
 
-type TokenPending = { status: "pending"; message?: string };
-
 type TokenResult =
   | { status: "success"; token: MiniMaxOAuthToken }
-  | TokenPending
+  | { status: "pending"; message?: string }
   | { status: "error"; message: string };
-
-/**
- * Normalize MiniMax token endpoint `expired_in` values to the auth-profile
- * contract: absolute Unix milliseconds.
- */
-function normalizeOAuthExpires(expiredIn: unknown, now = Date.now()): number | undefined {
-  return resolveExpiresAtMsFromDurationOrEpoch(expiredIn, {
-    nowMs: now,
-    relativeSecondsThreshold: MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD,
-    absoluteMillisecondsThreshold: MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD,
-  });
-}
-
-function normalizeOAuthAuthorizationExpires(expiredIn: unknown): number | undefined {
-  return asSafeIntegerInRange(expiredIn, { min: 1, max: MAX_DATE_TIMESTAMP_MS });
-}
-
-function generatePkce(): { verifier: string; challenge: string; state: string } {
-  const { verifier, challenge } = generatePkceVerifierChallenge();
-  const state = randomBytes(16).toString("base64url");
-  return { verifier, challenge, state };
-}
 
 async function requestOAuthCode(params: {
   challenge: string;
   state: string;
   region: MiniMaxRegion;
   signal?: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<MiniMaxOAuthAuthorization> {
   const endpoints = getOAuthEndpoints(params.region);
   const { response, release } = await fetchWithSsrFGuard({
@@ -119,6 +98,7 @@ async function requestOAuthCode(params: {
       }),
     },
     ...(params.signal ? { signal: params.signal } : {}),
+    beforeRequest: params.assertCurrent,
     timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
     policy: { allowedHostnames: [endpoints.hostname] },
     auditContext: "minimax.oauth.code",
@@ -129,10 +109,10 @@ async function requestOAuthCode(params: {
       throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
     }
 
-    const payload = (await readProviderJsonResponse(
+    const payload = await readProviderJsonResponse<MiniMaxOAuthAuthorization & { error?: string }>(
       response,
       "minimax.oauth-code",
-    )) as MiniMaxOAuthAuthorization & { error?: string };
+    );
     if (!payload.user_code || !payload.verification_uri) {
       throw new Error(
         payload.error ??
@@ -142,7 +122,10 @@ async function requestOAuthCode(params: {
     if (payload.state !== params.state) {
       throw new Error("MiniMax OAuth state mismatch: possible CSRF attack or session corruption.");
     }
-    const expiredIn = normalizeOAuthAuthorizationExpires(payload.expired_in);
+    const expiredIn = asSafeIntegerInRange(payload.expired_in, {
+      min: 1,
+      max: MAX_DATE_TIMESTAMP_MS,
+    });
     if (expiredIn === undefined) {
       throw new Error("MiniMax OAuth authorization returned invalid expired_in.");
     }
@@ -157,6 +140,7 @@ async function pollOAuthToken(params: {
   verifier: string;
   region: MiniMaxRegion;
   signal?: AbortSignal;
+  assertCurrent: () => void;
 }): Promise<TokenResult> {
   const endpoints = getOAuthEndpoints(params.region);
   const { response, release } = await fetchWithSsrFGuard({
@@ -175,6 +159,7 @@ async function pollOAuthToken(params: {
       }),
     },
     ...(params.signal ? { signal: params.signal } : {}),
+    beforeRequest: params.assertCurrent,
     timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
     policy: { allowedHostnames: [endpoints.hostname] },
     auditContext: "minimax.oauth.token",
@@ -192,6 +177,11 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
     | {
         status?: string;
         base_resp?: { status_code?: number; status_msg?: string };
+        access_token?: string | null;
+        refresh_token?: string | null;
+        expired_in?: unknown;
+        resource_url?: string;
+        notification_message?: string;
       }
     | undefined;
   if (text) {
@@ -214,28 +204,22 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
     return { status: "error", message: "MiniMax OAuth failed to parse response." };
   }
 
-  const tokenPayload = payload as {
-    status: string;
-    access_token?: string | null;
-    refresh_token?: string | null;
-    expired_in?: unknown;
-    token_type?: string;
-    resource_url?: string;
-    notification_message?: string;
-  };
-
-  if (tokenPayload.status === "error") {
+  if (payload.status === "error") {
     return { status: "error", message: "An error occurred. Please try again later" };
   }
 
-  if (tokenPayload.status !== "success") {
+  if (payload.status !== "success") {
     return { status: "pending", message: "current user code is not authorized" };
   }
 
-  if (!tokenPayload.access_token || !tokenPayload.refresh_token || !tokenPayload.expired_in) {
+  if (!payload.access_token || !payload.refresh_token || !payload.expired_in) {
     return { status: "error", message: "MiniMax OAuth returned incomplete token payload." };
   }
-  const expires = normalizeOAuthExpires(tokenPayload.expired_in);
+  const expires = resolveExpiresAtMsFromDurationOrEpoch(payload.expired_in, {
+    nowMs: Date.now(),
+    relativeSecondsThreshold: MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD,
+    absoluteMillisecondsThreshold: MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD,
+  });
   if (expires === undefined) {
     return { status: "error", message: "MiniMax OAuth returned invalid token expiry." };
   }
@@ -243,11 +227,11 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
   return {
     status: "success",
     token: {
-      access: tokenPayload.access_token,
-      refresh: tokenPayload.refresh_token,
+      access: payload.access_token,
+      refresh: payload.refresh_token,
       expires,
-      resourceUrl: tokenPayload.resource_url,
-      notification_message: tokenPayload.notification_message,
+      resourceUrl: payload.resource_url,
+      notification_message: payload.notification_message,
     },
   };
 }
@@ -259,18 +243,28 @@ export async function loginMiniMaxPortalOAuth(params: {
   progress: { update: (message: string) => void; stop: (message?: string) => void };
   region?: MiniMaxRegion;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<MiniMaxOAuthToken> {
   // Ensure env-based proxy dispatcher is active before any outbound fetch calls.
   // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
   ensureGlobalUndiciEnvProxyDispatcher();
   const region = params.region ?? "global";
-  const { verifier, challenge, state } = generatePkce();
+  // Channel login authority can be revoked without aborting the signal, so check both
+  // before every request and after every await that can outlive that authority.
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+  };
+  const { verifier, challenge } = generatePkceVerifierChallenge();
+  const state = randomBytes(16).toString("base64url");
   const oauth = await requestOAuthCode({
     challenge,
     state,
     region,
     ...(params.signal ? { signal: params.signal } : {}),
+    assertCurrent,
   });
+  assertCurrent();
   const verificationUrl = oauth.verification_uri;
 
   const noteLines = [
@@ -283,16 +277,18 @@ export async function loginMiniMaxPortalOAuth(params: {
   } catch {
     // Fall back to manual copy/paste if browser open fails.
   }
+  assertCurrent();
   if (params.deviceCode) {
     await params.deviceCode({
       title: "MiniMax OAuth",
       code: oauth.user_code,
       expiresInMinutes: Math.ceil((oauth.expired_in - Date.now()) / 60_000),
-      message: `Open ${verificationUrl} to approve access.`,
+      message: "Enter this one-time code to approve access.",
     });
   } else {
     await params.note(noteLines.join("\n"), "MiniMax OAuth");
   }
+  assertCurrent();
 
   let pollIntervalMs = resolvePositiveTimerTimeoutMs(oauth.interval, 2000);
   // The authorization endpoint returns an absolute millisecond deadline.
@@ -305,7 +301,9 @@ export async function loginMiniMaxPortalOAuth(params: {
       verifier,
       region,
       ...(params.signal ? { signal: params.signal } : {}),
+      assertCurrent,
     });
+    assertCurrent();
 
     if (result.status === "success") {
       return result.token;
@@ -319,32 +317,15 @@ export async function loginMiniMaxPortalOAuth(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await waitForMiniMaxOAuthPoll(Math.min(pollIntervalMs, remainingMs), params.signal);
+    params.signal?.throwIfAborted();
+    await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), params.signal).catch(() => {
+      throw params.signal?.reason instanceof Error
+        ? params.signal.reason
+        : new Error("MiniMax login cancelled");
+    });
+    assertCurrent();
     pollIntervalMs = Math.max(pollIntervalMs, 2000);
   }
 
   throw new Error("MiniMax OAuth timed out before authorization completed.");
-}
-
-async function waitForMiniMaxOAuthPoll(delayMs: number, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-    return;
-  }
-  if (signal.aborted) {
-    throw signal.reason;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timeout);
-      reject(signal.reason instanceof Error ? signal.reason : new Error("MiniMax login cancelled"));
-    };
-    const timeout = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }

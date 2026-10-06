@@ -1,7 +1,7 @@
-// Telegram plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithTimeout, runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -11,7 +11,6 @@ import {
   resolveTelegramTransport,
   type TelegramTransport,
 } from "./fetch.js";
-import { makeProxyFetch } from "./proxy.js";
 
 export type TelegramProbe = BaseProbeResult & {
   status?: number | null;
@@ -133,9 +132,9 @@ export async function probeTelegram(
       const options = resolveProbeOptions(proxyOrOptions);
       const abortSignal = options?.abortSignal;
       const includeWebhookInfo = options?.includeWebhookInfo !== false;
+      const apiBase = resolveTelegramApiBase(options?.apiRoot);
       const transport = resolveProbeTransport(token, options);
       const fetcher = transport.fetch;
-      const apiBase = resolveTelegramApiBase(options?.apiRoot);
       const base = `${apiBase}/bot${token}`;
       const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
       const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());

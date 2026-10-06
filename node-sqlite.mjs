@@ -56,11 +56,16 @@ function isSqliteCapabilities(value) {
   );
 }
 
-async function probeCurrentSqliteInWorker() {
+async function probeCurrentSqlite() {
   let worker;
   try {
-    if (typeof process.getBuiltinModule?.("node:sqlite")?.DatabaseSync !== "function") {
+    const DatabaseSync = process.getBuiltinModule?.("node:sqlite")?.DatabaseSync;
+    if (typeof DatabaseSync !== "function") {
       return unavailableSqliteCapabilities(new Error("node:sqlite is unavailable"));
+    }
+    // Keep the real capability check when Node's permission policy forbids workers.
+    if (!process.versions.bun && process.permission?.has("worker") === false) {
+      return probeSqlite(DatabaseSync);
     }
     const env = Object.fromEntries(
       Object.entries(process.env).filter(([name]) => !/^(NODE_OPTIONS|BUN_OPTIONS)$/i.test(name)),
@@ -126,7 +131,7 @@ async function probeCurrentSqliteInWorker() {
 
 export function detectCurrentSqliteCapabilities() {
   // Publish the Promise before Worker construction can notify another startup caller.
-  globalThis[capabilityCacheKey] ??= Promise.resolve().then(probeCurrentSqliteInWorker);
+  globalThis[capabilityCacheKey] ??= Promise.resolve().then(probeCurrentSqlite);
   return Promise.resolve(globalThis[capabilityCacheKey]);
 }
 
@@ -158,7 +163,7 @@ export function nodeRuntimeFailure(version, probe) {
     return `${label}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix`;
   }
   if (probe.error || !probe.text || !probe.blob || !probe.json) {
-    return `${label}: node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix.`;
+    return `${label}: node:sqlite NUL round-trip capability check failed; use 24.16+/26.1+ or a build with the fix.`;
   }
   if (!probe.version || !isSqliteWalResetSafeVersion(probe.version)) {
     return `${label}: SQLite ${probe.version ?? "unknown"} is not WAL-reset-safe; use SQLite 3.51.3+, 3.50.7+, or 3.44.6+ on its patched release line.`;
@@ -173,7 +178,7 @@ export function nodeRuntimeFailure(version, probe) {
 
 export function nodeRuntimeNote(version, probe) {
   return !nodeRuntimeFailure(version, probe) && !isSupportedOpenClawNodeVersion(version)
-    ? `Node ${version}: unsupported version, capability probe passed. Supported releases: 24.16+/26.1+.`
+    ? `Node ${version}: unsupported version, capability check passed. Supported releases: 24.16+/26.1+.`
     : null;
 }
 

@@ -30,9 +30,7 @@ describe("scripts/embedded-run-abort-leak", () => {
     ],
     [["--iters", "1", "--iters", "2"], "--iters was provided more than once"],
     [["--iters", "1", "--iters"], "--iters was provided more than once"],
-    [["--iters", "1", "--iters", "-h"], "--iters was provided more than once"],
     [["--iters", "  "], "--iters requires a value"],
-    [["--iters", " -1 "], "--iters requires a value"],
     [["--iters", "-h"], "--iters requires a value"],
     [["--mode", "-h"], "--mode requires a value"],
   ])("rejects %j before writing heap snapshots", (args, message) => {

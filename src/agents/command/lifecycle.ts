@@ -8,7 +8,7 @@ import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
 import { getFailoverErrorCode } from "../failover/error.js";
-import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
+import { renderBillingFailureCopy, renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import {
   AGENT_RUN_SUPERSEDED_STOP_REASON,
   resolveAgentRunAbortLifecycleFields,
@@ -23,7 +23,11 @@ const formatLifecycleError = (error: unknown): string => {
   const staleInstall = classifyGatewayStaleInstall(error);
   return staleInstall
     ? staleInstall.error.message
-    : formatErrorMessageForDisplay(error, renderFailoverCodeUserCopy(getFailoverErrorCode(error)));
+    : (renderBillingFailureCopy(error) ??
+        formatErrorMessageForDisplay(
+          error,
+          renderFailoverCodeUserCopy(getFailoverErrorCode(error)),
+        ));
 };
 
 function resolveTerminalLogLevel(
@@ -36,23 +40,6 @@ function resolveTerminalLogLevel(
     return "info";
   }
   return outcome.status === "timeout" ? "warn" : "error";
-}
-
-export function applyAgentRunAbortMetadata<T extends { meta: object }>(
-  result: T,
-  signal: AbortSignal | undefined,
-): T {
-  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
-  if (abortFields.aborted !== true) {
-    return result;
-  }
-  return {
-    ...result,
-    meta: {
-      ...result.meta,
-      ...abortFields,
-    },
-  };
 }
 
 export function createAgentCommandLifecycle(params: {
@@ -70,7 +57,7 @@ export function createAgentCommandLifecycle(params: {
           (payload) => payload.isError === true && typeof payload.text === "string",
         )?.text
       : undefined) ??
-    (runResult.meta.error ? "Agent run failed" : undefined);
+    (runResult.meta.error ? runResult.meta.error.message.trim() || "Agent run failed" : undefined);
   const resolveTerminalError = (
     runResult: AgentAttemptResult,
     fallbackExhausted: boolean,
@@ -81,6 +68,25 @@ export function createAgentCommandLifecycle(params: {
       ? terminal.outcome.error
       : resolveResultError(runResult, fallbackExhausted)) ??
     (fallbackExhausted ? "All model fallback candidates failed" : "Agent run failed");
+  const emitError = (error: unknown, extraData?: Record<string, unknown>) => {
+    if (params.state.lifecycleEnded) {
+      return;
+    }
+    params.state.lifecycleEnded = true;
+    emitAgentEvent({
+      runId: params.runId,
+      lifecycleGeneration: params.lifecycleGeneration(),
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: params.startedAt,
+        endedAt: Date.now(),
+        error: formatLifecycleError(error),
+        ...extraData,
+        executionSettled: true,
+      },
+    });
+  };
   const emitTerminalPhase = (
     phase: "finishing" | "end" | "error",
     terminal: EmbeddedAgentRunEntryTerminal,
@@ -126,25 +132,11 @@ export function createAgentCommandLifecycle(params: {
 
   return {
     emitBasicError(error: unknown, extraData?: Record<string, unknown>) {
-      if (params.state.lifecycleEnded) {
-        return;
-      }
-      params.state.lifecycleEnded = true;
-      emitAgentEvent({
-        runId: params.runId,
-        lifecycleGeneration: params.lifecycleGeneration(),
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          startedAt: params.startedAt,
-          endedAt: Date.now(),
-          error: formatLifecycleError(error),
-          ...(params.state.lifecycleErrorObservation
-            ? { errorObservation: params.state.lifecycleErrorObservation }
-            : {}),
-          ...extraData,
-          executionSettled: true,
-        },
+      emitError(error, {
+        ...(params.state.lifecycleErrorObservation
+          ? { errorObservation: params.state.lifecycleErrorObservation }
+          : {}),
+        ...extraData,
       });
     },
     emitFinishing(terminal: EmbeddedAgentRunEntryTerminal) {
@@ -189,23 +181,12 @@ export function createAgentCommandLifecycle(params: {
       if (params.state.lifecycleEnded) {
         return;
       }
-      params.state.lifecycleEnded = true;
       const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
         terminal.metadata.terminalDelivery,
       );
-      emitAgentEvent({
-        runId: params.runId,
-        lifecycleGeneration: params.lifecycleGeneration(),
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          startedAt: params.startedAt,
-          endedAt: Date.now(),
-          error: formatLifecycleError(error),
-          ...(terminalDelivery ? { terminalDelivery } : {}),
-          ...resolveAgentRunErrorLifecycleFields(error, params.abortSignal),
-          executionSettled: true,
-        },
+      emitError(error, {
+        ...(terminalDelivery ? { terminalDelivery } : {}),
+        ...resolveAgentRunErrorLifecycleFields(error, params.abortSignal),
       });
     },
   };

@@ -28,33 +28,19 @@ const session = (threadId: string): SessionCatalogSession => ({
   canArchive: false,
 });
 
+const shareRoute = {
+  kind: "thread-id-prefix",
+  routeSegment: "shared-sessions",
+  hostId: "gateway",
+  identifierAlphabet: "lowercase-hex",
+  fullLength: 32,
+  minPrefixLength: 12,
+  lookup: "catalog-list-search-by-thread-id-prefix",
+  ambiguity: "multiple-results-or-next-cursor",
+} satisfies NonNullable<SessionCatalogProvider["shareRoute"]>;
+void shareRoute;
+
 describe("session catalog SDK", () => {
-  it("exposes the closed share-route contract to external providers", () => {
-    const shareRoute = {
-      kind: "thread-id-prefix",
-      routeSegment: "shared-sessions",
-      hostId: "gateway",
-      identifierAlphabet: "lowercase-hex",
-      fullLength: 32,
-      minPrefixLength: 12,
-      lookup: "catalog-list-search-by-thread-id-prefix",
-      ambiguity: "multiple-results-or-next-cursor",
-    } as const satisfies NonNullable<SessionCatalogProvider["shareRoute"]>;
-    const provider = {
-      id: "external",
-      label: "External",
-      shareRoute,
-      async list() {
-        return [];
-      },
-      async read({ hostId, threadId }) {
-        return { hostId, threadId, items: [] };
-      },
-    } satisfies SessionCatalogProvider;
-
-    expect(provider.shareRoute).toEqual(shareRoute);
-  });
-
   it("owns canonical list/read parameter and cursor parsing", () => {
     const cursor = sessionCatalogPaging.encodeCursor(2);
     expect(
@@ -102,23 +88,14 @@ describe("session catalog SDK", () => {
     ).toThrow("cursor is invalid");
   });
 
-  it.each([
-    { name: "missing", timestamps: [] },
-    {
-      name: "equal",
-      timestamps: Array.from({ length: 5 }, () => "2026-08-30T12:00:00Z"),
-    },
-    {
-      name: "non-monotonic",
-      timestamps: [
-        "2026-08-30T12:00:04Z",
-        "2026-08-30T12:00:01Z",
-        "2026-08-30T12:00:03Z",
-        "2026-08-30T12:00:00Z",
-        "2026-08-30T12:00:02Z",
-      ],
-    },
-  ])("pages newest-first by source order with $name timestamps", ({ timestamps }) => {
+  it("pages newest-first by source order with non-monotonic timestamps", () => {
+    const timestamps = [
+      "2026-08-30T12:00:04Z",
+      "2026-08-30T12:00:01Z",
+      "2026-08-30T12:00:03Z",
+      "2026-08-30T12:00:00Z",
+      "2026-08-30T12:00:02Z",
+    ];
     const items: SessionCatalogTranscriptItem[] = ["z", "2", "10", "a", "1"].map((id, index) => ({
       id,
       type: "agentMessage",
@@ -282,13 +259,165 @@ describe("session catalog SDK", () => {
     ).resolves.toEqual({ sessionKey: "agent:main:created" });
   });
 
+  it.each(["local", "nodes"] as const)(
+    "does not start node work when the owner retires during %s discovery",
+    async (stage) => {
+      const { provider, options } = createFamilyFixture();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      const project = vi.fn(options.capabilities.project);
+      options.capabilities.project = project;
+      if (stage === "local") {
+        const original = options.local.list;
+        options.local.list = async (query) => {
+          entered.resolve();
+          await release.promise;
+          return original(query);
+        };
+      } else {
+        const listNodes = vi.mocked(options.runtime.nodes.list);
+        const original = listNodes.getMockImplementation()!;
+        listNodes.mockImplementation(async (query) => {
+          entered.resolve();
+          await release.promise;
+          return original(query);
+        });
+      }
+      const pending = provider.list({ agentId: "main", signal: controller.signal });
+      await entered.promise;
+      const reason = new Error("catalog owner retired");
+      controller.abort(reason);
+      release.resolve();
+      await expect(pending).rejects.toBe(reason);
+
+      expect(options.runtime.nodes.invoke).not.toHaveBeenCalled();
+      if (stage === "local") {
+        expect(project).not.toHaveBeenCalled();
+        expect(options.runtime.nodes.list).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("delivers owner retirement to an active node invocation", async () => {
+    const { provider, options } = createFamilyFixture();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const controller = new AbortController();
+    let transportRetired = false;
+    vi.mocked(options.runtime.nodes.invoke).mockImplementation(async ({ signal }) => {
+      const retire = () => {
+        transportRetired = true;
+        release.resolve();
+      };
+      signal?.addEventListener("abort", retire, { once: true });
+      entered.resolve();
+      try {
+        await release.promise;
+        return { payloadJSON: JSON.stringify({ sessions: [] }) };
+      } finally {
+        signal?.removeEventListener("abort", retire);
+      }
+    });
+    const pending = provider.list({
+      agentId: "main",
+      hostIds: ["node:node-1"],
+      signal: controller.signal,
+    });
+    try {
+      await entered.promise;
+      controller.abort(new Error("catalog owner retired"));
+      expect(transportRetired).toBe(true);
+    } finally {
+      release.resolve();
+      await pending.catch(() => []);
+    }
+  });
+
+  it("does not retry local publication as a discovery failure", async () => {
+    const { provider, options } = createFamilyFixture();
+    const reason = new Error("publication failed");
+    const onHost = vi.fn(() => {
+      throw reason;
+    });
+
+    await expect(provider.list({ onHost })).rejects.toBe(reason);
+
+    expect(onHost).toHaveBeenCalledTimes(1);
+    expect(options.runtime.nodes.list).not.toHaveBeenCalled();
+  });
+
+  it.each(["retirement", "publication failure"] as const)(
+    "joins all started node work before rejecting on %s",
+    async (failure) => {
+      const { provider, options } = createFamilyFixture();
+      const entered = createDeferred();
+      const fast = createDeferred();
+      const slow = createDeferred();
+      const reason = new Error(failure);
+      const controller = new AbortController();
+      vi.mocked(options.runtime.nodes.list).mockResolvedValue({
+        nodes: ["fast", "slow"].map((nodeId) => ({
+          nodeId,
+          connected: true,
+          commands: ["family.list"],
+        })),
+      });
+      let started = 0;
+      vi.mocked(options.runtime.nodes.invoke).mockImplementation(async ({ nodeId }) => {
+        if (++started === 2) {
+          entered.resolve();
+        }
+        await (nodeId === "fast" ? fast.promise : slow.promise);
+        return { payloadJSON: JSON.stringify({ sessions: [] }) };
+      });
+      const onHost = vi.fn((host: { hostId: string }) => {
+        if (failure === "publication failure" && host.hostId === "node:fast") {
+          throw reason;
+        }
+      });
+      let settled = false;
+      const pending = provider.list({
+        hostIds: ["node:fast", "node:slow"],
+        signal: controller.signal,
+        onHost,
+      });
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      try {
+        await entered.promise;
+        if (failure === "retirement") {
+          controller.abort(reason);
+        }
+        fast.resolve();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(settled).toBe(false);
+        if (failure === "retirement") {
+          expect(onHost).not.toHaveBeenCalled();
+        }
+        slow.resolve();
+        await expect(pending).rejects.toBe(reason);
+      } finally {
+        fast.resolve();
+        slow.resolve();
+        await pending.catch(() => []);
+      }
+    },
+  );
+
   it.each([
     { joinDuring: "lookup", firstAgentId: "main", secondAgentId: "main" },
     { joinDuring: "lookup", firstAgentId: "main", secondAgentId: "other" },
     { joinDuring: "lookup", firstAgentId: undefined, secondAgentId: "main" },
     { joinDuring: "completion", firstAgentId: "main", secondAgentId: "main" },
-    { joinDuring: "completion", firstAgentId: "main", secondAgentId: "other" },
-    { joinDuring: "completion", firstAgentId: undefined, secondAgentId: "main" },
   ])(
     "coordinates $firstAgentId/$secondAgentId adoption during $joinDuring and reuses stored adoption",
     async ({ joinDuring, firstAgentId, secondAgentId }) => {

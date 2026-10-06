@@ -230,13 +230,13 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>5 areas - 66% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels">
-      <span className="maturity-surface-title">Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels</span>
+    <a className="maturity-surface-link" href="#regional-channel-cohort">
+      <span className="maturity-surface-title">Regional channel cohort</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>4 areas - 58% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat">
-      <span className="maturity-surface-title">Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat</span>
+    <a className="maturity-surface-link" href="#community-channel-cohort">
+      <span className="maturity-surface-title">Community channel cohort</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>4 areas - 54% complete</span></span>
     </a>
 
@@ -1547,7 +1547,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
     <a id="automation-and-durable-work" />
     <a id="automation-cron-hooks-tasks-polling" />
 
-    Cron, hooks, tasks, Task Flow, and durable work surfaces are documented and usable. Scenario proof should cover unattended delivery, recovery, and failure visibility.
+    Cron, event ingress, hooks, background work, heartbeat, and polling surfaces are documented and usable. Scenario proof should cover unattended delivery, recovery, and failure visibility.
 
     <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
@@ -1566,9 +1566,9 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
     <div><p><strong><span>Automation Hooks / Quality</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Automation Hooks / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Automation Hooks / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Background Tasks and Flows / Quality</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Background Tasks and Flows / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Background Tasks and Flows / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Background Work / Quality</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Background Work / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Background Work / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Heartbeat / Quality</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Heartbeat / Completeness</span></strong></p><p>Current value: <span>79</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Heartbeat / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
@@ -1589,7 +1589,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Cron Jobs](/automation/cron-jobs), [Cron](/cli/cron), [Protocol](/gateway/protocol), [Tasks](/automation/tasks), [Discord](/channels/discord)
+    [Cron Jobs](/automation/cron-jobs), [Cron](/cli/cron), [Protocol](/gateway/protocol), [Discord](/channels/discord)
 
     </div>
       </div>
@@ -1623,15 +1623,15 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
-          <span className="maturity-category-title">Background Tasks and Flows</span>
-          <span>14 capabilities</span>
+          <span className="maturity-category-title">Background Work</span>
+          <span>4 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Tasks](/automation/tasks), [Index](/automation/index), [Standing Orders](/automation/standing-orders), [Tasks](/cli/tasks), [Workboard](/cli/workboard), [Taskflow](/automation/taskflow), [Workboard](/plugins/workboard), [Sdk Runtime](/plugins/sdk-runtime), [Progress Card](/tools/progress-card)
+    [Index](/automation/index), [Standing Orders](/automation/standing-orders), [Workboard](/cli/workboard), [Workboard](/plugins/workboard), [Sdk Runtime](/plugins/sdk-runtime), [Progress Card](/tools/progress-card)
 
     </div>
       </div>
@@ -2378,7 +2378,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Resource Helpers</span>
-          <span>6 capabilities</span>
+          <span>5 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>62%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "62%" }} /></span></span></div>
@@ -4995,10 +4995,13 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels - M2 Alpha - 4 areas">
+  <Accordion title="Regional channel cohort - M2 Alpha - 4 areas">
+    <a id="regional-channel-cohort" />
     <a id="feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels" />
 
     Important regional coverage, but public support level should be calibrated per account type, upstream approval, and maintainer proof.
+
+    **Current catalog members:** [Feishu](/channels/feishu), [QQ bot](/channels/qqbot), [WeChat](/channels/wechat), [WeCom](/channels/wecom), [Yuanbao](/channels/yuanbao), [Zalo](/channels/zalo), [Zalo ClawBot](/channels/zaloclawbot), [Zalo personal](/channels/zalouser)
 
     <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 55%</span><span>Completeness Alpha - 58%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
@@ -5084,10 +5087,13 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat - M2 Alpha - 4 areas">
+  <Accordion title="Community channel cohort - M2 Alpha - 4 areas">
+    <a id="community-channel-cohort" />
     <a id="mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat" />
 
     Supported surfaces exist, but maturity likely varies by upstream and maintainer coverage. Score individually later.
+
+    **Current catalog members:** [Buzz](/channels/buzz), [ClickClack](/channels/clickclack), [IRC](/channels/irc), [LINE](/channels/line), [Mattermost](/channels/mattermost), [Nextcloud Talk](/channels/nextcloud-talk), [Nostr](/channels/nostr), [Raft](/channels/raft), [Reef](/channels/reef), [SMS](/channels/sms), [Synology Chat](/channels/synology-chat), [Tlon](/channels/tlon), [Twitch](/channels/twitch)
 
     <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 53%</span><span>Completeness Alpha - 54%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
@@ -5868,9 +5874,9 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
     <div><p><strong><span>Media Routing and Discovery / Quality</span></strong></p><p>Current value: <span>61</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Media Routing and Discovery / Completeness</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Media Routing and Discovery / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Task Lifecycle and Delivery / Quality</span></strong></p><p>Current value: <span>61</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Task Lifecycle and Delivery / Completeness</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
-    <div><p><strong><span>Task Lifecycle and Delivery / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Media Operation Lifecycle and Delivery / Quality</span></strong></p><p>Current value: <span>61</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Media Operation Lifecycle and Delivery / Completeness</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
+    <div><p><strong><span>Media Operation Lifecycle and Delivery / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Image Generation / Quality</span></strong></p><p>Current value: <span>61</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Image Generation / Completeness</span></strong></p><p>Current value: <span>68</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
     <div><p><strong><span>Image Generation / LTS</span></strong></p><p>Current value: <span>false</span></p><div>Recorded decision: <span>Unknown (not recorded)</span></div></div>
@@ -5900,8 +5906,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       </div>
       <div className="maturity-category-row">
         <div className="maturity-category-area">
-          <span className="maturity-category-title">Task Lifecycle and Delivery</span>
-          <span>12 capabilities</span>
+          <span className="maturity-category-title">Media Operation Lifecycle and Delivery</span>
+          <span>11 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>61%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "61%" }} /></span></span></div>

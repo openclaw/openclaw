@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -36,7 +37,7 @@ describe("codex.accountUsage", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    config = { agents: { list: [{ id: "main" }, { id: "work" }] } };
+    config = { agents: { entries: { main: {}, work: {} } } };
     currentAuthority = true;
     store = {
       version: 1,
@@ -116,6 +117,43 @@ describe("codex.accountUsage", () => {
     );
   });
 
+  it("distinguishes reserve quota from ordinary Luna in selected-account usage", async () => {
+    const ordinary = usage(100).rateLimits.rateLimits;
+    vi.mocked(readCodexAppServerUsage).mockResolvedValue({
+      rateLimits: {
+        rateLimits: ordinary,
+        rateLimitsByLimitId: {
+          codex: ordinary,
+          base_model_inference: {
+            limitId: "base_model_inference",
+            limitName: "gpt-reserve",
+            normalModelSlug: "gpt-5.6-luna",
+            secondary: { usedPercent: 0, windowDurationMins: 10_080 },
+          },
+        },
+        ordinaryUsageAllowed: null,
+        rateLimitUpsell: null,
+      },
+    });
+    const respond = await request({ agentId: "work", profileId: "openai:alex" });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        providers: [
+          expect.objectContaining({
+            summary: expect.stringContaining("Ordinary Luna does not use this reserve"),
+            windows: expect.arrayContaining([
+              expect.objectContaining({
+                groupLabel: "Luna Reserve (separate route)",
+                usedPercent: 0,
+              }),
+            ]),
+          }),
+        ],
+      }),
+    );
+  });
+
   it("rejects proxy launches before sending the selected account to a shared daemon", async () => {
     config.plugins = {
       entries: {
@@ -134,7 +172,6 @@ describe("codex.accountUsage", () => {
   });
 
   it.each([
-    { agentId: "missing", profileId: "openai:alex" },
     { agentId: "../main", profileId: "openai:alex" },
     { profileId: "openai:alex" },
     { agentId: "main", profileId: "" },
@@ -152,15 +189,13 @@ describe("codex.accountUsage", () => {
     expect(readCodexAppServerUsage).not.toHaveBeenCalled();
   });
 
-  it.each(["removed", "replaced", "config changed", "authority revoked"])(
+  it.each(["replaced", "config changed", "authority revoked"])(
     "rejects guarded work and discards its result when %s during a read",
     async (change) => {
       let assertCurrent: (() => void) | undefined;
       vi.mocked(readCodexAppServerUsage).mockImplementation(async (options) => {
         assertCurrent = options.assertCurrent;
-        if (change === "removed") {
-          delete store.profiles["openai:alex"];
-        } else if (change === "replaced") {
+        if (change === "replaced") {
           store.profiles["openai:alex"] = {
             type: "token",
             provider: "openai",

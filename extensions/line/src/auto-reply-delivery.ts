@@ -1,4 +1,3 @@
-// Line plugin module implements auto reply delivery behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -9,11 +8,12 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { chunkMarkdownText, type ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { FlexContainer } from "./flex-templates/types.js";
-import type { ProcessedLineMessage } from "./markdown-to-line.js";
+import { processLineMessage } from "./markdown-to-line.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import {
   applyLineQuoteToken,
@@ -27,38 +27,14 @@ import {
   findLineHttpError,
   resolveLineNonDispatchRetryable,
 } from "./send-retry.js";
-import type { LineChannelData, LineQuickReplyItem, LineTemplateMessagePayload } from "./types.js";
-
-type LineAutoReplyDeps = {
-  buildTemplateMessageFromPayload: (
-    payload: LineTemplateMessagePayload,
-  ) => messagingApi.TemplateMessage | messagingApi.TextMessage | null;
-  processLineMessage: (text: string) => ProcessedLineMessage;
-  chunkMarkdownText: (text: string, limit: number) => string[];
-  pushMessagesLine: (
-    to: string,
-    messages: messagingApi.Message[],
-    opts: { cfg: OpenClawConfig; accountId?: string },
-  ) => Promise<unknown>;
-  createFlexMessage: (altText: string, contents: FlexContainer) => messagingApi.FlexMessage;
-  buildMediaMessage: (
-    mediaUrl: string,
-    opts: Pick<LineChannelData, "mediaKind" | "previewImageUrl" | "durationMs" | "trackingId">,
-    target: string,
-  ) => Promise<messagingApi.Message>;
-  createLocationMessage: (location: {
-    title: string;
-    address: string;
-    latitude: number;
-    longitude: number;
-  }) => messagingApi.LocationMessage | messagingApi.TextMessage;
-  replyMessageLine: (
-    replyToken: string,
-    messages: messagingApi.Message[],
-    opts: { cfg: OpenClawConfig; accountId?: string },
-  ) => Promise<unknown>;
-  onReplyError?: (err: unknown) => void;
-};
+import {
+  createFlexMessage,
+  createLocationMessage,
+  pushMessagesLine,
+  replyMessageLine,
+} from "./send.js";
+import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import type { LineChannelData, LineQuickReplyItem } from "./types.js";
 
 type LineAutoReplyDeliveryResult =
   | { status: "delivered"; replyTokenUsed: boolean; visibleReplySent: boolean }
@@ -124,9 +100,9 @@ export async function deliverLineAutoReply(params: {
   accountId?: string;
   cfg: OpenClawConfig;
   textLimit: number;
-  deps: LineAutoReplyDeps;
+  onReplyError?: (err: unknown) => void;
 }): Promise<LineAutoReplyDeliveryResult> {
-  const { payload, lineData, replyToken, accountId, to, textLimit, deps } = params;
+  const { payload, lineData, replyToken, accountId, to, textLimit } = params;
   let replyTokenUsed = params.replyTokenUsed;
   let visibleReplySent = false;
 
@@ -145,8 +121,8 @@ export async function deliverLineAutoReply(params: {
       throw error;
     }
   };
-  const replyVisible: LineAutoReplyDeps["replyMessageLine"] = (...args) =>
-    sendVisible(() => deps.replyMessageLine(...args));
+  const replyVisible: typeof replyMessageLine = (...args) =>
+    sendVisible(() => replyMessageLine(...args));
   const failedPushSegments = new WeakMap<
     object,
     {
@@ -167,7 +143,7 @@ export async function deliverLineAutoReply(params: {
       const batch = messages.slice(i, i + 5);
       try {
         await sendVisible(() =>
-          deps.pushMessagesLine(to, batch, {
+          pushMessagesLine(to, batch, {
             cfg: params.cfg,
             accountId,
           }),
@@ -206,7 +182,7 @@ export async function deliverLineAutoReply(params: {
         if (isChannelPartialDeliveryError(err) || !canFallbackAfterLineReplyFailure(err)) {
           throw err;
         }
-        deps.onReplyError?.(err);
+        params.onReplyError?.(err);
         // Only a definitive LINE 400 makes text recovery after a rejected push safe.
         await pushLineMessages(
           replyBatch,
@@ -238,7 +214,7 @@ export async function deliverLineAutoReply(params: {
 
   if (lineData.flexMessage) {
     richMessages.push(
-      deps.createFlexMessage(
+      createFlexMessage(
         lineData.flexMessage.altText,
         lineData.flexMessage.contents as FlexContainer,
       ),
@@ -246,50 +222,37 @@ export async function deliverLineAutoReply(params: {
   }
 
   if (lineData.templateMessage) {
-    const templateMsg = deps.buildTemplateMessageFromPayload(lineData.templateMessage);
+    const templateMsg = buildTemplateMessageFromPayload(lineData.templateMessage);
     if (templateMsg) {
       richMessages.push(templateMsg);
     }
   }
 
   if (lineData.location) {
-    richMessages.push(deps.createLocationMessage(lineData.location));
+    richMessages.push(createLocationMessage(lineData.location));
   }
 
   // Inbound auto-replies bypass the channel outbound adapter, so enforce the
   // same assistant-visible boundary here before Markdown can create LINE UI.
   const visibleText = payload.text ? sanitizeAssistantVisibleText(payload.text) : "";
-  const processed = visibleText
-    ? deps.processLineMessage(visibleText)
-    : { text: "", flexMessages: [] };
+  const processed = visibleText ? processLineMessage(visibleText) : [];
 
-  if (!processed.segments) {
-    for (const flexMsg of processed.flexMessages) {
-      richMessages.push(deps.createFlexMessage(flexMsg.altText, flexMsg.contents));
-    }
-  }
-
-  const orderedMessages = processed.segments?.flatMap<
-    messagingApi.FlexMessage | messagingApi.TextMessage
-  >((segment) =>
-    segment.type === "flex"
-      ? [deps.createFlexMessage(segment.message.altText, segment.message.contents)]
-      : deps
-          .chunkMarkdownText(segment.text, textLimit)
-          .map((text) => ({ type: "text" as const, text })),
+  const markdownMessages = processed.flatMap<messagingApi.FlexMessage | messagingApi.TextMessage>(
+    (segment) =>
+      segment.type === "flex"
+        ? [createFlexMessage(segment.message.altText, segment.message.contents)]
+        : chunkMarkdownText(segment.text, textLimit).map((text) => ({
+            type: "text" as const,
+            text,
+          })),
   );
-  const chunks = orderedMessages
-    ? orderedMessages.flatMap((message) => (message.type === "text" ? [message.text] : []))
-    : processed.text
-      ? deps.chunkMarkdownText(processed.text, textLimit)
-      : [];
 
   // Match the push path (outbound.ts): hand the LINE media options to the same
   // leaf so a reply-token video/audio is not downgraded to an image. A media
   // build failure is partial only after another visible part lands; media-only
   // failures remain full failures.
   const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
-  const mediaOpts: Parameters<LineAutoReplyDeps["buildMediaMessage"]>[1] = {
+  const mediaOpts: Parameters<typeof buildLineMediaMessage>[1] = {
     mediaKind: lineData.mediaKind,
     previewImageUrl: lineData.previewImageUrl,
     durationMs: lineData.durationMs,
@@ -297,26 +260,21 @@ export async function deliverLineAutoReply(params: {
   };
   const mediaMessages: messagingApi.Message[] = [];
   let deliveryError: unknown;
-  for (const rawUrl of mediaUrls) {
-    const url = rawUrl?.trim();
-    if (!url) {
-      continue;
-    }
+  for (const url of mediaUrls) {
     try {
-      mediaMessages.push(await deps.buildMediaMessage(url, mediaOpts, to));
+      mediaMessages.push(await buildLineMediaMessage(url, mediaOpts, to));
     } catch (err) {
       deliveryError ??= err;
     }
   }
 
-  const textMessages: messagingApi.Message[] = chunks.map((text) => ({ type: "text", text }));
-  // Rich-only Markdown stays on the inline media path so its final media
-  // message, not an earlier Flex card, owns the visible quick replies.
-  const orderedDeliveryMessages =
-    hasQuickReplies && chunks.length === 0 ? undefined : orderedMessages;
+  // Rich-only Markdown stays beside media so the final media message owns quick replies.
+  const inlineMarkdown =
+    hasQuickReplies && !markdownMessages.some((message) => message.type === "text");
+  const textMessages: messagingApi.Message[] = inlineMarkdown ? [] : markdownMessages;
   const richMediaMessages = [
     ...richMessages,
-    ...(orderedDeliveryMessages ? [] : (orderedMessages ?? [])),
+    ...(inlineMarkdown ? markdownMessages : []),
     ...mediaMessages,
   ];
   if (hasQuickReplies && textMessages.length === 0 && richMediaMessages.length === 0) {
@@ -326,11 +284,7 @@ export async function deliverLineAutoReply(params: {
     });
   }
   if (hasQuickReplies) {
-    const targetMessages = orderedDeliveryMessages?.length
-      ? orderedDeliveryMessages
-      : textMessages.length > 0
-        ? textMessages
-        : richMediaMessages;
+    const targetMessages = textMessages.length > 0 ? textMessages : richMediaMessages;
     const lastIndex = targetMessages.length - 1;
     const target = expectDefined(targetMessages[lastIndex], "last LINE auto-reply message");
     targetMessages[lastIndex] = {
@@ -342,8 +296,8 @@ export async function deliverLineAutoReply(params: {
   // Quick replies disappear when a newer message arrives, so rich/media parts
   // lead and the action-bearing text remains final across reply/push batches.
   const ordered = hasQuickReplies
-    ? [...richMediaMessages, ...(orderedDeliveryMessages ?? textMessages)]
-    : [...(orderedDeliveryMessages ?? textMessages), ...richMediaMessages];
+    ? [...richMediaMessages, ...textMessages]
+    : [...textMessages, ...richMediaMessages];
   // The token rides on the message rather than on a request so it survives the
   // reply-token batch splitting into pushes and the reply-to-push fallback.
   const replyQuoteToken = resolveLineQuoteToken({

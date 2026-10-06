@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -9,9 +10,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  isPublicSessionShareActive,
-  readPublicSessionShare,
+  isPublicSessionShareActive as readActive,
+  readPublicSessionShare as readShare,
 } from "./control-ui-public-session-read.js";
+import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import * as transcriptReaders from "./session-transcript-readers.js";
 
 afterEach(() => {
@@ -26,6 +28,34 @@ const locator = {
   sessionId: "public-history-generation",
   shareId: "a".repeat(48),
 };
+
+let projection: SessionRowProjection | undefined;
+function currentProjection() {
+  if (!projection) {
+    throw new Error("Public reader fixture is not prepared");
+  }
+  return projection;
+}
+function readPublicSessionShare(
+  config: OpenClawConfig,
+  target: typeof locator,
+  options: { offset?: number } = {},
+) {
+  return readShare(config, target, { ...options, projection: currentProjection() });
+}
+function isPublicSessionShareActive(config: OpenClawConfig, target: typeof locator) {
+  return readActive(config, target, currentProjection());
+}
+async function withPublicTestState(run: () => Promise<void>) {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    try {
+      await run();
+    } finally {
+      projection?.dispose();
+      projection = undefined;
+    }
+  });
+}
 
 async function seed(messages: string[], target = locator) {
   await upsertSessionEntryCore(target, {
@@ -43,11 +73,29 @@ async function seed(messages: string[], target = locator) {
       message: { role: "user", content },
     })),
   ]);
+  projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+  await projection.ensureMaterialized();
 }
 
 describe("anonymous published session reader", () => {
+  it("checks twenty warm publication readers without Gateway-thread SQLite", async () => {
+    await withPublicTestState(async () => {
+      await seed(["Public text"]);
+      expect(await readPublicSessionShare(cfg, locator)).not.toBeNull();
+      const sql = observeHostDataSql();
+      try {
+        for (let viewer = 0; viewer < 20; viewer++) {
+          expect(isPublicSessionShareActive(cfg, locator)).toBe(true);
+        }
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    });
+  });
+
   it("pages exact published history using source positions rather than rendered counts", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withPublicTestState(async () => {
       await seed(Array.from({ length: 205 }, (_, index) => `Message ${index}`));
       const latest = await readPublicSessionShare(cfg, locator);
       expect(latest).toMatchObject({
@@ -68,7 +116,7 @@ describe("anonymous published session reader", () => {
   });
 
   it("enforces the byte bound and advances past oversized source rows without losing older messages", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withPublicTestState(async () => {
       await seed(["Oldest", "x".repeat(1024 * 1024 + 1), "Newest"]);
       const latest = await readPublicSessionShare(cfg, locator);
       expect(latest?.messages).toMatchObject([{ content: "Newest" }]);
@@ -82,7 +130,7 @@ describe("anonymous published session reader", () => {
   });
 
   it("rejects private, unknown-agent, mismatched-instance and mismatched-grant requests", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withPublicTestState(async () => {
       await seed(["Published"]);
       expect(isPublicSessionShareActive(cfg, locator)).toBe(true);
       for (const target of [
@@ -105,7 +153,7 @@ describe("anonymous published session reader", () => {
   it.each(["revoke", "reset"] as const)(
     "rechecks %s after awaited history before releasing content",
     async (action) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withPublicTestState(async () => {
         await seed(["Must not escape after closure"]);
         const read = transcriptReaders.readSessionMessagesPageWithStatsAsync;
         vi.spyOn(transcriptReaders, "readSessionMessagesPageWithStatsAsync").mockImplementationOnce(
@@ -124,7 +172,7 @@ describe("anonymous published session reader", () => {
   );
 
   it("reads the exact global node in its configured store without resolving aliases", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withPublicTestState(async () => {
       const global = { ...locator, sessionKey: "global" };
       await seed(["Global publication"], global);
       expect((await readPublicSessionShare(cfg, global))?.messages).toMatchObject([

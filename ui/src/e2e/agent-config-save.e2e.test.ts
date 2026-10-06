@@ -1,7 +1,7 @@
 // Control UI E2E proves per-agent config writes use the canonical keyed shape.
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, expect, it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
@@ -31,7 +31,7 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
-        const config = { agents: { entries: { main: { default: true } } } };
+        const config = { agents: { entries: { main: {} } } };
         const gateway = await installMockGateway(page, {
           assistantName: "Main agent",
           defaultAgentId: "main",
@@ -63,6 +63,10 @@ suite.define(() => {
         await gateway.waitForRequest("agents.list");
         await gateway.waitForRequest("config.get");
         const agentsPage = page.locator("openclaw-agents-page");
+        const primary = agentsPage.locator(
+          'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
+        );
+        const decision = agentsPage.locator("openclaw-select-picker:has(#agent-decision-model)");
         const reload = agentsPage.getByRole("button", { name: "Reload Config" });
         await reload.waitFor();
         if (captureUiProof) {
@@ -81,11 +85,7 @@ suite.define(() => {
           .filter({ hasText: "Agent configuration unavailable" });
         await expect.poll(() => error.isVisible()).toBe(true);
         await expect
-          .poll(() =>
-            agentsPage
-              .locator(".model-picker__select .picker-select__trigger")
-              .getAttribute("disabled"),
-          )
+          .poll(() => primary.locator(".picker-select__trigger").getAttribute("disabled"))
           .not.toBeNull();
 
         await gateway.setMethodResponse("config.get", {
@@ -102,14 +102,10 @@ suite.define(() => {
         await gateway.waitForRequest("config.get", { after: readsBefore });
         await expect.poll(() => error.count()).toBe(0);
         await expect
-          .poll(() =>
-            agentsPage
-              .locator(".model-picker__select .picker-select__trigger")
-              .getAttribute("disabled"),
-          )
+          .poll(() => primary.locator(".picker-select__trigger").getAttribute("disabled"))
           .toBeNull();
 
-        const primary = agentsPage.locator("openclaw-select-picker.model-picker__select");
+        expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
         const indicator = page.locator("openclaw-settings-save-indicator");
         const writesBeforeReconnect = (await gateway.getRequests("config.set")).length;
         await gateway.deferNext("config.set");
@@ -120,7 +116,7 @@ suite.define(() => {
         const interruptedParams = requireRecord(interrupted.params);
         expect(interruptedParams.baseHash).toBe("recovered-agent-config");
         expect(JSON.parse(String(interruptedParams.raw))).toEqual({
-          agents: { entries: { main: { default: true, model: "openai/reconnect-draft" } } },
+          agents: { entries: { main: { model: "openai/reconnect-draft" } } },
         });
 
         // An unacknowledged save keeps the draft dirty without racing the debounce.
@@ -133,9 +129,13 @@ suite.define(() => {
         await gateway.waitForRequest("config.get", { after: readsBeforeReconnect });
         await expect.poll(() => primary.locator(".picker-select__trigger").isEnabled()).toBe(true);
         await expect.poll(() => pickerValue(primary)).toBe("openai/reconnect-draft");
-        await expect
-          .poll(() => indicator.textContent())
-          .toContain("Autosave paused after reconnect");
+        await expect.poll(() => indicator.textContent()).toContain("Save failed");
+        expect(await indicator.getByRole("status").getAttribute("aria-label")).toContain(
+          "The last configuration change could not be confirmed",
+        );
+        expect(
+          await indicator.getByRole("button", { name: "Retry", exact: true }).isEnabled(),
+        ).toBe(true);
         expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeReconnect + 1);
 
         await gateway.setMethodResponse("config.get", {
@@ -152,9 +152,7 @@ suite.define(() => {
         await gateway.waitForRequest("config.get", { after: readsBeforeDiscard });
         await expect.poll(() => pickerValue(primary)).toBe("");
         await expect.poll(() => primary.locator(".picker-select__trigger").isEnabled()).toBe(true);
-        await expect
-          .poll(() => indicator.textContent())
-          .not.toContain("Autosave paused after reconnect");
+        await expect.poll(() => indicator.textContent()).not.toContain("Save failed");
 
         const writesBeforeFreshEdit = (await gateway.getRequests("config.set")).length;
         expect(writesBeforeFreshEdit).toBe(writesBeforeReconnect + 1);
@@ -166,7 +164,7 @@ suite.define(() => {
           });
           const params = requireRecord(saved.params);
           const savedConfig = {
-            agents: { entries: { main: { default: true, model: "openai/after-reload" } } },
+            agents: { entries: { main: { model: "openai/after-reload" } } },
           };
           expect(params.baseHash).toBe("reloaded-agent-config");
           expect(JSON.parse(String(params.raw))).toEqual(savedConfig);
@@ -177,6 +175,7 @@ suite.define(() => {
             hash: "saved-agent-config",
           });
           await expect.poll(() => pickerValue(primary)).toBe("openai/after-reload");
+          expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
           await expect.poll(() => indicator.textContent()).toContain("Saved");
         } finally {
           if (captureUiProof) {
@@ -221,7 +220,6 @@ suite.define(() => {
         agents: {
           entries: {
             main: {
-              default: true,
               tools: scenario.tools,
             },
           },
@@ -302,7 +300,6 @@ suite.define(() => {
         agents: {
           entries: {
             main: {
-              default: true,
               tools: scenario.expectedTools,
             },
           },
@@ -332,7 +329,7 @@ suite.define(() => {
       const config = {
         agents: {
           defaults: { skills: ["github"] },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       };
       const skill = (name: string, blockedByAgentFilter: boolean) => ({
@@ -398,7 +395,7 @@ suite.define(() => {
       expect(JSON.parse(String(params.raw))).toEqual({
         agents: {
           defaults: { skills: ["github"] },
-          entries: { main: { default: true, skills: [] } },
+          entries: { main: { skills: [] } },
         },
       });
       expect(params.baseHash).toBe("agent-config-hash-1");

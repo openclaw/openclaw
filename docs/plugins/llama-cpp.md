@@ -128,6 +128,17 @@ managed server and the configured embedding model after explicit consent. It
 does not add a llama.cpp chat model or change the current chat model. Setup discovery remains
 read-only and never installs or downloads anything.
 
+If no recommended chat model fits your memory budget, enable local memory
+search and retry setup to get the embedding-only offer (about 0.3 GB for the
+default embedding model):
+
+```bash
+openclaw config set memory.search.provider local
+openclaw models auth login --provider llama-cpp --method local
+```
+
+If you use `--profile`, use the same profile for both commands.
+
 If the llama.cpp provider has any configured chat models, embedding-only setup
 leaves it unchanged. Move any chat routes to another provider and remove those
 model entries before retrying. An existing external llama.cpp server config
@@ -183,6 +194,10 @@ manager, or machine owns the process.
     endpoint. Enable API-key authentication only when the server or proxy
     requires it.
 
+    The URL prompt accepts HTTP or HTTPS endpoints and host shorthand such as
+    `localhost:8080`. Invalid URLs and embedded credentials are rejected inline
+    so you can correct the endpoint without restarting setup.
+
   </Step>
   <Step title="Select the model">
     ```bash
@@ -193,9 +208,13 @@ manager, or machine owns the process.
 </Steps>
 
 OpenClaw reads `/health`, `/models` (falling back to `/v1/models`), and
-`/props`. Router property probes use `autoload=false`. Discovery never loads,
-wakes, unloads, downloads, or reloads models. Explicit configured model rows
-remain authoritative over discovered rows with the same ID.
+`/props`. Router property checks use `autoload=false`. Discovery never loads,
+wakes, unloads, downloads, or reloads models.
+
+For discovered models, OpenClaw advertises reasoning and effort controls only
+when `/props` sets `chat_template_caps.supports_reasoning_effort` to `true`.
+Missing or false values leave those capabilities unadvertised. Explicit
+configured model rows remain authoritative over discovered rows with the same ID.
 
 Refreshing a configured external server reports authentication rejection or
 unavailability when discovery fails. Previously discovered models remain visible
@@ -267,8 +286,9 @@ declarations](/gateway/config-tools#custom-provider-capability-declarations).
 
 Both ownership choices use OpenClaw's normal chat, image, streaming, and tool
 transport. The llama.cpp compatibility family cleans unsupported tool-schema
-constraints, maps thinking-off requests to the Qwen chat-template flag, and
-adapts JSON Schema requests for older llama-server builds.
+constraints. Agent turns and standalone completions also map thinking-off
+requests to the server's chat-template flag and adapt JSON Schema requests
+for older llama-server builds.
 
 Local memory embeddings require managed mode:
 

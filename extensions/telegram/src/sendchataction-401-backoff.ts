@@ -1,4 +1,3 @@
-// Telegram plugin module implements sendchataction 401 and transient backoff behavior.
 import { GrammyError, type Bot, type Transformer } from "grammy";
 import {
   computeBackoff,
@@ -7,27 +6,11 @@ import {
   type BackoffPolicy,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  isRecoverableTelegramNetworkError,
-  isTelegramRateLimitError,
-  isTelegramServerError,
-  readTelegramRetryAfterMs,
-} from "./network-errors.js";
+import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "./network-errors.js";
 
 type TelegramSendChatActionLogger = (message: string) => void;
 
-type ChatAction =
-  | "typing"
-  | "upload_photo"
-  | "record_video"
-  | "upload_video"
-  | "record_voice"
-  | "upload_voice"
-  | "upload_document"
-  | "find_location"
-  | "record_video_note"
-  | "upload_video_note"
-  | "choose_sticker";
+type ChatAction = Parameters<Bot["api"]["sendChatAction"]>[1];
 
 type TelegramSendChatActionParams = Parameters<Bot["api"]["sendChatAction"]>[2];
 
@@ -72,23 +55,15 @@ function is401Error(error: unknown): boolean {
     typeof error === "object" &&
     error !== null &&
     "error_code" in error &&
-    typeof (error as { error_code: unknown }).error_code === "number"
+    typeof error.error_code === "number"
   ) {
-    return (error as { error_code: number }).error_code === 401;
+    return error.error_code === 401;
   }
   // Fallback for non-Telegram errors without a structured error_code:
   // match "unauthorized" case-insensitively, but do NOT use bare "401"
   // substring matching — that was the root cause of #94787.
   const message = error instanceof Error ? error.message : JSON.stringify(error);
   return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
-}
-
-function isTransientSendChatActionError(error: unknown): boolean {
-  return (
-    isTelegramRateLimitError(error) ||
-    isTelegramServerError(error) ||
-    isRecoverableTelegramNetworkError(error, { context: "action" })
-  );
 }
 
 function resolveTransientCooldownMs(error: unknown, attempt: number): number {
@@ -262,7 +237,7 @@ export function createTelegramSendChatActionHandler({
               `Retrying with exponential backoff.`,
           );
         }
-      } else if (isTransientSendChatActionError(error)) {
+      } else if (isRetryableTelegramApiError(error, { context: "action" })) {
         failureVersion++;
         consecutiveTransientFailures++;
         const cooldownMs = resolveTransientCooldownMs(error, consecutiveTransientFailures);

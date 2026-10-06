@@ -32,7 +32,7 @@ function visibleTab(element: HTMLElement): "overview" | "memories" | "dreams" | 
   if (!panel) {
     return null;
   }
-  if (panel.querySelector("openclaw-memory-dreaming")) {
+  if (panel.querySelector("openclaw-agent-memory-panel")) {
     return "dreams";
   }
   if (panel.querySelector("openclaw-memory-memories")) {
@@ -633,6 +633,26 @@ describe("MemorySettingsPage tab routing", () => {
       element.routeData = memoryTabRoute("dreams");
       await element.updateComplete;
       expect(visibleTab(element)).toBe("dreams");
+      expect(element.querySelector("openclaw-agent-select")).toBeNull();
+      expect(element.textContent).not.toContain("Dreaming frequency");
+    } finally {
+      element.remove();
+    }
+  });
+
+  it("keeps Dreams empty when no configured agent is available", async () => {
+    const { element, settingsAgentSelection } = createPage({
+      configObject: {},
+      agents: [],
+      routeData: memoryTabRoute("dreams"),
+    });
+    document.body.append(element);
+    try {
+      await element.updateComplete;
+      expect(settingsAgentSelection.state.selectedId).toBeNull();
+      expect(element.querySelector("openclaw-agent-memory-panel")).toBeNull();
+      expect(element.querySelector("openclaw-agent-select")).toBeNull();
+      expect(element.textContent).not.toContain("Dreaming frequency");
     } finally {
       element.remove();
     }
@@ -750,11 +770,11 @@ describe("MemorySettingsPage tab routing", () => {
     },
   );
 
-  it("loads Overview status once per activation, header agent change, and reconnect", async () => {
+  it("loads Overview status once per activation, Settings agent change, and reconnect", async () => {
     const memoryStatus = vi.fn((agentId: string) =>
       Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
     );
-    const { element, request, setPhase, agentSelection } = createPage({
+    const { element, request, setPhase, settingsAgentSelection } = createPage({
       configObject: {},
       agents: [{ id: "main" }, { id: "research" }],
       selectedAgentId: "research",
@@ -770,19 +790,14 @@ describe("MemorySettingsPage tab routing", () => {
         request.mock.calls.filter(([method]) => method === "doctor.memory.status"),
       ).toHaveLength(1);
 
-      expect(element.querySelectorAll("openclaw-agent-select")).toHaveLength(1);
+      expect(element.querySelectorAll("openclaw-agent-select")).toHaveLength(0);
       expect(element.textContent).not.toContain("Agent view");
-      const select = element.querySelector(
-        ".hub-page-header__actions openclaw-agent-select",
-      ) as HTMLElement & {
-        onSelect?: (value: string) => void;
-      };
-      select.onSelect?.("main");
+      settingsAgentSelection.set("main");
       await waitForFast(() => expect(memoryStatus).toHaveBeenLastCalledWith("main", false));
-      agentSelection.setScope(null);
+      settingsAgentSelection.setScope(null);
       await element.updateComplete;
       expect(memoryStatus).toHaveBeenCalledTimes(2);
-      agentSelection.set("research");
+      settingsAgentSelection.set("research");
       await waitForFast(() => expect(memoryStatus).toHaveBeenLastCalledWith("research", false));
 
       setPhase("disconnected");
@@ -816,7 +831,7 @@ describe("MemorySettingsPage tab routing", () => {
   });
 
   it("preselects the navigation agent without resetting a later manual choice on rerender", async () => {
-    const { element, agentSelection, request } = createPage({
+    const { element, settingsAgentSelection, request } = createPage({
       configObject: {},
       agents: [{ id: "main" }, { id: "research" }],
       routeData: memoryRoute("/settings/memory?agent=research"),
@@ -828,15 +843,68 @@ describe("MemorySettingsPage tab routing", () => {
           agentId: "research",
         }),
       );
-      expect(agentSelection.state.selectedId).toBe("research");
+      expect(settingsAgentSelection.state.selectedId).toBe("research");
       expect(request.mock.calls.filter(([method]) => method === "doctor.memory.status")).toEqual([
         ["doctor.memory.status", { agentId: "research" }],
       ]);
-      agentSelection.set("main");
+      settingsAgentSelection.set("main");
       element.routeData = memoryRoute("/settings/memory?agent=research");
       await element.updateComplete;
-      expect(agentSelection.state.selectedId).toBe("main");
-      expect(element.querySelector("openclaw-agent-select")).toHaveProperty("value", "main");
+      expect(settingsAgentSelection.state.selectedId).toBe("main");
+      expect(element.querySelector("openclaw-agent-select")).toBeNull();
+    } finally {
+      element.remove();
+    }
+  });
+
+  it.each([["main"], ["research", "main"]])(
+    "keeps newer sidebar intent when a pending Memory link mounts (%j)",
+    async (...choices: string[]) => {
+      const { element, settingsAgentSelection, request } = createPage({
+        configObject: {},
+        agents: [{ id: "main" }, { id: "research" }],
+        routeData: memoryRoute("/settings/memory?agent=research"),
+      });
+      Object.assign(element.routeData!, {
+        agentSelectionIntent: {
+          owner: settingsAgentSelection,
+          revision: settingsAgentSelection.intentRevision,
+        },
+      });
+      for (const agentId of choices) {
+        settingsAgentSelection.set(agentId);
+      }
+      document.body.append(element);
+      try {
+        await waitForFast(() =>
+          expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" }),
+        );
+        expect(settingsAgentSelection.state.selectedId).toBe("main");
+        expect(request).not.toHaveBeenCalledWith("doctor.memory.status", { agentId: "research" });
+      } finally {
+        element.remove();
+      }
+    },
+  );
+
+  it("honors a fresh explicit Memory navigation after the sidebar changed the same URL's agent", async () => {
+    const { element, settingsAgentSelection } = createPage({
+      configObject: {},
+      agents: [{ id: "main" }, { id: "research" }],
+      routeData: memoryRoute("/settings/memory?agent=research"),
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
+      settingsAgentSelection.set("main");
+      element.routeData = {
+        ...memoryRoute("/settings/memory?agent=research"),
+        agentSelectionIntent: {
+          owner: settingsAgentSelection,
+          revision: settingsAgentSelection.intentRevision,
+        },
+      };
+      await waitForFast(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
     } finally {
       element.remove();
     }
@@ -904,31 +972,6 @@ describe("MemorySettingsPage tab routing", () => {
 });
 
 describe("MemorySettingsPage dreaming support", () => {
-  it("links the dreaming intro to its guide", async () => {
-    const { element } = createPage({
-      configObject: {},
-      routeData: memoryTabRoute("settings"),
-    });
-    document.body.append(element);
-    try {
-      await waitForFast(() =>
-        expect(
-          element.querySelector(
-            '.settings-page__intro a[href="https://docs.openclaw.ai/concepts/dreaming"]',
-          ),
-        ).not.toBeNull(),
-      );
-      const link = element.querySelector<HTMLAnchorElement>(
-        '.settings-page__intro a[href="https://docs.openclaw.ai/concepts/dreaming"]',
-      );
-
-      expect(link?.textContent?.trim()).toBe("Learn more");
-      expect(link?.href).toBe("https://docs.openclaw.ai/concepts/dreaming");
-    } finally {
-      element.remove();
-    }
-  });
-
   it.each(["reconnect", "plugin publication"])(
     "re-probes after %s and drops the abandoned capability result",
     async (change) => {

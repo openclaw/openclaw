@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { performance as processPerformance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { isMainThread } from "node:worker_threads";
 import { hashVitestWorkerArtifact } from "../../../scripts/lib/vitest-worker-artifacts.mts";
 
 // Lifecycle fixtures publish real immutable files without compiling unrelated runtime code.
@@ -30,15 +32,16 @@ export function writeWorkerFixtureManifest(directory, inputSources, outputSource
   return manifest;
 }
 
-if (import.meta.main) {
-  const [directory, input, receipt] = process.argv.slice(2);
-  const { stripTypeScriptTypes } = await import("node:module");
+export async function runWorkerFixtureCompiler(directory, input, receipt) {
   const { runtimeProcessEntrypoints } =
     await import("../../../src/infra/runtime-process-entrypoints.ts");
   const declaration = fileURLToPath(
     new URL("../../../src/infra/runtime-process-entrypoints.ts", import.meta.url),
   );
   const declarationSource = fs.readFileSync(declaration, "utf8");
+  const compiledDeclaration = process.versions.bun
+    ? new Bun.Transpiler({ loader: "ts" }).transformSync(declarationSource)
+    : (await import("node:module")).stripTypeScriptTypes(declarationSource);
   const workerSource = fs.readFileSync(input);
   const manifest = writeWorkerFixtureManifest(
     directory,
@@ -48,7 +51,7 @@ if (import.meta.main) {
     },
     {
       // Preserve the actual declaration policy and hash the same bytes used for output.
-      "infra/runtime-process-entrypoints.js": stripTypeScriptTypes(declarationSource),
+      "infra/runtime-process-entrypoints.js": compiledDeclaration,
       [runtimeProcessEntrypoints.sqliteReadOnly.distWorkerPath]: workerSource,
     },
   );
@@ -56,9 +59,16 @@ if (import.meta.main) {
     receipt,
     JSON.stringify({
       pid: process.pid,
+      // A compiler call must not mint a new identity within a reused process.
+      processStartTime: processPerformance.timeOrigin,
+      isMainThread,
       directory,
       inputs: Object.keys(manifest.inputs).length,
       outputs: Object.keys(manifest.outputs).length,
     }) + "\n",
   );
+}
+
+if (import.meta.main) {
+  await runWorkerFixtureCompiler(...process.argv.slice(2));
 }

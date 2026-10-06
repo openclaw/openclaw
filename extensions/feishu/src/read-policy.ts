@@ -11,7 +11,7 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeFeishuChatType } from "./chat-type.js";
+import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
 import {
   hasExplicitFeishuGroupConfig,
   normalizeFeishuAllowEntry,
@@ -110,10 +110,7 @@ export function isFeishuGroupReadAllowed(
   if (group?.enabled === false) {
     return false;
   }
-  if (current) {
-    return true;
-  }
-  if (policy === "open") {
+  if (current || policy === "open") {
     return true;
   }
   const explicitlyConfigured = hasExplicitFeishuGroupConfig({
@@ -141,20 +138,22 @@ export function isFeishuGroupReadEnabled(
   return resolveFeishuGroupConfig({ cfg: account.config, groupId: chatId })?.enabled !== false;
 }
 
-function isDmUniversallyAllowed(account: ResolvedFeishuAccount): boolean {
+export function canEnumerateAllFeishuPeers(account: ResolvedFeishuAccount): boolean {
   // Feishu's canonical schema has no disabled DM mode; channel/account enabled owns shutdown.
   // Account overrides merge field-by-field, so only an allowFrom wildcard proves
   // universal non-current access under every supported ingress policy.
   return compileAllowlist(normalizeFeishuAllowlist(account.config.allowFrom)).wildcard;
 }
 
-export function assertFeishuChatReadAllowed(params: {
+type FeishuChatReadParams = {
   cfg: OpenClawConfig;
   account: ResolvedFeishuAccount;
   chatId: string;
   chatType?: FeishuChatType;
   ctx: FeishuReadContext;
-}): string {
+};
+
+export function assertFeishuChatReadAllowed(params: FeishuChatReadParams): string {
   const authorization = resolveFeishuChatReadPreliminaryAuthorization(params);
   if (authorization.decision !== "allow") {
     throw new ToolAuthorizationError("Feishu read target is not allowed.");
@@ -164,13 +163,7 @@ export function assertFeishuChatReadAllowed(params: {
 
 type FeishuChatReadPreliminaryDecision = "allow" | "deny" | "needs-metadata";
 
-export function resolveFeishuChatReadPreliminaryAuthorization(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedFeishuAccount;
-  chatId: string;
-  chatType?: FeishuChatType;
-  ctx: FeishuReadContext;
-}): {
+export function resolveFeishuChatReadPreliminaryAuthorization(params: FeishuChatReadParams): {
   chatId: string;
   decision: FeishuChatReadPreliminaryDecision;
 } {
@@ -189,7 +182,7 @@ export function resolveFeishuChatReadPreliminaryAuthorization(params: {
   const groupAllowed = directOperator
     ? isFeishuGroupReadEnabled(params.cfg, params.account, chatId)
     : isFeishuGroupReadAllowed(params.cfg, params.account, chatId, current);
-  const dmAllowed = directOperator || current || isDmUniversallyAllowed(params.account);
+  const dmAllowed = directOperator || current || canEnumerateAllFeishuPeers(params.account);
   if (knownGroup) {
     return { chatId, decision: groupAllowed ? "allow" : "deny" };
   }
@@ -202,6 +195,42 @@ export function resolveFeishuChatReadPreliminaryAuthorization(params: {
   return { chatId, decision: "needs-metadata" };
 }
 
+export async function readFeishuChatInfoWithAuthorization<
+  T extends { chat_mode?: unknown; chat_type?: unknown },
+>(
+  params: {
+    cfg: OpenClawConfig;
+    account: ResolvedFeishuAccount;
+    ctx: FeishuReadContext;
+    preliminary: ReturnType<typeof resolveFeishuChatReadPreliminaryAuthorization>;
+  },
+  readChatInfo: (chatId: string) => Promise<T>,
+): Promise<T> {
+  let chat: T;
+  try {
+    // Hide lookup failures only when type is needed, avoiding an existence oracle.
+    chat = await readChatInfo(params.preliminary.chatId);
+  } catch (error) {
+    if (params.preliminary.decision === "needs-metadata") {
+      assertFeishuChatReadAllowed({
+        cfg: params.cfg,
+        account: params.account,
+        chatId: params.preliminary.chatId,
+        ctx: params.ctx,
+      });
+    }
+    throw error;
+  }
+  assertFeishuChatReadAllowed({
+    cfg: params.cfg,
+    account: params.account,
+    chatId: params.preliminary.chatId,
+    chatType: resolveFeishuChatType(chat),
+    ctx: params.ctx,
+  });
+  return chat;
+}
+
 export type FeishuChatMemberReadAuthorization =
   | { kind: "group"; chatId: string }
   | {
@@ -211,15 +240,12 @@ export type FeishuChatMemberReadAuthorization =
       memberIdType: "open_id" | "user_id";
     };
 
-export function authorizeFeishuChatMemberRead(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedFeishuAccount;
-  chatId: string;
-  chatType?: FeishuChatType;
-  ctx: FeishuReadContext;
-  memberId?: string;
-  memberIdType?: "open_id" | "user_id" | "union_id";
-}): FeishuChatMemberReadAuthorization {
+export function authorizeFeishuChatMemberRead(
+  params: FeishuChatReadParams & {
+    memberId?: string;
+    memberIdType?: "open_id" | "user_id" | "union_id";
+  },
+): FeishuChatMemberReadAuthorization {
   const chatId = assertFeishuChatReadAllowed(params);
   const chatType = normalizeFeishuChatType(params.chatType);
   if (chatType === "group") {
@@ -269,8 +295,4 @@ export function canEnumerateAllFeishuGroups(
     (policy === "allowlist" &&
       compileAllowlist(normalizeFeishuAllowlist(account.config.groupAllowFrom)).wildcard)
   );
-}
-
-export function canEnumerateAllFeishuPeers(account: ResolvedFeishuAccount): boolean {
-  return isDmUniversallyAllowed(account);
 }

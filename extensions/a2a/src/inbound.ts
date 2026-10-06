@@ -1,9 +1,10 @@
 import {
   buildChannelInboundEventContext,
-  resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isReplyPayloadTerminalContent } from "openclaw/plugin-sdk/reply-payload";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { A2aTaskStore } from "./task-store.js";
 import type { ResolvedA2aChannelAccount } from "./types.js";
@@ -31,7 +32,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
       );
       return;
     }
-    const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+    const route = resolveAgentRoute({
       cfg: params.config,
       channel: "a2a",
       accountId: params.account.accountId,
@@ -42,7 +43,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
       // The peer id embeds the A2A contextId, giving one session per peer+context.
       dmScope: "per-account-channel-peer",
     });
-    const ingress = await resolveStableChannelMessageIngress({
+    const ingress = await params.channelRuntime.inbound.ingress.resolveStable({
       channelId: "a2a",
       accountId: params.account.accountId,
       cfg: params.config,
@@ -65,6 +66,10 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
 
     const timestamp = Date.now();
     const target = `a2a:${params.peerName}`;
+    const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({
+      cfg: params.config,
+      route,
+    });
     const body = buildEnvelope({
       channel: "A2A",
       from: params.peerName,
@@ -110,7 +115,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
       ctxPayload,
       delivery: {
         deliver: async (payload, info) => {
-          if (info.kind !== "final") {
+          if (info.kind !== "final" || !isReplyPayloadTerminalContent(payload)) {
             return;
           }
           // Conversation queues, rather than callback ownership, preserve FIFO
@@ -121,6 +126,9 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
           params.store.fail(params.taskId, error);
         },
       },
+      // Source replies complete the correlated task; the generic message tool
+      // starts a separate outbound message without that task correlation.
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
       replyPipeline: {},
     });
     if (dispatch.admission.kind !== "dispatch") {

@@ -38,6 +38,8 @@ describe("resolveStableNodePath", () => {
 
       await expect(resolveStableNodePath(defaultNode)).resolves.toBe(binNode);
       await expect(resolveStableNodePath(versionedNode)).resolves.toBe(versionedNode);
+      await fs.rm(binNode);
+      await expect(resolveStableNodePath(defaultNode)).resolves.toBe(defaultNode);
     });
   });
 });

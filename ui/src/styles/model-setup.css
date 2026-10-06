@@ -1,4 +1,5 @@
-.model-setup {
+.model-setup,
+.model-setup__loading-sections {
   display: grid;
   gap: 18px;
 }
@@ -27,11 +28,6 @@
   gap: 10px;
 }
 
-.model-setup__loading-sections {
-  display: grid;
-  gap: 18px;
-}
-
 .model-setup__loading-row {
   min-height: 72px;
 }
@@ -48,11 +44,12 @@
   min-height: 68px;
 }
 
-.model-setup__loading-sections .settings-section > p {
+.model-setup__loading-intro {
   margin: 0 0 12px;
 }
 
-.model-setup__loading-icon {
+.model-setup__loading-icon,
+.model-setup__icon {
   width: 24px;
   height: 24px;
   flex: 0 0 24px;
@@ -101,9 +98,6 @@
 }
 
 .model-setup__icon {
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
   object-fit: contain;
   border-radius: 5px;
 }
@@ -158,7 +152,8 @@
   font-size: 12px;
 }
 
-.model-setup__icon--recommendation {
+.model-setup__icon--recommendation,
+.model-setup__icon--picker {
   width: 28px;
   height: 28px;
   flex-basis: 28px;
@@ -234,11 +229,6 @@
   display: grid;
   gap: 14px;
   max-width: 720px;
-}
-
-.model-setup__manual .field {
-  display: grid;
-  gap: 6px;
 }
 
 .model-setup__manual input {
@@ -352,12 +342,6 @@
 
 .model-setup-provider-select__option .model-setup-provider-select__copy {
   padding: 3px 0;
-}
-
-.model-setup__icon--picker {
-  width: 28px;
-  height: 28px;
-  flex-basis: 28px;
 }
 
 .model-setup__manual-help {
@@ -516,6 +500,28 @@
   overflow: auto;
 }
 
+.model-setup-wizard__error {
+  position: relative;
+}
+
+.model-setup-wizard__error-text {
+  max-height: min(220px, 35dvh);
+  margin: 0;
+  padding-right: 32px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.model-setup-wizard__error-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
 .model-setup-wizard__footer {
   display: flex;
   justify-content: flex-end;
@@ -554,4 +560,13 @@
   .model-setup-success__actions .btn {
     width: 100%;
   }
+}
+
+/* Discovery has body + footer; its body must shrink before the footer can clip. */
+.model-setup-discovery {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.model-setup-discovery > .model-setup-wizard__body {
+  min-height: 0;
 }

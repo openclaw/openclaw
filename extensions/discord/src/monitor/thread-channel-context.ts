@@ -1,4 +1,3 @@
-// Discord plugin module implements thread channel context behavior.
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import type { ChannelType } from "../internal/discord.js";
 import { normalizeDiscordSlug } from "./allow-list.js";
@@ -10,19 +9,6 @@ import {
 import { resolveDiscordChannelInfo } from "./message-channel-info.js";
 import type { DiscordChannelInfo, DiscordChannelInfoClient } from "./message-channel-info.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
-
-type DiscordThreadLikeChannelContext = {
-  channelType?: ChannelType;
-  isThreadChannel: boolean;
-  channelId: string;
-  channelName?: string;
-  channelSlug: string;
-  parentId?: string;
-  threadParentId?: string;
-  threadParentName?: string;
-  threadParentSlug: string;
-  channelInfo: DiscordChannelInfo | null;
-};
 
 function buildFetchedChannelInfo(channel: unknown): DiscordChannelInfo | null {
   const channelInfo = resolveDiscordChannelInfoSafe(channel);
@@ -43,7 +29,7 @@ export async function resolveDiscordThreadLikeChannelContext(params: {
   channel: unknown;
   channelIdFallback?: string;
   channelInfo?: DiscordChannelInfo | null;
-}): Promise<DiscordThreadLikeChannelContext> {
+}) {
   const safeChannelInfo = resolveDiscordChannelInfoSafe(params.channel);
   const channelId = resolveDiscordChannelIdSafe(params.channel) ?? params.channelIdFallback ?? "";
   const channelInfo =
@@ -95,7 +81,7 @@ export async function resolveFetchedDiscordThreadLikeChannelContext(params: {
   client: DiscordChannelInfoClient;
   channel: unknown;
   channelIdFallback?: string;
-}): Promise<DiscordThreadLikeChannelContext> {
+}) {
   return await resolveDiscordThreadLikeChannelContext({
     ...params,
     channelInfo: buildFetchedChannelInfo(params.channel),

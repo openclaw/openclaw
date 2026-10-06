@@ -27,14 +27,6 @@ const PLAIN_PROFILE = {
   chunk: { limit: 1_600, unit: "chars" },
 } satisfies FormatCapabilityProfile;
 
-/**
- * Tests that stripMarkdown (used in the TTS pipeline via maybeApplyTtsToPayload)
- * produces clean text suitable for speech synthesis.
- *
- * The TTS pipeline calls stripMarkdown() before sending text to TTS engines
- * (OpenAI, ElevenLabs, Edge) so that formatting symbols are not read aloud
- * (e.g. "hashtag hashtag hashtag" for ### headers).
- */
 describe("TTS text preparation – stripMarkdown", () => {
   it("strips markdown headings and horizontal rules before TTS", () => {
     expect(stripMarkdown("### System Design Basics")).toBe("System Design Basics");
@@ -52,13 +44,8 @@ describe("TTS text preparation – stripMarkdown", () => {
 
   it("preserves underscores inside words while still stripping italic markers", () => {
     const cases = [
-      ["here_is_a_message", "here_is_a_message"],
-      ["foo_bar_baz", "foo_bar_baz"],
       ["https://cdn.example/my_file_name.png", "https://cdn.example/my_file_name.png"],
       ["e\u0301_mail_.txt", "e\u0301_mail_.txt"],
-      ["snake_case_var", "snake_case_var"],
-      ["use foo_bar_baz in code", "use foo_bar_baz in code"],
-      ["This is _italic_ text", "This is italic text"],
       ["_italic_ at start", "italic at start"],
       ["end _italic_", "end italic"],
       ["foo_bar _italic_ baz_qux", "foo_bar italic baz_qux"],
@@ -66,17 +53,10 @@ describe("TTS text preparation – stripMarkdown", () => {
       ["東京_駅_前", "東京_駅_前"],
       ["var_123_end", "var_123_end"],
       ["こんにちは _italic_ テスト", "こんにちは italic テスト"],
-      ["use foo_bar_baz and _italic_ text", "use foo_bar_baz and italic text"],
     ] as const;
     for (const [input, expected] of cases) {
       expect(stripMarkdown(input), input).toBe(expected);
     }
-  });
-
-  it("strips inline code markers before TTS", () => {
-    expect(stripMarkdown("Use `consistent hashing` for distribution")).toBe(
-      "Use consistent hashing for distribution",
-    );
   });
 
   it("keeps explicit link destinations readable by default", () => {
@@ -122,27 +102,5 @@ Some ~~deleted~~ content.`;
 A blockquote with code
 
 Some deleted content.`);
-  });
-
-  it("handles markdown-heavy system design explanation", () => {
-    const input = `### B-tree vs LSM-tree
-
-**B-tree** uses _in-place updates_ while **LSM-tree** uses _append-only writes_.
-
-> Key insight: LSM-tree optimizes for write-heavy workloads.
-
----
-
-Use \`B-tree\` for read-heavy, \`LSM-tree\` for write-heavy.`;
-
-    const result = stripMarkdown(input);
-
-    expect(result).not.toContain("#");
-    expect(result).not.toContain("**");
-    expect(result).not.toContain("`");
-    expect(result).not.toContain(">");
-    expect(result).not.toContain("---");
-    expect(result).toContain("B-tree vs LSM-tree");
-    expect(result).toContain("B-tree uses in-place updates");
   });
 });

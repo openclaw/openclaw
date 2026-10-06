@@ -3,15 +3,19 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
 } from "./doctor-heartbeat-scratch-migration.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     cleanup();
@@ -27,7 +31,7 @@ async function fixture() {
   const cfg: OpenClawConfig = {
     agents: {
       defaults: { workspace, heartbeat: { every: "30m" } },
-      list: [{ id: "main", workspace }],
+      entries: { main: { workspace } },
     },
   };
   const migrate = () => maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });
@@ -134,7 +138,7 @@ it.each(["before claiming", "while claimed"])(
     await fs.writeFile(f.sourcePath, "Same instructions");
     await fs.writeFile(path.join(replacement, "HEARTBEAT.md"), "Same instructions");
     await fs.symlink(original, alias, "dir");
-    f.cfg.agents!.list![0]!.workspace = alias;
+    f.cfg.agents!.entries!.main!.workspace = alias;
     const retarget = async () => {
       await fs.unlink(alias);
       await fs.symlink(replacement, alias, "dir");

@@ -14,9 +14,7 @@ export type TranscriptScrollRestoreHost = {
   getRowCount(): number;
   readonly virtualizer: Pick<Virtualizer<HTMLDivElement, HTMLElement>, "scrollToOffset">;
   isConnected(): boolean;
-  getPendingScrollFrame(): number | null;
-  setPendingScrollFrame(frame: number | null): void;
-  requestUpdate(): void;
+  pendingScrollFrame: number | null;
   onReaderScroll(): void;
 };
 
@@ -31,11 +29,16 @@ export function applyPendingScrollOffset(owner: TranscriptScrollRestoreHost): vo
   }
   const maxOffset = maxTranscriptScrollOffset(owner.getScrollElement());
   if (maxOffset === null) {
+    pending.observedMaxOffset = undefined;
+    pending.stableFrames = 0;
+    pending.zeroMaxFrames = 0;
     return;
   }
   if (maxOffset === 0 && pending.offset > 0) {
+    pending.observedMaxOffset = undefined;
+    pending.stableFrames = 0;
     if (owner.isContentReady()) {
-      if (++pending.zeroMaxFrames > CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES) {
+      if (pending.zeroMaxFrames >= CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES) {
         settlePendingScroll(owner, 0);
       } else {
         schedulePendingScrollRetry(owner);
@@ -44,6 +47,16 @@ export function applyPendingScrollOffset(owner: TranscriptScrollRestoreHost): vo
     return;
   }
   pending.zeroMaxFrames = 0;
+  if (maxOffset < pending.offset) {
+    if (pending.observedMaxOffset !== maxOffset) {
+      pending.observedMaxOffset = maxOffset;
+      pending.stableFrames = 0;
+    }
+    if (pending.stableFrames <= CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES) {
+      schedulePendingScrollRetry(owner);
+      return;
+    }
+  }
   const targetOffset = Math.min(pending.offset, maxOffset);
   const element = owner.getScrollElement();
   if (element) {
@@ -51,12 +64,7 @@ export function applyPendingScrollOffset(owner: TranscriptScrollRestoreHost): vo
   }
   owner.virtualizer.scrollToOffset(targetOffset);
   const currentOffset = owner.getScrollElement()?.scrollTop;
-  const atTarget = currentOffset != null && Math.abs(currentOffset - targetOffset) <= 1;
-  pending.stableFrames = atTarget ? pending.stableFrames + 1 : 0;
-  if (
-    currentOffset != null &&
-    pending.stableFrames > CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES
-  ) {
+  if (currentOffset != null) {
     settlePendingScroll(owner, currentOffset);
   } else {
     schedulePendingScrollRetry(owner);
@@ -64,17 +72,28 @@ export function applyPendingScrollOffset(owner: TranscriptScrollRestoreHost): vo
 }
 
 function schedulePendingScrollRetry(owner: TranscriptScrollRestoreHost): void {
-  if (!owner.isConnected() || owner.getPendingScrollFrame() !== null) {
+  if (!owner.isConnected() || owner.pendingScrollFrame !== null) {
     return;
   }
-  owner.setPendingScrollFrame(
-    requestAnimationFrame(() => {
-      owner.setPendingScrollFrame(null);
-      if (owner.isConnected() && owner.offsetState.pendingScrollOffset) {
-        owner.requestUpdate();
+  owner.pendingScrollFrame = requestAnimationFrame(() => {
+    owner.pendingScrollFrame = null;
+    const pending = owner.offsetState.pendingScrollOffset;
+    if (owner.isConnected() && pending) {
+      const maxOffset = maxTranscriptScrollOffset(owner.getScrollElement());
+      if (maxOffset === 0 && pending.offset > 0 && owner.isContentReady()) {
+        pending.zeroMaxFrames += 1;
+      } else if (
+        maxOffset !== null &&
+        maxOffset > 0 &&
+        maxOffset < pending.offset &&
+        maxOffset === pending.observedMaxOffset
+      ) {
+        pending.stableFrames += 1;
       }
-    }),
-  );
+      // Geometry notifications and settled reader policy own their renders.
+      applyPendingScrollOffset(owner);
+    }
+  });
 }
 
 function settlePendingScroll(owner: TranscriptScrollRestoreHost, scrollTop: number): void {

@@ -11,7 +11,6 @@ import {
 } from "./package-dist-inventory.js";
 import {
   assertRecoveryRootOutsidePackageRoot,
-  countChanges,
   emptyResult,
   fileModesHaveSameExecutableSemantics,
   normalizeDistPath,
@@ -23,7 +22,6 @@ import {
   type LocalOverridePackageRoot,
   type LocalPackageOverrideChange,
   type LocalPackageOverridesPlan,
-  type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
 
 async function copyOverridePayload(params: {
@@ -92,7 +90,7 @@ async function collectReferencedAddedOverridePaths(params: {
   const scannedPathsByRoot = new Set<string>();
   const modifiedChangesByPath = new Map(
     params.changes
-      .filter((change) => change.kind === "modified" && change.savedPath)
+      .filter((change) => change.kind === "modified")
       .map((change) => [change.path, change]),
   );
   const queue: Array<
@@ -100,7 +98,7 @@ async function collectReferencedAddedOverridePaths(params: {
     | { path: string; rootPath: string; packageRelativePath: string }
   > = [
     ...params.changes.flatMap((change) =>
-      change.kind === "modified" && change.savedPath
+      change.kind === "modified"
         ? [{ path: change.path, rootPath: change.path, sourcePath: change.savedPath }]
         : [],
     ),
@@ -111,11 +109,7 @@ async function collectReferencedAddedOverridePaths(params: {
     })),
   ];
 
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) {
-      continue;
-    }
+  for (const current of queue) {
     // Shared added files are rescanned per override root to retain each
     // importer's complete dependency closure in the recovery manifest.
     const scanKey = `${current.rootPath}\0${current.path}`;
@@ -156,7 +150,7 @@ async function collectReferencedAddedOverridePaths(params: {
       const referencedScanKey = `${current.rootPath}\0${referencedPath}`;
       if (!scannedPathsByRoot.has(referencedScanKey)) {
         queue.push(
-          referencedModifiedChange?.savedPath
+          referencedModifiedChange
             ? {
                 path: referencedPath,
                 rootPath: current.rootPath,
@@ -194,7 +188,6 @@ export async function captureLocalPackageOverrides(params: {
   const baseline = await readPackageDistContentInventoryIfPresent(params.packageRoot);
   const packageFs = await openFsRoot(params.packageRoot, {
     hardlinks: "reject",
-    nonBlockingRead: true,
     symlinks: "reject",
   });
 
@@ -236,7 +229,6 @@ export async function captureLocalPackageOverrides(params: {
         JSON.stringify({ packageRoot, changes }, null, 2) + "\n",
       );
       return {
-        packageRoot,
         recoveryDir: snapshotDir,
         changes,
         result: {
@@ -334,14 +326,12 @@ export async function captureLocalPackageOverrides(params: {
     }
     const finalRecoveryDir = await ensureRecoveryDir();
 
-    const counts = countChanges(changes);
-    const result: LocalPackageOverridesResult = {
-      status: "none",
-      ...counts,
-      applied: 0,
-      conflicts: [],
+    const result = {
+      ...emptyResult("none"),
+      added: changes.filter((change) => change.kind === "added").length,
+      modified: changes.filter((change) => change.kind === "modified").length,
+      deleted: changes.filter((change) => change.kind === "deleted").length,
       recoveryDir: finalRecoveryDir,
-      warnings: [],
     };
     await fs.writeFile(
       path.join(finalRecoveryDir, "manifest.json"),
@@ -353,7 +343,6 @@ export async function captureLocalPackageOverrides(params: {
       "utf8",
     );
     return {
-      packageRoot: params.recordedPackageRoot ?? params.packageRoot,
       recoveryDir: finalRecoveryDir,
       changes,
       result,

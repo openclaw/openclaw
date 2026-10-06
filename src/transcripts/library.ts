@@ -6,7 +6,6 @@ import {
   TRANSCRIPTS_LEGACY_MAX_TEXT_LENGTH,
   TRANSCRIPTS_LEGACY_RESULT_MAX_BYTES,
   TRANSCRIPTS_RESULT_MAX_BYTES,
-  type TranscriptSessionSummary,
   type TranscriptsExportParams,
   type TranscriptsExportResult,
   type TranscriptsGetParams,
@@ -15,7 +14,9 @@ import {
   type TranscriptsListResult,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
 import { readTranscriptCaptureSnapshot } from "./capture.js";
+import { presentTranscriptSession } from "./read-live.js";
 import {
   projectTranscriptMarkdown,
   projectTranscriptNotes,
@@ -84,30 +85,17 @@ export async function listTranscriptLibrary(
     }
     after = { startedAt, sessionId };
   }
-  const page = store.iterateReadEntries({ ...filters, startedAfter, startedBefore, after });
+  const { entries, hasMore } = await store.listReadEntries({
+    ...filters,
+    startedAfter,
+    startedBefore,
+    after,
+    projection: "public",
+  });
   const captures = readTranscriptCaptureSnapshot();
-  const sessions: TranscriptSessionSummary[] = [];
-  let bytes = 0;
-  let hasMore = false;
-  try {
-    for (let step = await page.next(); ; step = await page.next()) {
-      if (step.done) {
-        hasMore = step.value;
-        break;
-      }
-      const entry = projectTranscriptSession(
-        step.value,
-        undefined,
-        providerName?.(step.value.session.source.providerId),
-        captures,
-      );
-      bytes += Buffer.byteLength(JSON.stringify(entry), "utf8");
-      assertTranscriptByteCount(bytes);
-      sessions.push(entry);
-    }
-  } finally {
-    await page.return(false);
-  }
+  const sessions = entries.map((entry) =>
+    presentTranscriptSession(entry, captures, providerName?.(entry.providerId)),
+  );
   const last = sessions.at(-1);
   const result = {
     sessions,
@@ -123,17 +111,20 @@ export async function getTranscriptLibrary(
   providerName?: (providerId: string) => string | undefined,
 ): Promise<TranscriptsGetResult> {
   const { entry, page, notes, purpose, scope } = await store.readLibraryEntry(params);
-  const utterances = page?.utterances.map((utterance) => {
-    const projected = projectTranscriptUtterance(utterance);
-    if (purpose === "legacy") {
-      projected.text = truncateUtf16Safe(projected.text, TRANSCRIPTS_LEGACY_MAX_TEXT_LENGTH);
-    }
-    return projected;
-  });
-  const last = utterances?.at(-1);
+  const utterances = page?.utterances
+    .filter((utterance) => !isTranscriptArtifactText(utterance.text))
+    .map((utterance) => {
+      const projected = projectTranscriptUtterance(utterance);
+      if (purpose === "legacy") {
+        projected.text = truncateUtf16Safe(projected.text, TRANSCRIPTS_LEGACY_MAX_TEXT_LENGTH);
+      }
+      return projected;
+    });
+  // Cursors advance through stored rows even when an entire page contains artifacts.
+  const last = page?.utterances.at(-1);
   const result: TranscriptsGetResult = {
-    session: projectTranscriptSession(
-      entry,
+    session: presentTranscriptSession(
+      projectTranscriptSession(entry),
       undefined,
       providerName?.(entry.session.source.providerId),
     ),
@@ -163,6 +154,9 @@ export async function exportTranscriptLibrary(
         break;
       }
       const utterance = step.value;
+      if (isTranscriptArtifactText(utterance.text)) {
+        continue;
+      }
       const text =
         params.format === "jsonl"
           ? `${JSON.stringify(projectTranscriptUtterance(utterance))}\n`

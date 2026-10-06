@@ -30,110 +30,59 @@ function createLookupFn(addresses: Array<{ address: string; family: number }>): 
   }) as unknown as LookupFn;
 }
 
-describe("ssrfPolicyFromDangerouslyAllowPrivateNetwork", () => {
+describe.each([
+  ["ssrfPolicyFromDangerouslyAllowPrivateNetwork", ssrfPolicyFromDangerouslyAllowPrivateNetwork],
+  ["ssrfPolicyFromAllowPrivateNetwork", ssrfPolicyFromAllowPrivateNetwork],
+] as const)("%s", (_policyName, createPolicy) => {
   it.each([
-    {
-      name: "returns undefined for missing input",
-      input: undefined,
-      expected: undefined,
-    },
-    {
-      name: "returns undefined when private-network access is disabled",
-      input: false,
-      expected: undefined,
-    },
-    {
-      name: "returns an explicit allow-private-network policy when enabled",
-      input: true,
-      expected: { allowPrivateNetwork: true },
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(ssrfPolicyFromDangerouslyAllowPrivateNetwork(input)).toEqual(expected);
-  });
-});
-
-describe("ssrfPolicyFromAllowPrivateNetwork", () => {
-  it.each([
-    {
-      name: "returns undefined for missing input",
-      input: undefined,
-      expected: undefined,
-    },
-    {
-      name: "returns undefined when private-network access is disabled",
-      input: false,
-      expected: undefined,
-    },
-    {
-      name: "returns an explicit allow-private-network policy when enabled",
-      input: true,
-      expected: { allowPrivateNetwork: true },
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(ssrfPolicyFromAllowPrivateNetwork(input)).toEqual(expected);
+    ["returns undefined for missing input", undefined, undefined],
+    ["returns undefined when private-network access is disabled", false, undefined],
+    [
+      "returns an explicit allow-private-network policy when enabled",
+      true,
+      { allowPrivateNetwork: true },
+    ],
+  ])("$0", (_name, input, expected) => {
+    expect(createPolicy(input)).toEqual(expected);
   });
 });
 
 describe("isPrivateNetworkOptInEnabled", () => {
   it.each([
-    {
-      name: "returns false for missing input",
-      input: undefined,
-      expected: false,
-    },
-    {
-      name: "returns false for explicit false",
-      input: false,
-      expected: false,
-    },
-    {
-      name: "returns true for explicit boolean true",
-      input: true,
-      expected: true,
-    },
-    {
-      name: "returns true for flat allowPrivateNetwork config",
-      input: { allowPrivateNetwork: true },
-      expected: true,
-    },
-    {
-      name: "returns true for flat dangerous opt-in config",
-      input: { dangerouslyAllowPrivateNetwork: true },
-      expected: true,
-    },
-    {
-      name: "returns true for nested network dangerous opt-in config",
-      input: { network: { dangerouslyAllowPrivateNetwork: true } },
-      expected: true,
-    },
-    {
-      name: "returns false for nested false values",
-      input: { network: { dangerouslyAllowPrivateNetwork: false } },
-      expected: false,
-    },
-  ])("$name", ({ input, expected }) => {
+    ["returns false for missing input", undefined, false],
+    ["returns false for explicit false", false, false],
+    ["returns true for explicit boolean true", true, true],
+    ["returns true for flat allowPrivateNetwork config", { allowPrivateNetwork: true }, true],
+    [
+      "returns true for flat dangerous opt-in config",
+      { dangerouslyAllowPrivateNetwork: true },
+      true,
+    ],
+    [
+      "returns true for nested network dangerous opt-in config",
+      { network: { dangerouslyAllowPrivateNetwork: true } },
+      true,
+    ],
+    [
+      "returns false for nested false values",
+      { network: { dangerouslyAllowPrivateNetwork: false } },
+      false,
+    ],
+  ])("$0", (_name, input, expected) => {
     expect(isPrivateNetworkOptInEnabled(input)).toBe(expected);
   });
 });
 
 describe("ssrfPolicyFromPrivateNetworkOptIn", () => {
   it.each([
-    {
-      name: "returns undefined for unset input",
-      input: undefined,
-      expected: undefined,
-    },
-    {
-      name: "returns undefined for explicit false input",
-      input: { allowPrivateNetwork: false },
-      expected: undefined,
-    },
-    {
-      name: "returns the compat policy for nested dangerous input",
-      input: { network: { dangerouslyAllowPrivateNetwork: true } },
-      expected: { allowPrivateNetwork: true },
-    },
-  ])("$name", ({ input, expected }) => {
+    ["returns undefined for unset input", undefined, undefined],
+    ["returns undefined for explicit false input", { allowPrivateNetwork: false }, undefined],
+    [
+      "returns the compat policy for nested dangerous input",
+      { network: { dangerouslyAllowPrivateNetwork: true } },
+      { allowPrivateNetwork: true },
+    ],
+  ])("$0", (_name, input, expected) => {
     expect(ssrfPolicyFromPrivateNetworkOptIn(input)).toEqual(expected);
   });
 });
@@ -242,37 +191,38 @@ describe("legacy private-network alias helpers", () => {
 
 describe("assertHttpUrlTargetsPrivateNetwork", () => {
   it.each([
-    {
-      name: "allows https targets without private-network checks",
-      url: "https://matrix.example.org",
-      policy: {
+    [
+      "allows https targets without private-network checks",
+      "https://matrix.example.org",
+      {
         dangerouslyAllowPrivateNetwork: false,
       },
-      outcome: "resolve",
-    },
-    {
-      name: "allows internal DNS names only when they resolve exclusively to private IPs",
-      url: "http://matrix-synapse:8008",
-      policy: {
+      "resolve",
+      undefined,
+    ],
+    [
+      "allows internal DNS names only when they resolve exclusively to private IPs",
+      "http://matrix-synapse:8008",
+      {
         dangerouslyAllowPrivateNetwork: true,
         lookupFn: createLookupFn([{ address: "10.0.0.5", family: 4 }]),
       },
-      outcome: "resolve",
-    },
-    {
-      name: "rejects cleartext public hosts even when private-network access is enabled",
-      url: "http://matrix.example.org:8008",
-      policy: {
+      "resolve",
+      undefined,
+    ],
+    [
+      "rejects cleartext public hosts even when private-network access is enabled",
+      "http://matrix.example.org:8008",
+      {
         dangerouslyAllowPrivateNetwork: true,
         lookupFn: createLookupFn([{ address: "93.184.216.34", family: 4 }]),
         errorMessage:
           "Matrix homeserver must use https:// unless it targets a private or loopback host",
       },
-      outcome: "reject",
-      expectedError:
-        "Matrix homeserver must use https:// unless it targets a private or loopback host",
-    },
-  ])("$name", async ({ url, policy, outcome, expectedError }) => {
+      "reject",
+      "Matrix homeserver must use https:// unless it targets a private or loopback host",
+    ],
+  ])("$0", async (_name, url, policy, outcome, expectedError) => {
     const result = assertHttpUrlTargetsPrivateNetwork(url, policy);
     if (outcome === "reject") {
       await expect(result).rejects.toThrow(expectedError);
@@ -317,93 +267,56 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
 
 describe("normalizeHostnameSuffixAllowlist", () => {
   it.each([
-    {
-      name: "uses defaults when input is missing",
-      input: undefined,
-      defaults: ["GRAPH.MICROSOFT.COM"],
-      expected: ["graph.microsoft.com"],
-    },
-    {
-      name: "normalizes wildcard prefixes and deduplicates",
-      input: ["*.TrafficManager.NET", ".trafficmanager.net.", " * ", "x"],
-      defaults: undefined,
-      expected: ["*"],
-    },
-  ])("$name", ({ input, defaults, expected }) => {
+    [
+      "uses defaults when input is missing",
+      undefined,
+      ["GRAPH.MICROSOFT.COM"],
+      ["graph.microsoft.com"],
+    ],
+    [
+      "normalizes wildcard prefixes and deduplicates",
+      ["*.TrafficManager.NET", ".trafficmanager.net.", " * ", "x"],
+      undefined,
+      ["*"],
+    ],
+  ])("$0", (_name, input, defaults, expected) => {
     expect(normalizeHostnameSuffixAllowlist(input, defaults)).toEqual(expected);
   });
 });
 
 describe("isHttpsUrlAllowedByHostnameSuffixAllowlist", () => {
   it.each([
-    {
-      name: "requires https",
-      url: "http://a.example.com/x",
-      allowlist: ["example.com"],
-      expected: false,
-    },
-    {
-      name: "supports exact match",
-      url: "https://example.com/x",
-      allowlist: ["example.com"],
-      expected: true,
-    },
-    {
-      name: "supports suffix match",
-      url: "https://a.example.com/x",
-      allowlist: ["example.com"],
-      expected: true,
-    },
-    {
-      name: "rejects non-matching hosts",
-      url: "https://evil.com/x",
-      allowlist: ["example.com"],
-      expected: false,
-    },
-    {
-      name: "supports wildcard allowlist",
-      url: "https://evil.com/x",
-      allowlist: ["*"],
-      expected: true,
-    },
-  ])("$name", ({ url, allowlist, expected }) => {
+    ["requires https", "http://a.example.com/x", ["example.com"], false],
+    ["supports exact match", "https://example.com/x", ["example.com"], true],
+    ["supports suffix match", "https://a.example.com/x", ["example.com"], true],
+    ["rejects non-matching hosts", "https://evil.com/x", ["example.com"], false],
+    ["supports wildcard allowlist", "https://evil.com/x", ["*"], true],
+  ])("$0", (_name, url, allowlist, expected) => {
     expect(isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist)).toBe(expected);
   });
 });
 
 describe("buildHostnameAllowlistPolicyFromSuffixAllowlist", () => {
   it.each([
-    {
-      name: "returns undefined when allowHosts is empty",
-      input: undefined,
-      expected: undefined,
-    },
-    {
-      name: "returns undefined for an explicit empty list",
-      input: [],
-      expected: undefined,
-    },
-    {
-      name: "returns undefined when wildcard host is present",
-      input: ["*"],
-      expected: undefined,
-    },
-    {
-      name: "returns undefined when wildcard is mixed with concrete hosts",
-      input: ["example.com", "*"],
-      expected: undefined,
-    },
-    {
-      name: "expands a suffix entry to exact + wildcard hostname allowlist patterns",
-      input: ["sharepoint.com"],
-      expected: {
+    ["returns undefined when allowHosts is empty", undefined, undefined],
+    ["returns undefined for an explicit empty list", [], undefined],
+    ["returns undefined when wildcard host is present", ["*"], undefined],
+    [
+      "returns undefined when wildcard is mixed with concrete hosts",
+      ["example.com", "*"],
+      undefined,
+    ],
+    [
+      "expands a suffix entry to exact + wildcard hostname allowlist patterns",
+      ["sharepoint.com"],
+      {
         hostnameAllowlist: ["sharepoint.com", "*.sharepoint.com"],
       },
-    },
-    {
-      name: "normalizes wildcard prefixes, leading/trailing dots, and deduplicates patterns",
-      input: ["*.TrafficManager.NET", ".trafficmanager.net.", " blob.core.windows.net "],
-      expected: {
+    ],
+    [
+      "normalizes wildcard prefixes, leading/trailing dots, and deduplicates patterns",
+      ["*.TrafficManager.NET", ".trafficmanager.net.", " blob.core.windows.net "],
+      {
         hostnameAllowlist: [
           "trafficmanager.net",
           "*.trafficmanager.net",
@@ -411,8 +324,8 @@ describe("buildHostnameAllowlistPolicyFromSuffixAllowlist", () => {
           "*.blob.core.windows.net",
         ],
       },
-    },
-  ])("$name", ({ input, expected }) => {
+    ],
+  ])("$0", (_name, input, expected) => {
     expect(buildHostnameAllowlistPolicyFromSuffixAllowlist(input)).toEqual(expected);
   });
 });
@@ -424,36 +337,14 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
   // so a plugin author's allowedOrigins entry pointing at a metadata target
   // must still be rejected when an actual request goes through the guard.
   it.each([
-    {
-      name: "AWS/EC2 IMDS IPv4 literal",
-      hostname: "169.254.169.254",
-      family: 4,
-    },
-    {
-      name: "Alibaba/100-net metadata IPv4 literal",
-      hostname: "100.100.100.200",
-      family: 4,
-    },
-    {
-      name: "GCP metadata canonical hostname",
-      hostname: "metadata.google.internal",
-      family: 4,
-      resolvedAddress: "169.254.169.254",
-    },
-    {
-      name: "IPv6 ULA metadata literal",
-      hostname: "[fd00:ec2::254]",
-      family: 6,
-      resolvedAddress: "fd00:ec2::254",
-    },
-    {
-      name: "non-metadata link-local IPv4 literal",
-      hostname: "169.254.42.42",
-      family: 4,
-    },
+    ["AWS/EC2 IMDS IPv4 literal", "169.254.169.254", 4, undefined],
+    ["Alibaba/100-net metadata IPv4 literal", "100.100.100.200", 4, undefined],
+    ["GCP metadata canonical hostname", "metadata.google.internal", 4, "169.254.169.254"],
+    ["IPv6 ULA metadata literal", "[fd00:ec2::254]", 6, "fd00:ec2::254"],
+    ["non-metadata link-local IPv4 literal", "169.254.42.42", 4, undefined],
   ])(
-    "rejects plugin-supplied allowedOrigins entry: $name",
-    async ({ hostname, family, resolvedAddress }) => {
+    "rejects plugin-supplied allowedOrigins entry: $0",
+    async (_name, hostname, family, resolvedAddress) => {
       const baseUrl = `http://${hostname}/v1`;
       const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
       expect(policy?.allowedOrigins).toEqual([new URL(baseUrl).origin]);

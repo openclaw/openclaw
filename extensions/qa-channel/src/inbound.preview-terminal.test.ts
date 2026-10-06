@@ -31,17 +31,6 @@ describe("QA preview terminal ownership", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("cannot edit a promoted final from a late partial", async () => {
-    const turn = await assembledTurn();
-    await turn.replyOptions?.onPartialReply?.({ text: "draft" });
-    await turn.delivery.deliver({ text: "answer" }, { kind: "final" });
-    await turn.replyOptions?.onPartialReply?.({ text: "late draft" });
-    expect(sendQaBusMessage).toHaveBeenCalledOnce();
-    expect(editQaBusMessage).toHaveBeenCalledOnce();
-    expect(editQaBusMessage).toHaveBeenCalledWith(expect.objectContaining({ text: "answer" }));
-    expect(deleteQaBusMessage).not.toHaveBeenCalled();
-  });
-
   it("does not delete a promoted answer during later error cleanup", async () => {
     const turn = await assembledTurn();
     await turn.replyOptions?.onPartialReply?.({ text: "draft" });
@@ -125,7 +114,9 @@ describe("QA preview terminal ownership", () => {
     release.resolve();
     await Promise.all([final, late]);
     expect(editQaBusMessage).toHaveBeenCalledOnce();
+    expect(editQaBusMessage).toHaveBeenCalledWith(expect.objectContaining({ text: "answer" }));
     expect(sendQaBusMessage).toHaveBeenCalledOnce();
+    expect(deleteQaBusMessage).not.toHaveBeenCalled();
   });
 
   it("keeps cleanup ownership when the final edit failed", async () => {

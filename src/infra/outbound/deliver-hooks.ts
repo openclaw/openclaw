@@ -24,7 +24,6 @@ import {
   type OutboundDeliveryFailureStage,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
-  type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
 import type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
 import {
@@ -150,15 +149,14 @@ export async function applyMessageSendingHook(params: {
   hookMetadata?: Record<string, unknown>;
   contentRewritten: boolean;
   payload: ReplyPayload;
-  payloadSummary: NormalizedOutboundPayload;
 }> {
+  const unchanged = () => ({
+    cancelled: false,
+    contentRewritten: false,
+    payload: params.payload,
+  });
   if (!params.enabled) {
-    return {
-      cancelled: false,
-      contentRewritten: false,
-      payload: params.payload,
-      payloadSummary: params.payloadSummary,
-    };
+    return unchanged();
   }
   try {
     const group = getGroupThreadDispatchContext();
@@ -184,65 +182,38 @@ export async function applyMessageSendingHook(params: {
     );
     if (sendingResult?.cancel) {
       return {
+        ...unchanged(),
         cancelled: true,
         ...(sendingResult.cancelReason ? { cancelReason: sendingResult.cancelReason } : {}),
         ...(sendingResult.metadata ? { hookMetadata: sendingResult.metadata } : {}),
-        contentRewritten: false,
-        payload: params.payload,
-        payloadSummary: params.payloadSummary,
       };
     }
     if (sendingResult?.content == null) {
-      return {
-        cancelled: false,
-        contentRewritten: false,
-        payload: params.payload,
-        payloadSummary: params.payloadSummary,
-      };
+      return unchanged();
     }
-    if (params.payloadSummary.hookContent && !params.payloadSummary.text) {
-      const spokenText = sendingResult.content;
-      return {
-        cancelled: false,
-        contentRewritten: true,
-        payload: {
-          ...params.payload,
-          spokenText,
-        },
-        payloadSummary: {
-          ...params.payloadSummary,
-          hookContent: spokenText,
-        },
-      };
-    }
-    const payload = {
+    const spokenOnly = params.payloadSummary.hookContent && !params.payloadSummary.text;
+    const payload = copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
-      text: sendingResult.content,
-    };
+      [spokenOnly ? "spokenText" : "text"]: sendingResult.content,
+    });
     return {
       cancelled: false,
       contentRewritten: true,
       payload,
-      payloadSummary: {
-        ...params.payloadSummary,
-        text: sendingResult.content,
-      },
     };
   } catch {
     // Don't block delivery on hook failure.
-    return {
-      cancelled: false,
-      contentRewritten: false,
-      payload: params.payload,
-      payloadSummary: params.payloadSummary,
-    };
+    return unchanged();
   }
 }
 
-export async function applyReplyPayloadSendingHook(params: {
-  hook: QueuedReplyPayloadSendingHook | undefined;
-  payload: ReplyPayload;
-}): Promise<{
+export async function applyReplyPayloadSendingHook(
+  params: {
+    hook: QueuedReplyPayloadSendingHook | undefined;
+    payload: ReplyPayload;
+  },
+  hookRunner = getGlobalHookRunner(),
+): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
   changed: boolean;
@@ -250,14 +221,17 @@ export async function applyReplyPayloadSendingHook(params: {
   if (!params.hook) {
     return { cancelled: false, payload: params.payload, changed: false };
   }
-  const nextPayload = await runReplyPayloadSendingHook({
-    payload: params.payload,
-    kind: params.hook.kind,
-    ...(params.hook.channel ? { channel: params.hook.channel } : {}),
-    ...(params.hook.sessionKey ? { sessionKey: params.hook.sessionKey } : {}),
-    ...(params.hook.runId ? { runId: params.hook.runId } : {}),
-    context: params.hook.context,
-  });
+  const nextPayload = await runReplyPayloadSendingHook(
+    {
+      payload: params.payload,
+      kind: params.hook.kind,
+      ...(params.hook.channel ? { channel: params.hook.channel } : {}),
+      ...(params.hook.sessionKey ? { sessionKey: params.hook.sessionKey } : {}),
+      ...(params.hook.runId ? { runId: params.hook.runId } : {}),
+      context: params.hook.context,
+    },
+    hookRunner,
+  );
   if (!nextPayload) {
     return { cancelled: true, payload: params.payload, changed: false };
   }
@@ -285,14 +259,9 @@ export function toOutboundDeliveryError(params: {
   });
 }
 
-export function suppressedPayloadOutcome(params: {
-  index: number;
-  reason: OutboundPayloadDeliverySuppressionReason;
-  hookEffect?: {
-    cancelReason?: string;
-    metadata?: Record<string, unknown>;
-  };
-}): OutboundPayloadDeliveryOutcome {
+export function suppressedPayloadOutcome(
+  params: Omit<Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }>, "status">,
+): OutboundPayloadDeliveryOutcome {
   return {
     index: params.index,
     status: "suppressed",
@@ -300,5 +269,3 @@ export function suppressedPayloadOutcome(params: {
     ...(params.hookEffect ? { hookEffect: params.hookEffect } : {}),
   };
 }
-
-/** Adds directive-derived media to the queue copy before spool custody. */

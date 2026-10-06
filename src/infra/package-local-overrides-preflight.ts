@@ -1,8 +1,5 @@
 import { FsSafeError, root as openFsRoot } from "./fs-safe.js";
-import {
-  readPackageDistContentInventoryIfPresent,
-  type PackageDistContentInventoryEntry,
-} from "./package-dist-inventory.js";
+import { readPackageDistContentInventoryIfPresent } from "./package-dist-inventory.js";
 import {
   fileModesHaveSameExecutableSemantics,
   inspectLocalOverrideTarget,
@@ -13,21 +10,19 @@ import {
   type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
 
-function buildCurrentInventoryMap(entries: PackageDistContentInventoryEntry[] | null) {
-  return new Map((entries ?? []).map((entry) => [entry.path, entry]));
-}
-
 export async function preflightLocalOverrides(params: {
   packageRoot: string;
   realPackageRoot: string;
   plan: LocalPackageOverridesPlan;
 }): Promise<LocalPackageOverridesResult["conflicts"]> {
-  const nextInventory = buildCurrentInventoryMap(
-    await readPackageDistContentInventoryIfPresent(params.packageRoot),
+  const nextInventory = new Map(
+    ((await readPackageDistContentInventoryIfPresent(params.packageRoot)) ?? []).map((entry) => [
+      entry.path,
+      entry,
+    ]),
   );
   const packageFs = await openFsRoot(params.packageRoot, {
     hardlinks: "reject",
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   const conflicts: LocalPackageOverridesResult["conflicts"] = [];
@@ -43,10 +38,6 @@ export async function preflightLocalOverrides(params: {
       if (nextEntry || targetProbe.status !== "missing") {
         conflicts.push({ path: change.path, reason: "target-exists" });
       }
-      continue;
-    }
-    if (!change.baseline) {
-      conflicts.push({ path: change.path, reason: "target-missing" });
       continue;
     }
     if (targetProbe.status === "blocked") {
@@ -124,12 +115,8 @@ export async function preflightLocalOverrides(params: {
   }
   if (topologyResolutionFailed) {
     for (const change of params.plan.changes) {
-      if (conflictingPaths.has(change.path)) {
-        continue;
-      }
       conflicts.push({ path: change.path, reason: "target-inspection-failed" });
     }
-    return conflicts;
   }
   return conflicts;
 }

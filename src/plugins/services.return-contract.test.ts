@@ -2,8 +2,11 @@ import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import { startPluginServices } from "./services.js";
-import { createRegistry, createServiceConfig } from "./services.test-support.js";
+import {
+  createRegistry,
+  createServiceConfig,
+  startPluginServices,
+} from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginService } from "./types.js";
 
@@ -117,6 +120,7 @@ it.each(["native", "plain service", "managed service"] as const)(
       pluginId: id,
       origin: "workspace",
       source: "test",
+      id: (surface === "managed service" ? instance.wrap(service) : service).id.trim(),
       service: surface === "managed service" ? instance.wrap(service) : service,
     });
     const handle =

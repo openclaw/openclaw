@@ -2,5 +2,9 @@
 // Kysely-backed query helpers live in openclaw-runtime-kysely.ts so this
 // bridge stays off the kysely value graph for schema/transaction consumers.
 
-export { migrateSqliteSchemaToStrict } from "../../../../src/infra/sqlite-strict.js";
+export {
+  migrateSqliteSchemaToStrict,
+  migrateSqliteSchemaToStrictInTransaction,
+} from "../../../../src/infra/sqlite-strict.js";
+export { assertSqliteSchemaContains } from "../../../../src/infra/sqlite-schema-contract.js";
 export { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";

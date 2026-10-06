@@ -98,6 +98,10 @@ test.each([
   ["S-M-C-PgDn", `${ESC}[6;8~`],
   ["S-insert", `${ESC}[2;2~`],
   ["S-M-del", `${ESC}[3;4~`],
+  ["C-F1", `${ESC}[1;5P`],
+  ["S-F4", `${ESC}[1;2S`],
+  ["S-F5", `${ESC}[15;2~`],
+  ["M-F12", `${ESC}[24;3~`],
 ])("encodeKeySequence applies xterm modifiers to %s in every cursor mode", (key, data) => {
   for (const mode of [undefined, "normal", "application"] as const) {
     expect(encodeKeySequence({ keys: [key] }, mode)).toEqual({
@@ -105,6 +109,16 @@ test.each([
       warnings: [],
     });
   }
+});
+
+test.each([
+  ["C-Space", "\x00"],
+  ["C-M-Space", `${ESC}\x00`],
+  ["M-Space", `${ESC} `],
+  ["F1", `${ESC}OP`],
+  ["F5", `${ESC}[15~`],
+])("encodeKeySequence encodes %s", (key, data) => {
+  expect(encodeKeySequence({ keys: [key] })).toEqual({ data: Buffer.from(data), warnings: [] });
 });
 
 test("encodeKeySequence supports hex + literal with warnings", () => {

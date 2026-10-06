@@ -1,3 +1,4 @@
+import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   cancelProviderLoginFlow,
@@ -24,16 +25,13 @@ import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import type { TelegramCommandDispatch } from "./bot-native-command-dispatch.js";
-import { buildTelegramRoutingTarget, resolveTelegramCommandAuthorization } from "./bot/helpers.js";
+import { buildTelegramRoutingTarget } from "./bot/helpers.js";
 
 const activeTelegramProviderLoginFlows = createProviderLoginFlowRegistry();
 
-type TelegramLoginDeviceCode = {
-  title: string;
-  code: string;
-  expiresInMinutes?: number;
-  message?: string;
-};
+type TelegramLoginDeviceCode = Parameters<
+  NonNullable<Parameters<typeof runProviderChannelLoginFlow>[0]["sendDeviceCode"]>
+>[0];
 
 // Telegram's inline-code entity provides the tap-to-copy affordance needed for
 // short-lived device codes; plain text and literal backticks do not.
@@ -69,21 +67,14 @@ export async function executeTelegramLoginCommand(params: {
   currentProvider?: string;
 }): Promise<boolean> {
   const { dispatch } = params;
-  const sendLoginMessage = async (text: string) => {
-    await withTelegramApiErrorLogging({
-      operation: "sendMessage",
-      runtime: dispatch.runtime,
-      fn: () => dispatch.bot.api.sendMessage(dispatch.chatId, text, dispatch.threadParams ?? {}),
-    });
-  };
-  const sendLoginDeviceCode = async (deviceCode: TelegramLoginDeviceCode) => {
+  const sendLoginMessage = async (text: string, parseMode?: "HTML") => {
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
       runtime: dispatch.runtime,
       fn: () =>
-        dispatch.bot.api.sendMessage(dispatch.chatId, formatTelegramLoginDeviceCode(deviceCode), {
+        dispatch.bot.api.sendMessage(dispatch.chatId, text, {
           ...dispatch.threadParams,
-          parse_mode: "HTML",
+          ...(parseMode ? { parse_mode: parseMode } : {}),
         }),
     });
   };
@@ -99,17 +90,17 @@ export async function executeTelegramLoginCommand(params: {
     );
   };
   const assertCurrent = (config = dispatch.telegramDeps.getRuntimeConfig()) => {
-    const authorization = resolveTelegramCommandAuthorization({
+    dispatch.assertOwnerCurrent?.();
+    const authorization = resolveCommandAuthorization({
       cfg: config,
-      accountId: dispatch.route.accountId,
-      chatId: dispatch.chatId,
-      isGroup: dispatch.isGroup,
-      threadSpec: dispatch.threadSpec,
-      senderId: dispatch.senderId,
-      senderUsername: dispatch.senderUsername,
+      ctx: dispatch.ownerContext,
       commandAuthorized: dispatch.commandAuthorized,
     });
-    if (!authorization.senderIsOwner || !authorization.isAuthorizedSender) {
+    if (
+      !dispatch.senderIsOwner ||
+      !authorization.senderIsOwner ||
+      !authorization.isAuthorizedSender
+    ) {
       throw new Error("Provider login authority is no longer active.");
     }
   };
@@ -223,7 +214,7 @@ export async function executeTelegramLoginCommand(params: {
         },
         sendDeviceCode: async (deviceCode) => {
           flowSignal.throwIfAborted();
-          await sendLoginDeviceCode(deviceCode);
+          await sendLoginMessage(formatTelegramLoginDeviceCode(deviceCode), "HTML");
           flowSignal.throwIfAborted();
           signInActionWasDelivered = true;
           signInActionDelivered.resolve();

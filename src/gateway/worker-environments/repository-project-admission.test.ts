@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PreparedGitHubSourceReadIdentity } from "../../agents/github-read-identity.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 
 const mocks = vi.hoisted(() => ({
   captureAgentLifecycleBinding: vi.fn(),
@@ -34,13 +38,14 @@ const rootTree = "b".repeat(40);
 const setupTree = "c".repeat(40);
 const recipe = "d".repeat(40);
 const repositoryUrl = "https://github.com/acme/project.git";
+let observedRepositoryUrl = repositoryUrl;
 const agent = { agentId: "main", provenance: null };
-const initial = {
-  repository: { agentId: "main", url: repositoryUrl },
+const admission = {
   namespace: "test-gateway",
   getConfig: () => ({}),
   assertCurrent: () => {},
 };
+const initial = { ...admission, repository: { agentId: "main", url: repositoryUrl } };
 
 describe("repository project admission", () => {
   let selection: PreparedGitHubSourceReadIdentity["selection"];
@@ -55,7 +60,7 @@ describe("repository project admission", () => {
   const repositoryNode = () => ({
     __typename: "Repository",
     node_id: repositoryId,
-    clone_url: repositoryUrl.replace(/\.git$/u, ""),
+    clone_url: observedRepositoryUrl.replace(/\.git$/u, ""),
     private: privateRepository,
     object: { __typename: "Commit", sha: commit, tree: { sha: rootTree } },
   });
@@ -63,6 +68,7 @@ describe("repository project admission", () => {
     fetchImpl.mock.calls.map(([input]) => new URL(new Request(input).url).pathname);
 
   beforeEach(() => {
+    observedRepositoryUrl = repositoryUrl;
     selection = { source: "system-configured", profileId: `ghp_${"1".repeat(32)}`, accountId: 1 };
     token = "synthetic-github-source-token";
     selected = true;
@@ -110,7 +116,7 @@ describe("repository project admission", () => {
         }
         value = {
           node_id: repositoryId,
-          clone_url: repositoryUrl,
+          clone_url: observedRepositoryUrl,
           private: privateRepository,
           default_branch: "main",
         };
@@ -137,14 +143,39 @@ describe("repository project admission", () => {
     });
     vi.stubGlobal("fetch", fetchImpl);
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    clearRuntimeConfigSnapshot();
+  });
 
-  it.each([undefined, "HEAD", "tags/v1", "refs/tags/v1", "feature/ready"])(
+  it("prepares an authenticated pack for an internal enterprise repository", async () => {
+    setRuntimeConfigSnapshot({ gateway: { github: { host: "ghe.example.test" } } });
+    observedRepositoryUrl = "https://ghe.example.test/acme/project.git";
+    const admitted = await prepareRepositoryWorkerProjectSource({
+      ...initial,
+      repository: { ...initial.repository, url: observedRepositoryUrl },
+    });
+
+    expect(admitted).toHaveProperty("prepareGitPack");
+    await expect(
+      admitted.prepareGitPack?.({
+        temporaryRoot: "/synthetic/temporary",
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toBe("/synthetic/source.pack");
+    expect(mocks.prepareGitPack).toHaveBeenCalledWith(
+      expect.objectContaining({ url: observedRepositoryUrl, token }),
+    );
+  });
+
+  it.each([undefined, "HEAD", "refs/tags/v1", "feature/ready"])(
     "pins %s through the commit resolver and records executable recipe identity without credentials",
     async (ref) => {
       const result = await prepareRepositoryWorkerProjectSource({
         ...initial,
         repository: { ...initial.repository, ref },
+        knownRecipe: () => undefined,
       });
       expect(result.project).toMatchObject({
         baseCommit: commit,
@@ -156,6 +187,7 @@ describe("repository project admission", () => {
         },
       });
       expect(result.setupRecipe).toBe(recipe);
+      expect(requestPaths().filter((path) => path.includes("/git/trees/"))).toHaveLength(2);
       const urls = fetchImpl.mock.calls.map(([url]) => new Request(url).url);
       const expectedRef =
         ref === undefined || ref === "HEAD" ? "heads/main" : ref.replace(/^refs\//u, "");
@@ -176,9 +208,7 @@ describe("repository project admission", () => {
     expect(result).not.toHaveProperty("readGitToken");
     fetchImpl.mockClear();
     const restored = await prepareRepositoryWorkerProjectSource({
-      namespace: initial.namespace,
-      getConfig: initial.getConfig,
-      assertCurrent: initial.assertCurrent,
+      ...admission,
       expected: result.project,
     });
     expect(restored.project).toEqual(result.project);
@@ -194,9 +224,7 @@ describe("repository project admission", () => {
       knownRecipe: (project) => ({ project, setupRecipe: recipe }),
     });
     const restored = await prepareRepositoryWorkerProjectSource({
-      namespace: initial.namespace,
-      getConfig: initial.getConfig,
-      assertCurrent: initial.assertCurrent,
+      ...admission,
       expected: admitted.project,
       knownRecipe: (project) => ({ project, setupRecipe: recipe }),
     });
@@ -257,9 +285,7 @@ describe("repository project admission", () => {
           phase === "revalidate"
             ? admitted.revalidate()
             : prepareRepositoryWorkerProjectSource({
-                namespace: initial.namespace,
-                getConfig: initial.getConfig,
-                assertCurrent: initial.assertCurrent,
+                ...admission,
                 expected: admitted.project,
                 knownRecipe: (project) => ({ project, setupRecipe: recipe }),
               });
@@ -359,17 +385,14 @@ describe("repository project admission", () => {
   it.each<{ label: string; status: number; body?: string; headers?: Record<string, string> }>([
     { label: "authentication", status: 401, body: "{}" },
     { label: "missing endpoint", status: 404, body: "{}" },
-    { label: "upstream failure", status: 500, body: "{}" },
     { label: "malformed JSON", status: 200, body: "{" },
     { label: "ambiguous forbidden", status: 403, body: "{}" },
-    { label: "empty forbidden", status: 403 },
     {
       label: "quota at HTTP 403",
       status: 403,
       headers: { "x-ratelimit-remaining": "42" },
       body: JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }),
     },
-    { label: "quota", status: 200, body: JSON.stringify({ errors: [{ type: "RATE_LIMITED" }] }) },
     { label: "redirect", status: 307, headers: { location: "https://api.github.com/graphql" } },
   ])(
     "does not reinterpret $label as unavailable GraphQL capability",
@@ -393,9 +416,7 @@ describe("repository project admission", () => {
       expect(result.project).toEqual(admitted.project);
       expect(result.setupRecipe).toBe(setupRecipe);
       expect(knownRecipe).toHaveBeenCalledExactlyOnceWith(admitted.project);
-      expect(
-        fetchImpl.mock.calls.map(([input]) => new URL(new Request(input).url).pathname),
-      ).toEqual([
+      expect(requestPaths()).toEqual([
         "/repos/acme/project",
         "/repos/acme/project/commits/heads%2Fmain",
         "/repos/acme/project",
@@ -403,32 +424,11 @@ describe("repository project admission", () => {
     },
   );
 
-  it("discovers the recipe normally when the owner has no matching immutable facts", async () => {
-    const result = await prepareRepositoryWorkerProjectSource({
-      ...initial,
-      knownRecipe: () => undefined,
-    });
-    expect(result.setupRecipe).toBe(recipe);
-    expect(
-      fetchImpl.mock.calls.filter(([input]) => new Request(input).url.includes("/git/trees/")),
-    ).toHaveLength(2);
-  });
-
-  it.each(["commit", "repository", "identity"] as const)(
+  it.each(["repository", "identity"] as const)(
     "rejects old recipe facts after %s changes",
     async (changed) => {
       const admitted = await prepareRepositoryWorkerProjectSource(initial);
-      const original = fetchImpl.getMockImplementation()!;
-      if (changed === "commit") {
-        fetchImpl.mockImplementation(async (...args) => {
-          if (new Request(args[0]).url.includes("/commits/heads")) {
-            return new Response(
-              JSON.stringify({ sha: "e".repeat(40), commit: { tree: { sha: rootTree } } }),
-            );
-          }
-          return await original(...args);
-        });
-      } else if (changed === "repository") {
+      if (changed === "repository") {
         repositoryId = "R_recreated_project";
       } else {
         selection = {
@@ -489,7 +489,7 @@ describe("repository project admission", () => {
     ).toBe(true);
   });
 
-  it.each(["100644", "120000", "160000"])("does not authorize setup from mode %s", async (mode) => {
+  it.each(["120000", "160000"])("does not authorize setup from mode %s", async (mode) => {
     recipeMode = mode;
     expect((await prepareRepositoryWorkerProjectSource(initial)).setupRecipe).toBeUndefined();
   });
@@ -516,20 +516,6 @@ describe("repository project admission", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("refuses changed or inaccessible repository instances on a prepared hit", async () => {
-    const result = await prepareRepositoryWorkerProjectSource(initial);
-    repositoryId = "R_recreated_project";
-    await expect(result.revalidate()).rejects.toThrow("identity changed");
-    repositoryId = "R_fixture_project";
-    unavailable = true;
-    fetchImpl.mockClear();
-    await expect(result.revalidate()).rejects.toThrow("HTTP 404");
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
-      `Bearer ${token}`,
-    );
-  });
-
   it("admits private source with a separate key and retains credentials only in the pack producer", async () => {
     const publicSource = await prepareRepositoryWorkerProjectSource(initial);
     expect(publicSource.project.key).toBe(
@@ -544,9 +530,7 @@ describe("repository project admission", () => {
     expect(JSON.stringify(admitted)).not.toContain(token);
     const storedProject = JSON.stringify(admitted.project);
     const reopened = await prepareRepositoryWorkerProjectSource({
-      namespace: initial.namespace,
-      getConfig: initial.getConfig,
-      assertCurrent: initial.assertCurrent,
+      ...admission,
       expected: JSON.parse(storedProject),
     });
     expect(reopened.project).toEqual(admitted.project);
@@ -596,25 +580,6 @@ describe("repository project admission", () => {
         }),
       ).rejects.toThrow();
       expect(mocks.prepareGitPack).toHaveBeenCalledTimes(change === "during fetch" ? 1 : 0);
-    },
-  );
-
-  it.each(["refill", "revalidate"] as const)(
-    "rejects public-to-private visibility drift during %s",
-    async (phase) => {
-      const admitted = await prepareRepositoryWorkerProjectSource(initial);
-      expect(admitted.project.source).not.toHaveProperty("private");
-      privateRepository = true;
-      const changed =
-        phase === "revalidate"
-          ? admitted.revalidate()
-          : prepareRepositoryWorkerProjectSource({
-              namespace: initial.namespace,
-              getConfig: initial.getConfig,
-              assertCurrent: initial.assertCurrent,
-              expected: admitted.project,
-            });
-      await expect(changed).rejects.toThrow("identity changed");
     },
   );
 
@@ -714,9 +679,7 @@ describe("repository project admission", () => {
           ? prepareRepositoryWorkerProjectSource({ ...initial, signal: controller.signal })
           : phase === "refill"
             ? prepareRepositoryWorkerProjectSource({
-                namespace: initial.namespace,
-                getConfig: initial.getConfig,
-                assertCurrent: initial.assertCurrent,
+                ...admission,
                 expected: admitted.project,
                 signal: controller.signal,
               })

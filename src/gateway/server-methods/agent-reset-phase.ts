@@ -5,6 +5,7 @@ import {
 import {
   ErrorCodes,
   errorShape,
+  type ErrorShape,
   missingScopeErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,8 +13,9 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
 import { setGatewayDedupeEntries } from "../agent-turn/agent-dedupe.js";
-import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
+import { ADMIN_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
+import { resolveAgentRunSessionCreation } from "../session-creation-provenance.js";
+import { performGatewaySessionReset } from "../session-reset-service.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { formatForLog } from "../ws-log.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
@@ -21,10 +23,8 @@ import {
   buildBareSessionResetResponse,
   loadBareSessionResetDeliverySession,
   resolveBareSessionResetResult,
-  runSessionResetFromAgent,
 } from "./agent-session-reset.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { resolveAgentRunSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type CommittedResetCompletion = {
@@ -33,6 +33,7 @@ export type CommittedResetCompletion = {
   sessionKey: string;
   agentId?: string;
   followUpPending: boolean;
+  replyError?: ErrorShape;
 };
 
 type AgentResetPhaseResult = {
@@ -82,7 +83,7 @@ export async function runAgentResetPhase(params: {
     return { ...base, stop: true, accepted: true };
   }
   const postResetMessage = normalizeOptionalString(resetCommandMatch[2]) ?? "";
-  if (!clientHasAdminScope(params.client)) {
+  if (!hasGatewayAdminScope(params.client)) {
     params.respond(
       false,
       undefined,
@@ -92,19 +93,22 @@ export async function runAgentResetPhase(params: {
   }
   const resetReason =
     normalizeOptionalLowercaseString(resetCommandMatch[1]) === "new" ? "new" : "reset";
-  let resetResult: Awaited<ReturnType<typeof runSessionResetFromAgent>>;
+  params.assertAdmissionCurrent?.();
+  let resetResult: Awaited<ReturnType<typeof performGatewaySessionReset>>;
   try {
-    const creation = prepareSkillLibrarySessionCreation(
+    const creation = await prepareSkillLibrarySessionCreation(
       params.client,
       params.context.getRuntimeConfig,
       resolveAgentRunSessionCreation(params.client),
     );
-    resetResult = await runSessionResetFromAgent({
+    resetResult = await performGatewaySessionReset({
       key: params.requestedSessionKey,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       reason: resetReason,
+      commandSource: "gateway:agent",
+      armSessionDiffBaselineCapture: true,
       creation,
-      ...(params.client?.authenticatedUserProfile
+      ...(params.client?.authenticatedUserProfile?.profileId
         ? { requestingOperatorProfileId: params.client.authenticatedUserProfile.profileId }
         : {}),
       ...(params.client?.internal?.operatorRoleActor
@@ -140,18 +144,22 @@ export async function runAgentResetPhase(params: {
     params.respond(false, undefined, resetResult.error);
     return { ...base, stop: true, accepted: false };
   }
+  const resetSessionId =
+    "incognitoDeleted" in resetResult ? undefined : resetResult.entry.sessionId;
   const next = {
     ...base,
     requestedSessionKey: resetResult.key,
-    resolvedSessionId: resetResult.sessionId ?? params.resolvedSessionId,
+    resolvedSessionId: resetSessionId ?? params.resolvedSessionId,
   };
-  params.setCommittedResetCompletion({
+  const completion: CommittedResetCompletion = {
     reason: resetReason,
-    sessionId: resetResult.sessionId,
+    sessionId: resetSessionId,
     sessionKey: resetResult.key,
     agentId: params.agentId,
     followUpPending: Boolean(postResetMessage),
-  });
+  };
+  params.setCommittedResetCompletion(completion);
+  params.assertAdmissionCurrent?.();
   if (postResetMessage) {
     if (
       params.abortForLifecycleRotation({ sessionKey: resetResult.key, agentId: params.agentId })
@@ -171,7 +179,6 @@ export async function runAgentResetPhase(params: {
     const deliverySession =
       params.request.deliver === true
         ? loadBareSessionResetDeliverySession({
-            cfg: params.cfg,
             sessionKey: resetResult.key,
             ...(params.agentId ? { agentId: params.agentId } : {}),
           })
@@ -180,14 +187,18 @@ export async function runAgentResetPhase(params: {
       cfg: deliverySession?.cfg ?? params.cfg,
       context: params.context,
       reason: resetReason,
-      sessionId: resetResult.sessionId,
+      sessionId: resetSessionId,
       sessionKey: resetResult.key,
       agentId: deliverySession?.agentId ?? params.agentId,
       sessionEntry: deliverySession?.entry,
       request: params.sessionKeyFromTo ? { ...params.request, to: undefined } : params.request,
       runId: params.runId,
-      assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
+      assertCurrent: () => {
+        params.assertAdmissionCurrent?.();
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      },
     });
+    params.assertAdmissionCurrent?.();
     const responsePayload = buildBareSessionResetResponse({
       runId: params.runId,
       result: resetAckResult,
@@ -205,12 +216,18 @@ export async function runAgentResetPhase(params: {
     });
     return { ...next, stop: true, accepted: true };
   } catch (err) {
+    const error = errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err));
+    // The reset committed, but its requested reply failed. Cleanup and restart
+    // replay must retain that outcome without repeating either side effect.
+    if (params.request.deliver === true) {
+      params.setCommittedResetCompletion({ ...completion, replyError: error });
+    }
     if (
       params.abortForLifecycleRotation({ sessionKey: resetResult.key, agentId: params.agentId })
     ) {
       return { ...next, stop: true, accepted: true };
     }
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+    params.respond(false, undefined, error);
     return { ...next, stop: true, accepted: false };
   }
 }

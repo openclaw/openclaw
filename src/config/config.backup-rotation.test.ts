@@ -87,6 +87,9 @@ describe("config backup rotation", () => {
             "gateway.port",
             String(19000 + version),
           ]);
+          if (version === 1) {
+            await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(original);
+          }
         }
 
         await expect(readPort()).resolves.toBe(19006);
@@ -95,47 +98,41 @@ describe("config backup rotation", () => {
         await expect(readPort(".bak.2")).resolves.toBe(19003);
         await expect(readPort(".bak.3")).resolves.toBe(19002);
         await expect(readPort(".bak.4")).resolves.toBe(19001);
+        for (const suffix of [".bak", ".bak.1"]) {
+          expectPosixMode((await fs.stat(`${configPath}${suffix}`)).mode, 0o600);
+        }
         await expectPathMissing(`${configPath}.bak.5`);
         await expect(fs.readFile(`${configPath}.pre-update`, "utf-8")).resolves.toBe(original);
+        expectPosixMode((await fs.stat(`${configPath}.pre-update`)).mode, 0o600);
         await expect(fs.readFile(manualBackupPath, "utf-8")).resolves.toBe(manualBackupContent);
       },
     );
   });
 
-  it.each(["root", "include"])(
-    "openclaw config set preserves original %s bytes in private recovery backups",
-    async (location) => {
-      const includeRaw = '{"level":"info"}\n';
-      const rootRaw =
-        JSON.stringify({
-          gateway: { mode: "local" },
-          logging: location === "include" ? { $include: "logging.json" } : { level: "info" },
-        }) + "\n";
-      await withConfigFileHarness(
-        "openclaw-config-private-backup-",
-        rootRaw,
-        async ({ configPath, tempDir }) => {
-          const target = location === "include" ? path.join(tempDir, "logging.json") : configPath;
-          const original = location === "include" ? includeRaw : rootRaw;
-          await fs.writeFile(target, original, { mode: 0o600 });
-          const previousBackup = '{"level":"warn"}\n';
-          await fs.writeFile(`${target}.bak`, previousBackup, { mode: 0o644 });
+  it("openclaw config set preserves original include bytes in private recovery backups", async () => {
+    const original = '{"level":"info"}\n';
+    const rootRaw = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
+    await withConfigFileHarness(
+      "openclaw-config-private-backup-",
+      rootRaw,
+      async ({ configPath, tempDir }) => {
+        const target = path.join(tempDir, "logging.json");
+        await fs.writeFile(target, original, { mode: 0o600 });
+        const previousBackup = '{"level":"warn"}\n';
+        await fs.writeFile(`${target}.bak`, previousBackup, { mode: 0o644 });
 
-          await runRegisteredConfigCommand(["config", "set", "logging.level", "debug"]);
+        await runRegisteredConfigCommand(["config", "set", "logging.level", "debug"]);
 
-          const saved = JSON.parse(await fs.readFile(target, "utf8"));
-          expect(location === "include" ? saved.level : saved.logging.level).toBe("debug");
-          await expect(fs.readFile(`${target}.bak`, "utf-8")).resolves.toBe(original);
-          await expect(fs.readFile(`${target}.bak.1`, "utf-8")).resolves.toBe(previousBackup);
-          expectPosixMode((await fs.stat(`${target}.bak`)).mode, 0o600);
-          expectPosixMode((await fs.stat(`${target}.bak.1`)).mode, 0o600);
-          if (location === "include") {
-            await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
-          }
-        },
-      );
-    },
-  );
+        const saved = JSON.parse(await fs.readFile(target, "utf8"));
+        expect(saved.level).toBe("debug");
+        await expect(fs.readFile(`${target}.bak`, "utf-8")).resolves.toBe(original);
+        await expect(fs.readFile(`${target}.bak.1`, "utf-8")).resolves.toBe(previousBackup);
+        expectPosixMode((await fs.stat(`${target}.bak`)).mode, 0o600);
+        expectPosixMode((await fs.stat(`${target}.bak.1`)).mode, 0o600);
+        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
+      },
+    );
+  });
 
   it.skipIf(IS_WINDOWS).each(["symlink", "hardlink"])(
     "openclaw config set leaves an external file unchanged through an include backup %s",
@@ -150,6 +147,9 @@ describe("config backup rotation", () => {
           const externalRaw = "external file must stay unchanged\n";
           await fs.writeFile(includePath, '{"level":"info"}\n');
           await fs.writeFile(externalPath, externalRaw, { mode: 0o644 });
+          // Establish the fixture mode independently of the process umask.
+          await fs.chmod(externalPath, 0o644);
+          expectPosixMode((await fs.stat(externalPath)).mode, 0o644);
           const backupPath = `${includePath}.bak`;
           await (linkKind === "symlink" ? fs.symlink : fs.link)(externalPath, backupPath);
 
@@ -261,28 +261,6 @@ describe("config backup rotation", () => {
       );
     },
   );
-
-  it("createPreUpdateConfigSnapshot writes .pre-update outside rotation ring", async () => {
-    await withTempHome(async () => {
-      const configPath = resolveConfigPathFromTempState();
-      const content = JSON.stringify({ plugins: { installs: ["matrix"] } });
-      await fs.writeFile(configPath, content, { mode: 0o600 });
-
-      const { existsSync } = await import("node:fs");
-      await createPreUpdateConfigSnapshot({
-        configPath,
-        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
-      });
-
-      const snapshotPath = `${configPath}.pre-update`;
-      await expectRegularFile(snapshotPath);
-      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(content);
-      if (!IS_WINDOWS) {
-        const stat = await fs.stat(snapshotPath);
-        expectPosixMode(stat.mode, 0o600);
-      }
-    });
-  });
 
   it("createPreUpdateConfigSnapshot replaces a preexisting snapshot once per process", async () => {
     await withTempHome(async () => {
