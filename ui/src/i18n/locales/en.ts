@@ -4286,6 +4286,7 @@ export const en: TranslationMap & {
     },
     actions: {
       runNow: "Run now",
+      runNowStarting: "Starting…",
       runNowJob: "Run now: {name}",
       runIfDue: "Run if due",
       pauseJob: "Pause: {name}",

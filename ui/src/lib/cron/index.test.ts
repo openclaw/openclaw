@@ -1728,6 +1728,40 @@ describe("selected automation runtime refresh", () => {
     expect(state.cronError).toBe("Run queued. Run ID: queued-run");
   });
 
+  it("stops the run label once cron.run settles even while history refreshes slowly", async () => {
+    // The mutation lock is shared, so a slow cron.runs read used to keep Run
+    // saying "Starting…" after the run had already been accepted.
+    const job = createCronJob({ id: "selected", name: "Selected", state: {} });
+    const runResponse = createDeferred<unknown>();
+    const historyRead = createDeferred<CronRunsResult>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.run") {
+        return runResponse.promise;
+      }
+      if (method === "cron.runs") {
+        return historyRead.promise;
+      }
+      return {};
+    });
+    const state = createStateWithRequest(request, { cronJobs: [job] });
+
+    const mutation = runCronJob(state, job.id);
+    await vi.waitFor(() => {
+      expect(state.cronPendingAction).toBe("run");
+    });
+
+    // The run is accepted; the history refresh behind it is still pending.
+    runResponse.resolve({ ok: true, enqueued: true, runId: "run-1" });
+    await vi.waitFor(() => {
+      expect(state.cronPendingAction).toBeNull();
+    });
+    expect(state.cronBusy).toBe(true);
+
+    historyRead.resolve({ entries: [], total: 0, offset: 0, hasMore: false });
+    await mutation;
+    expect(state.cronBusy).toBe(false);
+  });
+
   it.each([
     { failedMethod: "cron.get", queueEvent: true },
     { failedMethod: "cron.status", queueEvent: true },
