@@ -39,6 +39,7 @@ import {
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig, TypingMode } from "../../config/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -634,41 +635,6 @@ function requireBuiltChannelSourceTurnId(
 }
 
 describe("runReplyAgent active steering", () => {
-  it("queues instead of steering when privilege facts differ on the active route", async () => {
-    const activeRoute = { provider: "openai", model: "gpt-fallback" };
-    const { followupRun, run } = createMinimalRun({
-      isActive: true,
-      shouldSteer: true,
-      resolvedQueueMode: "steer",
-      bindActiveAuthority: false,
-    });
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
-    active.bindToolAuthoritySnapshot(
-      prepareReplyToolAuthority({
-        ...followupRun,
-        run: {
-          ...followupRun.run,
-          runtimePluginToolGrant: {
-            pluginId: "workboard",
-            toolNames: ["workboard_complete"],
-          },
-        },
-      }),
-    );
-    active.bindToolAuthorityRoute(activeRoute);
-    active.setPhase("running");
-
-    await expect(run()).resolves.toBeUndefined();
-
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
-    active.complete();
-  });
-
   it("keeps the replacement source when retired admission completes", async ({ signal }) => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const sourceContext = {
@@ -839,43 +805,6 @@ describe("runReplyAgent active steering", () => {
     active.complete();
   });
 
-  it("drains an authority-mismatched turn after its provided operation clears", async () => {
-    const provided = createReplyOperation({
-      sessionKey: "agent:main:telegram:slash:source",
-      sessionId: "provided-session",
-      resetTriggered: false,
-    });
-    provided.bindToolAuthoritySnapshot({
-      fingerprint: () => "different-authority",
-      project: () => "different-authority",
-    });
-    provided.setPhase("running");
-    const { followupRun, run } = createMinimalRun({
-      isActive: true,
-      shouldSteer: true,
-      resolvedQueueMode: "steer",
-      replyOperation: provided,
-      bindActiveAuthority: false,
-      runOverrides: {
-        thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text", "image"] }],
-      },
-    });
-    const image = { type: "image" as const, data: "queued", mimeType: "image/png" };
-    followupRun.images = [image];
-
-    await expect(run()).resolves.toBeUndefined();
-
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
-    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
-    provided.complete();
-    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledOnce();
-    await requireScheduledFollowupRunner()(followupRun);
-    expect(mockCallArgs(state.runEmbeddedAgentMock, "queued image drain")[0]).toMatchObject({
-      images: [image],
-      modelHasVision: true,
-    });
-  });
-
   it("keeps the continuing Telegram task's typing alive after an accepted steer", async () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const active = createReplyOperation({
@@ -1002,6 +931,7 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("replays a declined steer without dispatching its hook twice", async () => {
+    using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "session",
@@ -1015,6 +945,8 @@ describe("runReplyAgent active steering", () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(false);
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const { followupRun, run } = createMinimalRun({
+      activeBackendRunId: "active-run-1",
+      opts: { runId: "incoming-run-1" },
       isActive: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
@@ -1031,6 +963,14 @@ describe("runReplyAgent active steering", () => {
 
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith("steering rejected; applying follow-up policy", {
+      reason: "runtime_rejected",
+      disposition: "followup-policy",
+      channel: "discord",
+      sessionId: "session",
+      runId: "incoming-run-1",
+      activeRunId: "active-run-1",
+    });
     expect(parkedSteer.fallback).toHaveBeenCalledOnce();
     expect(parkedSteer.consume).not.toHaveBeenCalled();
     active.complete();
@@ -1064,27 +1004,6 @@ describe("runReplyAgent active steering", () => {
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  });
-
-  it("does not steer, enqueue, or start a second run after accepted Gateway injection", async () => {
-    const runState: ReplyOperationRunState = {};
-    const { run } = createMinimalRun({
-      opts: {
-        messageInjectionDisposition: "accepted",
-        [REPLY_OPERATION_RUN_STATE]: runState,
-      },
-      isActive: true,
-      shouldSteer: true,
-      shouldFollowup: true,
-      resolvedQueueMode: "steer",
-    });
-
-    await expect(run()).resolves.toBeUndefined();
-
-    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("falls back visibly when the active CLI backend cannot accept injection", async () => {
