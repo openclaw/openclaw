@@ -2,7 +2,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   historyLane,
+  historyPageLane,
   maintenanceLane,
+  selectSessionHistoryReadLane,
   type SessionHistoryWorkerLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import { createHookRunner } from "../plugins/hooks.js";
@@ -43,8 +45,20 @@ beforeEach(() => {
 afterEach(() => resetGatewayWorkAdmission());
 
 it.each([
-  { reader: "history", lane: historyLane, outcome: "activate" },
-  { reader: "history", lane: historyLane, outcome: "close" },
+  { reader: "history", lane: historyPageLane, outcome: "activate" },
+  { reader: "history", lane: historyPageLane, outcome: "close" },
+  { reader: "metadata", lane: historyLane, outcome: "activate" },
+  { reader: "metadata", lane: historyLane, outcome: "close" },
+  {
+    reader: "transcript",
+    lane: selectSessionHistoryReadLane("transcript-hydration"),
+    outcome: "activate",
+  },
+  {
+    reader: "transcript",
+    lane: selectSessionHistoryReadLane("transcript-hydration"),
+    outcome: "close",
+  },
   { reader: "maintenance", lane: maintenanceLane, outcome: "activate" },
   { reader: "maintenance", lane: maintenanceLane, outcome: "close" },
 ])(
@@ -52,7 +66,7 @@ it.each([
   async ({ lane: blockedLane, outcome }) => {
     const entered = createDeferred();
     const prepared = createDeferred();
-    mocks.prewarm.mockImplementation(async (_database, lane = historyLane) => {
+    mocks.prewarm.mockImplementation(async (_database, lane = historyPageLane) => {
       if (lane === blockedLane) {
         entered.resolve();
         await prepared.promise;
@@ -90,7 +104,7 @@ it.each([
       prepared.resolve();
       await observers;
       expect(activate).toHaveBeenCalledTimes(outcome === "activate" ? 1 : 0);
-      if (outcome === "close" && blockedLane === historyLane) {
+      if (outcome === "close" && blockedLane === historyPageLane) {
         expect(mocks.prewarm).toHaveBeenCalledOnce();
       }
     } finally {

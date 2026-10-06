@@ -20,8 +20,11 @@ import { readSessionHistoryPageInWorker } from "../config/sessions/session-histo
 import {
   historyClearTimeout,
   historyLane,
+  historyPageLane,
   maintenanceLane,
+  projectionLane,
   rotateDatabaseWorkers,
+  selectSessionHistoryReadLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   prepareSessionEntryPresenceRead,
@@ -61,6 +64,7 @@ import { readChatHistoryMessageId } from "./session-history-tail.js";
 const observed = vi.hoisted(() => ({
   timers: vi.spyOn(globalThis, "setTimeout"),
   workers: [] as Worker[],
+  dispatchedWorkers: new Map<string, Worker>(),
   idleCloseKeepsWorker: new WeakMap<Worker, boolean>(),
   dispatch: undefined as ((message: unknown) => void) | undefined,
   restoration: undefined as
@@ -80,12 +84,19 @@ vi.mock("node:worker_threads", async (importOriginal) => {
       }
 
       override postMessage(...args: Parameters<Worker["postMessage"]>): void {
-        const kind = asOptionalRecord(asOptionalRecord(args[0])?.input)?.kind;
-        if (
-          (kind === "prewarm" || kind === "history-page" || kind === "session-row-presence") &&
-          !observed.workers.includes(this)
-        ) {
-          observed.workers.push(this);
+        const input = asOptionalRecord(asOptionalRecord(args[0])?.input);
+        const kind = input?.kind;
+        if (kind === "prewarm" || kind === "history-page" || kind === "session-row-presence") {
+          if (!observed.workers.includes(this)) {
+            observed.workers.push(this);
+          }
+          const requestKind = asOptionalRecord(input?.request)?.kind;
+          observed.dispatchedWorkers.set(
+            kind === "history-page" && typeof requestKind === "string"
+              ? `${kind}:${requestKind}`
+              : kind,
+            this,
+          );
         }
         observed.dispatch?.(args[0]);
         super.postMessage(...args);
@@ -117,7 +128,13 @@ afterEach(async () => {
   observed.dispatch = undefined;
   observed.restoration = undefined;
   await Promise.all(
-    [historyLane, maintenanceLane].map(async (lane) => {
+    [
+      historyLane,
+      historyPageLane,
+      selectSessionHistoryReadLane("transcript-hydration"),
+      projectionLane,
+      maintenanceLane,
+    ].map(async (lane) => {
       historyClearTimeout(lane.idleTimer);
       await rotateDatabaseWorkers(lane);
     }),
@@ -125,6 +142,7 @@ afterEach(async () => {
   for (const worker of observed.workers.splice(0)) {
     expect(worker.threadId).toBe(-1);
   }
+  observed.dispatchedWorkers.clear();
 });
 
 it.each([false, true])(
@@ -214,7 +232,7 @@ it("reads an exact ended-session archive in the history worker", async () => {
     );
 
     expect(observed.workers.length).toBeGreaterThan(workersBefore);
-    expect(observed.workers.at(-1)?.threadId).toBeGreaterThan(0);
+    expect(observed.dispatchedWorkers.get("history-page:recent-page")?.threadId).toBeGreaterThan(0);
   });
 });
 
@@ -224,11 +242,11 @@ it("keeps fresh fixture roots isolated while reusing idle reader execution", asy
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = await seed(state, "main", sessionId);
       await prewarmSessionHistoryWorker({ agentId: "main", path: fixture.path, env: state.env });
-      const prewarmedWorker = observed.workers.at(-1);
+      const prewarmedWorker = observed.dispatchedWorkers.get("prewarm");
       expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
         `${sessionId}-message`,
       ]);
-      const worker = observed.workers.at(-1)!;
+      const worker = observed.dispatchedWorkers.get("history-page:rpc")!;
       expect(worker).toBe(prewarmedWorker);
       if (previousWorker) {
         if (observed.idleCloseKeepsWorker.get(previousWorker) !== true) {
@@ -264,7 +282,7 @@ it("joins native worker exit when metadata-read custody is revoked during dispat
     await expect(prepareSessionEntryPresenceRead(target).read()).rejects.toThrow("revoked");
     expect(closing).toBeDefined();
     await closing;
-    expect(observed.workers.at(-1)?.threadId).toBe(-1);
+    expect(observed.dispatchedWorkers.get("session-row-presence")?.threadId).toBe(-1);
   });
 });
 
@@ -326,31 +344,30 @@ it("settles cancelled message reads before reuse and closes their database handl
         controller.abort(cancelled);
       }
     };
-    const pending = readSessionHistoryPageInWorker(
-      {
-        kind: "message-by-id",
-        params: { target: fixture.target, messageId: "cancel-message-read-message" },
-      },
-      controller.signal,
-    );
+    const readMessage = (signal?: AbortSignal) =>
+      readSessionHistoryPageInWorker(
+        {
+          kind: "message-by-id",
+          params: { target: fixture.target, messageId: "cancel-message-read-message" },
+        },
+        signal,
+      );
+    const pending = readMessage(controller.signal);
     await expect(pending).rejects.toBe(cancelled);
     expect(dispatched).toBe(true);
-    const worker = observed.workers.at(-1)!;
+    const worker = observed.dispatchedWorkers.get("history-page:message-by-id")!;
     const threadId = worker.threadId;
-    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "cancel-message-read-message",
-    ]);
-    expect(observed.workers.at(-1)).toBe(worker);
+    const expected = { found: true, message: { role: "user", content: "cancel-message-read" } };
+    await expect(readMessage()).resolves.toMatchObject(expected);
+    expect(observed.dispatchedWorkers.get("history-page:message-by-id")).toBe(worker);
     const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
     await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
     expect(worker.threadId).toBe(keepsWorker ? threadId : -1);
-    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "cancel-message-read-message",
-    ]);
+    await expect(readMessage()).resolves.toMatchObject(expected);
     if (!keepsWorker) {
-      expect(observed.workers.at(-1)).not.toBe(worker);
+      expect(observed.dispatchedWorkers.get("history-page:message-by-id")).not.toBe(worker);
     } else {
-      expect(observed.workers.at(-1)).toBe(worker);
+      expect(observed.dispatchedWorkers.get("history-page:message-by-id")).toBe(worker);
     }
   });
 });
@@ -524,14 +541,14 @@ it.each(["new-agent", "new-path", "schema", "physical-replacement"] as const)(
   },
 );
 
-it("closes idle A while active and queued B pages survive, then reads replaced A", async () => {
+it("closes idle A while concurrent sibling pages survive, then reads replaced A", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const a = await seed(state, "main", "close-a");
     const b = await seed(state, "other", "active-b");
     const c = await seed(state, "other", "queued-b");
     expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual(["close-a-message"]);
     await b.read();
-    const oldWorker = observed.workers.at(-1)!;
+    const oldWorker = observed.dispatchedWorkers.get("history-page:rpc")!;
     const threadId = oldWorker.threadId;
     const keepsWorker = observed.idleCloseKeepsWorker.get(oldWorker) === true;
     let closing: Promise<boolean> | undefined;
@@ -570,22 +587,25 @@ it("closes idle A while active and queued B pages survive, then reads replaced A
     ]);
     expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["active-b-message"]);
     if (keepsWorker) {
-      expect(observed.workers.at(-1)).toBe(oldWorker);
+      expect(observed.dispatchedWorkers.get("history-page:rpc")).toBe(oldWorker);
     }
   });
 });
 
-it("evicts the least recently used of 64 retained targets without charging missing databases", async () => {
+it("evicts the least recently used of 64 retained point targets without charging missing databases", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const targets = [];
     for (let index = 0; index < 65; index++) {
       targets.push(await seed(state, `retained-${index}`, `history-${index}`));
     }
-    for (const target of targets.slice(0, 64)) {
-      await target.read();
+    const readers = targets.map(({ target }) =>
+      prepareSessionEntryPresenceRead({ ...target, env: state.env }),
+    );
+    for (const reader of readers.slice(0, 64)) {
+      expect(await reader.read()).toBe(true);
     }
-    await targets[0]!.read();
-    const worker = observed.workers.at(-1)!;
+    expect(await readers[0]!.read()).toBe(true);
+    const worker = observed.dispatchedWorkers.get("session-row-presence")!;
     const threadId = worker.threadId;
     for (let index = 0; index < 65; index++) {
       const target = {
@@ -597,7 +617,7 @@ it("evicts the least recently used of 64 retained targets without charging missi
       expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
       expect(fs.existsSync(target.storePath)).toBe(false);
     }
-    await targets[64]!.read();
+    expect(await readers[64]!.read()).toBe(true);
     const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
     const closeResources = vi.spyOn(historyLane.pool, "closeResources");
     try {
@@ -613,9 +633,7 @@ it("evicts the least recently used of 64 retained targets without charging missi
     } finally {
       closeResources.mockRestore();
     }
-    expect((await targets[64]!.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "history-64-message",
-    ]);
+    expect(await readers[64]!.read()).toBe(true);
   });
 });
 
@@ -733,7 +751,7 @@ it("leaves the unrelated warm worker running when admission rejects a request be
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const b = await seed(state, "other", "overload-b");
     await b.read();
-    const worker = observed.workers.at(-1)!;
+    const worker = observed.dispatchedWorkers.get("history-page:rpc")!;
     const threadId = worker.threadId;
     await expect(
       withSessionHistoryWorkerDatabase(
@@ -742,14 +760,18 @@ it("leaves the unrelated warm worker running when admission rejects a request be
           path: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
         },
         (owner) =>
-          owner.run(() => {
-            throw new Error("refused factory must not run");
-          }, DEFAULT_WORKER_PENDING_BYTES + 1),
+          owner.run(
+            () => {
+              throw new Error("refused factory must not run");
+            },
+            DEFAULT_WORKER_PENDING_BYTES + 1,
+            "rpc",
+          ),
       ),
     ).rejects.toMatchObject({ code: "overloaded" });
     expect(worker.threadId).toBe(threadId);
     expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["overload-b-message"]);
-    expect(observed.workers.at(-1)).toBe(worker);
+    expect(observed.dispatchedWorkers.get("history-page:rpc")).toBe(worker);
   });
 });
 
@@ -767,32 +789,42 @@ it.each([false, true])(
         : await seed(state, "main", "idle-a");
       const beforeRead = observed.timers.mock.calls.length;
       await a.read();
-      const worker = observed.workers.at(-1)!;
-      const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 30 * 60_000);
+      const lane = missing ? historyLane : historyPageLane;
+      const requestKind = missing ? "session-row-presence" : "history-page:rpc";
+      const worker = observed.dispatchedWorkers.get(requestKind)!;
+      const index = observed.timers.mock.results.findLastIndex(
+        (result) => result.value === lane.idleTimer,
+      );
       expect(index).toBeGreaterThanOrEqual(beforeRead);
-      const [expire] = observed.timers.mock.calls[index]!;
+      const [expire, timeoutMs] = observed.timers.mock.calls[index]!;
+      expect(timeoutMs).toBe(30 * 60_000);
       const timer = observed.timers.mock.results[index]!.value as NodeJS.Timeout;
       expect(timer.hasRef()).toBe(false);
       clearTimeout(timer);
       expire();
-      await expect.poll(() => worker.threadId).toBe(-1);
+      expect(lane.rotation).toBeDefined();
+      await lane.rotation;
+      expect(worker.threadId).toBe(-1);
       const reopened = await a.read();
       if (typeof reopened === "boolean") {
         expect(reopened).toBe(false);
       } else {
         expect(reopened.messages.map(readChatHistoryMessageId)).toEqual(["idle-a-message"]);
       }
-      expect(observed.workers.at(-1)).not.toBe(worker);
+      expect(observed.dispatchedWorkers.get(requestKind)).not.toBe(worker);
       if (missing) {
         // No database resource exists to close; the reopened empty worker owns only its idle timer.
-        const emptyWorker = observed.workers.at(-1)!;
-        const nextIndex = observed.timers.mock.calls.findLastIndex(
-          (call) => call[1] === 30 * 60_000,
+        const emptyWorker = observed.dispatchedWorkers.get(requestKind)!;
+        const nextIndex = observed.timers.mock.results.findLastIndex(
+          (result) => result.value === lane.idleTimer,
         );
         expect(nextIndex).toBeGreaterThan(index);
+        expect(observed.timers.mock.calls[nextIndex]![1]).toBe(30 * 60_000);
         clearTimeout(observed.timers.mock.results[nextIndex]!.value as NodeJS.Timeout);
         observed.timers.mock.calls[nextIndex]![0]();
-        await expect.poll(() => emptyWorker.threadId).toBe(-1);
+        expect(lane.rotation).toBeDefined();
+        await lane.rotation;
+        expect(emptyWorker.threadId).toBe(-1);
         expect(observed.timers.mock.calls.filter((call) => call[1] === 30 * 60_000)).toHaveLength(
           observed.timers.mock.calls
             .slice(0, nextIndex + 1)

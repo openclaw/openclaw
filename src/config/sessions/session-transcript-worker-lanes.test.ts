@@ -9,8 +9,10 @@ import type {
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   historyLane,
+  historyPageLane,
   maintenanceLane,
   projectionLane,
+  selectSessionHistoryReadLane,
   rotateDatabaseWorkers,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
@@ -135,7 +137,13 @@ afterEach(async () => {
   observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
   await Promise.all(
-    [historyLane, projectionLane, maintenanceLane].map((lane) => rotateDatabaseWorkers(lane)),
+    [
+      historyLane,
+      historyPageLane,
+      selectSessionHistoryReadLane("transcript-hydration"),
+      projectionLane,
+      maintenanceLane,
+    ].map((lane) => rotateDatabaseWorkers(lane)),
   );
 });
 afterAll(() => {
@@ -144,7 +152,7 @@ afterAll(() => {
   observed.clearTimeout.mockRestore();
 });
 
-it.each([historyLane, maintenanceLane])(
+it.each([historyLane, historyPageLane, maintenanceLane])(
   "dedupes $name prewarm custody without extending idle retirement",
   async (lane) => {
     await rotateDatabaseWorkers(lane);
@@ -177,7 +185,7 @@ it.each([historyLane, maintenanceLane])(
   },
 );
 
-it.each([historyLane, maintenanceLane])(
+it.each([historyLane, historyPageLane, maintenanceLane])(
   "settles failed and revoked $name prewarms without rejecting callers",
   async (lane) => {
     const request = input();
@@ -211,12 +219,12 @@ it("joins only the matching lane prewarm and prepares its replacement after reti
   const joiningMaintenance = prewarmSessionHistoryWorker(request.database, maintenanceLane);
   try {
     expect(observed.run).toHaveBeenCalledTimes(2);
-    expect(historyLane.pending).toBe(1);
+    expect(historyPageLane.pending).toBe(1);
     expect(maintenanceLane.pending).toBe(1);
 
     history.resolve({ ok: true, value: { kind: "prewarm" } });
     await preparingHistory;
-    expect(historyLane.pending).toBe(0);
+    expect(historyPageLane.pending).toBe(0);
     expect(maintenanceLane.pending).toBe(1);
     maintenance.resolve({ ok: true, value: { kind: "prewarm" } });
     await Promise.all([preparingMaintenance, joiningMaintenance]);
@@ -369,6 +377,30 @@ it("binds native-close policy to each worker generation before replies", async (
   await successor.close();
   expect(observed.closeResources).toHaveBeenCalledTimes(3);
   expect(observed.rotate).toHaveBeenCalledOnce();
+});
+
+it("keeps concurrent reader custody until every worker closes the database", async () => {
+  const request = input();
+  observed.run.mockResolvedValue({
+    ok: true,
+    value: false,
+    closedHistoryDatabase: request.database,
+  });
+  await withSessionHistoryWorkerDatabase(
+    request.database,
+    (owner) => owner.readEntryPresence(request.scope),
+    historyPageLane,
+  );
+  // One reader's close receipt does not release a sibling's retained handle.
+  expect(observed.unregister).not.toHaveBeenCalled();
+  const closing = createDeferredCore();
+  observed.closeResources.mockReturnValueOnce(closing.promise);
+  const resource = observed.resources.at(-1)!;
+  const closed = resource.close();
+  expect(observed.unregister).not.toHaveBeenCalled();
+  closing.resolve();
+  await closed;
+  expect(observed.unregister).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])("retains reads dispatched after cleanup (capable=%s)", async (capable) => {

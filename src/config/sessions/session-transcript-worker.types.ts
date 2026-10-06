@@ -571,6 +571,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
   run: (
     prepare: () => Omit<SessionTranscriptHistoryWorkerInput, "database">,
     inputBytes: number,
+    kind: SessionHistoryWorkerRequest["kind"],
   ) => Promise<SessionHistoryWorkerResult>;
   readPreview: SessionHistoryReader<SessionPreviewWorkerInput, SessionPreviewItem[]>;
   readTitleFields: SessionHistoryReader<SessionTitleFieldsWorkerInput, SessionTitleFields>;

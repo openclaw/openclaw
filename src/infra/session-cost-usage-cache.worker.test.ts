@@ -13,6 +13,10 @@ import {
   createSessionEntryWithTranscript,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
+import {
+  costReadLane,
+  costRefreshLane,
+} from "../config/sessions/session-transcript-worker-resources.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "../gateway/server-worker-placement-session-evidence.js";
 import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -34,8 +38,6 @@ import {
 } from "./session-cost-usage.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import * as operationAdmission from "./sqlite-worker-operation-admission.js";
-import { WorkerTaskPool } from "./worker-task-pool.js";
-import type { WorkerTaskInput, WorkerTaskOptions } from "./worker-task-pool.types.js";
 
 const note = vi.hoisted(() => vi.fn());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
@@ -380,18 +382,13 @@ it("retains the process-held incognito cache without creating its sentinel file"
     const { db } = openOpenClawAgentDatabase({ agentId, path: databasePath, env: state.env });
     for (const changes of [1, Number.POSITIVE_INFINITY]) {
       let changed = 0;
-      // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
-      const run = WorkerTaskPool.prototype.run;
-      const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
-        this: WorkerTaskPool<unknown, unknown>,
-        input: WorkerTaskInput<unknown>,
-        options: WorkerTaskOptions<unknown>,
-      ) {
+      const run = costReadLane.pool.run;
+      const observer = vi.spyOn(costReadLane.pool, "run").mockImplementation((input, options) => {
         const onRequest = options.onRequest;
         if (!onRequest) {
-          return run.call(this, input, options);
+          return run(input, options);
         }
-        return run.call(this, input, {
+        return run(input, {
           ...options,
           onRequest: (value, context) => {
             if (changed < changes && isRecord(value) && value.kind === "memory-cache-body") {
@@ -452,18 +449,13 @@ it("serves fresh and partial usage while refresh waits for its host writer", asy
     const releaseWrite = createDeferred();
     let heldWrite = false;
     let refreshFinished = false;
-    // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
-    const run = WorkerTaskPool.prototype.run;
-    const observer = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
-      this: WorkerTaskPool<unknown, unknown>,
-      input: WorkerTaskInput<unknown>,
-      options: WorkerTaskOptions<unknown>,
-    ) {
+    const run = costRefreshLane.pool.run;
+    const observer = vi.spyOn(costRefreshLane.pool, "run").mockImplementation((input, options) => {
       const onRequest = options.onRequest;
       if (!onRequest) {
-        return run.call(this, input, options);
+        return run(input, options);
       }
-      return run.call(this, input, {
+      return run(input, {
         ...options,
         onRequest: async (value, context) => {
           if (
@@ -906,14 +898,9 @@ it("settles canceled refresh cleanup without waiting for its admitted successor"
           },
         };
       });
-    // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the pool receiver.
-    const run = WorkerTaskPool.prototype.run;
-    const pools = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(function (
-      this: WorkerTaskPool<unknown, unknown>,
-      input: WorkerTaskInput<unknown>,
-      options: WorkerTaskOptions<unknown>,
-    ) {
-      const result = run.call(this, input, options);
+    const run = costRefreshLane.pool.run;
+    const pools = vi.spyOn(costRefreshLane.pool, "run").mockImplementation((input, options) => {
+      const result = run(input, options);
       if (watchSuccessor && options.onRequest) {
         watchSuccessor = false;
         queuedB.resolve();

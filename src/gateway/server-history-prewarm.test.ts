@@ -1,5 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
+import {
+  historyPageLane,
+  maintenanceLane,
+} from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
@@ -63,10 +66,10 @@ it.each(["absent", "unavailable", "warm", "cancelled", "cancelled after discover
         : ["/synthetic/main/sessions.json", "/synthetic/research/sessions.json"];
     expect(mocks.prepare.mock.calls.map(([storePath]) => storePath)).toEqual(discovered);
     if (scenario === "absent" || scenario === "unavailable") {
-      expect(mocks.prewarm).toHaveBeenCalledExactlyOnceWith({
-        agentId: "research",
-        path: "/synthetic/research/openclaw-agent.sqlite",
-      });
+      expect(mocks.prewarm).toHaveBeenCalledExactlyOnceWith(
+        { agentId: "research", path: "/synthetic/research/openclaw-agent.sqlite" },
+        historyPageLane,
+      );
     } else {
       expect(mocks.prewarm).not.toHaveBeenCalled();
     }
@@ -78,7 +81,7 @@ it.each(["absent", "unavailable", "warm", "cancelled", "cancelled after discover
 
 it("prepares a cold maintenance reader even when foreground history is warm", async () => {
   mocks.cold.mockImplementation((lane) => lane === maintenanceLane);
-  await prewarmGatewaySessionHistory(config, { onlyIfCold: true, includeMaintenance: true });
+  await prewarmGatewaySessionHistory(config, { onlyIfCold: true, includeRequesterReaders: true });
   expect(mocks.prewarm.mock.calls.filter(([, lane]) => lane === maintenanceLane)).toEqual([
     [{ agentId: "main", path: "/synthetic/main/openclaw-agent.sqlite" }, maintenanceLane],
     [{ agentId: "research", path: "/synthetic/research/openclaw-agent.sqlite" }, maintenanceLane],

@@ -60,7 +60,7 @@ export function createWorkerTaskHost(owner: WorkerTaskPoolOwnerOptions = {}): Wo
     captureTaskContext: captureDeletedAgentDatabaseFences,
     createTaskObserver(url) {
       const kind = workerRequestKind(url);
-      return () => trackWorkerRequest(kind, "task");
+      return () => trackWorkerRequest(kind, owner.requestClass ?? "task");
     },
     receiveMessage: receiveWorkerMemoryPort,
     workerStarted: attributeWorkerToPool,

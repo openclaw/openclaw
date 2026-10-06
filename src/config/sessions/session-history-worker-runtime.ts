@@ -131,6 +131,7 @@ function readQueuedHistory(
             (input.request.kind === "rpc" || input.request.kind === "rpc-message")
               ? (input.request.params.cliHistoryRedaction?.retainedBytes ?? 0)
               : 0),
+          input.request.kind,
         );
   // Initial metadata probes share only in-flight work; queued restores bypass this map.
   void operation.then(

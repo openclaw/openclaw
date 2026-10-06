@@ -37,10 +37,12 @@ import {
   costRefreshLane,
   historyClearTimeout,
   historyLane,
+  historyPageLane,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   releaseRetiredDatabaseCustody,
   rotateDatabaseWorkers,
+  selectSessionHistoryReadLane,
   type HistoryDatabaseResource,
   type SessionCostWorkerLane,
   type SessionDatabaseCleanup,
@@ -65,14 +67,16 @@ const historyPrewarms = new WeakMap<
   >
 >();
 
-export function isSessionHistoryWorkerCold(lane: SessionHistoryWorkerLane = historyLane): boolean {
+export function isSessionHistoryWorkerCold(
+  lane: SessionHistoryWorkerLane = historyPageLane,
+): boolean {
   return lane.pending === 0 && lane.nativeSequence <= lane.retiredSequence;
 }
 
 /** Reuse normal reader custody; repeated warmups never refresh the idle deadline. */
 export async function prewarmSessionHistoryWorker(
   options: OpenClawAgentDatabaseOptions,
-  lane: SessionHistoryWorkerLane = historyLane,
+  lane: SessionHistoryWorkerLane = historyPageLane,
 ): Promise<void> {
   try {
     const resource = acquireHistoryDatabaseResource(options);
@@ -192,6 +196,7 @@ export function retainSessionHistoryWorkerDatabase(
   };
   historyClearTimeout(lane.idleTimer);
   lane.pending++;
+  const lanes = new Set([lane]);
   owned.pending++;
   refreshDatabaseWorkerPressureSubscription();
   let countsReleased = false;
@@ -206,10 +211,14 @@ export function retainSessionHistoryWorkerDatabase(
     if (!countsReleased) {
       countsReleased = true;
       owned.pending--;
-      lane.pending--;
+      for (const retainedLane of lanes) {
+        retainedLane.pending--;
+      }
     }
     try {
-      armDatabaseWorkerIdleRetirement(lane);
+      for (const retainedLane of lanes) {
+        armDatabaseWorkerIdleRetirement(retainedLane);
+      }
       owned.cleanups.delete(releaseCleanup);
       pruneHistoryDatabases();
       releaseFinished = true;
@@ -226,19 +235,27 @@ export function retainSessionHistoryWorkerDatabase(
       receive,
       signal,
       onRequest,
+      kind,
     ) => {
       assertCurrent();
+      const taskLane = lane === historyLane ? selectSessionHistoryReadLane(kind) : lane;
+      if (!lanes.has(taskLane)) {
+        lanes.add(taskLane);
+        historyClearTimeout(taskLane.idleTimer);
+        taskLane.pending++;
+        refreshDatabaseWorkerPressureSubscription();
+      }
       const deadline = performance.now() + 60_000;
       let sequence = 0;
       let executionRetired = false;
       try {
-        const reply = await lane.pool.run(
+        const reply = await taskLane.pool.run(
           () => {
             assertCurrent();
             const input = prepare();
             assertCurrent();
-            sequence = ++lane.nativeSequence;
-            owned.nativeSequences.set(lane, sequence);
+            sequence = ++taskLane.nativeSequence;
+            owned.nativeSequences.set(taskLane, sequence);
             return { ...input, database };
           },
           {
@@ -259,9 +276,9 @@ export function retainSessionHistoryWorkerDatabase(
                 }
               : undefined,
             onExecutionSettled: ({ retired }) => {
-              if (retired) {
+              if (retired && taskLane.pool.maxWorkers === 1) {
                 executionRetired = true;
-                releaseRetiredDatabaseCustody(lane, sequence);
+                releaseRetiredDatabaseCustody(taskLane, sequence);
               }
             },
           },
@@ -293,16 +310,16 @@ export function retainSessionHistoryWorkerDatabase(
           entryReadSource = source;
         }
         const value = receive(received);
-        if (reply.ok && reply.closedHistoryDatabase) {
+        if (reply.ok && reply.closedHistoryDatabase && taskLane.pool.maxWorkers === 1) {
           // A later dispatched request may already hold this target's next native custody.
-          clearClosedDatabaseCustody(lane, sequence, [reply.closedHistoryDatabase]);
+          clearClosedDatabaseCustody(taskLane, sequence, [reply.closedHistoryDatabase]);
         }
         assertCurrent();
         return value;
       } catch (error) {
         if (sequence > 0 && !executionRetired) {
           try {
-            await rotateDatabaseWorkers(lane);
+            await rotateDatabaseWorkers(taskLane);
           } catch (cleanupError) {
             throw sessionHistoryCleanupError(error, cleanupError, "worker retirement");
           }

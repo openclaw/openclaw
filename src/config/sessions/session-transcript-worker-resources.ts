@@ -14,11 +14,7 @@ import {
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import {
-  createOwnedWorkerTaskPool,
-  WorkerTaskError,
-  WorkerTaskPool,
-} from "../../infra/worker-task-pool.js";
+import { createOwnedWorkerTaskPool, WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -30,6 +26,7 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOutsideOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
+import type { SessionHistoryWorkerRequest } from "./session-history-types.js";
 import {
   sessionHistoryCleanupError,
   decodeSessionTranscriptWorkerReadError,
@@ -52,62 +49,67 @@ import type {
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-function createHistoryPool() {
-  let generation: { canCloseNativeResources: boolean } | undefined;
+function createHistoryPool(requestClass: string, maxWorkers = 1) {
+  const generations = new Set<{ canCloseNativeResources: boolean }>();
   const pool = createOwnedWorkerTaskPool<
     SessionHistoryWorkerInput,
     SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
-  >({
-    workerUrl,
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    maxWorkers: 1,
-    idleTimeoutMs: 0,
-    prepareWorker: () => {
-      ensureSqliteLibrarySelected();
-      // The worker inherits this same fact at creation; later admission cannot upgrade it.
-      const current = { canCloseNativeResources: captureSqliteWorkerClosePolicy() };
-      generation = current;
-      return {
-        options: {},
-        async releaseResources() {
-          if (generation === current) {
-            generation = undefined;
-          }
-        },
-      };
+  >(
+    {
+      workerUrl,
+      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+      maxWorkers,
+      idleTimeoutMs: 0,
+      prepareWorker: () => {
+        ensureSqliteLibrarySelected();
+        // The worker inherits this same fact at creation; later admission cannot upgrade it.
+        const current = { canCloseNativeResources: captureSqliteWorkerClosePolicy() };
+        generations.add(current);
+        return {
+          options: {},
+          async releaseResources() {
+            generations.delete(current);
+          },
+        };
+      },
+      onRetirementFailure() {
+        for (const generation of generations) {
+          generation.canCloseNativeResources = false;
+        }
+      },
     },
-    onRetirementFailure() {
-      generation = undefined;
-    },
-  });
+    { requestClass },
+  );
   return {
     ...pool,
-    canCloseNativeResources: () => generation?.canCloseNativeResources === true,
-    rotate() {
-      generation = undefined;
-      return pool.rotate();
-    },
+    maxWorkers,
+    canCloseNativeResources: () =>
+      generations.size > 0 &&
+      [...generations].every((generation) => generation.canCloseNativeResources),
   };
 }
 
 function createUsageCostPool(kind: "read" | "refresh") {
-  return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
-    workerUrl,
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    maxWorkers: 1,
-    // Foreground reads must remain available while refresh awaits a host writer.
-    sharedCompute: kind === "refresh",
-    idleTimeoutMs: 0,
-    prepareWorker: () => {
-      ensureSqliteLibrarySelected();
-      return { options: {} };
+  return createOwnedWorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>(
+    {
+      workerUrl,
+      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+      maxWorkers: 1,
+      // Foreground reads must remain available while refresh awaits a host writer.
+      sharedCompute: kind === "refresh",
+      idleTimeoutMs: 0,
+      prepareWorker: () => {
+        ensureSqliteLibrarySelected();
+        return { options: {} };
+      },
+      validateResult(reply) {
+        if (!reply.ok) {
+          throw new UsageCostWorkerReplyError(reply.error);
+        }
+      },
     },
-    validateResult(reply) {
-      if (!reply.ok) {
-        throw new UsageCostWorkerReplyError(reply.error);
-      }
-    },
-  });
+    { requestClass: `usage-${kind}` },
+  );
 }
 
 type SessionDatabaseWorkerLane = {
@@ -121,7 +123,7 @@ type SessionDatabaseWorkerLane = {
 };
 
 export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
-  pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
+  pool: ReturnType<typeof createUsageCostPool>;
 };
 
 export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
@@ -160,11 +162,29 @@ function createDatabaseWorkerLane<Pool extends SessionDatabaseWorkerLane["pool"]
   return { name, pool, nativeSequence: 0, retiredSequence: 0, pending: 0 };
 }
 
-export const historyLane = createDatabaseWorkerLane("Session history", createHistoryPool());
+export const historyLane = createDatabaseWorkerLane(
+  "Session history",
+  createHistoryPool("transcript_read"),
+);
+// Page density is unknown before reading; spare FIFO slots keep sparse pages from serializing hot reads.
+export const historyPageLane = createDatabaseWorkerLane(
+  "Session history pages",
+  createHistoryPool("history-page", 4),
+);
+const transcriptScanLane = createDatabaseWorkerLane(
+  "Session transcript scans",
+  createHistoryPool("full-transcript"),
+);
 // Keep list materialization independent of large history pages, with one extra reader per store.
-export const projectionLane = createDatabaseWorkerLane("Session projection", createHistoryPool());
+export const projectionLane = createDatabaseWorkerLane(
+  "Session projection",
+  createHistoryPool("projection"),
+);
 // Full-store validation cannot yield its snapshot to a foreground history read.
-export const maintenanceLane = createDatabaseWorkerLane("Session maintenance", createHistoryPool());
+export const maintenanceLane = createDatabaseWorkerLane(
+  "Session maintenance",
+  createHistoryPool("maintenance"),
+);
 export const costReadLane = createDatabaseWorkerLane(
   "Session usage read",
   createUsageCostPool("read"),
@@ -174,10 +194,38 @@ export const costRefreshLane = createDatabaseWorkerLane(
   createUsageCostPool("refresh"),
 );
 
-const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane];
+const historyWorkerLanes = [
+  historyLane,
+  historyPageLane,
+  transcriptScanLane,
+  projectionLane,
+  maintenanceLane,
+];
 const databaseWorkerLanes = [...historyWorkerLanes, costReadLane, costRefreshLane];
 const memoryPressure = channel("openclaw.memory.critical");
 let pressureSubscribed = false;
+
+export function selectSessionHistoryReadLane(
+  kind?: SessionHistoryWorkerRequest["kind"] | "transcript-hydration",
+): SessionHistoryWorkerLane {
+  switch (kind) {
+    case "transcript-hydration":
+    case "source-messages":
+      return transcriptScanLane;
+    case undefined:
+    case "active-accounting":
+    case "bounded-tail":
+    case "conversation-binding":
+    case "transcript-binding":
+    case "message-count":
+    case "message-by-id":
+    case "message-lookup":
+    case "rpc-message":
+      return historyLane;
+    default:
+      return historyPageLane;
+  }
+}
 
 registerOpenClawStateDatabaseAsyncResource({
   phase: "after-resources",

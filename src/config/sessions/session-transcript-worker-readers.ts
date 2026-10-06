@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import type { SessionHistoryWorkerRequest } from "./session-history-types.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
@@ -19,6 +20,7 @@ export type SessionHistoryWorkerRequestRunner = <TResult>(
   receive: (value: SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]]) => TResult,
   signal?: AbortSignal,
   onRequest?: (value: unknown) => void,
+  kind?: SessionHistoryWorkerRequest["kind"] | "transcript-hydration",
 ) => Promise<TResult>;
 
 type SessionHistoryWorkerValue = SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]];
@@ -228,36 +230,18 @@ export function createSessionHistoryWorkerReaders(
       (params) => ({ kind: "session-row-backfill", params }),
       (value) => value.fields,
     ),
-    run: async (prepare, inputBytes) =>
-      await runRequest(prepare, inputBytes, (value) => {
-        if (
-          typeof value === "boolean" ||
-          Array.isArray(value) ||
-          (value.kind !== "active-accounting" &&
-            value.kind !== "bounded-tail" &&
-            value.kind !== "reactions" &&
-            value.kind !== "conversation-binding" &&
-            value.kind !== "transcript-binding" &&
-            value.kind !== "artifacts" &&
-            value.kind !== "summary" &&
-            value.kind !== "message-page" &&
-            value.kind !== "around-id" &&
-            value.kind !== "source-messages" &&
-            value.kind !== "recent-page" &&
-            value.kind !== "rpc" &&
-            value.kind !== "rpc-message" &&
-            value.kind !== "http" &&
-            value.kind !== "delta" &&
-            value.kind !== "inline-visibility" &&
-            value.kind !== "recent" &&
-            value.kind !== "message-by-id" &&
-            value.kind !== "message-count" &&
-            value.kind !== "message-lookup")
-        ) {
-          throw new Error("Session history worker returned metadata instead of history");
-        }
-        return value;
-      }),
+    run: async (prepare, inputBytes, kind) =>
+      await runRequest(
+        prepare,
+        inputBytes,
+        (value) => {
+          assertResultKind(value, kind, "history");
+          return value;
+        },
+        undefined,
+        undefined,
+        kind,
+      ),
     readTranscript: async (input, signal) => {
       const events: TranscriptEvent[] = [];
       const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
@@ -323,6 +307,7 @@ export function createSessionHistoryWorkerReaders(
         },
         signal,
         input.limits ? undefined : receiveChunk,
+        "transcript-hydration",
       );
     },
     readMaintenance: reader(

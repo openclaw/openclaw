@@ -87,7 +87,7 @@ export async function runGatewayStartupObservers(params: {
           // first, including maintenance that shares compute with foreground admission.
           const { prewarmGatewaySessionHistory } = await import("./server-history-prewarm.js");
           await prewarmGatewaySessionHistory(params.config, {
-            includeMaintenance: true,
+            includeRequesterReaders: true,
             isCancelled: () => params.signal.aborted || params.isClosing?.() === true,
           });
           const activateSubagentRegistry = await params.loadSubagentRegistryActivation();

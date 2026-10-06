@@ -19,7 +19,11 @@ import { readSessionHistoryPageInWorker } from "./session-history-worker-runtime
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import {
   historyLane,
+  historyPageLane,
+  maintenanceLane,
+  projectionLane,
   rotateDatabaseWorkers,
+  selectSessionHistoryReadLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -122,7 +126,15 @@ beforeEach(() => {
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await rotateDatabaseWorkers(historyLane);
+  await Promise.all(
+    [
+      historyLane,
+      historyPageLane,
+      selectSessionHistoryReadLane("transcript-hydration"),
+      projectionLane,
+      maintenanceLane,
+    ].map((lane) => rotateDatabaseWorkers(lane)),
+  );
   vi.restoreAllMocks();
   expect(observed.nativeWorker).not.toHaveBeenCalled();
 });

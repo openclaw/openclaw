@@ -12,6 +12,7 @@ export type {
 } from "@openclaw/worker-runtime";
 
 export type WorkerTaskPoolOwnerOptions = RuntimeOwnerOptions & {
+  requestClass?: string;
   nativeSource?: RetainedNativeWorkerSource;
   nativeResource?: NativeWorkerResourceDescriptor;
 };

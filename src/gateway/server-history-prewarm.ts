@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
+import {
+  historyLane,
+  historyPageLane,
+  maintenanceLane,
+  selectSessionHistoryReadLane,
+} from "../config/sessions/session-transcript-worker-resources.js";
 import {
   isSessionHistoryWorkerCold,
   prewarmSessionHistoryWorker,
@@ -18,16 +23,20 @@ export async function prewarmGatewaySessionHistory(
   config: OpenClawConfig,
   options: {
     onlyIfCold?: boolean;
-    includeMaintenance?: boolean;
+    includeRequesterReaders?: boolean;
     isCancelled?: () => boolean;
   } = {},
 ): Promise<void> {
+  const lanes = options.includeRequesterReaders
+    ? [
+        historyPageLane,
+        historyLane,
+        selectSessionHistoryReadLane("transcript-hydration"),
+        maintenanceLane,
+      ]
+    : [historyPageLane];
   try {
-    if (
-      options.onlyIfCold &&
-      !isSessionHistoryWorkerCold() &&
-      (!options.includeMaintenance || !isSessionHistoryWorkerCold(maintenanceLane))
-    ) {
+    if (options.onlyIfCold && !lanes.some((lane) => isSessionHistoryWorkerCold(lane))) {
       return;
     }
     for (const agentId of listConfiguredSessionStoreAgentIds(config)) {
@@ -49,11 +58,13 @@ export async function prewarmGatewaySessionHistory(
             throw error;
           },
         );
-        if (exists && !options.isCancelled?.()) {
+        if (exists) {
           const target = { ...database, agentId: database.agentId ?? agentId };
-          await prewarmSessionHistoryWorker(target);
-          if (options.includeMaintenance && !options.isCancelled?.()) {
-            await prewarmSessionHistoryWorker(target, maintenanceLane);
+          for (const lane of lanes) {
+            if (options.isCancelled?.()) {
+              return;
+            }
+            await prewarmSessionHistoryWorker(target, lane);
           }
         }
       } catch (error) {

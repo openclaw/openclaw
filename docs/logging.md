@@ -627,6 +627,16 @@ and native allocation; Node's process heap flags can override a worker's request
 heap limits. Use constructor or per-isolate measurements when attributing memory
 growth to a particular worker.
 
+The transcript resource owner's queue-wait and request-duration histograms use `kind="sessionTranscript"` and
+bounded `request_class` labels: `transcript_read` for metadata and point reads, `history-page` for display pages,
+`full-transcript` for hydration and source-message scans, `projection`,
+`maintenance`, `usage-read`, and `usage-refresh`. Page reads admit up to four
+workers through the existing FIFO queue; the other classes retain separate
+single-worker lanes. A sparse page cannot occupy the point-read or projection
+worker. Saturating all four page workers can still delay later pages. Metrics
+contain no session identifiers or transcript contents. This changes no schema,
+stored data, configuration, or update procedure.
+
 ### Slow worktree cleanup
 
 With process diagnostics and info-level logging enabled, two subsystems log
