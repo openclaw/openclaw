@@ -7,6 +7,7 @@
  */
 import type { ToolLoopWarning } from "@openclaw/agent-core";
 import { getRuntimeConfig } from "../config/config.js";
+import { describeDelegatedExecutionToolDenial } from "../delegation/delegated-execution-run-admission.js";
 import { freezeDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -112,6 +113,21 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolPolicyName(args.toolName || "tool");
   const params = args.params;
+  // Host ownership gate: a protected tool is denied before it executes while
+  // delegated work still owns the proven task lineage. This is Host code, so it
+  // holds with no plugins loaded, no handler registered, and after a restart.
+  const delegatedOwnershipDenial = describeDelegatedExecutionToolDenial({ contexts: [args.ctx] });
+  if (delegatedOwnershipDenial) {
+    const outcome: HookOutcome = {
+      blocked: true,
+      kind: "veto",
+      deniedReason: "delegated-execution-ownership",
+      reason: delegatedOwnershipDenial,
+      params,
+    };
+    markPrivateDecision(outcome, "genericDecision");
+    return outcome;
+  }
   let loopWarning: ToolLoopWarning | undefined;
   const withLoopWarning = (outcome: HookOutcome): HookOutcome => {
     if (!outcome.blocked && loopWarning) {

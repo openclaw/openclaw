@@ -9,6 +9,7 @@ import {
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { assertDelegatedExecutionAgentAdmission } from "../delegation/delegated-execution-run-admission.js";
 import {
   claimAgentRunDelegatedAuthority,
   getAgentRunLifecycleGeneration,
@@ -446,6 +447,12 @@ export async function resolvePreparedRunAdmission(params: {
   admittedRunContext?: AdmittedRunContext;
   preparedRunAdmission?: PreparedAgentRunAdmission;
 }): Promise<AdmittedRunContext> {
+  // Host ownership gate: ordinary agent execution is refused before any model
+  // work when delegated work still owns the proven task lineage. This runs
+  // independently of plugin presence, so a missing plugin cannot remove it.
+  assertDelegatedExecutionAgentAdmission({
+    contexts: [params.admittedRunContext, params.preparedRunAdmission],
+  });
   if (params.admittedRunContext && params.preparedRunAdmission) {
     throw new Error("run cannot carry both prepared and admitted execution contexts");
   }
