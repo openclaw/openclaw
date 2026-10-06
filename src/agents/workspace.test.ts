@@ -655,6 +655,21 @@ describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
       },
     );
 
+    it("omits absent optional bootstrap files when the root cannot be listed", async () => {
+      await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "instructions");
+      await fs.chmod(tempDir, 0o300);
+      await expect(fs.readdir(tempDir)).rejects.toMatchObject({ code: "EACCES" });
+
+      const files = await loadWorkspaceBootstrapFiles(tempDir, [
+        DEFAULT_AGENTS_FILENAME,
+        DEFAULT_MEMORY_FILENAME,
+        DEFAULT_USER_FILENAME,
+      ]);
+
+      expect(files.map((file) => file.name)).toEqual([DEFAULT_AGENTS_FILENAME]);
+      expect(files[0]?.content).toBe("instructions");
+    });
+
     it("rejects skip-bootstrap setup under an unlistable root without changing content", async () => {
       await fs.writeFile(path.join(tempDir, DEFAULT_MEMORY_FILENAME), "user memory");
       await ensureWorkspace(false);
