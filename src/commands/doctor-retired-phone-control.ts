@@ -241,9 +241,10 @@ export async function prepareRetiredPhoneControlCleanup(params: {
 }) {
   const env = params.env ?? process.env;
   const residue = await readRetiredArmStates(env);
+  const configChanges: string[] = [];
   const unchanged = {
     config: params.cfg,
-    configChanges: [] as string[],
+    configChanges,
     cleanupPending: residue.cleanupPending,
     cleanupSafe: residue.cleanupSafe,
     warnings: residue.warnings,
@@ -283,7 +284,6 @@ export async function prepareRetiredPhoneControlCleanup(params: {
     return unchanged;
   }
 
-  const configChanges: string[] = [];
   if (allowChanged) {
     configChanges.push("Removed stale Phone Control lease-only command allow entries.");
   }
@@ -299,7 +299,6 @@ export async function prepareRetiredPhoneControlCleanup(params: {
       allow: nextAllow,
       deny: nextDeny,
     }),
-    configChanges,
   };
 }
 

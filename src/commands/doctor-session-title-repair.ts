@@ -85,11 +85,12 @@ export async function repairLegacySessionTitles(params: {
   if (params.apply) {
     assertRepairAuthority();
   }
+  const warnings: string[] = [];
   const report = {
     found: 0,
     repaired: 0,
     scannedStores: 0,
-    warnings: [] as string[],
+    warnings,
   };
   for (const target of params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env)) {
     if (params.apply) {

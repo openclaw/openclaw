@@ -1162,7 +1162,7 @@ export function registerExecApprovalsCli(program: Command) {
       await runApprovalsAction(opts, async () => {
         const result = (await callGatewayFromCli("exec.approval.grants.revoke", opts, {
           grantId,
-        })) as ExecApprovalGrantsRevokeResult;
+        })) as ExecApprovalGrantsRevokeResult; // SAFETY: closed enum from the revoke result schema.
         if (opts.json) {
           defaultRuntime.writeJson(result, 0);
           return;
