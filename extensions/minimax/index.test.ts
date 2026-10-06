@@ -536,6 +536,17 @@ describe("minimax provider hooks", () => {
     async (initialMode) => {
       let fastMode: boolean | "ultrafast" = initialMode;
       const { apiProvider, portalProvider } = await registeredProviders();
+      for (const provider of [apiProvider, portalProvider]) {
+        expect(
+          provider.resolveFastModeSupport?.({
+            provider: provider.id,
+            modelId: "MiniMax-M2.7",
+            api: "anthropic-messages",
+            runtimeId: "openclaw",
+            requestCapabilities: { endpointClass: "custom", allowsAnthropicServiceTier: false },
+          }),
+        ).toBe(true);
+      }
 
       let resolvedApiModelId = "";
       const captureApiModel: StreamFn = (model) => {

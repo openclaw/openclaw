@@ -392,6 +392,25 @@ export function createOpenAIThinkingLevelWrapper(
   };
 }
 
+/** Share tier precedence across provider wrappers and explicitly compatible Responses routes. */
+export function createOpenAIResponsesServiceTierWrapper(
+  baseStreamFn: StreamFn | undefined,
+  extraParams: Record<string, unknown> | undefined,
+): StreamFn {
+  const serviceTier = resolveOpenAIServiceTier(extraParams);
+  // Payload/transport tier stays authoritative, then an explicit tier, then fast's default.
+  if (serviceTier) {
+    return createOpenAIServiceTierWrapper(baseStreamFn, serviceTier);
+  }
+  if (
+    extraParams &&
+    (Object.hasOwn(extraParams, "fastMode") || Object.hasOwn(extraParams, "fast_mode"))
+  ) {
+    return createOpenAIFastModeWrapper(baseStreamFn, () => resolveOpenAIFastMode(extraParams));
+  }
+  return baseStreamFn ?? streamSimple;
+}
+
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIFastModeWrapper(
   baseStreamFn: StreamFn | undefined,

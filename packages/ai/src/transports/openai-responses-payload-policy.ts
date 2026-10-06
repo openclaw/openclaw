@@ -92,6 +92,7 @@ function readCompatPayloadBoolean(
     | "supportsInstructions"
     | "supportsPromptCacheKey"
     | "supportsResponsesContinuation"
+    | "supportsServiceTier"
     | "supportsStore",
 ): boolean | undefined {
   if (!compat || typeof compat !== "object") {
@@ -141,15 +142,23 @@ function resolveOpenAIResponsesPayloadCapabilities(model: OpenAIResponsesPayload
     provider !== "azure-openai" &&
     provider !== "azure-openai-responses" &&
     readCompatPayloadBoolean(model.compat, "supportsResponsesContinuation") === true;
+  const serviceTierSupport = readCompatPayloadBoolean(model.compat, "supportsServiceTier");
+  const serviceTierUrl =
+    serviceTierSupport === true ? URL.parse(readStringValue(model.baseUrl) ?? "") : null;
+  const explicitServiceTierOptIn =
+    (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
+    (serviceTierUrl?.protocol === "https:" || serviceTierUrl?.protocol === "http:");
 
   return {
     allowsOpenAIServiceTier:
-      (provider === "openai" &&
-        (api === "openai-responses" || api === "openclaw-openai-responses-transport")) ||
-      (isOpenAIProvider &&
-        (api === "openai-chatgpt-responses" ||
-          api === "openclaw-openai-chatgpt-responses-transport") &&
-        endpointClass === "openai"),
+      serviceTierSupport !== false &&
+      (explicitServiceTierOptIn ||
+        (provider === "openai" &&
+          (api === "openai-responses" || api === "openclaw-openai-responses-transport")) ||
+        (isOpenAIProvider &&
+          (api === "openai-chatgpt-responses" ||
+            api === "openclaw-openai-chatgpt-responses-transport") &&
+          endpointClass === "openai")),
     allowsResponsesStore:
       supportsResponsesStoreField &&
       api !== "openai-chatgpt-responses" &&

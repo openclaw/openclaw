@@ -64,6 +64,7 @@ describe("model catalog normalization", () => {
         supportsEagerToolInputStreaming: false,
         supportsLongCacheRetention: true,
         supportsResponsesContinuation: true,
+        supportsServiceTier: true,
         supportsJsonSchemaResponseFormat: true,
         requiresReasoningContentOnAssistantMessages: true,
         thinkingFormat: "together",
@@ -261,6 +262,7 @@ describe("model catalog normalization", () => {
       },
       compat: {
         supportsPromptCacheKey: true,
+        supportsServiceTier: false,
         toolSchemaProfile: "strict",
         toolCallArgumentsEncoding: "json",
         visibleReasoningDetailTypes: ["summary"],

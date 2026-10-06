@@ -27,43 +27,47 @@ describe("ModelsConfigSchema", () => {
     ).toBe(true);
   });
 
-  it("accepts and preserves declared model compatibility settings", () => {
-    const compat = {
-      thinkingFormat: "deepseek",
-      requiresReasoningContentOnAssistantMessages: true,
-      supportsTemperature: false,
-      supportsInstructions: false,
-      openRouterRouting: {
-        allow_fallbacks: false,
-        require_parameters: true,
-        data_collection: "deny",
-        zdr: true,
-        enforce_distillable_text: true,
-        order: ["anthropic", "openai"],
-        only: ["anthropic"],
-        ignore: ["openai"],
-        quantizations: ["fp16"],
-        sort: { by: "latency", partition: null },
-        max_price: { prompt: "0.5", completion: 1, image: 2, audio: 3, request: 4 },
-        preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
-        preferred_max_latency: 5,
-      },
-      vercelGatewayRouting: { only: ["anthropic"], order: ["anthropic", "openai"] },
-      zaiToolStream: true,
-      cacheControlFormat: "anthropic",
-      sendSessionAffinityHeaders: true,
-      sendSessionIdHeader: true,
-      supportsEagerToolInputStreaming: true,
-      supportsLongCacheRetention: true,
-    };
-    const parsed = ModelsConfigSchema.parse({
-      providers: {
-        "my-proxy": {
-          baseUrl: "https://my-proxy.example.com/v1",
-          models: [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", reasoning: true, compat }],
+  it.each([true, false])(
+    "preserves compatibility settings with service tiers=%s",
+    (supportsServiceTier) => {
+      const compat = {
+        thinkingFormat: "deepseek",
+        requiresReasoningContentOnAssistantMessages: true,
+        supportsTemperature: false,
+        supportsInstructions: false,
+        supportsServiceTier,
+        openRouterRouting: {
+          allow_fallbacks: false,
+          require_parameters: true,
+          data_collection: "deny",
+          zdr: true,
+          enforce_distillable_text: true,
+          order: ["anthropic", "openai"],
+          only: ["anthropic"],
+          ignore: ["openai"],
+          quantizations: ["fp16"],
+          sort: { by: "latency", partition: null },
+          max_price: { prompt: "0.5", completion: 1, image: 2, audio: 3, request: 4 },
+          preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
+          preferred_max_latency: 5,
         },
-      },
-    });
-    expect(parsed?.providers?.["my-proxy"]?.models?.[0]?.compat).toEqual(compat);
-  });
+        vercelGatewayRouting: { only: ["anthropic"], order: ["anthropic", "openai"] },
+        zaiToolStream: true,
+        cacheControlFormat: "anthropic",
+        sendSessionAffinityHeaders: true,
+        sendSessionIdHeader: true,
+        supportsEagerToolInputStreaming: true,
+        supportsLongCacheRetention: true,
+      };
+      const parsed = ModelsConfigSchema.parse({
+        providers: {
+          "my-proxy": {
+            baseUrl: "https://my-proxy.example.com/v1",
+            models: [{ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", reasoning: true, compat }],
+          },
+        },
+      });
+      expect(parsed?.providers?.["my-proxy"]?.models?.[0]?.compat).toEqual(compat);
+    },
+  );
 });

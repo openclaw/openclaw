@@ -32,7 +32,7 @@ import {
 } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
-import { resolveThinkingProfile } from "./provider-policy-api.js";
+import { resolveFastModeSupport, resolveThinkingProfile } from "./provider-policy-api.js";
 import { resolveXaiTransport } from "./provider-routing.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import {
@@ -314,6 +314,7 @@ export default defineSingleProviderPluginEntry({
       return oauth ? oauth : { handled: true };
     },
     fetchUsageSnapshot: async (ctx) => await fetchXaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
+    resolveFastModeSupport,
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
     classifyFailoverReason: classifyXaiFailoverReason,

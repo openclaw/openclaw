@@ -782,6 +782,15 @@ describe("xai provider plugin", () => {
   it("wires provider stream shaping for fast mode and tool-stream defaults", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const capture = createXaiPayloadCaptureStream();
+    expect(
+      provider.resolveFastModeSupport?.({
+        provider: "xai",
+        modelId: "grok-4",
+        api: "openai-responses",
+        runtimeId: "openclaw",
+        requestCapabilities: { endpointClass: "custom", allowsAnthropicServiceTier: false },
+      }),
+    ).toBe(true);
 
     const wrapped = provider.wrapStreamFn?.({
       provider: "xai",

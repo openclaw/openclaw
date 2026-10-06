@@ -497,7 +497,7 @@ export async function prepareModelsListResult({
       const projectedAvailability = preserveUnknownAvailability
         ? evaluation.availability
         : (evaluation.availability ?? false);
-      const speedPolicy = fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
+      const speedPolicy = fastMode(entry, evaluation, preparedEntry.agentRuntime?.id ?? "openclaw");
       const supportsFastMode = speedPolicy.supportsFastMode;
       const serviceTiers = projectModelServiceTiers({
         config: cfg,
@@ -584,7 +584,7 @@ export async function prepareModelsListResult({
   const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
   const runtimeChoiceReaders = new Map<string, () => ModelRuntimeChoice[]>();
   const projectPublic = createPublicProjector(projector, catalog);
-  const readCatalog = await prepareLogicalVisibleModelCatalog({
+  const visibleCatalog = await prepareLogicalVisibleModelCatalog({
     cfg,
     isCurrent: () => isCurrent() && projector.isCurrent(),
     metadataSnapshot,
@@ -664,7 +664,7 @@ export async function prepareModelsListResult({
   return {
     isCurrent: () => isCurrent() && projector.isCurrent(),
     read: () => {
-      const currentCatalog = readCatalog();
+      const currentCatalog = visibleCatalog.read();
       const keyOf = createModelCatalogIdentityKeyResolver();
       return {
         models: currentCatalog.filter(matchesProvider).map((entry) => {
@@ -674,7 +674,7 @@ export async function prepareModelsListResult({
             throw new Error("Model catalog publication omitted prepared auth evaluation");
           }
           const runtimeChoices = runtimeChoiceReaders.get(key)?.();
-          const projected = projectPublic(entry, evaluation);
+          const projected = projectPublic(visibleCatalog.runtimeEntryFor(entry), evaluation);
           if (runtimeChoices?.length) {
             projected.runtimeChoices = runtimeChoices;
           }

@@ -21,10 +21,67 @@ import {
 import { prepareModelsListResult } from "./models-list-result.js";
 import {
   createModelsListTestContext,
+  listModels,
   WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 
 describe("models.list account service tiers", () => {
+  it("derives Fast support from the selected route without publishing private metadata", async () => {
+    const cases = [
+      { id: "synthetic-opted-out", supportsServiceTier: false },
+      { id: "synthetic-opted-in", supportsServiceTier: true },
+    ];
+    const result = await listModels({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/synthetic-opted-out",
+            models: Object.fromEntries(
+              cases.map(({ id }) => [`openai/${id}`, { agentRuntime: { id: "openclaw" } }]),
+            ),
+          },
+        },
+      },
+      catalog: cases.flatMap(({ id, supportsServiceTier }) => [
+        {
+          id,
+          name: id,
+          provider: "openai",
+          ...subscriptionRoute,
+          compat: { supportsServiceTier: !supportsServiceTier },
+        },
+        {
+          id,
+          name: id,
+          provider: "openai",
+          ...platformRoute,
+          compat: { supportsServiceTier },
+          params: { syntheticPrivateParam: "private" },
+        },
+      ]),
+      preparedAuthStore: {
+        version: 1,
+        profiles: {
+          "openai:api-fixture": {
+            type: "api_key",
+            provider: "openai",
+            key: "synthetic-api-key",
+          },
+        },
+      },
+      routeResolverFactory: routeResolverFactory(dualRoutes),
+      includeDefaultModels: false,
+      preparedOnly: true,
+    });
+    expect(result.models).toHaveLength(cases.length);
+    for (const { id, supportsServiceTier } of cases) {
+      const row = result.models.find((entry) => entry.id === id);
+      expect(row).toMatchObject({ available: true, supportsFastMode: supportsServiceTier });
+      expect(row).not.toHaveProperty("compat");
+      expect(row).not.toHaveProperty("params");
+    }
+  });
+
   it.each(["profile", "direct"] as const)(
     "publishes %s API-key embedded tiers without discovery and withdraws a downgraded tier",
     async (source) => {

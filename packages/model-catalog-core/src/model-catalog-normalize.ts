@@ -302,6 +302,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsEagerToolInputStreaming",
     "supportsLongCacheRetention",
     "supportsResponsesContinuation",
+    "supportsServiceTier",
     "requiresOpenAiAnthropicToolPayload",
   ] as const;
   for (const field of booleanFields) {
