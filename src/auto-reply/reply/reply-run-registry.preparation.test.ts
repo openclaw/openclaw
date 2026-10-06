@@ -278,7 +278,7 @@ it.each([
       operation.setPhase("running");
       const entered = createDeferred();
       const resume = createDeferred();
-      const project = operation.projectToolAuthorityFingerprintAsync.bind(operation);
+      const project = operation.projectToolAuthorityFingerprintAsync;
       const delayed = vi
         .spyOn(operation, "projectToolAuthorityFingerprintAsync")
         .mockImplementation(async (caller) => {

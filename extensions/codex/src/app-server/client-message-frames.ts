@@ -1,4 +1,4 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { RpcRequest, RpcResponse } from "./protocol.js";
 import type { CodexAppServerTransport } from "./transport.js";
 

@@ -15,7 +15,6 @@ import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 export type DaemonSetupOutcome = "succeeded" | "failed" | "skipped";
 
-/** Prompt to install, reinstall, restart, or skip the local Gateway service. */
 export async function maybeInstallDaemon(params: {
   runtime: RuntimeEnv;
   port: number;

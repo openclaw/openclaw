@@ -8,6 +8,7 @@ import {
 } from "../../boards/sqlite-board-store.kernel.js";
 import { readSessionTitleFieldsFromTranscript } from "../../gateway/session-transcript-title-reader.js";
 import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
+import type { MessageToolRunOutcomeWorkerOperations } from "../../infra/message-tool-run-outcome-store.worker.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
@@ -43,6 +44,7 @@ import { listSessionSuggestionsInDatabase } from "./session-suggestion-store.ker
 
 type DomainOperations = SessionSharingWorkerOperations &
   HeartbeatOutcomeWorkerOperations &
+  MessageToolRunOutcomeWorkerOperations &
   ProgressCardWorkerOperations &
   BoardWriteOperations;
 type Command = SqliteWorkerCommand<IncognitoSideDataOperations>;
@@ -102,7 +104,9 @@ export function createIncognitoSideDataWorker(
               ? runtimeProcessEntrypoints.boardStore
               : command.type === "session.progressCard.put"
                 ? runtimeProcessEntrypoints.progressCardStore
-                : undefined;
+                : command.type === "session.messageToolOutcome.record"
+                  ? runtimeProcessEntrypoints.messageToolRunOutcomeStore
+                  : undefined;
       if (module) {
         binding = {
           id: randomUUID(),
@@ -137,6 +141,19 @@ export function createIncognitoSideDataWorker(
         }
         return withSqlitePostCommitPublications(database.db, () => {
           switch (command.type) {
+            case "session.messageToolOutcome.record": {
+              if (command.input.agent_id !== database.agentId) {
+                throw new Error("Message-tool outcome belongs to another incognito actor");
+              }
+              // Canonical actor admission already installed this table; only record here.
+              const receipt = executeDomain({ type: "record", input: command.input }).value;
+              if (!receipt.ok) {
+                const error = new Error("Message-tool outcome transaction failed");
+                retainOpenClawStateWorkerErrorPayload(error, receipt.error);
+                throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+              }
+              return result(receipt.value);
+            }
             case "session.progressCard.put": {
               const receipt = executeDomain({ type: "put", input: command.input }).value;
               if (!receipt.ok) {

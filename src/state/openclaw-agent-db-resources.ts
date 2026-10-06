@@ -8,6 +8,8 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { reserveAgentCreationClaimAdmission } from "./agent-creation-claim.js";
+import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
 export type OpenClawAgentDatabaseAsyncResource = {
@@ -102,12 +104,12 @@ export function matchesAgentDatabaseClose(
 /** Register before admitting a Worker; revocation is synchronous, native drainage is joined. */
 export function registerOpenClawAgentDatabaseAsyncResource(
   resource: OpenClawAgentDatabaseAsyncResource,
+  creationOptions?: OpenClawAgentDatabaseOptions,
 ): () => void {
-  return registerAgentDatabaseResource({
-    ...resource,
-    ownership: "known",
-    agentId: normalizeAgentId(resource.agentId),
-  });
+  return registerAgentDatabaseResource(
+    { ...resource, ownership: "known", agentId: normalizeAgentId(resource.agentId) },
+    creationOptions,
+  );
 }
 
 /** Native readers close synchronously, so successful retirement leaves no asynchronous barrier. */
@@ -130,13 +132,25 @@ export function registerOpenClawAgentDatabaseReadCandidateResource(
   return registerAgentDatabaseResource({ ...resource, ownership: "unresolved" });
 }
 
-function registerAgentDatabaseResource(resource: AgentDatabaseResource): () => void {
+function registerAgentDatabaseResource(
+  resource: AgentDatabaseResource,
+  creationOptions?: OpenClawAgentDatabaseOptions,
+): () => void {
   const owned = {
     ...resource,
     path: path.resolve(resource.path),
   };
   assertAgentDatabaseResourceAdmission(owned);
-  const unregister = () => resources.active.delete(owned);
+  const releaseCreation =
+    creationOptions && owned.ownership === "known"
+      ? reserveAgentCreationClaimAdmission(owned, creationOptions, () =>
+          closeAgentDatabaseResource(owned),
+        )
+      : undefined;
+  const unregister = () => {
+    resources.active.delete(owned);
+    releaseCreation?.();
+  };
   getOpenClawDatabaseMaintenanceScope()?.own(unregister, "agent-resources", () =>
     closeAgentDatabaseResource(owned),
   );

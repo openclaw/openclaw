@@ -398,6 +398,9 @@ type ContextEngineTurnOutboxFilter = Readonly<{
 
 /** Durable outbox rows the drain reads and settles through the agent database worker. */
 export type ContextEngineTurnOutboxStore = Readonly<{
+  /** Keep the selected owner through consumption and acknowledgment, outside its writer FIFO. */
+  retain?<T>(operation: () => Promise<T>): Promise<T>;
+  assertReadable?(): void;
   listPendingSessions(
     filter: ContextEngineTurnOutboxFilter & { sessionId?: string; limit: number },
   ): Promise<string[]>;
@@ -526,6 +529,14 @@ export async function drainContextEngineTurnOutbox(params: {
   onCommitted?: (turn: Parameters<NonNullable<ContextEngine["commitTurn"]>>[0]) => void;
   warn: (message: string) => void;
 }): Promise<{ pending: boolean }> {
+  return params.store.retain
+    ? params.store.retain(() => drainRetainedContextEngineTurnOutbox(params))
+    : drainRetainedContextEngineTurnOutbox(params);
+}
+
+async function drainRetainedContextEngineTurnOutbox(
+  params: Parameters<typeof drainContextEngineTurnOutbox>[0],
+): Promise<{ pending: boolean }> {
   const { store } = params;
   const filter = { engineId: params.engineId, ownerPluginId: params.ownerPluginId };
   if (typeof params.engine.commitTurn !== "function") {
@@ -589,6 +600,7 @@ async function commitPendingContextEngineTurn(params: {
       isHeartbeat: payload.isHeartbeat,
       ...(payload.runtimeContext ? { runtimeContext: payload.runtimeContext } : {}),
     };
+    params.store.assertReadable?.();
     const result = await params.engine.commitTurn?.(commonParams);
     if (!result) {
       throw new Error("context engine does not implement commitTurn");
@@ -599,6 +611,7 @@ async function commitPendingContextEngineTurn(params: {
     await params.store.complete(row.advancement_key);
     // Notification is best effort after acknowledgment; its failure must never requeue a commit.
     try {
+      params.store.assertReadable?.();
       params.onCommitted?.(commonParams);
     } catch (error) {
       params.warn(

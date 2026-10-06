@@ -466,8 +466,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 .executeRemoteExecTurn
             : (await raceNodeWorkerOperation(loadWorkerTurnExecution(), turn.abortSignal))
                 .executeWorkerTurn;
+          const { withWorkerTurnTranscriptDatabase } =
+            await import("./worker-turn-transcript-target.js");
           assertPreparationCurrent();
-          return await execute({
+          const executionOptions = {
             environments: options.environments,
             onHandoff: (custody?: { requiresTerminalReceipt: true }) => {
               if (!admissionReported) {
@@ -490,7 +492,16 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             turnClaim,
             runLocal,
             assertRunCurrent: remoteExec ? assertRunCurrent : assertPreparationCurrent,
-          });
+          };
+          return await withWorkerTurnTranscriptDatabase(
+            turn,
+            {
+              assertCurrent: assertPreparationCurrent,
+              prepareAuthority: () => options.placements.prepareTurnClaimAuthority(turnClaim),
+              signal: turn.abortSignal,
+            },
+            () => execute(executionOptions),
+          );
         } catch (error) {
           if (
             workspaceResolutionFailed ||

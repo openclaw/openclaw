@@ -6,6 +6,7 @@ import {
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import type { PreparedQuestionCallerRead } from "../agents/harness/host-private-capabilities.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { registerDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
@@ -30,6 +31,7 @@ type InProcessGatewayDispatchOptions = {
   requestIdPrefix?: string;
   prepareDispatchCurrent?: () => Promise<void>;
   assertPreparationCurrent?: () => void;
+  questionCallerRead?: PreparedQuestionCallerRead;
   sessionMutationCommitGuard?: () => void;
   assertCreatedInputSourceCurrent?: () => void;
   timeoutMs?: number;
@@ -220,6 +222,7 @@ export async function dispatchGatewayRequestInProcessRaw(
             },
             options.assertCreatedInputSourceCurrent,
             options.assertPreparationCurrent,
+            options.questionCallerRead,
           ),
         )
           .then(() => {

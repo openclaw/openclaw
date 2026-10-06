@@ -1,7 +1,5 @@
 import path from "node:path";
 import {
-  cancelPendingAgentQuestionForSession,
-  claimPendingAgentQuestionAnswer,
   detectAndLoadAgentHarnessPromptImages,
   embeddedAgentLog,
   formatErrorMessage,
@@ -16,7 +14,9 @@ import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
 import {
   CodexSteeringAcceptedUnconfirmedError,
+  createCodexQuestionInputHandlers,
   createCodexSteeringQueue,
+  type CodexQuestionInputAuthority as InputAuthority,
   type CodexSteeringQueueOptions,
   type CodexSteeringPreparation,
 } from "./attempt-steering.js";
@@ -445,48 +445,15 @@ export function activateCodexAttemptTurn(
     },
   });
   steeringQueueRef.current = activeSteeringQueue;
-  type InputAuthority = NonNullable<
-    Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"]
-  >;
+  const { claimPendingUserInputAnswer, cancelPendingUserInput } = createCodexQuestionInputHandlers(
+    params.sessionKey ?? params.sessionId,
+    assertSteeringActive,
+  );
   const injectionGuard = (assertCurrent?: () => void) => () => {
     assertCurrent?.();
     assertSteeringActive();
     return true;
   };
-  const claimPendingUserInputAnswer = async (
-    text: string,
-    optionsLocal?: CodexSteeringQueueOptions,
-    assertCurrent?: () => void,
-    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
-  ) => {
-    if (optionsLocal?.isInboundUserMessage !== true || hasPromptImageInput(optionsLocal)) {
-      return false;
-    }
-    assertSteeringActive();
-    return await claimPendingAgentQuestionAnswer({
-      sessionKey: params.sessionKey ?? params.sessionId,
-      text,
-      authority: { kind: authorityKind, assertCurrent: injectionGuard(assertCurrent) },
-      sourceRecorder: optionsLocal.userTurnTranscriptRecorder,
-      // Older supported hosts use the ordinary-question callback. Current hosts
-      // prefer the recorder owner so staged secret inputs commit before consumption.
-      persist: optionsLocal.userTurnTranscriptRecorder
-        ? async () => {
-            await optionsLocal.userTurnTranscriptRecorder?.persistApproved();
-          }
-        : undefined,
-    });
-  };
-  const cancelPendingUserInput = (
-    resolvedBy: string,
-    assertCurrent?: () => void,
-    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
-  ) =>
-    cancelPendingAgentQuestionForSession({
-      sessionKey: params.sessionKey ?? params.sessionId,
-      resolvedBy,
-      authority: { kind: authorityKind, assertCurrent: injectionGuard(assertCurrent) },
-    });
   // V1 retains backend-only authority; V2 requires a host assertion.
   const queueMessage = async (
     text: string,
@@ -495,9 +462,16 @@ export function activateCodexAttemptTurn(
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
     preparation?: CodexSteeringPreparation,
   ) => {
-    const questionGuard = preparation?.compatAssertCurrent ?? assertCurrent;
-    const canClaim = injectionGuard(questionGuard);
-    if (await claimPendingUserInputAnswer(text, optionsLocal, questionGuard, authorityKind)) {
+    const canClaim = injectionGuard(assertCurrent);
+    if (
+      await claimPendingUserInputAnswer(
+        text,
+        optionsLocal,
+        assertCurrent,
+        authorityKind,
+        preparation,
+      )
+    ) {
       // A question claim is already consumption. Closing the run during its
       // response must not turn that answer into a rejected, replayable steer.
       optionsLocal?.onQueueAccepted?.(true);
@@ -507,7 +481,7 @@ export function activateCodexAttemptTurn(
     if (optionsLocal?.isInboundUserMessage === true && hasPromptImageInput(optionsLocal)) {
       assertSteeringActive();
       try {
-        await cancelPendingUserInput("image-reply", questionGuard, authorityKind);
+        await cancelPendingUserInput("image-reply", assertCurrent, authorityKind, preparation);
       } catch (error) {
         canClaim();
         if (error instanceof Error && error.name === "QuestionDispatchRefusedError") {
@@ -520,12 +494,7 @@ export function activateCodexAttemptTurn(
       }
     }
     try {
-      await activeSteeringQueue.queue(
-        text,
-        optionsLocal,
-        injectionGuard(assertCurrent),
-        preparation,
-      );
+      await activeSteeringQueue.queue(text, optionsLocal, canClaim, preparation);
     } catch (error) {
       if (error instanceof CodexSteeringAcceptedUnconfirmedError) {
         return {
@@ -546,17 +515,15 @@ export function activateCodexAttemptTurn(
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
-    ...(connection.authority.withPreparedCurrent
-      ? {
-          queueMessageAsync: (
-            text: string,
-            options: CodexSteeringQueueOptions | undefined,
-            preparation: CodexSteeringPreparation,
-            kind: InputAuthority["kind"],
-          ) => queueMessage(text, options, preparation.assertCurrent, kind, preparation),
-        }
-      : {}),
-  };
+    claimPendingUserInputAnswerAsync: (text, options, preparation, kind) =>
+      claimPendingUserInputAnswer(text, options, preparation.assertCurrent, kind, preparation),
+    cancelPendingUserInputAsync: (resolvedBy, preparation, kind) =>
+      cancelPendingUserInput(resolvedBy, preparation.assertCurrent, kind, preparation),
+    queueMessageAsync: connection.authority.withPreparedCurrent
+      ? (text, options, preparation, kind) =>
+          queueMessage(text, options, preparation.assertCurrent, kind, preparation)
+      : undefined,
+  } satisfies NonNullable<Parameters<typeof setActiveEmbeddedRun>[1]["messageInjectionV2"]>;
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,

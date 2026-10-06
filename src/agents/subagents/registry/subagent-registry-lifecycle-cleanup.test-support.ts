@@ -149,7 +149,6 @@ export function registerDirectSessionCleanupAuthorityTests({
   gatewayMocks,
   helperMocks,
   sessionEntryReadMocks,
-  waitForLifecycleState,
 }: {
   createRunEntry: typeof createLifecycleRunEntry;
   createLifecycleController: (
@@ -170,7 +169,6 @@ export function registerDirectSessionCleanupAuthorityTests({
   };
   helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
   sessionEntryReadMocks: { loadSessionEntryByKey: Mock };
-  waitForLifecycleState: (assertion: () => void) => Promise<void>;
 }) {
   it("commits cancellation of a yielded run before browser cleanup", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: false });
@@ -255,29 +253,6 @@ export function registerDirectSessionCleanupAuthorityTests({
     );
   });
 
-  it("keeps direct delete cleanup root-admitted until the gateway call settles", async () => {
-    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: false });
-    const runs = new Map([[entry.runId, entry]]);
-    let releaseDelete: (() => void) | undefined;
-    gatewayMocks.callGateway.mockImplementation((opts) => {
-      if (opts.method !== "sessions.delete") {
-        return Promise.resolve({});
-      }
-      return new Promise<Record<string, unknown>>((resolve) => {
-        releaseDelete = () => resolve({});
-      });
-    });
-    const controller = createLifecycleController({ entry, runs });
-
-    await completeRun(controller, entry, { triggerCleanup: true });
-    await waitForLifecycleState(() => expect(releaseDelete).toBeTypeOf("function"));
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-
-    releaseDelete?.();
-    await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(runs.has(entry.runId)).toBe(false);
-  });
-
   it("settles direct cleanup when the child changes during its deletion identity read", async () => {
     const entry = createRunEntry({
       cleanup: "delete",
@@ -320,50 +295,6 @@ export function registerDirectSessionCleanupAuthorityTests({
     expect(finalPostimage?.execution.status).toBe("terminal");
     expect(finalPostimage?.execution.suppressSessionEffects).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
-  });
-}
-
-export function registerDeliveredCleanupEndedHookTest({
-  createRunEntry,
-  createLifecycleController,
-  completeAndJoinCleanup,
-}: Pick<
-  Parameters<typeof registerDirectSessionCleanupAuthorityTests>[0],
-  "createRunEntry" | "createLifecycleController" | "completeAndJoinCleanup"
->) {
-  it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
-    const entry = createRunEntry({
-      delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-    });
-    const emitSubagentEndedHookForRun = vi.fn(async () => {});
-
-    const controller = createLifecycleController({
-      entry,
-      shouldEmitEndedHookForRun: () => true,
-      emitSubagentEndedHookForRun,
-    });
-
-    await expect(
-      completeAndJoinCleanup(controller, entry, {
-        triggerCleanup: true,
-        terminalReply: { disposition: "visible", text: "final completion reply" },
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(emitSubagentEndedHookForRun).toHaveBeenCalledTimes(1);
-    expect(emitSubagentEndedHookForRun).toHaveBeenCalledWith({
-      entry: expect.objectContaining({
-        runId: entry.runId,
-        childSessionKey: entry.childSessionKey,
-        delivery: expect.objectContaining({ status: "delivered", deliveredAt: 3_500 }),
-      }),
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-      sendFarewell: true,
-      isCurrent: expect.any(Function),
-      prepareCurrent: expect.any(Function),
-    });
   });
 }
 

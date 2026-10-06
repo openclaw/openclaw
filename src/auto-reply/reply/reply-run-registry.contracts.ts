@@ -193,15 +193,28 @@ export type ReplyBackendMessageInjectionV2 = {
     preparation: ReplyToolAuthorityPreparation,
     authorityKind: "run" | "source-bound",
   ): Promise<void | ReplyBackendQueueMessageResult>;
+  /** @deprecated Use claimPendingUserInputAnswerAsync with fresh policy preparation. */
   claimPendingUserInputAnswer?(
     text: string,
     options: ReplyBackendQueueMessageOptions | undefined,
     assertCurrent: () => void,
     authorityKind: "run" | "source-bound",
   ): Promise<boolean>;
+  claimPendingUserInputAnswerAsync?(
+    text: string,
+    options: ReplyBackendQueueMessageOptions | undefined,
+    preparation: ReplyToolAuthorityPreparation,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
+  /** @deprecated Use cancelPendingUserInputAsync with fresh policy preparation. */
   cancelPendingUserInput?(
     resolvedBy: string,
     assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
+  cancelPendingUserInputAsync?(
+    resolvedBy: string,
+    preparation: ReplyToolAuthorityPreparation,
     authorityKind: "run" | "source-bound",
   ): Promise<boolean>;
 };
@@ -414,6 +427,7 @@ export type ReplyOperation = {
   /** @deprecated Use projectToolAuthorityFingerprintAsync. */
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
   projectToolAuthorityFingerprintAsync(
+    this: void,
     overlay: ReplyToolAuthorityOverlay,
   ): Promise<string | undefined>;
   /** Prepare fingerprint and projection together for the final concrete attempt route. */
