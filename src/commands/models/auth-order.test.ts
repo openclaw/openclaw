@@ -138,6 +138,7 @@ describe("models auth order", () => {
       agentDir: "/tmp/agent-main",
       provider: "anthropic",
       order: null,
+      sharedStoreWrite: true,
     });
     expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), undefined, {
       kind: "mutation",
