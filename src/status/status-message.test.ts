@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import * as transcriptReaders from "../gateway/session-transcript-usage.js";
@@ -311,6 +313,181 @@ describe("buildStatusMessage context window", () => {
     totalTokensFresh: true,
     totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
   };
+
+  describe("published model limits", () => {
+    const provider = "github-copilot";
+    const model = "status-context-fixture";
+    const cacheKey = providerContextTokenCacheKey(provider, model);
+
+    beforeEach(() => {
+      const caches = getContextWindowCaches();
+      caches.discoveredTokenCache.set(cacheKey, 128_000);
+      caches.contextWindowCache.set(cacheKey, 128_000);
+    });
+
+    afterEach(() => {
+      const caches = getContextWindowCaches();
+      caches.discoveredTokenCache.delete(cacheKey);
+      caches.contextWindowCache.delete(cacheKey);
+    });
+
+    function render(overrides: Partial<Parameters<typeof buildStatusMessageParts>[0]> = {}) {
+      return buildStatusMessageParts({
+        ...displayParams,
+        modelRefs: statusModelRefs({ provider, model }),
+        agent: { model: `${provider}/${model}` },
+        modelAuth: "token",
+        activeModelAuth: "token",
+        runtimeContextTokens: 1_050_000,
+        sessionEntry: { sessionId: "published-context", updatedAt: 0, ...tokenUsage },
+        ...overrides,
+      });
+    }
+
+    it.each([
+      {
+        name: "native and prompt",
+        contextWindow: 1_050_000,
+        contextTokens: 1_050_000,
+        label: "1.1m",
+      },
+      {
+        name: "lower prompt budget",
+        contextWindow: 1_050_000,
+        contextTokens: 922_000,
+        label: "922k",
+      },
+      { name: "native only", contextWindow: 1_050_000, contextTokens: undefined, label: "1.1m" },
+      { name: "prompt only", contextWindow: undefined, contextTokens: 1_050_000, label: "1.1m" },
+      {
+        name: "genuine smaller window",
+        contextWindow: 64_000,
+        contextTokens: 64_000,
+        label: "64k",
+      },
+    ])(
+      "uses published $name instead of a stale cache",
+      ({ contextWindow, contextTokens, label }) => {
+        const parts = render({
+          runtimeContextTokens: undefined,
+          thinkingCatalog: [{ provider, id: model, contextWindow, contextTokens }],
+        });
+
+        expect(parts.text).toContain(`Context: 11/${label}`);
+        const table = parts.presentation.blocks.find((block) => block.type === "table");
+        expect(
+          table?.type === "table" && table.rows.find((row) => row[0] === "📚 Context")?.[1],
+        ).toContain(`11/${label}`);
+      },
+    );
+
+    it("uses supplied runtime limits without changing the execution resolver or cache", () => {
+      expect(render().text).toContain("Context: 11/1.1m");
+      expect(
+        resolveContextTokensForModel({
+          cfg: {},
+          provider,
+          model,
+          modelContextTokens: 1_050_000,
+          allowAsyncLoad: false,
+        }),
+      ).toBe(128_000);
+      expect(getContextWindowCaches().discoveredTokenCache.get(cacheKey)).toBe(128_000);
+      expect(getContextWindowCaches().contextWindowCache.get(cacheKey)).toBe(128_000);
+    });
+
+    it("uses the newly selected model's published limits before its first run", () => {
+      const parts = render({
+        modelRefs: statusModelRefs(
+          { provider, model },
+          { provider: "previous-provider", model: "previous-model" },
+        ),
+        selectedContextWindow: 1_050_000,
+        selectedContextTokens: 922_000,
+        runtimeContextTokens: 64_000,
+      });
+
+      expect(parts.text).toContain("Context: 11/922k");
+    });
+
+    it.each([
+      { contextWindow: 64_000, contextTokens: undefined, label: "64k" },
+      { contextWindow: 1_050_000, contextTokens: 64_000, label: "64k" },
+      { contextWindow: 1_050_000, contextTokens: 1_200_000, label: "1.1m" },
+    ])(
+      "preserves configured limits $contextWindow/$contextTokens",
+      ({ contextWindow, contextTokens, label }) => {
+        const parts = render({
+          config: {
+            models: {
+              providers: {
+                [provider]: {
+                  baseUrl: "https://provider.example.invalid",
+                  models: [
+                    { ...statusTestModel(model, "Context fixture", contextWindow), contextTokens },
+                  ],
+                },
+              },
+            },
+          },
+        });
+
+        expect(parts.text).toContain(`Context: 11/${label}`);
+      },
+    );
+
+    it("does not inflate trusted lower runtime telemetry to the catalog window", () => {
+      const parts = render({
+        resolvedHarness: "openclaw",
+        sessionEntry: {
+          sessionId: "lower-runtime-context",
+          updatedAt: 0,
+          modelProvider: provider,
+          model,
+          agentHarnessId: "openclaw",
+          contextTokens: 64_000,
+          contextTokensSource: "runtime",
+          ...tokenUsage,
+        },
+      });
+
+      expect(parts.text).toContain("Context: 11/64k");
+    });
+
+    it.each([undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+      "keeps cache fallback when supplied limits are unavailable (%s)",
+      (runtimeContextTokens) => {
+        expect(render({ runtimeContextTokens }).text).toContain("Context: 11/128k");
+      },
+    );
+
+    it("uses the active fallback's own catalog entry, not the selected model's window", () => {
+      const activeProvider = "fallback-provider";
+      const parts = render({
+        modelRefs: statusModelRefs({ provider, model }, { provider: activeProvider, model }),
+        thinkingCatalog: [
+          { provider, id: model, contextWindow: 1_050_000 },
+          { provider: activeProvider, id: model, contextWindow: 64_000 },
+        ],
+        sessionEntry: {
+          sessionId: "fallback-context",
+          updatedAt: 0,
+          modelProvider: activeProvider,
+          model,
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: `${provider}/${model}`,
+            activeModel: `${activeProvider}/${model}`,
+            reason: "selected model unavailable",
+          },
+          ...tokenUsage,
+        },
+      });
+
+      expect(parts.text).toContain(`Fallback: ${activeProvider}/${model}`);
+      expect(parts.text).toContain("Context: 11/64k");
+    });
+  });
 
   it("rejects a stale runtime window after a same-model harness change", () => {
     const text = buildStatusMessage({

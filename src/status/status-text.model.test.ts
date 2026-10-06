@@ -1,6 +1,7 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "../agents/context-cache.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
@@ -108,6 +109,32 @@ describe("buildStatusText prepared context windows", () => {
       ...overrides,
     });
   }
+
+  it("renders published model limits while the passive context cache is stale", async () => {
+    const provider = "context-fixture";
+    const model = "large-model";
+    const key = providerContextTokenCacheKey(provider, model);
+    const caches = getContextWindowCaches();
+    caches.discoveredTokenCache.set(key, 128_000);
+    caches.contextWindowCache.set(key, 128_000);
+    try {
+      const parts = await renderPreparedStatus({
+        provider,
+        model,
+        contextTokens: 1_050_000,
+        thinkingCatalog: [
+          { provider, id: model, contextWindow: 1_050_000, contextTokens: 1_050_000 },
+        ],
+      });
+
+      expect(parts.text).toContain("Context: 45k/1.1m");
+      expect(caches.discoveredTokenCache.get(key)).toBe(128_000);
+      expect(caches.contextWindowCache.get(key)).toBe(128_000);
+    } finally {
+      caches.discoveredTokenCache.delete(key);
+      caches.contextWindowCache.delete(key);
+    }
+  });
 
   it("renders the agent thinking default ahead of model and global defaults", async () => {
     const parts = await renderPreparedStatus({

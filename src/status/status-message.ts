@@ -10,7 +10,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
-import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
@@ -75,6 +74,7 @@ import {
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { resolveStatusContextTokens } from "./status-context.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
@@ -650,7 +650,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const activeModelProvider = runtimeAliasModelEquivalent
     ? selectedLookupProvider
     : contextLookupProvider;
-  const selectedContextTokens = resolveContextTokensForModel({
+  const selectedContextTokens = resolveStatusContextTokens({
     cfg: contextConfig,
     provider: selectedLookupProvider,
     model: selectedLookupModel,
@@ -672,7 +672,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       normalizeLowercaseStringOrEmpty(modelRefs.active.provider)
       ? (args.runtimeContextProvider ?? contextLookupProvider)
       : contextLookupProvider;
-  const activeContextTokens = resolveContextTokensForModel({
+  const activeContextTokens = resolveStatusContextTokens({
     cfg: contextConfig,
     ...(activeContextProvider ? { provider: activeContextProvider } : {}),
     modelProvider: contextLookupProvider,
