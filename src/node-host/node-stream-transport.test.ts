@@ -769,4 +769,102 @@ describe("node stream close acknowledgement", () => {
       });
     }
   });
+
+  it("bounds a gateway close that withholds TCP FIN", async () => {
+    let peer: net.Socket | undefined;
+    const terminate = vi.spyOn(WebSocket.prototype, "terminate");
+    const gateway = net.createServer({ allowHalfOpen: true }, (socket) => {
+      peer = socket;
+      socket.on("error", () => undefined);
+      let buffer = Buffer.alloc(0);
+      let upgraded = false;
+      let sentClose = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (!upgraded) {
+          buffer = Buffer.concat([buffer, chunk]);
+          const headerEnd = buffer.indexOf("\r\n\r\n");
+          if (headerEnd === -1) {
+            return;
+          }
+          const header = buffer.subarray(0, headerEnd).toString("latin1");
+          const key = /^Sec-WebSocket-Key: ([^\r\n]+)/m.exec(header)?.[1]?.trim();
+          if (!key) {
+            socket.destroy();
+            return;
+          }
+          const accept = createHash("sha1")
+            .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+            .digest("base64");
+          socket.write(
+            "HTTP/1.1 101 Switching Protocols\r\n" +
+              "Upgrade: websocket\r\n" +
+              "Connection: Upgrade\r\n" +
+              `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+          );
+          upgraded = true;
+          return;
+        }
+        if (!sentClose) {
+          sentClose = true;
+          // Close code 1000. Leave the TCP connection half-open.
+          socket.write(Buffer.from([0x88, 0x02, 0x03, 0xe8]));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const target = new Duplex({
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    const delays: number[] = [];
+    let retire: (() => void) | undefined;
+    const armed = createDeferred<void>();
+    const controller = new AbortController();
+    let failure: unknown;
+    const running = runNodeStreamTransport({
+      gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+      attachPath: "/node-desktop/attach",
+      expectedAttachPath: "/node-desktop/attach",
+      target: { stream: target },
+      metadata: { ok: true },
+      streamName: "desktop",
+      signal: controller.signal,
+      scheduleCloseAck: (callback, delayMs) => {
+        delays.push(delayMs);
+        if (delayMs >= 30_000 && !retire) {
+          retire = callback;
+          armed.resolve();
+        }
+        return () => {
+          if (retire === callback) {
+            retire = undefined;
+          }
+        };
+      },
+    }).catch((error: unknown) => {
+      failure = error;
+    });
+    try {
+      await armed.promise;
+      expect(delays).toContain(30_000);
+      expect(target.readableEnded).toBe(false);
+      expect(terminate).not.toHaveBeenCalled();
+      retire?.();
+      expect(terminate).toHaveBeenCalledOnce();
+      await running;
+      expect(failure).toBeUndefined();
+    } finally {
+      controller.abort();
+      target.destroy();
+      peer?.destroy();
+      terminate.mockRestore();
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  });
 });

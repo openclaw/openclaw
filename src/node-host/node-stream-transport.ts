@@ -27,11 +27,10 @@ const RESUME_CHECK_MS = 25;
 // a silent gateway cannot hold the command open.
 const STREAM_CLOSE_ACK_MS = 5_000;
 // A peer that stops reading leaves the payload queued in this process.
+// The library uses this same 30 second budget to destroy a socket after a
+// close handshake. Do not extend it: a Gateway close that withholds TCP FIN
+// would otherwise keep the command until that longer timer.
 const STREAM_CLOSE_FLUSH_MS = 30_000;
-// ws destroys the socket 30s after close(). The node command must stay open
-// until the gateway acknowledges the close: settling it destroys the receive
-// stream while a proxy can still be holding the tail.
-const STREAM_CLOSE_HANDSHAKE_MS = 2_147_483_647;
 const streamLog = createSubsystemLogger("node-host/stream");
 
 type NodeStreamCloseTrigger =
@@ -74,8 +73,6 @@ function websocketOptions(
     maxPayload: MAX_PAYLOAD_BYTES,
     ...(cloudflareAccess ? { headers: buildCloudflareAccessHeaders(cloudflareAccess) } : {}),
   };
-  // ClientOptions does not declare closeTimeout. The runtime still reads it.
-  Object.assign(options, { closeTimeout: STREAM_CLOSE_HANDSHAKE_MS });
   if (tlsFingerprint?.trim()) {
     applyGatewayWebSocketTlsPin(options, tlsFingerprint);
   }
@@ -182,6 +179,28 @@ function createNodeStreamSplice(params: {
     });
     params.ws.once("close", () => finish("websocket-close"));
     params.ws.once("error", (error) => finish("websocket-error", error));
+    // A Gateway close frame calls close() and leaves the socket CLOSING while
+    // the local target is still open. Target-end and failure timers do not run
+    // on that path. Retire on the flush budget if TCP FIN never arrives.
+    const closeSocket = params.ws.close.bind(params.ws);
+    params.ws.close = (code?: number, data?: string | Buffer) => {
+      closeSocket(code, data);
+      // Protocol errors also call close(). Only a received close frame should
+      // arm this timer; command failure already has its own flush callback.
+      if (Reflect.get(params.ws, "_closeFrameReceived") !== true) {
+        return;
+      }
+      if (settled || params.socket.readableEnded || params.ws.readyState !== WEBSOCKET_CLOSING) {
+        return;
+      }
+      cancelCloseAck?.();
+      cancelCloseAck = scheduleCloseAck(() => {
+        finish("websocket-close");
+        if (params.ws.readyState === WEBSOCKET_OPEN || params.ws.readyState === WEBSOCKET_CLOSING) {
+          params.ws.terminate();
+        }
+      }, STREAM_CLOSE_FLUSH_MS);
+    };
     params.socket.once("close", () => {
       params.diagnostics.trigger ??= "target-close";
       stopInbound();
@@ -228,9 +247,9 @@ function createNodeStreamSplice(params: {
             return;
           }
           params.ws.close();
-          // The gateway still has to acknowledge the close. A peer that
-          // already read the payload and then stays silent must not keep
-          // the command for the library's multi-day handshake budget.
+          // The payload has left this process. If the gateway never
+          // acknowledges the close, retire on the same 30 second budget
+          // the library uses for a half-open handshake.
           cancelCloseAck = scheduleCloseAck(retireUnacknowledged, STREAM_CLOSE_FLUSH_MS);
         };
         closeAfterDrain();
@@ -353,14 +372,13 @@ export async function runNodeStreamTransport(params: {
     ) {
       const closing = ws;
       // A protocol error can close the socket before the error event. That
-      // leaves it CLOSING under the long handshake budget unless this path
-      // still arms the flush timer.
+      // leaves it CLOSING. Arm the flush timer so retirement does not wait
+      // on a peer that never sends TCP FIN.
       if (closing.readyState !== WEBSOCKET_CLOSING) {
         closing.close();
       }
-      // The long handshake budget is only for a forwarded stream that is
-      // waiting on the gateway. A failed command must not keep the socket
-      // for that whole budget when the peer never answers the close.
+      // A failed command must not wait out a silent close handshake.
+      // The flush budget matches the library close timer.
       const scheduleCloseAck =
         params.scheduleCloseAck ??
         ((callback: () => void, delayMs: number) => {
