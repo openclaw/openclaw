@@ -351,7 +351,7 @@ describe("captured model decisions", () => {
     expect(prepared.snapshot.providerOutcomes?.[0]?.modelServiceTiers?.[0]?.serviceTiers).toEqual([
       "ultrafast",
     ]);
-    expect(await prepared.evaluateEntry(entry, undefined, "codex")).toMatchObject({
+    expect(prepared.evaluateEntry(entry, undefined, "codex")).toMatchObject({
       selectedProfileId: "openai:selected",
       availability: true,
     });
@@ -443,9 +443,9 @@ describe("captured model decisions", () => {
         pluginRegistry: harnessRegistry("copilot"),
         isCurrent: () => true,
       });
-      const choices = await owner.runtimeChoices(model);
+      const choices = owner.runtimeChoices(model);
       if (authenticated) {
-        expect(await owner.evaluateEntry(model, undefined, "copilot")).toMatchObject({
+        expect(owner.evaluateEntry(model, undefined, "copilot")).toMatchObject({
           availability: true,
           selectedProfileId: "github-copilot:work",
         });
@@ -474,7 +474,7 @@ describe("captured model decisions", () => {
           : {}),
       };
       const owner = nativeOwner(true, true, () => true, cfg);
-      const evaluation = await owner.evaluateEntry(entry);
+      const evaluation = owner.evaluateEntry(entry);
       expect(evaluation).toMatchObject({
         availability: true,
         runtimeAuth: { id: "codex", source: "native" },
@@ -503,7 +503,7 @@ describe("captured model decisions", () => {
       },
     };
     const owner = nativeOwner(true, true, () => true, cfg);
-    const evaluation = await owner.evaluateEntry(entry);
+    const evaluation = owner.evaluateEntry(entry);
     expect(evaluation.availability).not.toBe(true);
     expect(evaluation.runtimeAuth).toBeUndefined();
     expect(
@@ -531,7 +531,7 @@ describe("captured model decisions", () => {
       },
     };
     const owner = nativeOwner(true, false, () => true, cfg);
-    const evaluation = await owner.evaluateEntry(entry);
+    const evaluation = owner.evaluateEntry(entry);
     expect(evaluation.availability).toBe(true);
     expect(evaluation.runtimeAuth).toBeUndefined();
     expect(evaluation.selectedRoute).toMatchObject(platformRoute);
@@ -568,10 +568,10 @@ describe("captured model decisions", () => {
       }),
     });
     expect(
-      await owner.evaluateEntry({ provider: entry.provider, id: entry.id }, undefined, "openclaw"),
+      owner.evaluateEntry({ provider: entry.provider, id: entry.id }, undefined, "openclaw"),
     ).toMatchObject({ availability: true, selectedProfileId: "openai:platform" });
     expect(
-      await owner.evaluateEntry(
+      owner.evaluateEntry(
         { ...entry, api: subscriptionRoute.api, baseUrl: subscriptionRoute.baseUrl },
         undefined,
         "openclaw",
@@ -580,16 +580,16 @@ describe("captured model decisions", () => {
   });
 
   it("distinguishes unknown choices from authoritative empty choices", async () => {
-    expect(await nativeOwner(false, false).runtimeChoices(entry)).toBeUndefined();
-    expect(await nativeOwner(true, false).runtimeChoices(entry)).toEqual([]);
+    expect(nativeOwner(false, false).runtimeChoices(entry)).toBeUndefined();
+    expect(nativeOwner(true, false).runtimeChoices(entry)).toEqual([]);
   });
 
   it("rejects a replaced generation instead of returning its old choices", async () => {
     let current = true;
     const owner = nativeOwner(true, true, () => current);
-    expect(await owner.runtimeChoices(entry)).toEqual(["codex"]);
+    expect(owner.runtimeChoices(entry)).toEqual(["codex"]);
     current = false;
-    await expect(owner.runtimeChoices(entry)).rejects.toThrow("Model catalog changed");
+    expect(() => owner.runtimeChoices(entry)).toThrow("Model catalog changed");
   });
 
   it("keeps a different provider's account pin out of the selected route", async () => {
@@ -611,7 +611,7 @@ describe("captured model decisions", () => {
       },
       routeResolverFactory: routeResolverFactory({ ...dualRoutes, routes: [platformRoute] }),
     });
-    expect(await owner.evaluateEntry(entry, [entry], "openclaw")).toMatchObject({
+    expect(owner.evaluateEntry(entry, [entry], "openclaw")).toMatchObject({
       availability: true,
       selectedProfileId: "openai:chosen",
     });
@@ -732,7 +732,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       };
       setRuntimeAuthProfileStoreSnapshot(orderStore, state.path("custom-worker"));
       const owner = decisionOwner(cfg, "worker", state.workspaceDir);
-      expect(await readRow(owner, "before-order-change")).toMatchObject({
+      expect(readRow(owner, "before-order-change")).toMatchObject({
         availability: true,
         evidence: "runtime",
         selectedAuthMode: "oauth",
@@ -743,9 +743,9 @@ describe("catalog decisions with prepared CLI auth directories", () => {
         state.path("custom-worker"),
       );
       // New keys bypass the intentional completed-row decision memoization.
-      expect((await readRow(owner, "after-order-change")).evidence).not.toBe("runtime");
+      expect(readRow(owner, "after-order-change").evidence).not.toBe("runtime");
       setRuntimeAuthProfileStoreSnapshot(orderStore, state.path("custom-worker"));
-      expect(await readRow(owner, "after-order-restored")).toMatchObject({
+      expect(readRow(owner, "after-order-restored")).toMatchObject({
         availability: true,
         evidence: "runtime",
       });
@@ -764,11 +764,11 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       };
       setRuntimeAuthProfileStoreSnapshot(storedChoice(false), legacyDir);
       const owner = decisionOwner(cfg, "worker", state.workspaceDir);
-      expect((await readRow(owner, "before-relocation")).evidence).not.toBe("runtime");
+      expect(readRow(owner, "before-relocation").evidence).not.toBe("runtime");
 
       noteCommittedSharedAuthStoreOwnership({ location: "state-db" });
       setRuntimeAuthProfileStoreSnapshot(storedChoice(true));
-      expect(await readRow(owner, "after-relocation")).toMatchObject({
+      expect(readRow(owner, "after-relocation")).toMatchObject({
         availability: true,
         evidence: "runtime",
         selectedAuthMode: "oauth",
@@ -795,11 +795,11 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       setRuntimeAuthProfileStoreSnapshot(storedChoice(false), replacementDir);
       const first = decisionOwner(cfg, "first", state.workspaceDir);
       const second = decisionOwner(cfg, "second", state.workspaceDir);
-      expect(await readRow(first, "same-row")).toMatchObject({
+      expect(readRow(first, "same-row")).toMatchObject({
         availability: true,
         evidence: "runtime",
       });
-      expect((await readRow(second, "same-row")).evidence).not.toBe("runtime");
+      expect(readRow(second, "same-row").evidence).not.toBe("runtime");
       const replacement = decisionOwner(
         {
           ...cfg,
@@ -811,8 +811,8 @@ describe("catalog decisions with prepared CLI auth directories", () => {
         "first",
         state.workspaceDir,
       );
-      expect((await readRow(replacement, "same-row")).evidence).not.toBe("runtime");
-      expect(await readRow(first, "old-owner-new-row")).toMatchObject({
+      expect(readRow(replacement, "same-row").evidence).not.toBe("runtime");
+      expect(readRow(first, "old-owner-new-row")).toMatchObject({
         availability: true,
         evidence: "runtime",
       });

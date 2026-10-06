@@ -1,4 +1,3 @@
-/** Session MCP runtime manager lifecycle: maps, idle sweep, dispose, advertised catalog. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";

@@ -17,9 +17,6 @@ function stripThreadSuffix(value: string): string {
 }
 
 /**
- * Limits conversation history to recent user turns (and their associated
- * assistant responses). This reduces token usage for long-running DM sessions.
- *
  * Leading non-conversation messages (e.g. compactionSummary, branchSummary)
  * placed at index 0 by buildSessionContext are always preserved, since they
  * carry summarized pre-compaction context that history limiting must not drop.

@@ -95,6 +95,31 @@ function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun
 }
 
 describe("gateway concurrency benchmark script", () => {
+  it.skipIf(process.platform !== "linux")(
+    "caps Control UI defaults to the requested cohort",
+    () => {
+      for (const total of [1, 10, 50]) {
+        const options = testing.parseOptions([
+          "--control-ui-clients",
+          String(total),
+          "--resource-cgroup",
+          "/synthetic/cgroup",
+          "--transpiler-cache",
+          "/synthetic/cache",
+          "--runs",
+          "1",
+          "--warmup",
+          "0",
+        ]);
+        expect(options.controlUiLoad).toMatchObject({
+          totalClients: total,
+          activeClients: Math.min(25, total),
+          drivers: Math.min(4, total),
+        });
+      }
+    },
+  );
+
   describe("passive activity-summary diagnostics", () => {
     const create = () => createActivitySummaryDiagnostics(performance.now());
     const recapLog = (error: unknown = "Activity recap timed out") =>
@@ -2280,4 +2305,31 @@ syncBuiltinESMExports();\n`,
       );
     }
   });
+});
+
+it("cancels dispatch readiness promptly instead of waiting for a later ready event", async () => {
+  vi.useFakeTimers();
+  try {
+    const controller = new AbortController();
+    const interrupted = new Error("synthetic interruption");
+    let reads = 0;
+    const pending = testing
+      .waitForGatewayDispatchReady(
+        () => {
+          controller.abort(interrupted);
+          return ++reads === 1 ? "" : "startup trace: sidecars.ready ";
+        },
+        Infinity,
+        controller.signal,
+      )
+      .then(
+        () => false,
+        () => true,
+      );
+    await vi.runAllTimersAsync();
+    expect(await pending).toBe(true);
+    expect(reads).toBe(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });

@@ -18,6 +18,7 @@ import {
 } from "./session-cost-usage-collection.js";
 import {
   withUsageCostIncognitoScope,
+  captureUsageCostIncognitoBinding,
   type UsageCostIncognitoBinding,
 } from "./session-cost-usage-incognito.js";
 import {
@@ -113,10 +114,9 @@ export async function loadSessionCostSummary(params: {
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
 }): Promise<SessionCostSummary | null> {
-  const prepared = params.incognito
-    ? prepareUsageCostWorker({ ...params, storePath: params.incognito.actor.path })
-    : undefined;
-  return withUsageCostIncognitoScope(params.incognito, (incognito) =>
+  const binding = captureUsageCostIncognitoBinding(params);
+  const prepared = binding ? prepareUsageCostWorker({ ...params, incognito: binding }) : undefined;
+  return withUsageCostIncognitoScope(binding, (incognito) =>
     loadSessionCostSummaryCaptured({ ...params, incognito }, prepared),
   );
 }
@@ -192,7 +192,7 @@ export async function loadSessionUsageTimeSeries(params: {
   incognito?: UsageCostIncognitoBinding;
   maxPoints?: number;
 }): Promise<SessionUsageTimeSeries | null> {
-  return withUsageCostIncognitoScope(params.incognito, (incognito) =>
+  return withUsageCostIncognitoScope(captureUsageCostIncognitoBinding(params), (incognito) =>
     loadSessionUsageTimeSeriesCaptured({ ...params, incognito }),
   );
 }
@@ -294,7 +294,7 @@ export async function loadSessionLogs(params: {
   incognito?: UsageCostIncognitoBinding;
   limit?: number;
 }): Promise<SessionLogEntry[] | null> {
-  return withUsageCostIncognitoScope(params.incognito, (incognito) =>
+  return withUsageCostIncognitoScope(captureUsageCostIncognitoBinding(params), (incognito) =>
     loadSessionLogsCaptured({ ...params, incognito }),
   );
 }

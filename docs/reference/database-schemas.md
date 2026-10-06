@@ -13,7 +13,7 @@ OpenClaw stores control-plane state in the shared state database and agent data 
 
 Schema-version, integrity, canonical-index, and table-existence checks belong to open/admission and the migration owner after migrations; runtime paths must carry admitted schema facts with the handle, never re-query them, and use fresh `PRAGMA data_version` checks to observe foreign commits on the next unpinned read while preserving active SQLite snapshots. Existing per-call checks are legacy and must be migrated when touched.
 
-Shared-state and agent read-only connections reuse bounded prepared statements under their native connection lifecycle. Queries still execute on every read. Read admission shares one freshness check within its synchronous operation; schema-fact lookups reuse the admitted handle without checking again. Write transactions refresh after acquiring `BEGIN`, before consuming those facts. Explicit fresh checks always execute, even inside another read operation. A foreign commit compares the schema and user versions before retaining or replacing schema facts, preserving active SQLite snapshots. Closing or replacing the connection clears retained statements and facts.
+Shared-state and agent read-only connections reuse bounded prepared statements under their native connection lifecycle. Statement reuse alone does not skip query execution. Read admission shares one freshness check within its synchronous operation; schema-fact lookups reuse the admitted handle without checking again. Write transactions refresh after acquiring `BEGIN`, before consuming those facts. Explicit fresh checks always execute, even inside another read operation. A foreign commit compares the schema and user versions before retaining or replacing schema facts, preserving active SQLite snapshots. Closing or replacing the connection clears retained statements and facts.
 
 Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent, so warm writes preserve schema facts for that handle and its local siblings. First use after rollback or a foreign schema change still creates missing storage through normal write admission. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
 
@@ -35,6 +35,21 @@ retention policies are unchanged.
 Session row-facts reads reuse a canonical continuation's existing transaction
 instead of nesting a savepoint. Reads without an active transaction still open
 one so entry metadata, board presence, and transcript watermarks share a snapshot.
+Board presence travels in the exact-entry query, including its single-key error
+fallback, instead of a separate Board read.
+
+Placement projections read placement, move, pending-result, journal, and environment
+facts in one statement per bounded batch. Batches share the existing read
+transaction; journal and result-claim checks consume those same snapshot facts.
+Optional columns come from admitted schema facts and refresh with that owner.
+
+Shared-state read operations retain their admission revision through their
+synchronous domain read. ACP metadata reuses at most 128 rows per connection
+under that revision; foreign commits, local writes, schema changes, and close
+invalidate reuse. Transactions and pinned or authorizer-controlled reads still
+query SQLite. Supplied shared-state writers reuse their selected handle and check
+schema and ownership after `BEGIN`, without a duplicate pre-transaction row read.
+Stored bytes, schemas, permissions, and update behavior are unchanged.
 
 Transcript watermarks select the rewrite generation and cold-or-hot sequence in
 one indexed statement on that snapshot. Session entry writes batch their saved

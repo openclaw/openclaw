@@ -1,7 +1,3 @@
-/**
- * Splits streamed embedded-agent replies into Markdown-safe message chunks.
- */
-
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { FenceSpan } from "../../packages/markdown-core/src/fences.js";
 import {
@@ -241,7 +237,6 @@ export class EmbeddedBlockChunker {
     return this.#buffer.length > 0;
   }
 
-  /** Emit safe chunks according to size and Markdown fence constraints. */
   drain(params: BlockChunkDrain) {
     const sourceBreaks = this.#sourceBreaks;
     while (this.#nextSourceBreak < sourceBreaks.length) {

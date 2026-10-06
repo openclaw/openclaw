@@ -147,7 +147,7 @@ describe("renderChatComposer controls", () => {
       onDraftChange: (value) => {
         draft = value;
       },
-      onSend: () => onSend(draft),
+      onSend: (_mode, action) => onSend(draft, action),
       onToggleRealtimeTalk: vi.fn(),
       submitDisabledReason,
     });
@@ -203,13 +203,14 @@ describe("renderChatComposer controls", () => {
       const send = primaryButton(container);
       expect(send.getAttribute("aria-label")).toBe("Send");
       expect(send.disabled).toBe(false);
-      send.click();
+      const action = new MouseEvent("click", { bubbles: true, cancelable: true });
+      send.dispatchEvent(action);
 
       expect(finishActive).toHaveBeenCalledOnce();
       expect(onSend).not.toHaveBeenCalled();
       finalTranscript.resolve("dictated ending");
       await vi.waitFor(() =>
-        expect(onSend).toHaveBeenCalledExactlyOnceWith("Typed beginning dictated ending"),
+        expect(onSend).toHaveBeenCalledExactlyOnceWith("Typed beginning dictated ending", action),
       );
     },
   );
@@ -310,21 +311,25 @@ describe("renderChatComposer controls", () => {
     expect(onAbort).toHaveBeenCalledOnce();
   });
 
-  it("keeps mobile voice controls disabled while the composer is busy", () => {
-    const { container } = renderComposer({
-      sending: true,
-      onToggleRealtimeTalk: vi.fn(),
-    });
+  it.each([{ sending: true }, { stream: "Working" }])(
+    "keeps dictation available while Talk is held during an active turn: %j",
+    (run) => {
+      const { container } = renderComposer({
+        ...run,
+        onToggleRealtimeTalk: vi.fn(),
+      });
 
-    const mobileDictation = container.querySelector<HTMLButtonElement>(
-      ".chat-mobile-dictation-action .chat-send-btn--voice",
-    );
-    expect(mobileDictation?.disabled).toBe(true);
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-mobile-talk-action .chat-send-btn")
-        ?.disabled,
-    ).toBe(true);
-  });
+      const mobileDictation = container.querySelector<HTMLButtonElement>(
+        ".chat-mobile-dictation-action .chat-send-btn--voice",
+      );
+      expect(mobileDictation?.disabled).toBe(false);
+      expect(button(container, t("chat.composer.startVoiceInput")).disabled).toBe(false);
+      expect(
+        container.querySelector<HTMLButtonElement>(".chat-mobile-talk-action .chat-send-btn")
+          ?.disabled,
+      ).toBe(true);
+    },
+  );
 
   it.each([true, false])(
     "holds Talk during initial history while preserving draft input (hold-to-record=%s)",

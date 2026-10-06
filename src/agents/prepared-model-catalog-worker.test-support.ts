@@ -513,7 +513,7 @@ async function expectNativeHarnessModelsPublished(params: {
       isCurrent: params.snapshot.isCurrent,
       observationConfig: params.snapshot.observationConfig,
     });
-    const hostEvaluation = await projector.evaluateEntry(nativeEntry!);
+    const hostEvaluation = projector.evaluateEntry(nativeEntry!);
     expect(projector.evaluateNative(nativeEntry!, hostEvaluation)).toMatchObject({
       availability: true,
     });

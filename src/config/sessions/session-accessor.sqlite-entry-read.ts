@@ -1,5 +1,5 @@
 import { toUSVString } from "node:util";
-import { sql, type Selectable } from "kysely";
+import { expressionBuilder, sql, type Selectable, type SqlBool } from "kysely";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
@@ -13,6 +13,7 @@ import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { ExactSessionEntry, SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
 import {
@@ -109,7 +110,7 @@ export type ResolvedSessionEntryRow = {
   row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at"> &
     SqliteSessionOwnerRow &
     SessionEntrySnapshotRow &
-    Partial<Pick<SessionEntryRow, "legacy_acp_migration_json">>;
+    Partial<Pick<SessionEntryRow, "legacy_acp_migration_json">> & { board_present?: SqlBool };
 };
 
 type ReadableSessionEntryRow = ResolvedSessionEntryRow["row"] &
@@ -366,26 +367,61 @@ export function prepareExactSessionEntryRowReads(
   sessionKeys: readonly string[],
   projection: SessionEntryProjection | "delivery" = "full",
   validation?: "canonical",
+  options?: { includeBoardPresence?: boolean },
 ): (sessionKey: string) => ResolvedSessionEntryRow | undefined {
   return runSqliteReadOperationSync(database.db, () => {
+    const baseQuery =
+      validation === "canonical"
+        ? canonicalSessionValidationQuery(database, { metadata: true })
+            .select("session_nodes.updated_at")
+            .select(
+              sessionEntrySnapshotColumnsForKeys(
+                undefined,
+                projection === "delivery" ? "list" : projection,
+              ),
+            )
+        : selectReadableSessionEntryRows(database, projection);
+    const eb = expressionBuilder<OpenClawAgentKyselyDatabase, "session_nodes">();
+    // Old stores have no board tables until first use; branch before compiling SQL.
+    const query = options?.includeBoardPresence
+      ? baseQuery.select(
+          (tableExists(database.db, "board_widgets")
+            ? eb.exists(
+                eb
+                  .selectFrom("board_tabs")
+                  .select("session_key")
+                  .whereRef("board_tabs.session_key", "=", "session_nodes.session_key"),
+              )
+            : eb.lit(0)
+          ).as("board_present"),
+        )
+      : baseQuery;
+    const readRows = (selection: string | readonly string[]) =>
+      executeSqliteQuerySync(
+        database.db,
+        typeof selection === "string"
+          ? query.where("session_nodes.session_key", "=", selection)
+          : query.where("session_nodes.session_key", "in", sqliteStringSet(selection)),
+      ).rows;
     let rows: ReadableSessionEntryRow[];
     try {
-      rows = executeSqliteQuerySync(
-        database.db,
-        (validation === "canonical"
-          ? canonicalSessionValidationQuery(database, { metadata: true })
-              .select("session_nodes.updated_at")
-              .select(
-                sessionEntrySnapshotColumnsForKeys(
-                  undefined,
-                  projection === "delivery" ? "list" : projection,
-                ),
-              )
-          : selectReadableSessionEntryRows(database, projection)
-        ).where("session_nodes.session_key", "in", sqliteStringSet(sessionKeys)),
-      ).rows;
+      rows = readRows(sessionKeys);
     } catch {
       // Native conversion errors have no row identity; exact reads preserve each key's error.
+      if (options?.includeBoardPresence) {
+        return (sessionKey) =>
+          runSqliteReadOperationSync(database.db, () => {
+            const row = readRows(sessionKey)[0];
+            const entry =
+              row &&
+              parseReadableSqliteSessionEntryRow(
+                database,
+                row,
+                projection === "delivery" ? "list" : projection,
+              );
+            return row && entry ? { entry, row } : undefined;
+          });
+      }
       return (sessionKey) =>
         readExactSessionEntryRow(
           database,

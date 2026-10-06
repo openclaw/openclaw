@@ -54,7 +54,6 @@ function isImageReasoningFallbackSignature(value: unknown): boolean {
   return id.startsWith("rs_") && (type === "reasoning" || type.startsWith("reasoning."));
 }
 
-/** Detects provider responses that contain only reasoning blocks and no usable image text. */
 export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
   if (extractEmbeddedAssistantText(message).trim() || !Array.isArray(message.content)) {
     return false;
@@ -103,7 +102,6 @@ export function decodeDataUrl(
   return { buffer, mimeType, kind: "image" };
 }
 
-/** Extracts assistant text or throws a provider/model-specific image failure. */
 export function coerceImageAssistantText(params: {
   message: AssistantMessage;
   provider: string;
@@ -125,7 +123,6 @@ export function coerceImageAssistantText(params: {
   throw new Error(`Image model returned no text (${params.provider}/${params.model}).`);
 }
 
-/** Reads imageModel defaults from config into the shared tool model config shape. */
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
 }
@@ -203,7 +200,6 @@ function resolveProviderlessConfiguredImageModelRef(params: {
   );
 }
 
-/** Resolves providerless configured image model refs against configured provider models. */
 export function resolveConfiguredImageModelRefs(params: {
   cfg?: OpenClawConfig;
   imageModelConfig: ImageModelConfig;
@@ -228,7 +224,6 @@ export function resolveConfiguredImageModelRefs(params: {
   };
 }
 
-/** Returns the configured vision-capable model for a provider, if present. */
 export function resolveProviderVisionModelFromConfig(params: {
   cfg?: OpenClawConfig;
   provider: string;

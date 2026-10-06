@@ -1,11 +1,11 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { registerAgentContinuationRecoveryTests } from "./agent-continuation-recovery.test-utils.js";
@@ -43,6 +43,7 @@ import {
 const mocks = getAgentTestMocks();
 
 describe("gateway agent handler", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-gateway-agent-media-routing-");
   afterEach(describe0AfterEach0);
 
   it.each([
@@ -72,74 +73,73 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTestDir({ prefix: "openclaw-gateway-stale-failed-session-" }, async (root) => {
-      const sessionsDir = `${root}/sessions`;
-      const storePath = `${sessionsDir}/sessions.json`;
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptFields = await scenario.configureTranscript({
-        sessionId: scenario.sessionId,
-        storePath,
-      });
-      const failedEntryWithStaleActivity = {
-        sessionId: scenario.sessionId,
-        ...transcriptFields,
-        status: "failed",
-        startedAt: now - 11 * 60_000,
-        endedAt: now - 10 * 60_000,
-        runtimeMs: 60_000,
-        abortedLastRun: true,
-        updatedAt: now - 10 * 60_000,
-        sessionStartedAt: now - 20 * 60_000,
-        lastInteractionAt: now - 10 * 60_000,
-      };
-      mocks.loadSessionEntry.mockReturnValue({
-        cfg: { session: { idleMinutes: 5 } },
-        storePath,
-        entry: failedEntryWithStaleActivity,
-        canonicalKey: scenario.sessionKey,
-      });
-      let capturedEntry: Record<string, unknown> | undefined;
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        const store: Record<string, unknown> = {
-          [scenario.sessionKey]: { ...failedEntryWithStaleActivity },
-        };
-        const result = await updater(store);
-        capturedEntry = result as Record<string, unknown>;
-        return result;
-      });
-      mocks.agentCommand.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: { durationMs: 100 },
-      });
-
-      await invokeAgent({
-        message: "recover stale failed",
-        agentId: "main",
-        sessionKey: scenario.sessionKey,
-        idempotencyKey: `test-idem-${scenario.sessionId}`,
-      } as AgentParams);
-
-      const call = await waitForAgentCommandCall<{ sessionId?: string }>();
-      expect(call.sessionId).toBe(scenario.sessionId);
-      if (scenario.expectsSqlitePresence) {
-        expect(mocks.hasSessionTranscriptEventsSync).toHaveBeenCalledWith({
-          agentId: "main",
-          sessionId: scenario.sessionId,
-          sessionKey: scenario.sessionKey,
-          storePath,
-          sessionEntry: failedEntryWithStaleActivity,
-        });
-      } else {
-        expect(mocks.hasSessionTranscriptEventsSync).not.toHaveBeenCalled();
-      }
-      expect(capturedEntry?.sessionId).toBe(scenario.sessionId);
-      expect(capturedEntry?.status).toBeUndefined();
-      expect(capturedEntry?.startedAt).toBeUndefined();
-      expect(capturedEntry?.endedAt).toBeUndefined();
-      expect(capturedEntry?.runtimeMs).toBeUndefined();
-      expect(capturedEntry?.abortedLastRun).toBeUndefined();
-      expectSqliteSessionFileMarkerForEntry(capturedEntry);
+    const root = sessionDirs.make();
+    const sessionsDir = `${root}/sessions`;
+    const storePath = `${sessionsDir}/sessions.json`;
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcriptFields = await scenario.configureTranscript({
+      sessionId: scenario.sessionId,
+      storePath,
     });
+    const failedEntryWithStaleActivity = {
+      sessionId: scenario.sessionId,
+      ...transcriptFields,
+      status: "failed",
+      startedAt: now - 11 * 60_000,
+      endedAt: now - 10 * 60_000,
+      runtimeMs: 60_000,
+      abortedLastRun: true,
+      updatedAt: now - 10 * 60_000,
+      sessionStartedAt: now - 20 * 60_000,
+      lastInteractionAt: now - 10 * 60_000,
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: { session: { idleMinutes: 5 } },
+      storePath,
+      entry: failedEntryWithStaleActivity,
+      canonicalKey: scenario.sessionKey,
+    });
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [scenario.sessionKey]: { ...failedEntryWithStaleActivity },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent({
+      message: "recover stale failed",
+      agentId: "main",
+      sessionKey: scenario.sessionKey,
+      idempotencyKey: `test-idem-${scenario.sessionId}`,
+    } as AgentParams);
+
+    const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+    expect(call.sessionId).toBe(scenario.sessionId);
+    if (scenario.expectsSqlitePresence) {
+      expect(mocks.hasSessionTranscriptEventsSync).toHaveBeenCalledWith({
+        agentId: "main",
+        sessionId: scenario.sessionId,
+        sessionKey: scenario.sessionKey,
+        storePath,
+        sessionEntry: failedEntryWithStaleActivity,
+      });
+    } else {
+      expect(mocks.hasSessionTranscriptEventsSync).not.toHaveBeenCalled();
+    }
+    expect(capturedEntry?.sessionId).toBe(scenario.sessionId);
+    expect(capturedEntry?.status).toBeUndefined();
+    expect(capturedEntry?.startedAt).toBeUndefined();
+    expect(capturedEntry?.endedAt).toBeUndefined();
+    expect(capturedEntry?.runtimeMs).toBeUndefined();
+    expect(capturedEntry?.abortedLastRun).toBeUndefined();
+    expectSqliteSessionFileMarkerForEntry(capturedEntry);
   });
 
   it("recovers a failed session when its SQLite transcript rows exist", async () => {
@@ -148,42 +148,39 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTestDir({ prefix: "openclaw-gateway-failed-session-file-" }, async (root) => {
-      const sessionsDir = `${root}/sessions`;
-      await fs.mkdir(sessionsDir, { recursive: true });
-      mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
-      const failedEntryWithResolvedTranscript = {
-        sessionId: "failed-present-session-id",
-        status: "failed",
-        startedAt: now - 1_000,
-        endedAt: now,
-        runtimeMs: 1_000,
-        abortedLastRun: true,
-        updatedAt: now,
-        sessionStartedAt: now,
-        lastInteractionAt: now,
-      };
-      mocks.loadSessionEntry.mockReturnValue({
-        cfg: {},
-        storePath: `${sessionsDir}/sessions.json`,
-        entry: failedEntryWithResolvedTranscript,
-        canonicalKey: "agent:main:main",
-      });
-
-      const capturedEntry = await runMainAgentAndCaptureEntry(
-        "test-idem-failed-present-transcript",
-      );
-
-      const call = await waitForAgentCommandCall<{ sessionId?: string }>();
-      expect(call.sessionId).toBe("failed-present-session-id");
-      expect(capturedEntry?.sessionId).toBe("failed-present-session-id");
-      expect(capturedEntry?.status).toBeUndefined();
-      expect(capturedEntry?.startedAt).toBeUndefined();
-      expect(capturedEntry?.endedAt).toBeUndefined();
-      expect(capturedEntry?.runtimeMs).toBeUndefined();
-      expect(capturedEntry?.abortedLastRun).toBeUndefined();
-      expectSqliteSessionFileMarkerForEntry(capturedEntry);
+    const root = sessionDirs.make();
+    const sessionsDir = `${root}/sessions`;
+    await fs.mkdir(sessionsDir, { recursive: true });
+    mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
+    const failedEntryWithResolvedTranscript = {
+      sessionId: "failed-present-session-id",
+      status: "failed",
+      startedAt: now - 1_000,
+      endedAt: now,
+      runtimeMs: 1_000,
+      abortedLastRun: true,
+      updatedAt: now,
+      sessionStartedAt: now,
+      lastInteractionAt: now,
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: `${sessionsDir}/sessions.json`,
+      entry: failedEntryWithResolvedTranscript,
+      canonicalKey: "agent:main:main",
     });
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-failed-present-transcript");
+
+    const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+    expect(call.sessionId).toBe("failed-present-session-id");
+    expect(capturedEntry?.sessionId).toBe("failed-present-session-id");
+    expect(capturedEntry?.status).toBeUndefined();
+    expect(capturedEntry?.startedAt).toBeUndefined();
+    expect(capturedEntry?.endedAt).toBeUndefined();
+    expect(capturedEntry?.runtimeMs).toBeUndefined();
+    expect(capturedEntry?.abortedLastRun).toBeUndefined();
+    expectSqliteSessionFileMarkerForEntry(capturedEntry);
   });
 
   it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {
@@ -872,37 +869,36 @@ describe("gateway agent handler", () => {
 
   it("recovers terminal failed agent API sessions with SQLite transcript rows", async () => {
     const sessionId = "failed-agent-session";
-    await withTestDir({ prefix: "openclaw-gateway-terminal-recovery-" }, async (root) => {
-      const sessionsDir = `${root}/sessions`;
-      await fs.mkdir(sessionsDir, { recursive: true });
-      mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
-      mocks.loadSessionEntry.mockReturnValue({
-        cfg: {},
-        storePath: `${sessionsDir}/sessions.json`,
-        entry: {
-          sessionId,
-          status: "failed",
-          startedAt: 100,
-          endedAt: 200,
-          runtimeMs: 100,
-          abortedLastRun: true,
-          updatedAt: Date.now(),
-        },
-        canonicalKey: "agent:main:main",
-      });
-
-      const capturedEntry = await runMainAgentAndCaptureEntry("recover-terminal-agent-session");
-      const call = await waitForAgentCommandCall();
-
-      expect(call.sessionId).toBe(sessionId);
-      expectRecordFields(capturedEntry, {
+    const root = sessionDirs.make();
+    const sessionsDir = `${root}/sessions`;
+    await fs.mkdir(sessionsDir, { recursive: true });
+    mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: `${sessionsDir}/sessions.json`,
+      entry: {
         sessionId,
-        status: undefined,
-        startedAt: undefined,
-        endedAt: undefined,
-        runtimeMs: undefined,
-        abortedLastRun: undefined,
-      });
+        status: "failed",
+        startedAt: 100,
+        endedAt: 200,
+        runtimeMs: 100,
+        abortedLastRun: true,
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "agent:main:main",
+    });
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("recover-terminal-agent-session");
+    const call = await waitForAgentCommandCall();
+
+    expect(call.sessionId).toBe(sessionId);
+    expectRecordFields(capturedEntry, {
+      sessionId,
+      status: undefined,
+      startedAt: undefined,
+      endedAt: undefined,
+      runtimeMs: undefined,
+      abortedLastRun: undefined,
     });
   });
 

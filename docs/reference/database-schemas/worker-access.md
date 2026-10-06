@@ -705,6 +705,32 @@ remain covered by its native mutation witness. No new worker service, schema,
 retention, durability, environment switch, or update behavior is introduced.
 Native routes and T1 counts remain unchanged until the atomic P7 cutover.
 
+### Incognito history and compute facade composition (P7m, inactive)
+
+History, hydration, Memory, usage, and reconciliation facades consume the shared
+captured actor binding when one is supplied. The binding resolves the physical
+store and current session facts before asynchronous preparation; later reads
+cannot adopt a replacement actor. Memory retains that source across lazy adapter
+loading, observer callbacks, corpus projection, and cleanup. Corpus preparation
+on the actor skips filesystem archive discovery. Usage preserves the separately
+selected cache owner, and reconciliation keeps its existing accepted-work and
+publication lifecycle.
+
+Memory can consume retained transcript windows while grants remain bound to the
+current logical session. The actor verifies each retained window's ownership
+before extracting messages or reset metadata. Empty corpus reads also enter the
+actor FIFO and reject a selection invalidated by an earlier queued creation.
+
+Incremental Gateway history still requires its prepared subagent visibility
+resolver. A shared-bound reader without that resolver returns the existing reset
+response for a full history reload; activation must supply the resolver for
+incremental parity.
+
+Production acquisition still supplies no binding. Native selection and extraction
+bridges remain until the atomic activation removes them together. This composition
+changes no schema, retention, durability, permissions, environment names, or update
+behavior and retires no T1 sites.
+
 ### Incognito shared binding and SDK preflight (P7h1, inactive)
 
 SessionManager and Codex history consume one captured actor binding. The binding

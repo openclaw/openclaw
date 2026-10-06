@@ -1,4 +1,3 @@
-/** Model selection, compression preparation, and provider execution for view_image. */
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { normalizeMediaProviderId } from "../../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

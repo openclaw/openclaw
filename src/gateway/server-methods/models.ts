@@ -114,12 +114,13 @@ export const modelsHandlers: GatewayRequestHandlers = {
               GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
             );
             const prepared =
-              !scope && params.refresh !== true
+              params.refresh !== true
                 ? await context.readPreparedModelsList?.({
                     agentId: resolved.agentId,
                     params,
                     includeManualSelection,
                     requesterProfileId: preparedScope.requesterProfileId,
+                    readScope: scope,
                   })
                 : undefined;
             const result =

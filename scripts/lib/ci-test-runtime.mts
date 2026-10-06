@@ -84,7 +84,10 @@ const bunCompatibleScopedOwners = new Map([
     "test/vitest/vitest.extension-database-workers.config.ts",
     {
       dir: "extensions",
-      files: ["extensions/team-reports/src/render/theme.test.ts"],
+      files: [
+        "extensions/codex/src/session-catalog-native-performance.test.ts",
+        "extensions/team-reports/src/render/theme.test.ts",
+      ],
     },
   ],
   [
@@ -148,6 +151,7 @@ const bunCompatibleScopedOwners = new Map([
         "test/scripts/pr-worktree-state.test.ts",
         "test/scripts/pr-wrappers.test.ts",
         "test/scripts/test-projects-empty-native.test.ts",
+        "test/scripts/test-projects.test.ts",
         "test/scripts/upgrade-survivor-timeout-diagnostics.test.ts",
         "test/scripts/watch-pr-ci-dependencies.test.ts",
         "test/scripts/watch-pr-ci.test.ts",
@@ -173,6 +177,34 @@ const bunCompatibleScopedOwners = new Map([
       files: [
         "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
         "src/infra/update-managed-service-handoff-reclamation.test.ts",
+        "src/infra/worker-cpu.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.gateway-database-workers.config.ts",
+    {
+      dir: ".",
+      files: ["src/gateway/server-methods/session-catalog.performance.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.logging.config.ts",
+    {
+      dir: "src",
+      files: ["src/logging/diagnostic-memory.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.ui-e2e.config.ts",
+    {
+      dir: "",
+      files: [
+        "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
+        "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+        "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+        "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+        "ui/src/e2e/service-worker-update.e2e.test.ts",
       ],
     },
   ],

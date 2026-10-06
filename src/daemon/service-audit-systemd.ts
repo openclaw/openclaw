@@ -64,13 +64,7 @@ function readUnitDirectives(content: string): UnitDirective[] {
   return directives;
 }
 
-function parseSystemdUnit(directives: UnitDirective[]): {
-  after: Set<string>;
-  wants: Set<string>;
-  restartSec?: string;
-  killMode?: string;
-  stopTimeoutMs: number;
-} {
+function parseSystemdUnit(directives: UnitDirective[]) {
   const after = new Set<string>();
   const wants = new Set<string>();
   let restartSec: string | undefined;

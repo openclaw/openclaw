@@ -1,4 +1,3 @@
-/** Runs image generation, persistence, and detached completion. */
 import { Type } from "typebox";
 import type {
   ImageGenerationOpenAIOptions,

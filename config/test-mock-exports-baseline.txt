@@ -8081,7 +8081,6 @@
 ["src/gateway/server-methods/web-search-status.auth.test.ts","../../agents/auth-profiles/store-runtime.js","96e119062f3967c4f222662c7f562c20686a1cfa99aa9e4630d55e92146a5558",1]
 ["src/gateway/server-methods/web-search-status.auth.test.ts","../../agents/auth-profiles/store.js","27301b152118d50a5139c399dcdd11f8fd03eec4b4c82a37a7b0dfa002408cd5",1]
 ["src/gateway/server-methods/web-search-status.auth.test.ts","../../agents/model-auth.js","3a86cc1ec17d431c548729f7afbffd3bfd48d0c7e25bc4f2b1f4f1b8839b4d3b",1]
-["src/gateway/server-methods/web-search-status.auth.test.ts","../../agents/model-catalog-decisions.js","3a3bc76c2b68afc500ef30eca75be6a6eaee7c32c232a6720336a5eddd515e6e",1]
 ["src/gateway/server-methods/web-search-status.auth.test.ts","../../agents/model-selection.js","cb63fe9b0dde3ec9d128acb960061881ac55c9c53b0611cd845fe99c724d7996",1]
 ["src/gateway/server-methods/web-search-status.auth.test.ts","../../agents/web-search-tool-policy.js","f65fc29a7b6fef460e0a5cfb0f56dbe030f3ad3c4c40089f7ba96b608c718634",1]
 ["src/gateway/server-methods/web-search-status.auth.test.ts","../../flows/search-setup.js","0dae4fb7f9276b91b5dccac0081f11307ae3489f4a41c7525a297e3bfce8e24a",1]

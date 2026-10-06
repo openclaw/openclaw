@@ -198,7 +198,7 @@ function normalizeAbandonSource(value: number | null): boolean {
   throw new Error("Invalid worker placement move source abandonment value");
 }
 
-function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
+export function workerPlacementMoveFromRow(row: MoveRow): WorkerPlacementMoveIntent {
   const source = normalizeWorkerPlacementMoveSource({
     generation: row.source_generation,
     environmentId: row.source_environment_id,
@@ -275,7 +275,7 @@ export function readWorkerPlacementMovesReadOnly(
         .selectAll()
         .where("session_id", "in", sessionIds.slice(offset, offset + 250)),
     ).rows) {
-      const intent = fromRow({
+      const intent = workerPlacementMoveFromRow({
         ...row,
         target_machine_class: row.target_machine_class ?? null,
         target_os: row.target_os ?? null,
@@ -297,7 +297,7 @@ function requireExactMove(
   if (!row || row.session_id !== sessionId) {
     throw new Error(`Session ${sessionId} placement move changed before completion`);
   }
-  return fromRow(row);
+  return workerPlacementMoveFromRow(row);
 }
 
 function exactMoveValues(intent: WorkerPlacementMoveIntent) {
@@ -412,7 +412,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
   return {
     getPlacementMove(sessionId: string): WorkerPlacementMoveIntent | undefined {
       const row = findMoveRow(read(), "session_id", required(sessionId, "move session id"));
-      return row ? fromRow(row) : undefined;
+      return row ? workerPlacementMoveFromRow(row) : undefined;
     },
 
     beginPlacementMove(input: {
@@ -436,7 +436,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
       return write((db) => {
         const existingRow = findMoveRow(db, "session_id", sessionId);
         if (existingRow) {
-          const existing = fromRow(existingRow);
+          const existing = workerPlacementMoveFromRow(existingRow);
           if (
             !isDeepStrictEqual(existing.source, source) ||
             !isDeepStrictEqual(existing.target, target) ||
@@ -490,7 +490,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
                 },
                 timestamp,
               );
-        return { intent: fromRow(row), placement, joined: false };
+        return { intent: workerPlacementMoveFromRow(row), placement, joined: false };
       });
     },
 
@@ -504,7 +504,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
         if (!row || row.session_id !== required(input.sessionId, "move session id")) {
           return false;
         }
-        const intent = fromRow(row);
+        const intent = workerPlacementMoveFromRow(row);
         const statement = moveQuery(db)
           .updateTable("worker_session_placement_moves")
           .set({ last_error: boundedWorkerError(input.error), updated_at_ms: now() })

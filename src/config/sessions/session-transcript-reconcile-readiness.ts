@@ -10,7 +10,10 @@ import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
-import type { IncognitoProjectionBinding } from "./session-incognito-projection.js";
+import {
+  captureIncognitoProjectionBinding,
+  type IncognitoProjectionBinding,
+} from "./session-incognito-projection.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import {
   captureSessionTranscriptReconcileGeneration,
@@ -31,15 +34,17 @@ export type PreparedReconcileParams = SessionTranscriptReconcileParams & {
 };
 export function prepareReconcileParams(
   params: SessionTranscriptReconcileParams,
-  incognito?: IncognitoProjectionBinding,
+  suppliedIncognito?: IncognitoProjectionBinding,
 ): PreparedReconcileParams {
+  const path = resolveOpenClawAgentSqlitePath(params);
+  const incognito = suppliedIncognito ?? captureIncognitoProjectionBinding({ ...params, path });
   if (incognito) {
     getAsyncWorkSignal()?.throwIfAborted();
     incognito.actor.assertCurrent();
     incognito.authority.assertCurrent();
     if (
       incognito.actor.path !== resolveOpenClawAgentSqlitePath(params) ||
-      incognito.actor.agentId !== params.agentId
+      (params.agentId !== undefined && incognito.actor.agentId !== params.agentId)
     ) {
       throw new Error("Incognito reconciliation belongs to another actor");
     }
@@ -47,6 +52,8 @@ export function prepareReconcileParams(
   // Deferred work retains the state owner selected before scheduling or admission.
   return {
     ...params,
+    path,
+    agentId: params.agentId ?? incognito?.actor.agentId,
     env: { ...(params.env ?? process.env) },
     generation: captureSessionTranscriptReconcileGeneration(),
     incognito: incognito && { ...incognito, target: structuredClone(incognito.target) },
@@ -65,7 +72,7 @@ export async function readSessionTranscriptProjectionStatus(
     if (target && target.sessionId !== sessionId) {
       throw new Error("Incognito projection belongs to another session");
     }
-    return actor.sessions.withCompute(
+    const pending = await actor.sessions.withCompute(
       authority,
       target,
       (compute) =>
@@ -74,6 +81,11 @@ export async function readSessionTranscriptProjectionStatus(
           : compute.execute({ type: "session.compute.store.status", input: { sessionId } }),
       abortSignal,
     );
+    actor.assertReadable();
+    authority.assertCurrent();
+    abortSignal?.throwIfAborted();
+    incognito.sharedBinding?.admissionSignal?.throwIfAborted();
+    return pending;
   }
   if (supportsOpenClawAgentDatabaseExecution(databaseOptions)) {
     const closing = captureAgentDatabaseCloseFence({
