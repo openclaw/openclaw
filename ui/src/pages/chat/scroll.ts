@@ -146,6 +146,7 @@ function applyChatScroll(
   }
   const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
   const contentGrew = target.scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
+  const contentHeightChanged = Math.abs(target.scrollHeight - (host.chatLastScrollHeight ?? 0)) > 1;
   host.chatLastScrollHeight = target.scrollHeight;
   const contentChanged = options.contentChanged ?? options.source !== "resize";
   const manualScroll = options.source === "manual";
@@ -153,13 +154,13 @@ function applyChatScroll(
   // force=true only overrides when we haven't auto-scrolled yet (initial load).
   // After initial load, respect the user's scroll position.
   const effectiveForce = force && !host.chatHasAutoScrolled;
-  // Content commits measure after rows grow. Preserve the pre-growth reader intent
-  // in chatFollowLocked instead of re-deriving it from the new geometry.
+  // Content commits measure after rows change height. Preserve the prior reader
+  // intent in chatFollowLocked instead of re-deriving it from the new geometry.
   const shouldStick =
     manualScroll ||
     effectiveForce ||
     (!host.chatFollowLocked &&
-      (contentChanged ||
+      ((contentChanged && contentHeightChanged) ||
         options.source === "resize" ||
         host.chatUserNearBottom ||
         distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
