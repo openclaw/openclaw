@@ -37,6 +37,16 @@ function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
     : undefined;
 }
 
+function canReuseStoredTokens(store: McpOAuthStore): boolean {
+  const discoveredIssuer = store.discoveryState?.authorizationServerUrl;
+  return (
+    !store.tokens?.refresh_token ||
+    discoveredIssuer === undefined ||
+    (store.tokensAuthorizationServerUrl !== undefined &&
+      discoveredIssuer === store.tokensAuthorizationServerUrl)
+  );
+}
+
 function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = {}): string {
   return (
     normalizeOptionalString(config.redirectUrl) ??
@@ -190,7 +200,25 @@ export async function createMcpOAuthClientProvider(params: {
     async clientInformation() {
       const store = await readStore();
       params.login?.assertCurrent();
-      return store.clientInformation;
+      // The SDK can replace a mismatched client before requesting authorization.
+      // Background refresh must preserve the original registration and tokens;
+      // only an explicit login may start registration with another issuer.
+      if (!canReuseStoredTokens(store)) {
+        assertAuthorizationRedirectAllowed();
+      }
+      const clientInformation = store.clientInformation;
+      // Re-register an unused client when the callback changes. Saved tokens remain
+      // bound to their original client; metadata-document clients have no redirect list.
+      if (
+        !store.tokens &&
+        clientInformation &&
+        "redirect_uris" in clientInformation &&
+        Array.isArray(clientInformation.redirect_uris) &&
+        !clientInformation.redirect_uris.includes(resolveOAuthRedirectUrl(config, store))
+      ) {
+        return undefined;
+      }
+      return clientInformation;
     },
     async saveClientInformation(clientInformation) {
       await updateStore({ kind: "clientInformation", clientInformation });
@@ -205,14 +233,7 @@ export async function createMcpOAuthClientProvider(params: {
       }
       const store = await readStore();
       params.login?.assertCurrent();
-      const discoveredAuthorizationServerUrl = store.discoveryState?.authorizationServerUrl;
-      if (!store.tokens?.refresh_token || discoveredAuthorizationServerUrl === undefined) {
-        return store.tokens;
-      }
-      return store.tokensAuthorizationServerUrl !== undefined &&
-        discoveredAuthorizationServerUrl === store.tokensAuthorizationServerUrl
-        ? store.tokens
-        : undefined;
+      return canReuseStoredTokens(store) ? store.tokens : undefined;
     },
     async saveTokens(tokens) {
       await updateStore(
