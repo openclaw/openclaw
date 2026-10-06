@@ -11,6 +11,8 @@ import {
   type AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  combineNativeSessionBindingAuthority,
+  createNativeSessionBindingAuthority,
   prepareNativeSessionGenerationAuthority,
   wrapNativeSessionDeletionMutation,
 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
@@ -191,10 +193,10 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
               params,
               binding,
               bind,
-              () => {
-                authority.assertLegacyCurrent();
-                assertLeaseCurrent();
-              },
+              combineNativeSessionBindingAuthority(
+                authority,
+                createNativeSessionBindingAuthority([], assertLeaseCurrent),
+              ).assertLegacyCurrent,
               () => {
                 assertCurrent();
                 assertLeaseCurrent();

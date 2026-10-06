@@ -19,19 +19,7 @@ export class UpdateCommandAbort extends Error {
   }
 }
 
-export type WindowsTaskAutoStartRecovery = {
-  suspended: Promise<boolean>;
-  beginMutation: () => void;
-  assertRecoveryCurrent: () => void;
-  restore: (
-    restartSafe?: boolean,
-    guard?: () => Promise<void>,
-    assertCurrent?: () => void,
-  ) => Promise<void>;
-  handoff: (guard: () => Promise<void>) => void;
-  complete: (restartSafe?: boolean, options?: { preserveState?: true }) => Promise<void>;
-  interrupted: () => boolean;
-};
+export type WindowsTaskAutoStartRecovery = ReturnType<typeof createWindowsTaskAutoStartRecovery>;
 
 export function createWindowsTaskAutoStartRecovery(params: {
   serviceEnv: NodeJS.ProcessEnv;
@@ -39,7 +27,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
   assertCurrent?: (phase?: "restore") => void;
   alreadySuspended?: true;
   updateRun?: UpdateCommandOptions["run"];
-}): WindowsTaskAutoStartRecovery {
+}) {
   let guard = params.assertCurrentService;
   let restorePromise: Promise<void> | undefined;
   let settlement: Promise<void> | undefined;
@@ -218,7 +206,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
       restoreAllowed = false;
     },
     restore,
-    handoff: (guardianGuard) => {
+    handoff: (guardianGuard: () => Promise<void>) => {
       params.assertCurrent?.();
       if (closed || delegated) {
         throw new Error("Windows task recovery cannot transfer after settlement.");

@@ -1,9 +1,16 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import type { PreservedSessionWorktree } from "../../packages/gateway-protocol/src/index.js";
-import { SessionWorktreeLifecycleError } from "../agents/worktrees/errors.js";
+import {
+  SessionWorktreeLifecycleError,
+  WorktreeRemovalContentionError,
+} from "../agents/worktrees/errors.js";
+import { assertManagedWorktreeRemovalComplete } from "../agents/worktrees/git-lock.js";
 import { runGit } from "../agents/worktrees/git.js";
-import { getRegistryWorktree } from "../agents/worktrees/registry.js";
+import {
+  assertWorktreeRemovalAvailable,
+  getRegistryWorktree,
+} from "../agents/worktrees/registry.js";
 import {
   classifyWorktreeRemovalError,
   managedWorktrees,
@@ -115,6 +122,14 @@ export async function restoreSessionWorktree(params: {
   };
   const assertCurrent = () => {
     assertSessionCurrent();
+    try {
+      assertWorktreeRemovalAvailable(scope.env ?? process.env, id);
+    } catch (error) {
+      if (error instanceof WorktreeRemovalContentionError) {
+        throw new SessionWorktreeLifecycleError(error.message, "busy");
+      }
+      throw error;
+    }
     const record = getRegistryWorktree(scope.env ?? process.env, id);
     if (record && !belongsToSession(record, scope.sessionKey)) {
       throw new SessionWorktreeLifecycleError(
@@ -167,6 +182,16 @@ export async function restoreSessionWorktree(params: {
         "Session worktree could not be restored. Free disk space if needed, check the source repository, then retry. The conversation and snapshot are preserved.",
         "restore-failed",
       );
+    }
+  } else {
+    try {
+      await assertManagedWorktreeRemovalComplete(record, { beforeRun: assertCurrent });
+    } catch (error) {
+      assertCurrent();
+      if (error instanceof WorktreeRemovalContentionError) {
+        throw new SessionWorktreeLifecycleError(error.message, "restore-failed");
+      }
+      throw error;
     }
   }
   assertCurrent();

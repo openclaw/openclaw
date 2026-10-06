@@ -1,4 +1,3 @@
-// Doctor repair for dmPolicy allowlists whose sender entries only exist in pairing stores.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -10,11 +9,10 @@ import {
 } from "../../../channels/plugins/dm-access.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
+import { normalizeAccountId } from "../../../routing/session-key.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import { hasAllowFromEntries } from "./allowlist.js";
 
-/** Restore missing allowFrom entries for allowlist DM policies from persisted pairing stores. */
 export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   changes: string[];
@@ -53,7 +51,7 @@ export async function maybeRepairAllowlistPolicyAllowFrom(cfg: OpenClawConfig): 
     if (!normalizedChannelId) {
       return;
     }
-    const normalizedAccountId = normalizeAccountId(params.accountId) || DEFAULT_ACCOUNT_ID;
+    const normalizedAccountId = normalizeAccountId(params.accountId);
     const fromStore = await readChannelAllowFromStore(
       normalizedChannelId,
       process.env,

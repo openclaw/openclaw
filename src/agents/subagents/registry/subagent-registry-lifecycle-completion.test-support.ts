@@ -32,7 +32,11 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
-import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import {
+  bindSubagentRunRecord,
+  rowToSubagentRunRecord,
+  subagentRunRecordVersion,
+} from "./subagent-registry.store.codec.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -55,9 +59,19 @@ function policyReceipt(
 ): SubagentCompletionMutationResult {
   return {
     applied: true,
-    records: [...postimages.values()].flatMap((entry) =>
-      entry ? [{ row: bindSubagentRunRecord(entry), cleanupHandled: entry.cleanupHandled }] : [],
-    ),
+    records: [...postimages.values()].flatMap((entry) => {
+      if (!entry) {
+        return [];
+      }
+      const subagent = rowToSubagentRunRecord(bindSubagentRunRecord(entry))!;
+      return [
+        {
+          subagent,
+          version: subagentRunRecordVersion(subagent)!,
+          cleanupHandled: entry.cleanupHandled,
+        },
+      ];
+    }),
     retiredRunIds: [...postimages].flatMap(([id, entry]) => (entry ? [] : [id])),
     queueIds: [],
   };

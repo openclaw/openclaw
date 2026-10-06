@@ -1,3 +1,10 @@
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import type {
+  WorktreeBranch,
+  WorktreeRecord,
+  WorktreesRemoveResult,
+  WorktreesRetireSnapshotParams,
+} from "../../../packages/gateway-protocol/src/schema/worktrees.js";
 import type { OpenClawStateAsyncLeaseContext } from "../../state/openclaw-state-lease-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 
@@ -23,23 +30,21 @@ export type ProvisionedFileState = {
   chunks: number;
 };
 
-export type ManagedWorktreeRecord = {
-  id: string;
-  name: string;
-  repoFingerprint: string;
-  repoRoot: string;
-  path: string;
-  branch: string;
-  baseRef: string;
+export type WorktreeRemovalDeferral = {
+  stage: string;
+  elapsedMs: number;
+  attempts: number;
+  retryAt: number;
+};
+
+export type ManagedWorktreeRecord = Omit<
+  SchemaContract<WorktreeRecord>,
+  "ownerKind" | "runEndCleanup"
+> & {
   ownerKind: ManagedWorktreeOwnerKind;
-  ownerId?: string;
-  snapshotRef?: string;
-  createdAt: number;
-  lastActiveAt: number;
-  removedAt?: number;
   runEndCleanup?: ManagedWorktreeRunEndCleanup;
-  /** Non-removal disposition for the current registry lifecycle; explicit GC retries it. */
-  gcProtection?: string;
+  /** Internal retry metadata for the same revision-bound cleanup disposition. */
+  gcRetry?: WorktreeRemovalDeferral;
 };
 
 export type WorktreeRegistryPredicate =
@@ -136,19 +141,10 @@ export type ManagedWorktreeCreationOutcome = {
   materialized: boolean;
 };
 
-export type RemoveManagedWorktreeResult = {
-  removed: boolean;
-  snapshotRef?: string;
-  snapshotError?: string;
-  /** Exact retirement retains the original checkout, not merely its captured bytes. */
-  recoveryPath?: string;
-  recoveryRetainedUntil?: number;
-};
+/** Exact retirement retains the original checkout, not merely its captured bytes. */
+export type RemoveManagedWorktreeResult = Omit<SchemaContract<WorktreesRemoveResult>, "cleanup">;
 
-export type ManagedWorktreeBranch = {
-  name: string;
-  kind: "local" | "remote";
-};
+export type ManagedWorktreeBranch = WorktreeBranch;
 
 type ManagedWorktreeRepositoryStatus = "git" | "not_git" | "unavailable";
 
@@ -176,6 +172,11 @@ export type ManagedWorktreeGcResult = {
     reason: string;
   }[];
   issueCount: number;
+  /** Removal candidates that passed initial policy checks; final guards may still defer them. */
+  eligibleCount: number;
+  /** Exact disposition totals, including issues omitted from the bounded detail list. */
+  deferredCount: number;
+  failedCount: number;
   protectedCount: number;
   protectionReasons: Record<string, number>;
   /** Null when incomplete inventory or size measurements prevent a conclusion. */
@@ -192,13 +193,10 @@ export type ManagedWorktreeGcReceipt = ManagedWorktreeGcResult & {
 };
 
 /** Explicit early retirement only for a snapshot whose source remains retained. */
-export type RetireManagedWorktreeSnapshotParams = {
-  id: string;
-  expectedSnapshotRef: string;
-  expectedSnapshotOid: string;
-  expectedRemovedAt: number;
-  retainedSourceRef: string;
-  expectedRetainedSourceOid: string;
+export type RetireManagedWorktreeSnapshotParams = Omit<
+  WorktreesRetireSnapshotParams,
+  "expectedOwnerId"
+> & {
   signal?: AbortSignal;
   commitGuard?: () => void;
 };

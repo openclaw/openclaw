@@ -1,4 +1,5 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
 import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
 import {
   captureExternalSessionCommitGuard,
@@ -336,6 +337,8 @@ export async function dispatchGatewayMethodInProcessRaw(
         resolved.assertInvocationCurrent,
         assertExplicitRequestCurrent,
       ]),
+      questionCallerRead: readQuestionDispatchCapability(options?.prepareDispatchCurrent)
+        ?.callerRead,
       ...(assertCreatedInputSourceCurrent
         ? {
             assertCreatedInputSourceCurrent: composeSessionSourceAssertion([

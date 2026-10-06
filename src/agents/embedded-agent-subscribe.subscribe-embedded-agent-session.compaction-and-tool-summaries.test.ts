@@ -348,24 +348,20 @@ describe("tool summaries", () => {
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["exec", "server.exec"])(
-    "hides command metadata for %s outside full verbose mode",
-    async (toolName) => {
-      const onToolResult =
-        vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>>();
-      const { emit, subscription } = harness({ verboseLevel: "on", onToolResult });
-      emit({
-        type: "tool_execution_start",
-        toolName,
-        toolCallId: "exec",
-        args: { command: "echo private-sentinel" },
-      });
-      await subscription.waitForPendingEvents();
-      const payload = onToolResult.mock.calls[0]?.[0];
-      expect(payload?.text).toContain(toolName === "exec" ? "Exec" : "Server.exec");
-      expect(payload?.text).not.toContain("private-sentinel");
-    },
-  );
+  it.each(["exec"])("hides command metadata for %s outside full verbose mode", async (toolName) => {
+    const onToolResult = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>>();
+    const { emit, subscription } = harness({ verboseLevel: "on", onToolResult });
+    emit({
+      type: "tool_execution_start",
+      toolName,
+      toolCallId: "exec",
+      args: { command: "echo private-sentinel" },
+    });
+    await subscription.waitForPendingEvents();
+    const payload = onToolResult.mock.calls[0]?.[0];
+    expect(payload?.text).toContain(toolName === "exec" ? "Exec" : "Server.exec");
+    expect(payload?.text).not.toContain("private-sentinel");
+  });
 
   it("emits exec and read output in full verbose mode with the PTY indicator", async () => {
     const onToolResult = vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>>();

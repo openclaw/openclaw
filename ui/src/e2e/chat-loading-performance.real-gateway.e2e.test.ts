@@ -252,6 +252,13 @@ suite.define(() => {
     url.hash = new URL(String(handoff.browserUrl)).hash;
     const artifactDir = suite.artifactDir;
     const rpc: RpcMetric[] = [];
+    const olderHistoryRequests = (metrics: readonly RpcMetric[]) =>
+      metrics.filter(
+        (metric) =>
+          metric.method === "chat.history" &&
+          metric.sessionKey === selectedKey &&
+          (metric.offset ?? 0) > 0,
+      );
     let measuring = false;
     let startedAt = 0;
     await suite.withPage(
@@ -583,6 +590,7 @@ suite.define(() => {
         let loadedMessages = await loadedMessageCount();
         const initialLoadedMessages = loadedMessages;
         let olderPageCommits = 0;
+        const olderPageMessageCounts: number[] = [];
         while (loadedMessages < transcriptLength) {
           await waitForHistoryGesture();
           await thread.evaluate((element) => {
@@ -591,9 +599,15 @@ suite.define(() => {
           });
           await page.mouse.wheel(0, -500);
           await expect.poll(loadedMessageCount).toBeGreaterThan(loadedMessages);
-          loadedMessages = await loadedMessageCount();
+          const nextLoadedMessages = await loadedMessageCount();
+          olderPageMessageCounts.push(nextLoadedMessages - loadedMessages);
+          loadedMessages = nextLoadedMessages;
           olderPageCommits += 1;
           expect(loadedMessages).toBeLessThanOrEqual(transcriptLength);
+          // A committed page may stage one successor, never drain the remaining history.
+          expect(olderHistoryRequests(rpc.slice(startupMetrics.length)).length).toBeLessThanOrEqual(
+            olderPageCommits + 1,
+          );
         }
         await expect
           .poll(() =>
@@ -651,12 +665,7 @@ suite.define(() => {
           await page.screenshot({ path: path.join(artifactDir, "03-older-history-loaded.png") });
         }
         const paginationMetrics = structuredClone(rpc.slice(startupMetrics.length));
-        const olderPages = paginationMetrics.filter(
-          (metric) =>
-            metric.method === "chat.history" &&
-            metric.sessionKey === selectedKey &&
-            (metric.offset ?? 0) > 0,
-        );
+        const olderPages = olderHistoryRequests(paginationMetrics);
         const captureNarrowReload = async (stage: string, homeOpen: boolean) => {
           await page.setViewportSize({ width: 1050, height: 900 });
           const requestStart = rpc.length;
@@ -741,6 +750,7 @@ suite.define(() => {
               browserPagination,
               initialLoadedMessages,
               olderPageCommits,
+              olderPageMessageCounts,
               performanceBeforePagination,
               performanceAfterPagination,
               narrowHomeOpen,
@@ -756,7 +766,22 @@ suite.define(() => {
         );
 
         // Save measurements before asserting budgets so failures retain their evidence.
-        expect(olderPages).toHaveLength(1);
+        // #165897 deliberately bounds ordinary pages to 512 KiB; the full
+        // synthetic transcript now spans pages instead of one multi-megabyte reply.
+        expect(olderPages).toHaveLength(olderPageCommits);
+        expect(olderPages.length).toBeGreaterThan(1);
+        expect(olderPages.map((metric) => metric.messages)).toEqual(olderPageMessageCounts);
+        let nextOffset = initialLoadedMessages;
+        for (const metric of olderPages) {
+          expect(metric.receivedMs).toBeDefined();
+          expect(metric.offset).toBe(nextOffset);
+          expect(metric.historyBytes).toBeLessThanOrEqual(512 * 1024);
+          const messages = metric.messages ?? 0;
+          expect(messages).toBeGreaterThan(0);
+          // This fixture has one visible message per source row.
+          nextOffset += messages;
+        }
+        expect(nextOffset).toBe(transcriptLength);
         const selectedStartup = startupMetrics.find(
           (metric) => metric.method === "chat.startup" && metric.sessionKey === selectedKey,
         );
@@ -766,6 +791,7 @@ suite.define(() => {
           { metrics: narrowHomeOpen.startup, identity: narrowHomeOpen.identity },
           { metrics: narrowHomeClosed.startup, identity: narrowHomeClosed.identity },
         ]) {
+          expect(olderHistoryRequests(metrics)).toHaveLength(0);
           const resolutions = metrics.filter((metric) => metric.method === "sessions.resolve");
           expect(resolutions).toHaveLength(1);
           const resolved = resolutions[0]!;

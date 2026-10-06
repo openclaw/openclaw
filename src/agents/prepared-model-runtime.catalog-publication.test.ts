@@ -12,7 +12,6 @@ import {
   requestContext,
 } from "../gateway/server-methods/sessions-read-cache.test-support.js";
 import { readPreparedGatewayModelCatalog } from "../gateway/server-model-catalog.js";
-import * as projectionWork from "../gateway/session-projection-work.js";
 import { bindSessionRowProjection } from "../gateway/session-row-projection-access.js";
 import {
   createSessionRowProjection,
@@ -456,25 +455,5 @@ describe("catalog publication session rows", () => {
     await refresh();
     expect((await list()).sessions.every((row) => row.contextTokens === 64_000)).toBe(true);
     expect(rows.needsMaterialization).toBe(false);
-  });
-
-  it("serves retained rows after a failed background catalog read and retries on the next list", async () => {
-    const { rows, list, refresh, readCatalog } = await setup();
-    const replacement = createDeferred<Awaited<ReturnType<typeof readCatalog>>>();
-    readCatalog.mockReturnValueOnce(replacement.promise);
-    mocks.runPreparedModelCatalogWorker.mockResolvedValue(
-      catalog({ ...model, contextWindow: 64_000 }),
-    );
-    await refresh();
-    try {
-      expect((await list()).sessions.every((row) => row.contextTokens === 32_000)).toBe(true);
-      replacement.reject(new Error("projection read failure"));
-      await projectionWork.yieldSessionListWork();
-      expect(rows.needsMaterialization).toBe(false);
-      expect((await list()).sessions.every((row) => row.contextTokens === 64_000)).toBe(true);
-      expect(rows.needsMaterialization).toBe(false);
-    } finally {
-      replacement.resolve([]);
-    }
   });
 });

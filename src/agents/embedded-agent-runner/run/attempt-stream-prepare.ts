@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ReplyToolAuthorityPreparation } from "../../../auto-reply/reply/reply-run-registry.contracts.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import { validateAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
@@ -481,8 +482,10 @@ function prepareStream(
   const questionAuthority = (
     assertCurrent: (() => void) | undefined,
     kind: InputAuthority["kind"],
+    toolAuthorityPreparation?: ReplyToolAuthorityPreparation,
   ): InputAuthority => ({
     kind,
+    toolAuthorityPreparation,
     assertCurrent: () => {
       if (!composeInjectionGuard(assertCurrent)()) {
         throw new Error("active session is finalizing");
@@ -495,6 +498,8 @@ function prepareStream(
     options?: EmbeddedAgentQueueMessageOptions,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    prepareCurrent?: () => Promise<void>,
+    toolAuthorityPreparation?: ReplyToolAuthorityPreparation,
   ) => {
     const canInjectMessage = composeInjectionGuard(assertCurrent);
     if (!canInjectMessage()) {
@@ -511,7 +516,8 @@ function prepareStream(
         options,
         attempt.sessionKey,
         canInjectMessage,
-        questionAuthority(assertCurrent, authorityKind),
+        questionAuthority(assertCurrent, authorityKind, toolAuthorityPreparation),
+        prepareCurrent,
       );
     } finally {
       activeQueueAdmissions--;
@@ -522,23 +528,25 @@ function prepareStream(
     options?: EmbeddedAgentQueueMessageOptions,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    preparation?: ReplyToolAuthorityPreparation,
   ) =>
     claimEmbeddedPendingUserInputAnswer(
       text,
       options,
       attempt.sessionKey,
       composeInjectionGuard(assertCurrent),
-      questionAuthority(assertCurrent, authorityKind),
+      questionAuthority(assertCurrent, authorityKind, preparation),
     );
   const cancelPendingUserInput = (
     resolvedBy: string,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    preparation?: ReplyToolAuthorityPreparation,
   ) =>
     cancelPendingAgentQuestionForSession({
       sessionKey: attempt.sessionKey,
       resolvedBy,
-      authority: questionAuthority(assertCurrent, authorityKind),
+      authority: questionAuthority(assertCurrent, authorityKind, preparation),
     });
   const messageInjection = {
     version: 2 as const,
@@ -546,7 +554,20 @@ function prepareStream(
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
-  };
+    queueMessageAsync: (text, options, preparation, kind) =>
+      queueMessage(
+        text,
+        options,
+        preparation.assertCurrent,
+        kind,
+        preparation.prepareCurrent,
+        preparation,
+      ),
+    claimPendingUserInputAnswerAsync: (text, options, preparation, kind) =>
+      claimPendingUserInputAnswer(text, options, preparation.assertCurrent, kind, preparation),
+    cancelPendingUserInputAsync: (resolvedBy, preparation, kind) =>
+      cancelPendingUserInput(resolvedBy, preparation.assertCurrent, kind, preparation),
+  } satisfies NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>;
   const heartbeatReplyOperation =
     attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
   const applyPermissionMode = input.applyPermissionMode;

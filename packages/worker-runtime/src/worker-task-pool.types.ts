@@ -71,8 +71,10 @@ export type WorkerTaskOptions<Input> = {
 };
 
 /** Internal codecs may answer a worker while their caller cannot run Promise reactions. */
-export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> &
-  (
+export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> & {
+  /** Host diagnostics classify this operation before publishing bounded labels. */
+  diagnosticOperation?: string;
+} & (
     | { onRequest?: WorkerTaskOptions<Input>["onRequest"]; onRequestSync?: never }
     | {
         onRequest?: never;

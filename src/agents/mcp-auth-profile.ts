@@ -112,13 +112,6 @@ function buildTokenEnvVarName(serverName: string): string {
   return `OPENCLAW_MCP_AUTH_${hash.toUpperCase()}_TOKEN`;
 }
 
-function stripOpenClawOnlyOAuthConfig(server: BundleMcpServerConfig): BundleMcpServerConfig {
-  const next = { ...server };
-  delete next.auth;
-  delete next.oauth;
-  return next;
-}
-
 /** Resolves OAuth-backed MCP servers into bearer headers for external runtimes. */
 export async function resolveMcpBearerBundleConfig(
   params: {
@@ -167,13 +160,14 @@ export async function resolveMcpBearerBundleConfig(
     }
     const headers = withoutMcpAuthorizationHeader(filterStringRecord(server.headers));
     nextServers ??= { ...params.config.mcpServers };
-    nextServers[serverName] = stripOpenClawOnlyOAuthConfig({
-      ...server,
+    const { auth: _auth, oauth: _oauth, ...externalServer } = server;
+    nextServers[serverName] = {
+      ...externalServer,
       headers: {
         ...headers,
         Authorization: authorization,
       },
-    });
+    };
   }
 
   return {

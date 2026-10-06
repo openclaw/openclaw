@@ -18,17 +18,6 @@ import {
   resolveNestedAllowlistDecision,
 } from "../runtime-api.js";
 
-type MSTeamsResolvedRouteConfig = {
-  teamConfig?: MSTeamsTeamConfig;
-  channelConfig?: MSTeamsChannelConfig;
-  allowlistConfigured: boolean;
-  allowed: boolean;
-  teamKey?: string;
-  channelKey?: string;
-  channelMatchKey?: string;
-  channelMatchSource?: "direct" | "wildcard";
-};
-
 // Length-prefixed segments keep arbitrary config keys, including slashes, collision-free.
 const teamScopeKey = (teamKey: string) => scopeKey(["team", teamKey]);
 const channelScopeKey = (teamKey: string, channelKey: string) =>
@@ -122,7 +111,7 @@ export function resolveMSTeamsRouteConfig(params: {
   conversationId?: string | null | undefined;
   channelName?: string | null | undefined;
   allowNameMatching?: boolean;
-}): MSTeamsResolvedRouteConfig {
+}) {
   const teamId = params.teamId?.trim();
   const teamName = params.teamName?.trim();
   const conversationId = params.conversationId?.trim();

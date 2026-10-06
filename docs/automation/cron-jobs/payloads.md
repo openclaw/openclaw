@@ -170,9 +170,9 @@ When a runtime reports token usage without a cost, automation estimates use the 
 
 If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that selection (and any new auth profile) for the active run. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
 
-Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one probe instead of a request storm. Skipped preflight runs do not increment execution-error backoff; set `failureAlert.includeSkipped` to opt into repeated skip alerts.
+Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one check instead of a request storm. Skipped preflight runs do not increment execution-error backoff; set `failureAlert.includeSkipped` to opt into repeated skip alerts.
 
-Client-side preflight timeouts are not cached. The next scheduled run probes the endpoint again instead of inheriting a timeout from another run.
+Client-side preflight timeouts are not cached. The next scheduled run checks the endpoint again instead of inheriting a timeout from another run.
 
 ### Command payloads
 
@@ -186,7 +186,7 @@ Command payloads are an operator-admin Gateway automation surface, not an agent 
 
 ```bash
 openclaw automations create "*/15 * * * *" \
-  --name "Queue depth probe" \
+  --name "Queue depth check" \
   --command "scripts/check-queue.sh" \
   --command-cwd "/srv/app" \
   --announce \

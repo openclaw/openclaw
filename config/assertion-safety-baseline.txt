@@ -312,7 +312,6 @@ extensions/discord/src/token.ts	2
 extensions/discord/src/voice-message.ts	3
 extensions/discord/src/voice/access.ts	1
 extensions/discord/src/voice/audio.ts	1
-extensions/discord/src/voice/ingress.ts	1
 extensions/discord/src/voice/realtime-turns.ts	3
 extensions/discord/src/voice/receive-recovery.ts	1
 extensions/discord/src/voice/sdk-runtime.ts	1
@@ -351,7 +350,7 @@ extensions/feishu/src/perm.ts	1
 extensions/feishu/src/policy.ts	1
 extensions/feishu/src/presentation-card.ts	1
 extensions/feishu/src/reply-dispatcher.ts	1
-extensions/feishu/src/send.ts	8
+extensions/feishu/src/send.ts	7
 extensions/feishu/src/setup-core.ts	1
 extensions/feishu/src/setup-surface.ts	9
 extensions/feishu/src/tool-account.ts	1
@@ -1004,7 +1003,6 @@ extensions/whatsapp/src/inbound/extract.ts	10
 extensions/whatsapp/src/inbound/group-metadata-cache.ts	4
 extensions/whatsapp/src/inbound/ingress-lifecycle.ts	2
 extensions/whatsapp/src/inbound/media.ts	2
-extensions/whatsapp/src/inbound/message-delivery.ts	1
 extensions/whatsapp/src/inbound/message-enrichment.ts	3
 extensions/whatsapp/src/inbound/outbound-mentions.ts	1
 extensions/whatsapp/src/qa-driver.runtime.ts	1
@@ -1060,7 +1058,7 @@ extensions/zalouser/src/text-styles-inline.ts	1
 extensions/zalouser/src/text-styles-ranges.ts	1
 extensions/zalouser/src/text-styles-source.ts	1
 extensions/zalouser/src/tool.ts	1
-extensions/zalouser/src/zalo-js.ts	9
+extensions/zalouser/src/zalo-js.ts	7
 extensions/zalouser/src/zca-client.ts	2
 packages/acp-core/src/runtime/errors.ts	6
 packages/agent-core/src/agent-loop.ts	2
@@ -1219,7 +1217,6 @@ src/agents/agent-command.ts	1
 src/agents/agent-hooks/compaction-safeguard.ts	12
 src/agents/agent-project-settings-snapshot.ts	5
 src/agents/agent-run-terminal-delivery.ts	1
-src/agents/agent-run-terminal-outcome.ts	2
 src/agents/agent-run-terminal-receipt.ts	1
 src/agents/agent-runtime-config.ts	1
 src/agents/agent-scope-config.ts	3
@@ -1238,7 +1235,6 @@ src/agents/anthropic-payload-log.ts	2
 src/agents/apply-patch-file-ops.ts	2
 src/agents/apply-patch-targets.ts	1
 src/agents/apply-patch.ts	2
-src/agents/auth-profiles/clone.ts	1
 src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	1
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
@@ -1255,7 +1251,7 @@ src/agents/bash-tools.exec-host-node-phases.ts	1
 src/agents/bash-tools.exec-host-node.ts	2
 src/agents/bash-tools.exec-request-preparation.ts	6
 src/agents/bash-tools.exec-run.ts	1
-src/agents/bash-tools.exec-script-preflight.ts	2
+src/agents/bash-tools.exec-script-preflight.ts	1
 src/agents/bash-tools.process.ts	5
 src/agents/bootstrap-files.ts	1
 src/agents/bootstrap-hooks.ts	1
@@ -1619,7 +1615,6 @@ src/auto-reply/reply/inbound-context.ts	8
 src/auto-reply/reply/mentions.ts	1
 src/auto-reply/reply/queue/drain.ts	1
 src/auto-reply/reply/queue/enqueue.ts	1
-src/auto-reply/reply/queue/settings.ts	1
 src/auto-reply/reply/reply-config-runtime-mode.ts	2
 src/auto-reply/reply/reply-operation-run-state.ts	1
 src/auto-reply/reply/reply-run-registry.registry.ts	1
@@ -1722,7 +1717,6 @@ src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	6
 src/cli/capability-cli/web.ts	5
 src/cli/channel-auth.ts	4
-src/cli/channel-options.ts	1
 src/cli/channels-cli.ts	5
 src/cli/claws-cli.gateway-readiness.ts	1
 src/cli/claws-cli.runtime.ts	2
@@ -1815,7 +1809,6 @@ src/commands/doctor-gateway-services.ts	1
 src/commands/doctor-heartbeat-scratch-migration.ts	4
 src/commands/doctor-main-session-recovery.ts	1
 src/commands/doctor-model-catalog-credentials.ts	1
-src/commands/doctor-plugin-registry.ts	1
 src/commands/doctor-post-upgrade.ts	1
 src/commands/doctor-prompter.ts	1
 src/commands/doctor-retired-phone-control.ts	1
@@ -1863,7 +1856,6 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.models.refs.ts	1
 src/commands/doctor/shared/legacy-config-state-migration-input.ts	2
 src/commands/doctor/shared/legacy-talk-config-normalizer.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
-src/commands/doctor/shared/plugin-runtime-symlinks.ts	1
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	3
 src/commands/doctor/shared/stale-auth-order-store.ts	3
@@ -2143,7 +2135,7 @@ src/gateway/server.auth.control-ui.trusted-proxy.suite.ts	3
 src/gateway/server.auth.default-token.suite.ts	8
 src/gateway/server.auth.modes.suite.ts	1
 src/gateway/server/http-listen.ts	1
-src/gateway/server/ws-connection-diagnostics.ts	3
+src/gateway/server/ws-connection-diagnostics.ts	1
 src/gateway/server/ws-connection.ts	1
 src/gateway/server/ws-connection/authenticated-request-dispatch.ts	1
 src/gateway/server/ws-connection/connect-device-metadata.ts	1
@@ -2159,7 +2151,7 @@ src/gateway/stale-install.ts	1
 src/gateway/system-ca-warmup.ts	1
 src/gateway/talk/handlers/index.ts	3
 src/gateway/talk/relay/session-create.ts	1
-src/gateway/talk/session-config.ts	4
+src/gateway/talk/session-config.ts	1
 src/gateway/terminal/node-relay.ts	1
 src/gateway/test-http-response.ts	4
 src/gateway/test-temp-config.ts	1
@@ -2649,7 +2641,7 @@ src/shared/runtime-import.ts	1
 src/shared/safe-record.ts	1
 src/shared/store-writer-queue.ts	1
 src/shared/worker-bundle-archive.ts	1
-src/skills/lifecycle/clawhub-install-core.ts	2
+src/skills/lifecycle/clawhub-install-core.ts	1
 src/skills/lifecycle/clawhub-store.ts	4
 src/skills/lifecycle/upload-store.ts	1
 src/skills/lifecycle/workspace-skill-write.ts	1
@@ -2702,7 +2694,7 @@ src/transcripts/store-export-ownership.ts	2
 src/transcripts/store-sqlite.ts	2
 src/tts/openai-compatible-speech-provider.ts	1
 src/tts/status-config.ts	1
-src/tts/tts-config.ts	5
+src/tts/tts-config.ts	4
 src/tts/tts-core.ts	1
 src/tts/tts-payload.ts	1
 src/tts/tts-provider-resolution.ts	1

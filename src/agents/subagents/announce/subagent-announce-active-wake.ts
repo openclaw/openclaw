@@ -20,16 +20,6 @@ export const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
 
 export { resolveRequesterSessionActivity };
 
-// Backoff schedule for re-attempting an active-requester steer while the run is
-// compacting. Compaction is transient and usually finishes quickly, so a denser
-// schedule is used than for transient delivery errors. Total wait stays well
-// within the announce delivery timeout, and the loop also stops on cancellation.
-function resolveCompactionSteerRetryDelaysMs() {
-  return isFastTestRuntimeEnv()
-    ? ([8, 16, 32, 64] as const)
-    : ([1_000, 2_000, 4_000, 8_000] as const);
-}
-
 // Wake an active requester run through transient compacting and delivery-mode
 // outcomes. Unsupported transcript-commit waits are terminal refusals: the loop
 // keeps the requested gate intact and lets the caller fall through to the
@@ -81,13 +71,12 @@ export async function resolveActiveWakeWithRetries(
     return isAttemptAllowed?.() === false ? SOURCE_OWNER_CHANGED : result;
   };
   let outcome = await attemptWake(currentOptions);
-  const compactionRetryDelaysMs = resolveCompactionSteerRetryDelaysMs();
+  const compactionRetryDelaysMs = isFastTestRuntimeEnv()
+    ? ([8, 16, 32, 64] as const)
+    : ([1_000, 2_000, 4_000, 8_000] as const);
   let compactionRetryIndex = 0;
   for (;;) {
-    if (outcome === SOURCE_OWNER_CHANGED) {
-      break;
-    }
-    if (outcome.queued || signal?.aborted) {
+    if (outcome === SOURCE_OWNER_CHANGED || outcome.queued || signal?.aborted) {
       break;
     }
     if (isAttemptAllowed?.() === false || isSourceSessionAdmissionAllowed?.() === false) {
@@ -103,14 +92,7 @@ export async function resolveActiveWakeWithRetries(
       const activeRunOptions = { ...currentOptions };
       delete activeRunOptions.sourceReplyDeliveryMode;
       currentOptions = activeRunOptions;
-      const retryOptions = resolveRetryOptions();
-      if (!retryOptions) {
-        break;
-      }
-      outcome = await attemptWake(retryOptions);
-      continue;
-    }
-    if (outcome.reason === "compacting") {
+    } else if (outcome.reason === "compacting") {
       const remainingDeliveryTimeoutMs =
         compactionDeadlineMs === undefined ? undefined : compactionDeadlineMs - Date.now();
       const canRetry =
@@ -136,14 +118,14 @@ export async function resolveActiveWakeWithRetries(
         break;
       }
       compactionRetryIndex += 1;
-      const retryOptions = resolveRetryOptions();
-      if (!retryOptions) {
-        break;
-      }
-      outcome = await attemptWake(retryOptions);
-      continue;
+    } else {
+      break;
     }
-    break;
+    const retryOptions = resolveRetryOptions();
+    if (!retryOptions) {
+      break;
+    }
+    outcome = await attemptWake(retryOptions);
   }
   return outcome;
 }

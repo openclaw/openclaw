@@ -239,6 +239,18 @@ literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
 
+Plugin snapshots verify inventoried bytes with SHA-256. Native companion captures
+may add or remove hard links while the old Gateway serves; link-only metadata
+changes do not invalidate unchanged files on Windows or POSIX. Content, file
+identity, type, permissions, ownership, size, and modification-time changes still
+refuse the snapshot.
+
+This check belongs to the installed updater. An older updater that reports
+`Plugin entry changed after snapshot inventory` during native capture cannot
+obtain this repair from the candidate it is already validating. Use the
+installation's [manual update method](/install/updating/update-methods), with a
+verified backup and the managed Gateway stopped during package replacement.
+
 Before each candidate check starts, the updater names the check and command.
 These progress messages go to stderr with `--json`, leaving stdout for the JSON
 result. The installed updater owns these announcements, so an older updater gains
@@ -296,7 +308,7 @@ cleanup handling.
 After the canary passes, the updater records temporary-copy cleanup and previous-Gateway
 readiness verification as active steps. `openclaw update status`, including `--json`,
 shows the recorded operation, wait reason, start time, and budget. Readiness observations
-refresh at most every 30 seconds within each probe stage. Verification checks the managed
+refresh at most every 30 seconds within each check stage. Verification checks the managed
 service, listener identity, installed version/build, health RPC, and HTTP readiness.
 Its implicit allowance is ten times the canary startup duration, with a five-minute minimum
 and one-hour ceiling; an explicit `--timeout` takes precedence. The ceiling preserves
@@ -310,7 +322,7 @@ the update records a warning and continues; removal may still finish in the back
 The warning names the temporary path and explains cleanup after the updater exits.
 These progress improvements require the repaired updater on the next update hop.
 An already-running 2026.9.5 updater retains its original silent verification window;
-independent `openclaw gateway status --deep --require-rpc` and `/readyz` probes can show
+independent `openclaw gateway status --deep --require-rpc` and `/readyz` checks can show
 whether the old Gateway is still serving, but do not establish the updater's wait reason.
 
 Update build and validation processes resolve source-linked plugin SDKs from
@@ -358,14 +370,14 @@ Auth diagnostics are advisory; optional inference repair runs through triage onl
 after a failed update has settled. It uses the normal runtime credential resolver,
 including shared profiles and OAuth refresh.
 
-The new version answers the updater's native service capability probe before
-loading configuration or initializing debug capture. Probing capability does not
+The new version answers the updater's native service capability check before
+loading configuration or initializing debug capture. Checking capability does not
 open or migrate shared state, so the old Gateway can keep serving while its
 database schema is older than the new version's. The installed updater runs first;
-this repair takes effect when the version it probes contains the fix.
+this repair takes effect when the version it checks contains the fix.
 
-The invoking updater supplies the capability probe's per-step time budget. The
-probe does not impose a separate startup deadline.
+The invoking updater supplies the capability check's per-step time budget. The
+check does not impose a separate startup deadline.
 
 Snapshot preparation budgets time for the SQLite database and journal bytes,
 including copying and verification passes, with a five-minute startup floor.
@@ -377,7 +389,7 @@ that scales with measured database and plugin bytes. An explicit per-step
 timeout replaces that derived allowance.
 While retaining its own runtime, the updater reports completed file operations
 directly instead of repeatedly scanning the growing copy. If those operations
-stop completing, isolated filesystem probes still track a slow individual copy.
+stop completing, isolated filesystem checks still track a slow individual copy.
 This improvement applies when the installed updater contains the fix.
 Automatic and chat updates leave that runtime allowance derived from state.
 Their request and recovery watchdogs do not become update validation deadlines.
@@ -385,12 +397,12 @@ Startup and readiness responses share their own allowance, including reading
 the response body. Completed candidate CLI and Gateway startup milestones from a
 fixed set of startup events renew that allowance once each; passing the original
 deadline records a warning while startup keeps progressing. Unknown names are
-ignored and logged at debug level. Probe responses do not renew the allowance.
+ignored and logged at debug level. Check responses do not renew the allowance.
 The total readiness wait cannot exceed four
 times its initial allowance, even while milestones advance. Reaching that ceiling
 refuses the candidate and records the elapsed time and milestones reached, leaving
 the previous Gateway untouched. A candidate that exits or stops advancing fails
-validation with its last startup evidence. Unreachable probes
+validation with its last startup evidence. Unreachable checks
 without startup evidence and configured proxy failures remain warnings.
 This progress-aware wait belongs to the installed updater. The published
 2026.9.4 updater retains its fixed five-minute cap when checking a newer candidate.
@@ -540,7 +552,7 @@ or checkout swap, required `doctor --fix` migrations, and state compatibility
 inspection, followed by service start
 in `restarting`. Update verification does not use model inference. In `verifying`,
 the updater checks that the managed service is running and owns its port, requires
-the normal 12-probe health settle and a Gateway hello handshake matching the
+the normal 12-check health settle and a Gateway hello handshake matching the
 expected version and Git build identity, checks channel readiness, and requires
 HTTP 200 from `/readyz`. Plugin activation or load failures remain named warnings
 when these core checks pass; they do not turn a successful core update into an error.
@@ -575,7 +587,7 @@ than success or an indefinite pending run. Observed PID or boot-generation chang
 remain failures and enter recovery. Check `openclaw gateway status --deep`
 before retiring those backups. A timeout alone does not authorize a recovery
 restart or rollback; a refused rollback also leaves the candidate untouched.
-A running status alone, a failed probe on an established listener, or an HTTP
+A running status alone, a failed check on an established listener, or an HTTP
 `/readyz` failure does not establish startup progress. Those unhealthy-service
 observations and concrete version, build, channel, or stopped-service failures
 remain failures with their own diagnostics. Doctor reports a qualifying startup
@@ -766,7 +778,7 @@ If schema state cannot be verified, rollback is refused with
 If an update fails before activation, recovery observes the existing Gateway once
 without waiting for startup or restarting it. Native service and listener checks
 share the update's existing observation allowance; their elapsed time does not
-consume the separate short health-request timeout. An explicit shorter probe
+consume the separate short health-request timeout. An explicit shorter check
 allowance and the overall deadline still apply. This correction takes effect
 when the installed updater includes it, not in an older updater already running.
 
@@ -1144,7 +1156,7 @@ Already-current runtime plugins are kept in place; a no-op startup repair does
 not reinstall the package or invalidate the migration checkpoint.
 
 When post-core convergence retains an official pin outside automatic release-pin
-recovery and the npm probe finds a newer release, the update prints a pin advisory
+recovery and the npm check finds a newer release, the update prints a pin advisory
 and reports `postUpdate.plugins.status: "warning"` in JSON. The warning includes
 the observed installed and available versions and an explicit command to replace
 the pin. Keep the pin if intentional. This advisory does not establish

@@ -1,6 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  runOpenClawAgentWorkerWrite,
+  runOpenClawAgentWriteAdmission,
+} from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as observerWork from "./session-observer-work.js";
 import {
@@ -10,6 +14,64 @@ import {
   preparedModel,
   resetSessionObserverEventSequence,
 } from "./session-observer.test-utils.js";
+
+it("queues background digest persistence after its publisher and joins it before disposal", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { agentId: "main", path: state.path("sessions.sqlite"), env: state.env };
+    const entered = createDeferred();
+    const release = createDeferred();
+    const order: string[] = [];
+    let digestEntered = false;
+    const persistDigest = vi.fn(() =>
+      runOpenClawAgentWorkerWrite(options, async () => {
+        digestEntered = true;
+        entered.resolve();
+        await release.promise;
+        order.push("persisted");
+        return true;
+      }),
+    );
+    const harness = createHarness({
+      config: {
+        session: { store: options.path },
+        gateway: { controlUi: { sessionObserver: true } },
+      },
+      utilityModelRef: null,
+      persistDigest,
+    });
+    let successor: Promise<void> | undefined;
+    let disposal: Promise<void> | undefined;
+    try {
+      await runOpenClawAgentWriteAdmission(options, async () => {
+        harness.observer.handleEvent(
+          event({ stream: "item", data: { kind: "preamble", progressText: "Reviewing" } }),
+        );
+        expect(persistDigest).toHaveBeenCalledOnce();
+        expect(digestEntered).toBe(false);
+      });
+      await withinTest(entered.promise, signal);
+      successor = runOpenClawAgentWriteAdmission(options, () =>
+        runOpenClawAgentWorkerWrite(options, async () => {
+          order.push("successor");
+        }),
+      );
+      disposal = harness.observer.disposeAsync().then(() => {
+        order.push("disposed");
+      });
+      release.resolve();
+      await withinTest(Promise.all([successor, disposal]), signal);
+      expect(order[0]).toBe("persisted");
+      expect(order).toHaveLength(3);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([successor, disposal]);
+      await harness.observer.disposeAsync();
+      resetSessionObserverEventSequence();
+    }
+  });
+});
 
 it.for(["model", "failed model", "synthesized terminal"] as const)(
   "rechecks physical source authority before consuming a %s digest",

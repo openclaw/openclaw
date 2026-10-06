@@ -37,20 +37,14 @@ import {
 import { collectInstalledPluginMissingRequiredDependencies } from "./missing-configured-plugin-install.dependency-health.js";
 import { collectEffectiveConfiguredChannelOwnerPluginIds } from "./missing-configured-plugin-install.ids.js";
 
-export type DownloadableInstallCandidate = {
+export type DownloadableInstallCandidate = Pick<
+  PluginPackageInstall,
+  "npmSpec" | "clawhubSpec" | "expectedIntegrity" | "defaultChoice"
+> & {
   pluginId: string;
   label: string;
-  npmSpec?: string;
-  clawhubSpec?: string;
-  expectedIntegrity?: string;
   trustedSourceLinkedOfficialInstall?: boolean;
-  defaultChoice?: PluginPackageInstall["defaultChoice"];
   versionBoundToOpenClaw?: boolean;
-};
-
-type BundledPluginPackageDescriptor = {
-  packageName?: string;
-  preserveExternalInstallRecord?: boolean;
 };
 
 /** Keep doctor diagnostics and actual package repair on the same discovery snapshot. */
@@ -88,7 +82,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     params.configuredPluginIds.has(pluginId) ||
     params.configuredChannelIds.has(pluginId) ||
     [...configuredChannelOwnerPluginIds.values()].some((ownerIds) => ownerIds.has(pluginId));
-  const bundledPluginsById = new Map<string, BundledPluginPackageDescriptor>(
+  const bundledPluginsById = new Map(
     currentBundledPlugins.flatMap((plugin) => {
       const external = isExternallyDistributedPlugin({
         pluginId: plugin.id,
@@ -408,14 +402,11 @@ export function collectDownloadableInstallCandidates(params: {
   );
 }
 
-export function collectUpdateDeferredPluginIds(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  configuredPluginIds: ReadonlySet<string>;
-  configuredChannelIds: ReadonlySet<string>;
-  configuredChannelOwnerPluginIds?: ReadonlyMap<string, ReadonlySet<string>>;
-  blockedPluginIds?: ReadonlySet<string>;
-}): Set<string> {
+export function collectUpdateDeferredPluginIds(
+  params: Omit<Parameters<typeof collectDownloadableInstallCandidates>[0], "missingPluginIds"> & {
+    env: NodeJS.ProcessEnv;
+  },
+): Set<string> {
   const pluginIds = new Set(params.configuredPluginIds);
   for (const candidate of collectDownloadableInstallCandidates({
     ...params,

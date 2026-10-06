@@ -36,22 +36,6 @@ export type SessionActivityFilters = {
   time: ActivityTimeFilter;
 };
 
-type ActivityPerson = PresenceViewer & { count: number };
-
-type SessionActivityDay = {
-  key: string;
-  timestamp: number | null;
-  sessions: readonly GatewaySessionRow[];
-};
-
-type SessionActivityProjection = {
-  days: readonly SessionActivityDay[];
-  matchedCount: number;
-  people: readonly ActivityPerson[];
-  sessions: readonly GatewaySessionRow[];
-  timeCount: number;
-};
-
 const DEFAULT_ACTIVITY_TIME_FILTER: ActivityTimeFilter = "7d";
 
 export function parseSessionActivityFilters(
@@ -240,9 +224,7 @@ function dayStart(timestamp: number): number {
   return new Date(timestamp).setHours(0, 0, 0, 0);
 }
 
-export function projectSessionActivity(
-  result: SessionsListResult | undefined,
-): SessionActivityProjection {
+export function projectSessionActivity(result: SessionsListResult | undefined) {
   const visible = result?.sessions ?? [];
   const people = (result?.people ?? []).map((person) => ({
     id: person.identity.id,

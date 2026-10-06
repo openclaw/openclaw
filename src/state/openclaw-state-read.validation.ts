@@ -209,8 +209,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.childSessionKey === "string") ||
       (input.command.type === "subagents.runs" &&
         isRecord(input.command.scope) &&
-        (input.command.scope.kind === "all" ||
-          input.command.scope.kind === "maintenance" ||
+        (input.command.scope.kind === "maintenance" ||
           (input.command.scope.kind === "session" &&
             typeof input.command.scope.sessionKey === "string") ||
           (input.command.scope.kind === "descendants" &&
@@ -223,6 +222,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
                 typeof link.requesterSessionKey === "string",
             )) ||
           (input.command.scope.kind === "ids" && isStringArray(input.command.scope.runIds)))) ||
+      input.command.type === "subagents.restore" ||
       input.command.type === "exec-approvals.read" ||
       (input.command.type === "skillLibrary.read" &&
         isRecord(input.command.input) &&
@@ -388,6 +388,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       isWorkspaceJournalReadCommand(input.command) ||
       input.command.type === "workers.placementRecoveryCandidates" ||
       input.command.type === "workers.placementPreservation" ||
+      (input.command.type === "workers.placementEnvironmentOwner" &&
+        typeof input.command.environmentId === "string") ||
       (input.command.type === "workers.placementPendingResults" &&
         (input.command.sessionId === undefined || typeof input.command.sessionId === "string")) ||
       (input.command.type === "workers.placementProjection" &&

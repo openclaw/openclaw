@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
@@ -182,6 +183,9 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         birthtimeNs: stat.birthtimeNs.toString(),
         mtimeNs: stat.mtimeNs.toString(),
         ctimeNs: stat.ctimeNs.toString(),
+        uid: stat.uid.toString(),
+        gid: stat.gid.toString(),
+        sha256: hashFileMutationSnapshotSync(file, stat),
       };
     } else if (stat.isSymbolicLink()) {
       const target =
@@ -677,6 +681,10 @@ export async function copyUpdateCandidatePluginTrees(
             ),
         });
         await assertEntry(entry);
+        const copiedStat = await fs.lstat(destination, { bigint: true });
+        if (hashFileMutationSnapshotSync(destination, copiedStat) !== entry.sha256) {
+          throw new Error(`Copied plugin bytes differ from snapshot inventory: ${entry.path}`);
+        }
       }),
   });
   // A failed copy can already have published bytes. Drain every admitted copy

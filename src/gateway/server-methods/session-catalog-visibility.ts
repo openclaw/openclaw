@@ -226,9 +226,7 @@ export async function resolveSessionCatalogThreadVisibility(params: {
       ) {
         return { visibility, source: { sessionKey: session.sessionKey, entry: visibleEntry } };
       }
-      const target = session.sessionKey
-        ? resolveSessionSharingTarget({ cfg: config, sessionKey: session.sessionKey })
-        : null;
+      const target = resolveSessionSharingTarget({ cfg: config, sessionKey: session.sessionKey });
       return target !== null &&
         resolveSessionSharingRole({ cfg: config, client: params.client, target }) === "member"
         ? { visibility, source: { sessionKey: target.canonicalKey, entry: visibleEntry } }

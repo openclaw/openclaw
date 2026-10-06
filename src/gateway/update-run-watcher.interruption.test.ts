@@ -213,8 +213,8 @@ it.each([false, true])(
     expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain(
       "Updater exited before recording completion",
     );
-    expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain("settle probe: settled");
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle probe: settled"));
+    expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain("settle check: settled");
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle check: settled"));
   },
 );
 
@@ -403,10 +403,10 @@ it.each(["unverified", "timed-out"])(
     const diagnostic = pending.steps.find((step) => step.step === "reconcile:settle");
     expect(diagnostic).toMatchObject({
       status: "completed",
-      detail: expect.stringContaining(`settle probe: ${outcome}`),
+      detail: expect.stringContaining(`settle check: ${outcome}`),
     });
     expect(pending.status).toBe("running");
-    expect(renderUpdateRunReport(pending).markdown).toContain(`settle probe: ${outcome}`);
+    expect(renderUpdateRunReport(pending).markdown).toContain(`settle check: ${outcome}`);
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining(diagnostic!.detail!));
     if (outcome === "timed-out") {
       expect(diagnostic?.detail).toContain(
@@ -418,9 +418,9 @@ it.each(["unverified", "timed-out"])(
     const recovered = getUpdateRun(runId)!;
     expect(recovered).toMatchObject({ status: "succeeded", verification: { versionMatch: true } });
     expect(recovered.steps.filter((step) => step.step === "reconcile:settle")).toEqual([
-      expect.objectContaining({ detail: expect.stringContaining("settle probe: settled") }),
+      expect.objectContaining({ detail: expect.stringContaining("settle check: settled") }),
     ]);
-    expect(renderUpdateRunReport(recovered).markdown).not.toContain(`settle probe: ${outcome}`);
+    expect(renderUpdateRunReport(recovered).markdown).not.toContain(`settle check: ${outcome}`);
   },
 );
 

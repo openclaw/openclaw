@@ -47,12 +47,9 @@ import type { RunPluginUpdateCommandParams } from "./plugins-update-command.js";
 
 const GATEWAY_HOOKS_STATUS_TIMEOUT_MS = 1_500;
 
-type HooksReportTarget = {
-  agentId: string;
-  workspaceDir: string;
-};
+type HooksReportTarget = ReturnType<typeof resolveHooksReportTarget>;
 
-function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string): HooksReportTarget {
+function resolveHooksReportTarget(config: OpenClawConfig, rawAgentId?: string) {
   const requested = rawAgentId?.trim();
   if (rawAgentId !== undefined && !requested) {
     throw new Error("--agent must not be blank");

@@ -193,6 +193,8 @@ const VoiceCallRealtimeConfigSchema = z
     provider: z.string().min(1).optional(),
     /** Optional override for the local WebSocket route path. */
     streamPath: z.string().min(1).optional(),
+    /** End an active realtime call after this much speech inactivity. */
+    idleHangupMs: z.number().int().positive().optional(),
     /** System instructions passed to the realtime provider. */
     instructions: z.string().default(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS),
     /** Tool policy for the shared OpenClaw agent consult tool. */

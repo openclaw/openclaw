@@ -112,7 +112,7 @@ async function persistCaptureResult(params: {
             sessionDiffBaselineCapture: { ...params.capture, status: "unavailable" },
           } satisfies Partial<InternalSessionEntry>);
     },
-    { preserveActivity: true, skipMaintenance: true },
+    { preserveActivity: true, skipMaintenance: true, workerGuard: {} },
   ).catch((error: unknown) => {
     if (isSessionWorkStartInvalidatedError(error)) {
       throw error;
@@ -224,7 +224,7 @@ export async function ensureSessionDiffBaseline(params: {
         }
         return { sessionDiffBaselineCapture: pending } satisfies Partial<InternalSessionEntry>;
       },
-      { preserveActivity: true, skipMaintenance: true },
+      { preserveActivity: true, skipMaintenance: true, workerGuard: {} },
     );
     entry = requireAuthoritativeGeneration({
       entry: armed,

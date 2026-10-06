@@ -10,14 +10,6 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 
-type ChannelDisplayState = {
-  configured: boolean | null;
-  running: boolean | null;
-  connected: boolean | null;
-  defaultAccount: ChannelAccountSnapshot | null;
-  status: Record<string, unknown> | undefined;
-};
-
 type ChannelStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 
 type ChannelStatusRow = {
@@ -54,10 +46,7 @@ function resolveDefaultChannelAccount(
   );
 }
 
-export function resolveChannelDisplayState(
-  key: ChannelKey,
-  props: ChannelsProps,
-): ChannelDisplayState {
+export function resolveChannelDisplayState(key: ChannelKey, props: ChannelsProps) {
   const status = resolveChannelStatus(key, props);
   const defaultAccount = resolveDefaultChannelAccount(key, props);
   const configured =

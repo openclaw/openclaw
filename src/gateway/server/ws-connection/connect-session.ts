@@ -632,7 +632,7 @@ export async function attachAuthenticatedGatewayConnect(
         });
       },
       (err) =>
-        logGateway.warn(`remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`),
+        logGateway.warn(`remote bin check failed for ${nodeSession.nodeId}: ${formatForLog(err)}`),
     );
     const sendConnectSnapshot = async (event: string, payload: unknown) => {
       if (pairingGeneration) {

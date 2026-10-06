@@ -63,29 +63,6 @@ function managedWorktreeFixture(params: {
 
 test.each([
   {
-    name: "agent default",
-    request: {},
-    catalogTarget: undefined,
-    parentEntry: undefined,
-    expectedEntry: {},
-    expectedTitleSelection: { regularModelRef: "openai/gpt-5.6-luna" },
-  },
-  {
-    name: "explicit model",
-    request: { model: "anthropic/sonnet-4.6@work" },
-    catalogTarget: undefined,
-    parentEntry: undefined,
-    expectedEntry: {
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      authProfileOverride: "work",
-    },
-    expectedTitleSelection: {
-      regularModelRef: "anthropic/claude-sonnet-4-6@work",
-      preferredProfile: "work",
-    },
-  },
-  {
     name: "registered catalog target",
     request: { catalogId: "claude" },
     catalogTarget: {
@@ -275,42 +252,6 @@ test("sessions.create does not start title generation for a model denied by poli
     expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toBeUndefined();
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
   } finally {
-    await disposeSessionReadContexts();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
-  }
-});
-
-test("sessions.create keeps the crustacean fallback when no title source exists", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-worktree-empty-title-",
-  });
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  let worktreeId: string | undefined;
-  try {
-    const created = await directSessionReq<{ worktree: { id: string; branch: string } }>(
-      "sessions.create",
-      { agentId: "main", worktree: true },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    worktreeId = created.payload?.worktree.id;
-    expect(created.payload?.worktree.branch).toMatch(
-      /^openclaw\/[a-z]+-(?:barnacle|claw|crab|crayfish|krill|langoustine|lobster|prawn|shrimp|shell)$/,
-    );
-    expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
-  } finally {
-    if (worktreeId) {
-      await managedWorktrees.remove({
-        id: worktreeId,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
     await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();

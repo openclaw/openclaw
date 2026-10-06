@@ -199,17 +199,22 @@ export function createIncognitoHistoryWorker(
           maxChars: command.input.maxChars,
         };
         break;
-      case "session.history.branches":
-        request = {
-          kind: "branch-summaries",
-          request: {
+      case "session.history.branches": {
+        const read = await prepareSessionHistoryReadOperation(
+          {
+            kind: "branch-summaries",
             database: physical,
-            sessionKey,
-            sessionId,
-            lifecycleRevision: command.input.lifecycleRevision,
+            request: {
+              sessionKey,
+              sessionId,
+              lifecycleRevision: command.input.lifecycleRevision,
+            },
           },
-        };
-        break;
+          database,
+        );
+        prepared = prepareHistoryRead(command.type, () => read().result);
+        return;
+      }
       case "session.history.context":
         request = {
           kind: "model-context",

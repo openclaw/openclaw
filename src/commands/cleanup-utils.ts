@@ -128,11 +128,7 @@ export function buildCleanupPlan(params: {
   stateDir: string;
   configPath: string;
   oauthDir: string;
-}): {
-  configInsideState: boolean;
-  oauthInsideState: boolean;
-  workspaceDirs: string[];
-} {
+}) {
   const cfg = params.cfg;
   return {
     configInsideState: isPathInside(params.stateDir, params.configPath),

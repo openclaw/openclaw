@@ -92,19 +92,12 @@ async function generateCompletionCache(
   return result.status === 0;
 }
 
-export type ShellCompletionStatus = {
-  shell: CompletionShell;
-  profileInstalled: boolean;
-  cacheExists: boolean;
-  cachePath: string;
-  /** True if profile uses slow dynamic pattern like `source <(openclaw completion ...)` */
-  usesSlowPattern: boolean;
-};
+export type ShellCompletionStatus = Awaited<ReturnType<typeof checkShellCompletionStatus>>;
 
 export async function checkShellCompletionStatus(
   binName = "openclaw",
   options: ShellCompletionStatusOptions = {},
-): Promise<ShellCompletionStatus> {
+) {
   const shell = options.shell ?? resolveShellFromEnv();
   const profileInstalled = await isCompletionInstalled(shell, binName);
   const cacheExists = await completionCacheExists(shell, binName);

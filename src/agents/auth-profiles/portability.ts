@@ -1,12 +1,6 @@
-/**
- * Auth profile portability for agent-local copies.
- * Decides which credentials can be copied to spawned agents without leaking or
- * duplicating unsafe OAuth refresh material.
- */
 import { AUTH_STORE_VERSION } from "./constants.js";
 import type { AuthProfileCredential, AuthProfileSecretsStore, AuthProfileStore } from "./types.js";
 
-/** Reason a credential is or is not portable into an agent copy. */
 type AuthProfilePortabilityReason =
   | "portable-static-credential"
   | "non-portable-oauth-refresh-token"
@@ -14,13 +8,11 @@ type AuthProfilePortabilityReason =
   | "setup-inactive"
   | "oauth-provider-opted-in";
 
-/** Portability decision for copying credentials into an agent-local store. */
 export type AuthProfilePortability = {
   portable: boolean;
   reason: AuthProfilePortabilityReason;
 };
 
-/** Resolves whether a credential can be copied into an agent-local store. */
 export function resolveAuthProfilePortability(
   credential: AuthProfileCredential,
 ): AuthProfilePortability {

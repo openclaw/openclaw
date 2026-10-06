@@ -475,6 +475,10 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage> & {
     runId?: string;
     updateMode?: SessionTranscriptUpdateMode;
+    /** @deprecated Use prepareMessageAfterIdempotencyCheckAsync for preparation outside the transaction. */
+    prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+    /** Awaited after duplicate detection; undefined suppresses a fresh append. */
+    prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
   },
 ): Promise<SessionTranscriptStrictMessageAppendResult<TMessage>> {
   const expectedSessionId = params.sessionId?.trim();
@@ -499,6 +503,22 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
           ? {
               prepareMessageAfterIdempotencyCheck: (message: unknown) =>
                 params.prepareMessageAfterIdempotencyCheck?.(message as TMessage),
+            }
+          : {}),
+        ...(params.prepareMessageAfterIdempotencyCheckAsync || params.beforeFreshMessageCommit
+          ? {
+              workerPreparation: {
+                ...(params.prepareMessageAfterIdempotencyCheckAsync
+                  ? {
+                      prepareMessageAfterIdempotencyCheckAsync: (message: unknown) =>
+                        // SAFETY: Preparation receives this caller's supplied message.
+                        params.prepareMessageAfterIdempotencyCheckAsync!(message as TMessage),
+                    }
+                  : {}),
+                beforeFreshMessageCommit: captureExternalSessionCommitGuard(
+                  params.beforeFreshMessageCommit,
+                ),
+              },
             }
           : {}),
         ...(params.useRawWhenLinear !== undefined
