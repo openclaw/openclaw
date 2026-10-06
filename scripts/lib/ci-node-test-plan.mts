@@ -3241,11 +3241,11 @@ function listCompactToolingTestFiles(): string[] {
     ...toolingIsolatedTestFiles,
     ...databaseWorkerCoreTestFiles,
   ]);
-  return [...listTrackedTestFiles("test"), ...listTrackedTestFiles("src/scripts")].filter(
+  return [...listTrackedTestFiles("test", ""), ...listTrackedTestFiles("src/scripts")].filter(
     (file) =>
+      /\.test\.(?:ts|mjs)$/u.test(file) &&
       !file.startsWith("test/fixtures/") &&
-      !file.endsWith(".e2e.test.ts") &&
-      !file.endsWith(".live.test.ts") &&
+      !/\.(?:e2e|live)\.test\.(?:ts|mjs)$/u.test(file) &&
       !excludedFiles.has(file),
   );
 }
