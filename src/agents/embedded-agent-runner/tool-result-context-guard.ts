@@ -10,6 +10,7 @@ import { formatContextLimitTruncationNotice } from "./context-truncation-notice.
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import {
+  estimateRenderedLlmBoundaryTokenPressure,
   shouldPreemptivelyCompactBeforePrompt,
   type CompactionReplayPressureContext,
 } from "./run/preemptive-compaction.js";
@@ -240,6 +241,10 @@ export function installContextEngineLoopHook(params: {
   sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   tokenBudget?: number;
+  /** Compaction reserve the turn-start window already subtracted from its budget. */
+  reserveTokens?: () => number;
+  /** Rendered system prompt; the turn-start window subtracts its token pressure. */
+  getSystemPrompt?: () => string | undefined;
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
@@ -356,13 +361,29 @@ export function installContextEngineLoopHook(params: {
         (sum, message) => sum + estimateTokens(message),
         0,
       );
+      // The turn-start window hands the engine contextTokens minus the
+      // compaction reserve and rendered system-prompt pressure. The loop must
+      // refill history from the same baseline (still minus the pending
+      // exchange), or an engine that fills its budget re-adds history the turn
+      // start dropped and the next model call overflows mid-turn.
+      const reserve = Math.max(0, Math.floor(params.reserveTokens?.() ?? 0));
+      const loopBudget =
+        tokenBudget === undefined
+          ? undefined
+          : Math.max(
+              1,
+              Math.max(1, tokenBudget - reserve) -
+                estimateRenderedLlmBoundaryTokenPressure({
+                  systemPrompt: params.getSystemPrompt?.(),
+                  prompt: "",
+                }),
+            );
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
         messages: providerMessages.slice(0, historyLength),
         ...params.deferredTurn,
-        tokenBudget:
-          tokenBudget === undefined ? undefined : Math.max(1, tokenBudget - pendingTokens),
+        tokenBudget: loopBudget === undefined ? undefined : Math.max(1, loopBudget - pendingTokens),
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });

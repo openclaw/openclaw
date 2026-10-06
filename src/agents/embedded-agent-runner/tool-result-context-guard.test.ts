@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream, type Message } from "openclaw/plugin
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { estimateTokens } from "../runtime/index.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { convertToLlm } from "../sessions/messages.js";
 import {
@@ -13,6 +14,7 @@ import {
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
+import { estimateRenderedLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import {
   createMessageCharEstimateCache,
   estimateMessageCharsCached,
@@ -383,6 +385,28 @@ describe("installContextEngineLoopHook", () => {
     ).resolves.toEqual(messages);
     expect(engine.afterTurn).toHaveBeenCalledOnce();
     expect(engine.assemble).toHaveBeenCalledOnce();
+  });
+
+  it("refills a deferred turn from the reserve- and system-prompt-adjusted window", async () => {
+    const engine = makeEngine();
+    const systemPrompt = "system boundary text ".repeat(64);
+    const pending = [makeUser("current"), makeToolResult("one", "tool output")];
+    const { run } = hook(engine, {
+      tokenBudget: 100_000,
+      reserveTokens: () => 20_000,
+      getSystemPrompt: () => systemPrompt,
+      deferredTurn: { prompt: "current", availableTools: new Set(["read"]) },
+    });
+    await run([makeUser("first"), ...pending]);
+    expect(engine.assemble).toHaveBeenCalledOnce();
+    const call = engine.assemble.mock.calls[0]?.[0];
+    expectDefined(call);
+    const pendingTokens = pending.reduce((sum, message) => sum + estimateTokens(message), 0);
+    const loopWindow =
+      Math.max(1, 100_000 - 20_000) -
+      estimateRenderedLlmBoundaryTokenPressure({ systemPrompt, prompt: "" });
+    expect(call.tokenBudget).toBe(Math.max(1, loopWindow - pendingTokens));
+    expect(call.tokenBudget).toBeLessThan(100_000 - pendingTokens);
   });
 
   it("advances the ingest fence and checkpoints only new iterations", async () => {

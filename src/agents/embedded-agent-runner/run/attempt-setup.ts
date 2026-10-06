@@ -300,6 +300,10 @@ export function installEmbeddedAttemptContextGuards(input: {
       sessionTarget: attempt.sessionTarget,
       sessionFile: attempt.sessionFile,
       tokenBudget: attempt.contextTokenBudget,
+      // Mirror the turn-start window: the loop hook refills history from the
+      // reserve- and system-prompt-adjusted budget, not the raw context window.
+      reserveTokens: () => settingsManager.getCompactionReserveTokens(),
+      getSystemPrompt: input.getSystemPrompt,
       modelId: attempt.modelId,
       ...(input.repairToolUseResultPairing
         ? {
