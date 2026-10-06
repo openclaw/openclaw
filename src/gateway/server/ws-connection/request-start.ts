@@ -15,13 +15,14 @@ type StartBudget = {
   connections: Map<string, StartConnection>;
 };
 type StartConnection = { id: string; count: number };
-type StartWork = {
+type RequestStart = {
   grant: () => void;
+  reject: (error: Error) => void;
+  expiresAt: number;
   preparation: boolean;
+  independentRead: boolean;
   settled: Promise<void>;
   signal?: AbortSignal;
-};
-type RequestStart = StartWork & {
   budget: StartBudget;
   frameBytes: number;
   connection: StartConnection;
@@ -48,25 +49,54 @@ const MAX_CONTROL_FRAME_BYTES = 4096;
 const MAX_STARTS_PER_TURN = 64;
 const START_WORK_BUDGET_MS = 12;
 const MAX_CONCURRENT_PREPARATIONS = 4;
-const preparations = new Set<Promise<void>>();
-let notifyPreparationSettled: (() => void) | undefined;
+const MAX_QUEUE_WAIT_MS = 30_000;
+let preparations = 0;
+let notifyQueueChanged: (() => void) | undefined;
 let active = false;
 
-async function grantStarts(first: StartWork): Promise<void> {
-  let current: StartWork | undefined = first;
+export class GatewayRequestStartTimeoutError extends Error {
+  constructor() {
+    super("The server could not start the request within 30 seconds. Please try again.");
+  }
+}
+
+async function grantStarts(): Promise<void> {
   let turnStartedAt = 0;
   let turnStarts = MAX_STARTS_PER_TURN;
-  while (current) {
-    // Include ready caller continuations in the work budget without awaiting
-    // an unresolved RPC or inheriting its root admission.
-    await new Promise<void>(queueMicrotask);
-    if (current.preparation) {
-      while (preparations.size >= MAX_CONCURRENT_PREPARATIONS && !current.signal?.aborted) {
-        const changed = createDeferredCore();
-        notifyPreparationSettled = changed.resolve;
-        await racePromiseWithAbortSignal(changed.promise, current.signal).catch(() => {});
-        notifyPreparationSettled = undefined;
+  while (pending.length > 0) {
+    const now = performance.now();
+    const blockedConnections = new Set<string>();
+    const index = pending.findIndex((work) => {
+      if (work.signal?.aborted || now >= work.expiresAt) {
+        return true;
       }
+      if (
+        (work.preparation && preparations >= MAX_CONCURRENT_PREPARATIONS) ||
+        (!work.independentRead && blockedConnections.has(work.connection.id))
+      ) {
+        blockedConnections.add(work.connection.id);
+        return false;
+      }
+      return true;
+    });
+    if (index === -1) {
+      const changed = createDeferredCore();
+      notifyQueueChanged = changed.resolve;
+      const timeout = setTimeout(
+        changed.resolve,
+        Math.max(0, pending[0]!.expiresAt - performance.now()),
+      );
+      await racePromiseWithAbortSignal(changed.promise, pending[0]!.signal).catch(() => {});
+      clearTimeout(timeout);
+      notifyQueueChanged = undefined;
+      continue;
+    }
+    const current = pending.splice(index, 1)[0]!;
+    current.budget.count--;
+    current.budget.bytes -= current.frameBytes;
+    current.connection.count--;
+    if (current.connection.count === 0) {
+      current.budget.connections.delete(current.connection.id);
     }
     if (
       current.preparation ||
@@ -78,30 +108,25 @@ async function grantStarts(first: StartWork): Promise<void> {
       turnStarts = 0;
     }
     turnStarts++;
+    if (performance.now() >= current.expiresAt) {
+      current.reject(new GatewayRequestStartTimeoutError());
+      continue;
+    }
     if (current.preparation && !current.signal?.aborted) {
-      const settled = current.settled;
-      preparations.add(settled);
-      void settled.then(() => {
-        preparations.delete(settled);
-        notifyPreparationSettled?.();
+      preparations++;
+      void current.settled.then(() => {
+        preparations--;
+        notifyQueueChanged?.();
       });
     }
     current.grant();
-    const next = pending.shift();
-    if (next) {
-      next.budget.count--;
-      next.budget.bytes -= next.frameBytes;
-      next.connection.count--;
-      if (next.connection.count === 0) {
-        next.budget.connections.delete(next.connection.id);
-      }
-    }
-    current = next;
+    // Count ready caller continuations, without inheriting their root admission.
+    await new Promise<void>(queueMicrotask);
   }
   active = false;
 }
 
-/** Queues operator starts in FIFO order; snapshots retain capacity through settlement. */
+/** Park saturated preparations; preserve connection order except for independent reads. */
 export function scheduleGatewayRequestStart(
   frameBytes: number,
   request: Pick<RequestFrame, "method" | "params">,
@@ -114,41 +139,48 @@ export function scheduleGatewayRequestStart(
     // ready upgrade/hello I/O runs before another preparation resumes on the main thread.
     const preparation =
       request.method === "sessions.subscribe" ||
-      request.method === "sessions.list" ||
       request.method === "models.list" ||
       (request.method === "sessions.messages.subscribe" &&
         asOptionalRecord(request.params)?.includeApprovals === true);
+    const independentRead = request.method === "chat.history" || request.method === "sessions.list";
     const control =
       frameBytes <= MAX_CONTROL_FRAME_BYTES &&
       (request.method === "sessions.messages.unsubscribe" ||
         (request.method === "sessions.messages.subscribe" &&
           asOptionalRecord(request.params)?.includeApprovals !== true));
     const budget = control ? controlBudget : workBudget;
-    const connection = active ? budget.connections.get(connId) : undefined;
-    // One active scheduling task is separate from waiting capacity. All classes
-    // share FIFO order and the same per-turn work budget.
+    const connection = budget.connections.get(connId);
+    // Parked preparations still consume waiting capacity, never a runnable start.
     if (
-      active &&
-      (budget.count >= budget.maxCount ||
-        budget.bytes + frameBytes > budget.maxBytes ||
-        (connection && connection.count >= budget.maxConnectionCount))
+      budget.count >= budget.maxCount ||
+      budget.bytes + frameBytes > budget.maxBytes ||
+      (connection && connection.count >= budget.maxConnectionCount)
     ) {
       return null;
     }
-    const { promise, resolve: grant } = createDeferredCore();
-    const work = { grant, preparation, settled, signal };
-    if (active) {
-      const queuedConnection = connection ?? { id: connId, count: 0 };
-      budget.count++;
-      budget.bytes += frameBytes;
-      queuedConnection.count++;
-      if (!connection) {
-        budget.connections.set(connId, queuedConnection);
-      }
-      pending.push({ ...work, budget, frameBytes, connection: queuedConnection });
-    } else {
+    const { promise, resolve: grant, reject } = createDeferredCore();
+    const queuedConnection = connection ?? { id: connId, count: 0 };
+    budget.count++;
+    budget.bytes += frameBytes;
+    queuedConnection.count++;
+    budget.connections.set(connId, queuedConnection);
+    pending.push({
+      grant,
+      reject,
+      expiresAt: performance.now() + MAX_QUEUE_WAIT_MS,
+      preparation,
+      independentRead,
+      settled,
+      signal,
+      budget,
+      frameBytes,
+      connection: queuedConnection,
+    });
+    if (!active) {
       active = true;
-      void grantStarts(work);
+      void grantStarts();
+    } else {
+      notifyQueueChanged?.();
     }
     return promise;
   });
