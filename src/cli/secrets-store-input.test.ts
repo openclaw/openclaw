@@ -16,7 +16,7 @@ describe("secret store file input", () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "secret-store-input-fifo-"));
     const fifo = path.join(directory, "input");
     const setup = execFileAsync("mkfifo", [fifo]);
-    const reading = setup.then(() => read(fifo));
+    const reading = setup.then<Awaited<ReturnType<typeof read>>>(() => read(fifo));
     onTestFinished(async () => {
       try {
         if (
