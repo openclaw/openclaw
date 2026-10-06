@@ -319,7 +319,12 @@ it(
         // The started ACK precedes dispatch inserting the turn into the followup
         // queue; agent.wait reports the queued registration once insertion commits.
         await expect(
-          client.request("agent.wait", { runId, timeoutMs: 30_000 }),
+          client.request(
+            "agent.wait",
+            { runId, timeoutMs: 30_000 },
+            // The transport must outlive the server's long-poll budget under runner load.
+            { timeoutMs: 60_000 },
+          ),
         ).resolves.toMatchObject({ runId, status: "pending", timeoutPhase: "queue" });
       };
       const readInFlightRunIds = () =>

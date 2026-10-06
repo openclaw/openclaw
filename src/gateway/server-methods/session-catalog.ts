@@ -122,7 +122,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.continue": defineValidatedGatewayHandler(
     "sessions.catalog.continue",
     validateSessionsCatalogContinueParams,
-    async ({ params: request, respond, client, context, sessionMutationCommitGuard }) => {
+    async ({ params: request, respond, client, context, sessionMutationCommitGuard, signal }) => {
       const registration = registrationOrRespond(request.catalogId, respond);
       if (!registration) {
         return;
@@ -161,6 +161,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           client,
           context,
           commitGuard: sessionMutationCommitGuard,
+          signal,
         });
         if (!continued.ok) {
           respond(false, undefined, continued.error);

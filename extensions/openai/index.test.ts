@@ -470,17 +470,16 @@ describe("openai plugin", () => {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
       },
     });
-    expect(
-      openaiProvider.resolveSystemPromptContribution?.({
-        ...contributionContext,
-        modelId: "openai/gpt-5.4-mini",
-      }),
-    ).toEqual({
-      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
-      sectionOverrides: {
-        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
-      },
-    });
+    for (const modelId of ["openai/gpt-5.4-mini", "gpt-6-astra", "openai/gpt-7-x"]) {
+      expect(
+        openaiProvider.resolveSystemPromptContribution?.({ ...contributionContext, modelId }),
+      ).toEqual({
+        stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
+        sectionOverrides: {
+          interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+        },
+      });
+    }
     expect(
       openaiProvider.resolveSystemPromptContribution?.({
         ...contributionContext,
