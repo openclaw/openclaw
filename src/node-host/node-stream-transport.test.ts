@@ -1,12 +1,14 @@
 import { createHash, X509Certificate } from "node:crypto";
+import { once } from "node:events";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import net, { type AddressInfo } from "node:net";
 import { Duplex } from "node:stream";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { installGlobalProxy } from "@openclaw/proxyline";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
@@ -675,14 +677,14 @@ describe("node stream close acknowledgement", () => {
   });
 
   it("bounds cleanup when a protocol error has already started the close", async () => {
-    let peerClosed = false;
-    const gateway = net.createServer((socket) => {
+    let peer: net.Socket | undefined;
+    const terminate = vi.spyOn(WebSocket.prototype, "terminate");
+    const gateway = net.createServer({ allowHalfOpen: true }, (socket) => {
+      peer = socket;
       socket.on("error", () => undefined);
-      socket.on("close", () => {
-        peerClosed = true;
-      });
       let buffer = Buffer.alloc(0);
       let upgraded = false;
+      let sentInvalidFrame = false;
       socket.on("data", (chunk: Buffer) => {
         if (!upgraded) {
           buffer = Buffer.concat([buffer, chunk]);
@@ -708,7 +710,10 @@ describe("node stream close acknowledgement", () => {
           upgraded = true;
           return;
         }
-        socket.write(Buffer.from([0xc1, 0x00]));
+        if (!sentInvalidFrame) {
+          sentInvalidFrame = true;
+          socket.write(Buffer.from([0x83, 0x00]));
+        }
       });
     });
     await new Promise<void>((resolve) => {
@@ -741,16 +746,22 @@ describe("node stream close acknowledgement", () => {
             return () => undefined;
           },
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/invalid opcode 3/);
       expect(delays).toContain(30_000);
-      expect(peerClosed).toBe(false);
+      expect(terminate).not.toHaveBeenCalled();
       for (const callback of retire) {
         callback();
       }
-      await expect.poll(() => peerClosed).toBe(true);
+      expect(terminate).toHaveBeenCalledOnce();
+      expect(terminate.mock.contexts[0]).toBeInstanceOf(WebSocket);
+      const client = terminate.mock.contexts[0];
+      await once(client, "close");
+      expect(client.readyState).toBe(WebSocket.CLOSED);
     } finally {
       controller.abort();
       target.destroy();
+      peer?.destroy();
+      terminate.mockRestore();
       await new Promise<void>((resolve) => {
         gateway.close(() => resolve());
       });
