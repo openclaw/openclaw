@@ -941,7 +941,7 @@ jobs:
     needs: [resolve_target]
     if: needs.resolve_target.outputs.package_required == 'true'
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     permissions:
       actions: read
       contents: read
