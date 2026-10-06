@@ -699,6 +699,13 @@ CREATE TABLE IF NOT EXISTS device_auth_tokens (
 CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
   ON device_auth_tokens(updated_at_ms DESC, device_id, role);
 
+-- Native import completion survives token retirement and failed legacy claim cleanup.
+CREATE TABLE IF NOT EXISTS device_auth_import_receipts (
+  device_id TEXT NOT NULL,
+  profile TEXT NOT NULL,
+  PRIMARY KEY (device_id, profile)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
   gateway_scope TEXT NOT NULL,
   device_id TEXT NOT NULL,

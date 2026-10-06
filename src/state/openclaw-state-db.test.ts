@@ -50,6 +50,7 @@ import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
+import { isUninitializedNativeStartupDatabase } from "./openclaw-state-db-startup-checkpoint.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -4316,6 +4317,37 @@ INSERT INTO device_identities VALUES (
     });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
+  });
+
+  it("preserves native auth import completion across Node bootstrap and reopen", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const seed = new DatabaseSync(databasePath);
+    seed.exec(`
+CREATE TABLE device_auth_import_receipts (
+  device_id TEXT NOT NULL,
+  profile TEXT NOT NULL,
+  PRIMARY KEY (device_id, profile)
+) STRICT;
+INSERT INTO device_auth_import_receipts VALUES ('device-1', 'primary');
+`);
+    expect(isUninitializedNativeStartupDatabase(seed)).toBe(true);
+    seed.close();
+
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const database = openOpenClawStateDatabase(options);
+      expect(database.db.prepare("SELECT * FROM device_auth_import_receipts").all()).toEqual([
+        { device_id: "device-1", profile: "primary" },
+      ]);
+      expect(readSqliteNumberPragma(database.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+      expect(collectSqliteSchemaShape(database.db)).toEqual(createInitialStateSchemaShape());
+      closeOpenClawStateDatabaseForTest();
+    }
   });
 
   it("adopts a canonical native PortGuardian seed without losing records", () => {

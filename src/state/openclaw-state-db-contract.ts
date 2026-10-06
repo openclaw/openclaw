@@ -75,6 +75,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "worktree_templates",
   "user_preferences",
   "device_pair_setup_completions",
+  "device_auth_import_receipts",
   "github_publication_requests",
   "device_pairing_join_codes",
   "skill_workshop_proposal_events",

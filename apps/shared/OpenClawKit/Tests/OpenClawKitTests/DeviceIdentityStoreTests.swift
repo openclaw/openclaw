@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import OpenClawNativeState
 import SQLite3
 import Testing
 @testable import OpenClawKit
@@ -897,6 +898,196 @@ struct DeviceIdentityStoreTests {
 
             #expect(identity.deviceId == Self.fixtureDeviceID)
             #expect(FileManager.default.fileExists(atPath: claimURL.path))
+        }
+    }
+
+    @Test
+    func `resumed cross root claim cannot resurrect a cleared gateway token`() async throws {
+        for clearOperation in ["role", "gateway", "all"] {
+            let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+            try Self.seedCanonicalIdentity(fixture.databaseURL)
+            let source = try fixture.source("other-root")
+            let claimURL = fixture.claimURL(for: source)
+            let identityDirectory = source.identityURL.deletingLastPathComponent()
+            let auth = DeviceAuthStoreFile(
+                version: 1,
+                deviceId: Self.fixtureDeviceID,
+                tokens: [
+                    "legacy-key": DeviceAuthEntry(
+                        token: "retired-gateway-token", role: "node", scopes: [],
+                        updatedAtMs: 100, gatewayID: "gateway-a"),
+                    "other-role": DeviceAuthEntry(
+                        token: "operator-token", role: "operator", scopes: ["operator.read"],
+                        updatedAtMs: 100, gatewayID: "gateway-a"),
+                    "other-gateway": DeviceAuthEntry(
+                        token: "other-gateway-token", role: "node", scopes: [],
+                        updatedAtMs: 100, gatewayID: "gateway-b"),
+                ])
+            let authData = try JSONEncoder().encode(auth)
+            try authData.write(to: source.authURL)
+            try FileManager.default.moveItem(at: source.identityURL, to: claimURL)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o500],
+                ofItemAtPath: identityDirectory.path)
+            defer {
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o700],
+                    ofItemAtPath: identityDirectory.path)
+            }
+
+            try await DeviceIdentityStore.withStateDirectory(fixture.destination) {
+                let importedIdentity = try fixture.load(sources: [source])
+                #expect(importedIdentity.deviceId == Self.fixtureDeviceID)
+                #expect(FileManager.default.fileExists(atPath: claimURL.path))
+                #expect(try Data(contentsOf: source.authURL) == authData)
+                #expect(deviceAuthEntry(Self.fixtureDeviceID, owner: "gateway-a")?.token ==
+                    "retired-gateway-token")
+                #expect(deviceAuthEntry(Self.fixtureDeviceID, role: "operator", owner: "gateway-a")?.token ==
+                    "operator-token")
+                #expect(deviceAuthEntry(Self.fixtureDeviceID, owner: "gateway-b")?.token == "other-gateway-token")
+
+                switch clearOperation {
+                case "role":
+                    DeviceAuthStore.clearToken(
+                        deviceId: Self.fixtureDeviceID, role: "node", gatewayID: "gateway-a")
+                case "gateway":
+                    #expect(DeviceAuthStore.clearGatewayTokensPersisted(
+                        deviceId: Self.fixtureDeviceID, gatewayID: "gateway-a"))
+                default:
+                    DeviceAuthStore.clearAll()
+                }
+                #expect(deviceAuthEntry(Self.fixtureDeviceID, owner: "gateway-a") == nil)
+
+                for _ in 0..<2 {
+                    let reloaded = try fixture.load(sources: [source])
+                    #expect(reloaded == importedIdentity)
+                    #expect(
+                        deviceAuthEntry(Self.fixtureDeviceID, owner: "gateway-a") == nil,
+                        "\(clearOperation) must remain effective while claim cleanup is blocked")
+                    #expect(deviceAuthEntry(Self.fixtureDeviceID, role: "operator", owner: "gateway-a")?.token ==
+                        (clearOperation == "role" ? "operator-token" : nil))
+                    #expect(deviceAuthEntry(Self.fixtureDeviceID, owner: "gateway-b")?.token ==
+                        (clearOperation == "all" ? nil : "other-gateway-token"))
+                }
+
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o700],
+                    ofItemAtPath: identityDirectory.path)
+                #expect(try fixture.load(sources: [source]) == importedIdentity)
+                #expect(!FileManager.default.fileExists(atPath: claimURL.path))
+                #expect(
+                    deviceAuthEntry(Self.fixtureDeviceID, owner: "gateway-a") == nil,
+                    "\(clearOperation) must remain effective after claim cleanup becomes writable")
+                #expect(deviceAuthEntry(Self.fixtureDeviceID, role: "operator", owner: "gateway-a")?.token ==
+                    (clearOperation == "role" ? "operator-token" : nil))
+                #expect(deviceAuthEntry(Self.fixtureDeviceID, owner: "gateway-b")?.token ==
+                    (clearOperation == "all" ? nil : "other-gateway-token"))
+            }
+        }
+    }
+
+    @Test
+    func `completed empty auth import ignores credentials appearing behind a retained claim`() async throws {
+        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        try Self.seedCanonicalIdentity(fixture.databaseURL)
+        let source = try fixture.source("other-root")
+        let claimURL = fixture.claimURL(for: source)
+        let identityDirectory = source.identityURL.deletingLastPathComponent()
+        try FileManager.default.moveItem(at: source.identityURL, to: claimURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: identityDirectory.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: identityDirectory.path)
+        }
+        let first = try fixture.load(sources: [source])
+        #expect(FileManager.default.fileExists(atPath: claimURL.path))
+        #expect(!FileManager.default.fileExists(atPath: source.authURL.path))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: identityDirectory.path)
+        let lateAuth = DeviceAuthStoreFile(
+            version: 1,
+            deviceId: Self.fixtureDeviceID,
+            tokens: ["node": DeviceAuthEntry(
+                token: "late-legacy-token", role: "node", scopes: [], updatedAtMs: 100)])
+        try JSONEncoder().encode(lateAuth).write(to: source.authURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: identityDirectory.path)
+
+        try await DeviceIdentityStore.withStateDirectory(fixture.destination) {
+            #expect(try fixture.load(sources: [source]) == first)
+            #expect(FileManager.default.fileExists(atPath: claimURL.path))
+            #expect(deviceAuthEntry(Self.fixtureDeviceID) == nil)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: identityDirectory.path)
+            #expect(try fixture.load(sources: [source]) == first)
+            #expect(!FileManager.default.fileExists(atPath: claimURL.path))
+            #expect(deviceAuthEntry(Self.fixtureDeviceID) == nil)
+        }
+    }
+
+    @Test
+    func `same root claim cleanup leaves malformed auth for its owner`() throws {
+        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        try Self.seedCanonicalIdentity(fixture.databaseURL)
+        let source = try fixture.source("destination")
+        let claimURL = fixture.claimURL(for: source)
+        let malformedAuth = Data("{not-json".utf8)
+        try malformedAuth.write(to: source.authURL)
+        try FileManager.default.moveItem(at: source.identityURL, to: claimURL)
+
+        #expect(try fixture.load(sources: [source]).deviceId == Self.fixtureDeviceID)
+        #expect(!FileManager.default.fileExists(atPath: claimURL.path))
+        #expect(try Data(contentsOf: source.authURL) == malformedAuth)
+        let remainingFiles = try FileManager.default.contentsOfDirectory(
+            atPath: source.authURL.deletingLastPathComponent().path)
+        #expect(!remainingFiles.contains { $0.hasPrefix("device-auth.json.invalid-") })
+        #expect(try Self.scalarInt(
+            fixture.databaseURL,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'device_auth_tokens'") == 0)
+    }
+
+    @Test
+    func `failed auth completion receipt rolls back imported credentials and retries`() async throws {
+        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        try Self.seedCanonicalIdentity(fixture.databaseURL)
+        let database = try OpenClawNativeStateSQLite(databaseURL: fixture.databaseURL)
+        try database.withImmediateTransaction {
+            try database.ensureCanonicalTable(.deviceAuthTokens)
+            try database.ensureDeviceAuthImportReceipts()
+        }
+        // Use a versioned database so the injected failure trigger does not violate
+        // the native version-zero ownership check before the migration is reached.
+        try Self.execute(fixture.databaseURL, """
+        CREATE TABLE schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, schema_version INTEGER NOT NULL
+        ) STRICT;
+        INSERT INTO schema_meta VALUES ('primary', 'global', 17);
+        PRAGMA user_version = 17;
+        CREATE TRIGGER reject_auth_completion BEFORE INSERT ON device_auth_import_receipts
+        BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END;
+        """)
+        let source = try fixture.source("other-root")
+        let claimURL = fixture.claimURL(for: source)
+        try FileManager.default.moveItem(at: source.identityURL, to: claimURL)
+        let auth = DeviceAuthStoreFile(
+            version: 1,
+            deviceId: Self.fixtureDeviceID,
+            tokens: ["node": DeviceAuthEntry(
+                token: "retryable-token", role: "node", scopes: [], updatedAtMs: 100)])
+        let authData = try JSONEncoder().encode(auth)
+        try authData.write(to: source.authURL)
+
+        try await DeviceIdentityStore.withStateDirectory(fixture.destination) {
+            let interrupted = try fixture.load(sources: [source])
+            #expect(interrupted.deviceId == Self.fixtureDeviceID)
+            #expect(FileManager.default.fileExists(atPath: claimURL.path))
+            #expect(try Data(contentsOf: source.authURL) == authData)
+            #expect(deviceAuthEntry(Self.fixtureDeviceID) == nil)
+            #expect(try Self.scalarInt(fixture.databaseURL, "SELECT COUNT(*) FROM device_auth_import_receipts") == 0)
+
+            try Self.execute(fixture.databaseURL, "DROP TRIGGER reject_auth_completion")
+            #expect(try fixture.load(sources: [source]) == interrupted)
+            #expect(!FileManager.default.fileExists(atPath: claimURL.path))
+            #expect(deviceAuthEntry(Self.fixtureDeviceID)?.token == "retryable-token")
+            #expect(try Self.scalarInt(fixture.databaseURL, "SELECT COUNT(*) FROM device_auth_import_receipts") == 1)
+            #expect(try Self.scalarInt(fixture.databaseURL, "PRAGMA user_version") == 17)
         }
     }
 

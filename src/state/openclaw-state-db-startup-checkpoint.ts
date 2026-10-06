@@ -22,6 +22,7 @@ import {
 // Native Swift stores may create only these canonical objects before Node owns schema bootstrap.
 const NATIVE_STARTUP_BOOTSTRAP_OBJECTS = new Set([
   "table:device_auth_tokens",
+  "table:device_auth_import_receipts",
   "index:idx_device_auth_tokens_updated",
   "table:device_identities",
   "index:idx_device_identities_device",

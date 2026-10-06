@@ -442,6 +442,11 @@ export interface DeliveryQueueEntries {
   updated_at: number;
 }
 
+export interface DeviceAuthImportReceipts {
+  device_id: string;
+  profile: string;
+}
+
 export interface DeviceAuthTokens {
   device_id: string;
   role: string;
@@ -1768,6 +1773,7 @@ export interface DB {
   cron_run_trigger_state_retirements: CronRunTriggerStateRetirements;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
+  device_auth_import_receipts: DeviceAuthImportReceipts;
   device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;
   device_identities: DeviceIdentities;

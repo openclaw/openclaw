@@ -87,6 +87,93 @@ struct OpenClawNativeStateSQLiteTests {
         }
     }
 
+    @Test(arguments: [0, 17])
+    func `auth import receipts compose without changing existing auth or schema version`(version: Int) throws {
+        try self.withDatabase { database in
+            try database.withImmediateTransaction {
+                try database.ensureCanonicalTable(.deviceAuthTokens)
+                try database.execute("""
+                INSERT INTO device_auth_tokens VALUES ('device', 'operator', 'token', '["read"]', 30);
+                """)
+                if version != 0 {
+                    try self.installSchemaMetadata(database, version: version)
+                }
+            }
+            let authSchema = try database.scalarText(
+                "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'device_auth_tokens'")
+
+            try database.withImmediateTransaction {
+                try database.ensureDeviceAuthImportReceipts()
+                try database.execute("""
+                INSERT INTO device_auth_import_receipts VALUES ('device', 'primary');
+                INSERT INTO device_auth_import_receipts VALUES ('device', 'node');
+                """)
+                try database.ensureDeviceAuthImportReceipts()
+                try database.ensureCanonicalTable(.deviceAuthTokens)
+            }
+
+            #expect(try database.scalarInt64("PRAGMA user_version") == Int64(version))
+            #expect(try database.scalarInt64("SELECT COUNT(*) FROM device_auth_import_receipts") == 2)
+            #expect(try database.scalarText(
+                "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'device_auth_tokens'") == authSchema)
+            #expect(try database.scalarInt64("""
+            SELECT COUNT(*) FROM device_auth_tokens
+            WHERE device_id = 'device' AND role = 'operator' AND token = 'token'
+              AND scopes_json = '["read"]' AND updated_at_ms = 30
+            """) == 1)
+            if version != 0 {
+                #expect(try database.scalarInt64(
+                    "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'") == Int64(version))
+            }
+            #expect(throws: OpenClawNativeStateError.self) {
+                try database.execute("INSERT INTO device_auth_import_receipts VALUES ('device', 'primary')")
+            }
+        }
+    }
+
+    @Test(arguments: [0, 17])
+    func `auth import receipts refuse incompatible existing shape`(version: Int) throws {
+        try self.withDatabase { database in
+            if version != 0 {
+                try self.installSchemaMetadata(database, version: version)
+            }
+            try database.execute("""
+            CREATE TABLE device_auth_import_receipts (
+              device_id TEXT NOT NULL PRIMARY KEY,
+              profile TEXT NOT NULL
+            ) STRICT;
+            INSERT INTO device_auth_import_receipts VALUES ('device', 'primary');
+            """)
+
+            #expect(throws: OpenClawNativeStateError.self) {
+                try database.withImmediateTransaction {
+                    try database.ensureDeviceAuthImportReceipts()
+                }
+            }
+            #expect(try database.scalarInt64("SELECT COUNT(*) FROM device_auth_import_receipts") == 1)
+        }
+    }
+
+    @Test(arguments: ["missing", "mismatched", "newer"])
+    func `auth import receipts refuse unverified shared metadata`(scenario: String) throws {
+        try self.withDatabase { database in
+            switch scenario {
+            case "missing":
+                try database.execute("PRAGMA user_version = 17")
+            case "mismatched":
+                try self.installSchemaMetadata(database, version: 17)
+                try database.execute("UPDATE schema_meta SET schema_version = 16")
+            default:
+                try self.installSchemaMetadata(database, version: 18)
+            }
+
+            #expect(throws: OpenClawNativeStateError.self) {
+                try database.ensureDeviceAuthImportReceipts()
+            }
+            #expect(try database.schemaObjectExists(type: "table", name: "device_auth_import_receipts") == false)
+        }
+    }
+
     @Test
     func `concurrent version zero stores compose different tables`() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -388,6 +475,19 @@ struct OpenClawNativeStateSQLiteTests {
 
     private enum TestError: Error {
         case expected
+    }
+
+    private func installSchemaMetadata(_ database: OpenClawNativeStateSQLite, version: Int) throws {
+        try database.execute("""
+        CREATE TABLE schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY,
+          role TEXT NOT NULL,
+          schema_version INTEGER NOT NULL
+        ) STRICT;
+        INSERT INTO schema_meta (meta_key, role, schema_version)
+        VALUES ('primary', 'global', \(version));
+        PRAGMA user_version = \(version);
+        """)
     }
 
     private func withDatabase(

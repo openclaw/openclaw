@@ -218,13 +218,43 @@ public enum DeviceAuthStore {
         }) ?? 0
     }
 
-    static func importLegacyStore(
-        _ store: DeviceAuthStoreFile,
+    static func importLegacyIdentityAuthOnce(
+        _ store: DeviceAuthStoreFile?,
+        deviceId: String,
         stateDirectoryURL: URL,
         profile: GatewayDeviceIdentityProfile) throws
     {
-        try self.withStore(stateDirectoryURL: stateDirectoryURL, profile: profile) { database in
-            try self.importLegacyStore(store, into: database)
+        let importOnce = { (database: Database) throws in
+            try database.ensureDeviceAuthImportReceipts()
+            let receipt = try database.prepare("""
+            SELECT 1 FROM device_auth_import_receipts WHERE device_id = ? AND profile = ?
+            """)
+            try receipt.bindText(deviceId, at: 1)
+            try receipt.bindText(profile.rawValue, at: 2)
+            if try receipt.step() == .row { return }
+            if let store {
+                guard store.deviceId == deviceId else {
+                    throw OpenClawNativeStateError("Legacy auth does not match the imported identity")
+                }
+                try self.importLegacyStore(store, into: database)
+            }
+            // Commit completion with the credentials, not with filesystem cleanup. A retained
+            // claim must never replay this snapshot after a later clear or token-owner transition.
+            // Empty snapshots are complete too; a later file is not new import authority.
+            let completed = try database.prepare("""
+            INSERT INTO device_auth_import_receipts (device_id, profile) VALUES (?, ?)
+            """)
+            try completed.bindText(deviceId, at: 1)
+            try completed.bindText(profile.rawValue, at: 2)
+            _ = try completed.step()
+        }
+        if store != nil {
+            try self.withStore(stateDirectoryURL: stateDirectoryURL, profile: profile, importOnce)
+        } else {
+            // No cross-root auth was verified. Recording an empty snapshot must not consume or
+            // quarantine an unrelated destination legacy file as a side effect of identity load.
+            let database = try self.openDatabase(stateDirectoryURL: stateDirectoryURL)
+            try database.withImmediateTransaction { try importOnce(database) }
         }
     }
 

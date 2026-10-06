@@ -102,6 +102,79 @@ struct GatewayNativeTransportDeviceAuthTests {
 
     @Test(.stateDirectoryIsolated)
     @MainActor
+    func `claim cleanup failure cannot send a retired token on native reconnect`() async throws {
+        let stateDirPath = try #require(getenv("OPENCLAW_STATE_DIR").map { String(cString: $0) })
+        let destinationStateDirURL = URL(fileURLWithPath: stateDirPath, isDirectory: true)
+        let canonical = DeviceIdentityStore.loadOrCreate()
+        let sourceStateDirURL = destinationStateDirURL
+            .appendingPathComponent("interrupted-legacy-source", isDirectory: true)
+        let sourceIdentityDirURL = sourceStateDirURL.appendingPathComponent("identity", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceIdentityDirURL, withIntermediateDirectories: true)
+        let sourceIdentityURL = sourceIdentityDirURL.appendingPathComponent("device.json")
+        let sourceAuthURL = sourceIdentityDirURL.appendingPathComponent("device-auth.json")
+        let claimURL = URL(fileURLWithPath: "\(sourceIdentityURL.path).native-importing")
+        try JSONEncoder().encode(canonical).write(to: claimURL, options: [.atomic])
+        let gatewayID = "native-retired-owner"
+        let retiredToken = "retired-native-device-token"
+        let legacyAuth = DeviceAuthStoreFile(
+            version: 1,
+            deviceId: canonical.deviceId,
+            tokens: ["node": DeviceAuthEntry(
+                token: retiredToken,
+                role: "node",
+                scopes: [],
+                updatedAtMs: 1_800_000_000_000,
+                gatewayID: gatewayID)])
+        try JSONEncoder().encode(legacyAuth).write(to: sourceAuthURL, options: [.atomic])
+        let source = DeviceIdentityPaths.LegacyIdentitySource(
+            stateDirURL: sourceStateDirURL,
+            identityURL: sourceIdentityURL,
+            authURL: sourceAuthURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o500], ofItemAtPath: sourceIdentityDirURL.path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700], ofItemAtPath: sourceIdentityDirURL.path)
+        }
+
+        let databaseURL = destinationStateDirURL.appendingPathComponent("state/openclaw.sqlite")
+        let imported = try DeviceIdentitySQLiteStore.loadOrCreate(
+            databaseURL: databaseURL,
+            destinationStateDirURL: destinationStateDirURL,
+            profile: .primary,
+            legacySources: [source])
+        #expect(imported == canonical)
+        #expect(FileManager.default.fileExists(atPath: claimURL.path))
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: canonical.deviceId, role: "node", gatewayID: gatewayID)?.token == retiredToken)
+
+        #expect(DeviceAuthStore.clearGatewayTokensPersisted(
+            deviceId: canonical.deviceId, gatewayID: gatewayID))
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: canonical.deviceId, role: "node", gatewayID: gatewayID) == nil)
+        let restarted = try DeviceIdentitySQLiteStore.loadOrCreate(
+            databaseURL: databaseURL,
+            destinationStateDirURL: destinationStateDirURL,
+            profile: .primary,
+            legacySources: [source])
+        #expect(restarted == canonical)
+
+        // The loopback fixture captures the real URLSession connect frame; it does not
+        // authenticate credentials or stand in for the Gateway's token-revocation policy.
+        let fixture = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [nil])
+        defer { fixture.stop() }
+        let gateway = GatewayNodeSession()
+        try await gateway.connectThroughURLSessionForTest(
+            fixture.url(),
+            options: nativeNodeConnectOptions(
+                allowStoredDeviceAuth: true,
+                deviceAuthGatewayID: gatewayID))
+        #expect(fixture.capturedAuth(at: 0) == .init(token: nil, bootstrapToken: nil, deviceToken: nil))
+        await gateway.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated)
+    @MainActor
     func `legacy unscoped token rotation persists and reconnects with replacement`() async throws {
         let previousToken = "native-legacy-previous-token"
         let rotatedToken = "native-legacy-rotated-token"

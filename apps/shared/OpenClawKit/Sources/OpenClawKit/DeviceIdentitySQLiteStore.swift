@@ -321,7 +321,8 @@ enum DeviceIdentitySQLiteStore {
                     try self.importLegacyAuthIfNeeded(
                         currentAuth,
                         destinationStateDirURL: destinationStateDirURL,
-                        profile: profile)
+                        profile: profile,
+                        deviceId: authoritative.identity.deviceId)
                     try self.removeClaimedLegacyIdentities(claims)
                 } catch {
                     // Cleanup is optional once SQLite was already authoritative. Keep whatever
@@ -888,7 +889,8 @@ extension DeviceIdentitySQLiteStore {
         try self.importLegacyAuthIfNeeded(
             sourceAuth,
             destinationStateDirURL: destinationStateDirURL,
-            profile: profile)
+            profile: profile,
+            deviceId: deviceId)
     }
 
     private static func inspectLegacyAuth(
@@ -918,12 +920,13 @@ extension DeviceIdentitySQLiteStore {
     private static func importLegacyAuthIfNeeded(
         _ sourceAuth: [LegacyAuthCandidate],
         destinationStateDirURL: URL,
-        profile: GatewayDeviceIdentityProfile) throws
+        profile: GatewayDeviceIdentityProfile,
+        deviceId: String) throws
     {
-        guard let selectedAuth = sourceAuth.first else { return }
-        // Cross-container auth remains at its source; only canonical SQLite rows move.
-        try DeviceAuthStore.importLegacyStore(
-            selectedAuth.store,
+        // Cross-container files remain evidence, not authority to replay an already committed import.
+        try DeviceAuthStore.importLegacyIdentityAuthOnce(
+            sourceAuth.first?.store,
+            deviceId: deviceId,
             stateDirectoryURL: destinationStateDirURL,
             profile: profile)
     }

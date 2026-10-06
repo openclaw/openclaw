@@ -17,6 +17,7 @@ public struct OpenClawNativeStateError: Error, LocalizedError, Sendable {
 }
 
 public enum OpenClawNativeStateCanonicalTable: Sendable {
+    case deviceAuthImportReceipts
     case deviceAuthTokens
     case deviceIdentities
     case execApprovalsConfig
@@ -105,6 +106,22 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
             IndexColumn(name: "device_id", descending: false),
             IndexColumn(name: "updated_at_ms", descending: true),
         ])
+
+    private static let deviceAuthImportReceipts = CanonicalTable(
+        name: "device_auth_import_receipts",
+        indexName: nil,
+        createSQL: """
+        CREATE TABLE IF NOT EXISTS device_auth_import_receipts (
+          device_id TEXT NOT NULL,
+          profile TEXT NOT NULL,
+          PRIMARY KEY (device_id, profile)
+        ) STRICT;
+        """,
+        columns: [
+            Column(name: "device_id", type: "TEXT", notNull: true, primaryKeyPosition: 1, hidden: 0),
+            Column(name: "profile", type: "TEXT", notNull: true, primaryKeyPosition: 2, hidden: 0),
+        ],
+        indexColumns: [])
 
     private static let deviceAuthTokens = CanonicalTable(
         name: "device_auth_tokens",
@@ -196,6 +213,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         indexColumns: [])
 
     private static let canonicalTables = [
+        OpenClawNativeStateSQLite.deviceAuthImportReceipts,
         OpenClawNativeStateSQLite.deviceAuthTokens,
         OpenClawNativeStateSQLite.deviceIdentities,
         OpenClawNativeStateSQLite.execApprovalsConfig,
@@ -309,6 +327,27 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
         }
     }
 
+    /// Adds only the auth-import receipt companion on first migration use. Call inside the
+    /// import transaction so the receipt cannot become durable without the imported tokens.
+    /// Existing canonical tables and both shared schema-version markers remain unchanged.
+    public func ensureDeviceAuthImportReceipts() throws {
+        try self.withConnectionLock {
+            let userVersion = try self.scalarInt64("PRAGMA user_version")
+            guard userVersion <= Self.maximumSupportedSchemaVersion else {
+                throw OpenClawNativeStateError(
+                    "Native state database uses newer schema version \(userVersion); " +
+                        "this build supports \(Self.maximumSupportedSchemaVersion)")
+            }
+            if userVersion == 0 {
+                try self.ensureCanonicalTable(.deviceAuthImportReceipts)
+            } else {
+                try self.validateSharedDatabaseMetadata(userVersion: userVersion)
+                try self.execute(Self.deviceAuthImportReceipts.createSQL)
+                try self.validateCanonicalTable(.deviceAuthImportReceipts)
+            }
+        }
+    }
+
     public func prepare(_ sql: String) throws -> OpenClawNativeStateSQLiteStatement {
         try self.withConnectionLock {
             var statement: OpaquePointer?
@@ -391,6 +430,7 @@ public final class OpenClawNativeStateSQLite: @unchecked Sendable {
 
     private static func descriptor(_ table: OpenClawNativeStateCanonicalTable) -> CanonicalTable {
         switch table {
+        case .deviceAuthImportReceipts: self.deviceAuthImportReceipts
         case .deviceAuthTokens: self.deviceAuthTokens
         case .deviceIdentities: self.deviceIdentities
         case .execApprovalsConfig: self.execApprovalsConfig
