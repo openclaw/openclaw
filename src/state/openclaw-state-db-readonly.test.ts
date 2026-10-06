@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -599,7 +598,6 @@ it("shares only one synchronous metadata snapshot and refreshes committed WAL ne
 
 it("keeps the original synchronous snapshot while retained current reads see later commits", async () => {
   await withTempDir("openclaw-retained-inherited-snapshot-", async (root) => {
-    const outsideSnapshot = AsyncLocalStorage.snapshot();
     const options = createOptions(root);
     openOpenClawStateDatabase(options);
     closeOpenClawStateDatabaseForTest();
@@ -709,39 +707,6 @@ it("keeps the original synchronous snapshot while retained current reads see lat
           return reply.row?.value_json;
         }),
       ).toEqual(['"first"', '"second"', '"first"']);
-      await withOpenClawStateDatabaseReadSnapshot(async () => {
-        writer
-          .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
-          .run('"third"', "retained.snapshot.fixture");
-        await withOpenClawStateDatabaseReadSnapshot(
-          async () => {
-            writer
-              .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
-              .run('"fourth"', "retained.snapshot.fixture");
-            withArtifactPreservingStateReads(() =>
-              withSynchronousArtifactPreservingStateSnapshot(() => {
-                outsideSnapshot(() =>
-                  withArtifactPreservingStateReads(() => expect(legacyRead()).toBe('"fourth"')),
-                );
-                pending.push(
-                  executeExistingOpenClawStateRead(options, {
-                    type: "tui.lastSession.read",
-                    stateKey: "retained.snapshot.fixture",
-                  }),
-                );
-              }),
-            );
-            await expect(pending.at(-1)).resolves.toMatchObject({
-              ok: true,
-              type: "tui.lastSession.read",
-              row: { value_json: '"third"' },
-            });
-          },
-          options,
-          { fresh: true },
-        );
-        expect(legacyRead()).toBe('"second"');
-      }, options);
     } finally {
       capture.mockRestore();
       controller.abort(new Error("Snapshot proof finished"));

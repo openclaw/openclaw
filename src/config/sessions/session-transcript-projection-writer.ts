@@ -7,7 +7,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   isIncognitoOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
   runOpenClawAgentWriteTransaction,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
@@ -116,7 +116,7 @@ export async function runProjectionWrite<T>(
       };
       return !isIncognitoOpenClawAgentSqlitePath(databaseOptions.path, databaseOptions) &&
         !getOpenClawAgentDatabaseIfOpen(databaseOptions)
-        ? withOpenClawAgentDatabaseAsync(databaseOptions, write, databaseOptions.assertCurrent)
+        ? withOpenClawAgentDatabaseRuntime(databaseOptions, write, databaseOptions.assertCurrent)
         : write();
     },
     operationLabel,

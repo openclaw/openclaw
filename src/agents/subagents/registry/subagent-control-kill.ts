@@ -24,7 +24,6 @@ import {
   type SubagentKillSession,
 } from "./subagent-control-session.js";
 import type { SubagentAdminKillParams, SubagentAdminKillResult } from "./subagent-control.types.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
 import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
 import {
   captureSubagentExecution,
@@ -514,15 +513,12 @@ export async function killSubagentRunAdmin(
       // Return the freshest registry state so task cancellation cannot make a stale kill sticky.
       const targetState = resolveSubagentKillTargetState(tree.entry) ?? stopResult.targetState;
       const killedTarget =
-        targetState?.state === "terminal" &&
-        targetState.task.status === "cancelled" &&
-        targetState.task.error === SUBAGENT_KILL_TASK_ERROR;
+        targetState?.state === "terminal" && targetState.task.status === "cancelled";
       const stopResultAlreadyClearedAbort =
         stopResult.targetState !== undefined &&
         !(
           stopResult.targetState.state === "terminal" &&
-          stopResult.targetState.task.status === "cancelled" &&
-          stopResult.targetState.task.error === SUBAGENT_KILL_TASK_ERROR
+          stopResult.targetState.task.status === "cancelled"
         );
       const resolved = stopped.session;
       if (targetState && !killedTarget && !stopResultAlreadyClearedAbort && resolved) {

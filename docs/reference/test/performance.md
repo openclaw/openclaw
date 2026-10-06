@@ -89,8 +89,8 @@ before warm calls. A later failure preserves the successful first-call receipt.
 After those matched phases, the conformance case uses `kitchen.resources` to
 verify ten million CPU iterations and a fixed checksum, hold a 16 MiB Buffer,
 and start a referenced 10 ms timer. Timer progress is observed with bounded
-status probes. Each calibration operation counts one asserted control step,
-including its probes; it is not an RPC throughput count. The fixture must include
+status checks. Each calibration operation counts one asserted control step,
+including its checks; it is not an RPC throughput count. The fixture must include
 the calibration controls from Kitchen Sink commit `051db418820c2f0a73f8d349c88eb002b3c2d6e2`
 or later. Older fixtures fail visibly instead of skipping calibration.
 
@@ -301,7 +301,7 @@ The incident cases are opt-in because each sample builds an isolated, non-sensit
 
 Output includes first process output, `/healthz`, `/readyz`, HTTP listen log time, Gateway ready log time, CPU time, CPU core ratio, max RSS, heap, startup trace metrics, event-loop delay, and plugin lookup-table detail metrics. The script sets `OPENCLAW_GATEWAY_STARTUP_TRACE=1` in the child Gateway environment.
 
-`/healthz` is liveness (HTTP server can answer). `/readyz` is usable readiness (startup plugin sidecars, channels, and ready-critical post-attach work have settled). Startup hooks dispatch asynchronously and are not part of the readiness guarantee. Ready log time is the Gateway's internal timestamp, useful for process-side attribution but not a substitute for the external `/readyz` probe.
+`/healthz` is liveness (HTTP server can answer). `/readyz` is usable readiness (startup plugin sidecars, channels, and ready-critical post-attach work have settled). Startup hooks dispatch asynchronously and are not part of the readiness guarantee. Ready log time is the Gateway's internal timestamp, useful for process-side attribution but not a substitute for the external `/readyz` check.
 
 Use JSON output or `--output` when comparing changes. Use `--cpu-prof-dir` only after trace output points at import, compile, or CPU-bound work that phase timings alone cannot explain.
 
@@ -335,9 +335,9 @@ The default workload is smaller: 1,000 entries and one concurrent operation.
 
 The benchmark checks identical inventory bytes, manifest references, and changed
 payloads. Separate processes measure first invocation and warm throughput, CPU,
-event-loop delay, memory, and HTTP latency from an external probe. Worker task
+event-loop delay, memory, and HTTP latency from an external check. Worker task
 diagnostics distinguish queueing, input preparation, transfer, and execution.
-The HTTP probe measures responsiveness of the computation's owning process;
+The HTTP check measures responsiveness of the computation's owning process;
 paired-node wire tests provide the full Gateway dispatch and reconciliation proof.
 
 </Accordion>
@@ -345,7 +345,7 @@ paired-node wire tests provide the full Gateway dispatch and reconciliation proo
 <Accordion title="Gateway concurrency (scripts/bench-gateway-concurrency.ts)">
 
 Runs synthetic streaming agent turns in parallel sessions on one isolated
-Gateway. Add tool calls, session history, observers, and control-plane probes to
+Gateway. Add tool calls, session history, observers, and control-plane checks to
 reproduce allocation pressure from a busy Gateway. Build with `pnpm build`
 first. The default mock provider needs no key. Dreaming is disabled in this
 isolated benchmark; ordinary indexing, recaps, and database idle retention keep
@@ -389,11 +389,11 @@ runs this workload with repository-managed credentials.
 turns in each session (default 1, maximum 100). The second example completes 512
 turns across 64 sessions. Each session starts its next turn as soon as its
 previous turn completes, retaining its conversation history and workspace;
-there is no barrier between rounds. The fresh-connection probe runs once after
+there is no barrier between rounds. The fresh-connection check runs once after
 every session has started its first turn. `--tool-events` requires a matching
 successful `exec` result and the expected visible final reply on every turn,
 including follow-ups. Missing or duplicate tool evidence fails the run. The load
-timeout bounds turns and probes; startup, setup, and probe warmup have separate
+timeout bounds turns and checks; startup, setup, and check warmup have separate
 budgets. Health/control sampling is capped at 2,048 samples, while heap
 sampling continues until the full workload finishes.
 
@@ -404,7 +404,7 @@ legitimately report zero; observer correctness proof requires a positive count.
 
 `mockRequests` retains six mock-server counter checkpoints and their parent
 monotonic request bounds. Ingress deltas cover `startupAndWarmup` (readiness,
-connect, visibility, and probe warmup), `setup`, `agentWarmup` (optional agent
+connect, visibility, and check warmup), `setup`, `agentWarmup` (optional agent
 turns on the same Gateway), `loadBracket`, and `postLoad` (through Gateway
 shutdown). The `agentWarmup` bracket remains present when `--agent-warmup-turns`
 is zero (the default); warmup turns are excluded from measured load. These
@@ -435,11 +435,11 @@ reported storage route; it does not independently inspect database files.
 `activeTurnAgentIds` and
 `completedTurns` distinguish the agents handling turns from the configured
 roster: 128 configured agents with 16 parallel sessions does not mean 128 agents
-handled turns. Multi-agent history probe rows retain `sessionKey`, which maps
+handled turns. Multi-agent history check rows retain `sessionKey`, which maps
 successful requests to the independently verified store inventory. These extra
 setup reads do not run in the default one-agent case.
 
-Use `--probe-rounds N` for allocation comparisons with equal probe work. It
+Use `--probe-rounds N` for allocation comparisons with equal check work. It
 attempts exactly N sampler rounds and N history bursts per configured history
 client, regardless of which finishes first. Each sampler round requests
 `/readyz`, the Control UI, and `sessions.list`; `--control-plane` adds one each
@@ -447,10 +447,10 @@ of `cron.list` and `cron.status`. Enabling `--subscribers` adds
 one subscribe attempt per round and an unsubscribe after each successful
 subscription. History attempts total `N × historyClients × historyBurst`, capped
 at 2048 per run. Slow clients receive the same history budget as fast clients.
-Failed probes remain recorded failures; counts describe attempts, not successes.
-Omitting the flag retains adaptive probing until agent turns and mutations end.
+Failed checks remain recorded failures; counts describe attempts, not successes.
+Omitting the flag retains adaptive checking until agent turns and mutations end.
 
-Fixed probes can finish before or after agent turns. Every configured workload
+Fixed checks can finish before or after agent turns. Every configured workload
 joins before final memory and allocation capture; an exhausted load deadline
 fails the run instead of reporting a partial fixed workload as complete. Output
 records the mode and requested counts in `probeWorkload`; actual sampler and
@@ -464,7 +464,7 @@ Gateway's time-dependent background work.
 Each run's `cpuUsage` records user, system, and total CPU milliseconds for the
 Gateway process and its main thread. Two private IPC snapshots bound the load
 after setup and profiler activation through completion of all configured work,
-before the final memory probe, profile export, and teardown. Their child-side
+before the final memory check, profile export, and teardown. Their child-side
 monotonic timestamps define `wallMs`; CPU time can exceed wall time when threads
 run in parallel. Ordinary runs do not connect an inspector or start a profiler.
 
@@ -475,12 +475,12 @@ difference estimates work on other threads, with small skew from reading the
 counters sequentially. The summary reports `gatewayProcessCpuMs`,
 `gatewayProcessCpuMsPerTurn`, `gatewayMainThreadCpuMs`, and
 `gatewayProcessCpuCoreRatio`. CPU per turn includes the configured concurrent
-probes and mutations. Compare fixed workloads and identical profiling settings;
+checks and mutations. Compare fixed workloads and identical profiling settings;
 moving work to Workers can improve responsiveness without reducing process CPU.
 The existing `cpuCoreRatio` summary remains sampled readiness-window data.
 
 To measure clicking an existing session in the Control UI sidebar during load,
-build the UI and install Playwright Chromium, then enable the browser probe:
+build the UI and install Playwright Chromium, then enable the browser check:
 
 ```bash
 pnpm ui:build
@@ -489,7 +489,7 @@ pnpm test:gateway:concurrency -- --session-count 1000 --concurrency 16 --turns-p
 ```
 
 `--browser-session-clicks` defaults to 0 and accepts up to 20 first visits,
-followed by one revisit to a recent pane. The probe seeds separate idle click
+followed by one revisit to a recent pane. The check seeds separate idle click
 targets after the inventory. `--browser-history-messages` defaults to 80 per
 target (maximum 500), independent of `--history-messages`, so a large inventory
 does not require history in every session. `--history-message-chars` also sizes
@@ -510,7 +510,7 @@ actionability waits. RPC `windowStartMs` offsets begin before that wait;
 include socket identity, method, session key, success, error, and response bytes.
 An `inherited` request began before the click window and has a negative
 `windowStartMs`; its latency includes the earlier wait. Completed click records
-remain unchanged when a later window observes the response. The probe includes
+remain unchanged when a later window observes the response. The check includes
 message subscribe/unsubscribe requests to expose subscription recovery waits.
 `connections` records observed socket, hello, and outer event sequence gaps;
 negative offsets include recent setup events. Close events report observed inbound
@@ -527,8 +527,8 @@ attributing latency to concurrent work. A recorded click failure makes the bench
 exit unsuccessfully after writing its report.
 
 `--heap-prof-dir` samples allocations in the Gateway's main V8 isolate, starting
-after startup, session seeding, and probe warmup. Sampling ends after the load
-and its final memory probe, before profile serialization and teardown. It uses
+after startup, session seeding, and check warmup. Sampling ends after the load
+and its final memory check, before profile serialization and teardown. It uses
 a 32 KiB sampling interval and includes objects collected by both minor and
 major GC, so `sampledAllocatedBytes` estimates gross allocations rather than
 retained heap. Each run records its `.heapprofile` path and the twenty largest
@@ -537,7 +537,7 @@ DevTools Memory panel. Worker isolates have separate profiles, described below.
 Native allocations are outside these V8 profiles.
 
 The summary includes sampled allocation bytes per run and per completed turn.
-The per-turn figure also includes concurrent probes and session mutations;
+The per-turn figure also includes concurrent checks and session mutations;
 compare identical workload settings and Node versions across multiple runs.
 Initial and follow-up turns overlap across sessions, so the allocation profile
 covers their combined workload rather than attributing separate cold and warm
@@ -550,7 +550,7 @@ the recorded `loadWindow` identifies the measured interval in that CPU profile.
 For CPU attribution during concurrent work, including on Windows, add
 `--load-cpu-prof-dir .artifacts/gateway-load-cpu`. This captures the Gateway's
 main V8 isolate at a 1 ms sampling interval after setup and through the final
-memory probe. The private benchmark IPC channel stops the profiler and writes
+memory check. The private benchmark IPC channel stops the profiler and writes
 the `.cpuprofile` before process teardown, without depending on signal-driven
 profile flushing. Each run's `loadCpuProfile` records its path, duration, and
 sample count with `scope: "main-isolate"`; open the raw profile in Chrome
@@ -578,8 +578,8 @@ miss work before its first or after its last successful sample. The sample's
 `memory.rss` covers the process; other `memory` fields describe the main isolate,
 while each Worker's `heap` contains its own V8 heap statistics.
 
-Capture windows differ: load CPU counters end before the final memory probe;
-the main V8 profile includes that probe; Worker profiles and samples also extend
+Capture windows differ: load CPU counters end before the final memory check;
+the main V8 profile includes that check; Worker profiles and samples also extend
 through main-profile serialization before their own stop. Use the raw CPU
 profiles' timestamps and manifest observations for attribution, and keep these
 windows separate from `cpuUsage`. Main-thread CPU plus observed Worker CPU does
@@ -624,7 +624,7 @@ pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5
 pnpm test:restart:gateway -- --case default --runs 3 --restarts 3 --warmup 1
 ```
 
-Case ids: `skipChannels`, `skipChannelsAcpxProbe` (ACPX startup probe on), `skipChannelsNoAcpxProbe` (probe off), `default`, `fiftyPlugins`.
+Case ids: `skipChannels`, `skipChannelsAcpxProbe` (ACPX startup check on), `skipChannelsNoAcpxProbe` (check off), `default`, `fiftyPlugins`.
 
 Output includes next `/healthz`, next `/readyz`, downtime, restart ready timing, CPU, RSS, startup trace metrics for the replacement process, and restart trace metrics for signal handling, active-work drain, close phases, next start, ready timing, and memory snapshots. The script sets `OPENCLAW_GATEWAY_STARTUP_TRACE=1` and `OPENCLAW_GATEWAY_RESTART_TRACE=1`.
 

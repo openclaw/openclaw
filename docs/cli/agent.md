@@ -205,7 +205,7 @@ prompt/fixture fingerprints, and settings. Per-cell accounting includes parent
 and descendant input, cache reads/writes, and output, reconciled with runtime
 totals. Missing usage or prices remain unavailable, never zero. Failed attempts
 remain in operational totals. Successful-pair deltas require both arms to pass
-and complete measurements; observed error counts include intentional probes and
+and complete measurements; observed error counts include intentional checks and
 are not repair-turn counts. Task latency excludes startup and interviews.
 
 Automated completion means artifact/effect checks passed. Final-response
@@ -280,7 +280,7 @@ alongside the complete ledger. The process helper's exact written source bytes
 are part of its workload fingerprint. The JavaScript contract task verifies
 declaration discovery, runtime input validation, and the dependent file operation
 sequence, including completion through `wait`. Preview-completeness checks use the observed metadata
-for probed references; missing or conflicting metadata remains unknown.
+for checked references; missing or conflicting metadata remains unknown.
 Keep transcripts local unless their
 publication is explicitly requested. Interview claims about sample coverage,
 freshness, lifetime, limits, and retry safety must be reviewed against these

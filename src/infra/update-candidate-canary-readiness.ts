@@ -211,14 +211,14 @@ export async function waitForUpdateCandidateReadiness(
             const nextStep = "Check Gateway logs and proxy.loopbackMode; rerun openclaw update.";
             failure = {
               message: redactSupportString(
-                `Readiness probe ${url} failed: ${detail}${proxy ? ` (via proxy ${proxy.origin})` : ""}. ${nextStep}`,
+                `Readiness check ${url} failed: ${detail}${proxy ? ` (via proxy ${proxy.origin})` : ""}. ${nextStep}`,
                 params,
               ),
               fact: createUpdateFailureFact(
                 {
                   check: endpoint,
                   code: "candidate-readiness-probe-failed",
-                  message: `Readiness probe ${endpoint} failed: ${detail}. ${nextStep}`,
+                  message: `Readiness check ${endpoint} failed: ${detail}. ${nextStep}`,
                 },
                 params.env,
               ),

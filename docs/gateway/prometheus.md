@@ -610,6 +610,6 @@ OpenClaw supports both surfaces independently. You can run either, both, or neit
 ## Related
 
 - [Diagnostics export](/gateway/diagnostics) — local diagnostics zip for support bundles
-- [Health and readiness](/gateway/health) — `/healthz` and `/readyz` probes
+- [Health and readiness](/gateway/health) — `/healthz` and `/readyz` checks
 - [Logging](/logging) — file-based logging
 - [OpenTelemetry export](/gateway/opentelemetry) — OTLP push for traces, metrics, and logs

@@ -132,22 +132,6 @@ export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
   );
 }
 
-/** A retained delivery callback cannot adopt another requester claim or frozen reply policy. */
-function isRequesterSettleRunBindingCurrent(
-  current: SubagentRunRecord,
-  expected: SubagentRunRecord,
-): boolean {
-  return (
-    isSameSubagentRunOwner(current, expected) &&
-    isDeepStrictEqual(
-      captureRequesterSettleRunIdentity(current),
-      captureRequesterSettleRunIdentity(expected),
-    ) &&
-    (current.requesterSettleWake?.yieldedFinalDeliverable === true) ===
-      (expected.requesterSettleWake?.yieldedFinalDeliverable === true)
-  );
-}
-
 /** Completion custody can outlive a requester that finished without explicitly yielding. */
 export function hasRequesterCompletionCohort(entry: SubagentRunRecord): boolean {
   const wake = entry.requesterSettleWake;
@@ -267,7 +251,12 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
     if (
       !entry ||
       (entry.expectsCompletionMessage === true && entry.requesterTurnRunId) ||
-      !isRequesterSettleRunBindingCurrent(entry, observed) ||
+      !isDeepStrictEqual(
+        captureRequesterSettleRunIdentity(entry),
+        captureRequesterSettleRunIdentity(observed),
+      ) ||
+      (wake?.yieldedFinalDeliverable === true) !==
+        (observed.requesterSettleWake?.yieldedFinalDeliverable === true) ||
       !wake ||
       wake.rearmGeneration !== params.rearmGeneration ||
       (params.pause

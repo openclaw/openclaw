@@ -153,6 +153,7 @@ describe("X account monitor", () => {
         cfg: guest
           ? {
               ...config,
+              messages: { queue: { mode: "collect" } },
               agents: {
                 entries: { maintainer: { skills: [], tools: { fs: { workspaceOnly: true } } } },
               },

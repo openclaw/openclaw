@@ -172,6 +172,11 @@ export type ManagedWorktreeGcResult = {
     reason: string;
   }[];
   issueCount: number;
+  /** Removal candidates that passed initial policy checks; final guards may still defer them. */
+  eligibleCount: number;
+  /** Exact disposition totals, including issues omitted from the bounded detail list. */
+  deferredCount: number;
+  failedCount: number;
   protectedCount: number;
   protectionReasons: Record<string, number>;
   /** Null when incomplete inventory or size measurements prevent a conclusion. */

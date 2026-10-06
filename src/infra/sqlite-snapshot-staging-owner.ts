@@ -298,16 +298,13 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     return owned;
   };
 
-  const assertAdmission = () => {
-    if (admissionClosed) {
-      throw new Error("SQLite snapshot staging owner is closing");
-    }
-  };
   const start = (
     command: SqliteSnapshotStagingInput,
     signal?: AbortSignal,
   ): SqliteSnapshotStagingRequest => {
-    assertAdmission();
+    if (admissionClosed) {
+      throw new Error("SQLite snapshot staging owner is closing");
+    }
     const preparationId = ++preparationSequence;
     const inputBytes = Buffer.byteLength(JSON.stringify({ ...command, preparationId }));
     const runInContext = AsyncLocalStorage.snapshot();
@@ -651,10 +648,6 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   const owner = {
     start,
     retainDirectory,
-    prepareResources() {
-      assertAdmission();
-      nativeSource.prepareResources();
-    },
   };
   nativeSource.retain(owner, async () => {
     admissionClosed = true;

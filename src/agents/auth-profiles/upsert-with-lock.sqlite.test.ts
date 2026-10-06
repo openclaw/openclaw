@@ -787,7 +787,9 @@ describe("auth profile batch persistence", () => {
         credential: apiKey("sk-new"),
       }).catch((error: unknown) => error);
 
-      expect(String(failure)).toContain("no column named updated_at");
+      expect(failure).toMatchObject({ name: "SqliteSchemaMismatchError" });
+      expect(String(failure)).toContain("column definitions differ for auth_profile_store");
+      expect(String(failure)).toContain("openclaw doctor --fix");
       expect(String(failure)).not.toContain("lock may be busy");
     });
   });

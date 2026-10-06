@@ -316,7 +316,7 @@ export function createManagedLinuxDesktop(
       throw new Error("managed Linux desktop stopped during startup");
     }
     throw new Error(
-      `managed Linux desktop did not become ready on 127.0.0.1:${active.port} within ${readinessTimeoutMs}ms (last probe: ${lastProbe})`,
+      `managed Linux desktop did not become ready on 127.0.0.1:${active.port} within ${readinessTimeoutMs}ms (last check: ${lastProbe})`,
     );
   };
 

@@ -22,6 +22,7 @@ import {
   isToolAuthorityReadCaptureActive,
   prepareReplyToolAuthorityCallerRead,
   recordPreparedToolAuthorityRead,
+  type PreparedQuestionCallerRead,
 } from "../../agents/harness/host-private-capabilities.js";
 import { readOperatorModelPolicyMembership } from "../../agents/operator-model-policy.js";
 import {
@@ -38,7 +39,6 @@ import { captureRuntimeConfig } from "../../config/runtime-source-projection.js"
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { PreparedSessionEntryWorkerRead } from "../../config/sessions/session-entry-read-runtime.types.js";
 import {
   prepareGatewaySessionEntryReadOnlyInWorker,
   type GatewaySessionEntryReadPlan,
@@ -649,23 +649,37 @@ export function prepareReplyToolAuthority(
         assertSources();
       };
       const reads = plan?.reads ?? [];
-      const assertPrepared = (currentReads: readonly PreparedSessionEntryWorkerRead[]) => {
+      const assertPrepared: PreparedQuestionCallerRead["assertPrepared"] = (currentReads) => {
         assertSources();
         assertEntry(plan?.selectPrepared(currentReads));
       };
-      recordPreparedToolAuthorityRead({
+      const prepared: PreparedQuestionCallerRead = {
         reads,
         assertPrepared,
+        prepareCurrent: () => withSessionEntriesFromStoresInWorker(reads, assertPrepared),
+        retainNative() {
+          assertSources();
+          // Secret writes retain their pre-existing other-owner check at both worker grants.
+          const retained = plan?.retainNative();
+          if (!retained) {
+            return { assertCurrent: () => assertEntry(undefined), release: () => {} };
+          }
+          const assertCurrent = () => {
+            assertSources();
+            assertEntry(retained.readCurrent());
+          };
+          // Consumers validate policy at the effect boundary; retention only pins the reader.
+          return { assertCurrent, release: retained.release };
+        },
+      };
+      recordPreparedToolAuthorityRead({
+        ...prepared,
         assertLegacyCurrent: () => {
           assertSources();
           assertEntry(plan?.readLegacy());
         },
       });
-      return {
-        prepareCurrent: async () => {
-          await withSessionEntriesFromStoresInWorker(reads, assertPrepared);
-        },
-      };
+      return prepared;
     },
   );
   return result;

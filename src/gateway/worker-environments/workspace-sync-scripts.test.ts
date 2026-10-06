@@ -263,7 +263,7 @@ describe("remote workspace quiescence scripts", () => {
         { timeoutMs: 10_000, baseEnv: input.env },
       );
       expect(result.code, JSON.stringify(result)).toBe(0);
-      expect(result.stderr).toContain("slow ps probe; retrying");
+      expect(result.stderr).toContain("slow ps check; retrying");
       const nonce = /^quiesced ([a-f0-9]{32})\n$/u.exec(result.stdout)?.[1];
       expect(nonce).toBeDefined();
       await resume(input, nonce!);
@@ -287,13 +287,13 @@ describe("remote workspace quiescence scripts", () => {
       },
     });
     await expect(acquire(input.workspace)).rejects.toThrow(
-      "workspace quiescence process probe budget exhausted after 30000 ms",
+      "workspace quiescence process check budget exhausted after 30000 ms",
     );
     expect(results).toHaveLength(1);
     expect(results[0]?.termination).toBe("exit");
     expect(results[0]?.code).toBe(1);
-    expect(results[0]?.stderr).toContain("slow ps probe; retrying");
-    expect(results[0]?.stderr.slice(0, 900)).toContain("probe budget exhausted after 30000 ms");
+    expect(results[0]?.stderr).toContain("slow ps check; retrying");
+    expect(results[0]?.stderr.slice(0, 900)).toContain("check budget exhausted after 30000 ms");
     // A renewed budget must not authorize another probe after 30s of simulated delay.
     await expect(fs.readFile(path.join(input.home, "..", "budget-probes"), "utf8")).resolves.toBe(
       "timeout\n",
@@ -373,7 +373,7 @@ require("node:child_process").execFileSync("/bin/ps", process.argv.slice(2), { s
         { timeoutMs: 10_000, baseEnv: input.env },
       );
       expect(result.code, JSON.stringify(result)).toBe(1);
-      expect(result.stderr).toContain("lease expired during process probing");
+      expect(result.stderr).toContain("lease expired during process checking");
       const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as { expiresAtMs: number };
       expect(lease.expiresAtMs).toBeLessThan(Date.now());
     } finally {
@@ -863,7 +863,7 @@ esac
         processes: typeof lease.processes;
       };
       expect(exhausted.processes).toEqual(lease.processes);
-      expect(exhausted.recoveryError).toContain("recovery exhausted after 4 probe passes");
+      expect(exhausted.recoveryError).toContain("recovery exhausted after 4 check passes");
       expect(exhausted.recoveryError).toContain("retry workspace recovery");
       await expect(quiescence.resume()).rejects.toThrow(exhausted.recoveryError);
       for (const entry of lease.processes) {

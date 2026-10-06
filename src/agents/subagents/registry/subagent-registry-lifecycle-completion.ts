@@ -30,10 +30,7 @@ import {
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
-import {
-  captureSubagentRunResult,
-  refreshPendingFinalDeliveryPayload,
-} from "./subagent-registry-lifecycle-delivery.js";
+import { captureSubagentRunResult } from "./subagent-registry-lifecycle-delivery.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -163,11 +160,7 @@ export async function completeSubagentRunAttempt(
     ? getCurrentSubagentRunOwner(params.runs, completeParams.expectedEntry)
     : params.runs.get(completeParams.runId);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  if (
-    !selectedOwner ||
-    (completeParams.expectedEntry &&
-      !isSameSubagentRunOwner(selectedOwner, completeParams.expectedEntry))
-  ) {
+  if (!selectedOwner) {
     return;
   }
   let releaseCompletionLock: (() => void) | undefined = await context.acquireTerminalCompletionLock(
@@ -175,7 +168,7 @@ export async function completeSubagentRunAttempt(
   );
   let collectorSession: SubagentKillSession | undefined;
   const selected = getCurrentSubagentRunOwner(params.runs, selectedOwner);
-  if (!selected || !isSameSubagentRunOwner(selected, selectedOwner)) {
+  if (!selected) {
     releaseCompletionLock();
     throw new SubagentRegistryMutationRejectedError("Subagent terminal execution changed");
   }
@@ -718,7 +711,20 @@ function planTerminalCompletion(
   } else {
     updateSubagentArchiveAtMs(entry, params.getRuntimeConfig());
   }
-  refreshPendingFinalDeliveryPayload(entry);
+  const delivery = entry.delivery;
+  if (
+    delivery?.payload &&
+    delivery.status !== "delivered" &&
+    typeof delivery.announcedAt !== "number"
+  ) {
+    delivery.payload = {
+      ...delivery.payload,
+      startedAt: entry.execution.startedAt,
+      endedAt: entry.execution.endedAt,
+      outcome: entry.execution.outcome,
+      terminalReply: entry.completion?.terminalReply,
+    };
+  }
   const mutated = !isDeepStrictEqual(currentEntry, entry);
   return {
     entry: mutated ? entry : currentEntry,

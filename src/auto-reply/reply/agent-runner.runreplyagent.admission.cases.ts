@@ -284,10 +284,10 @@ export function registerReplyAdmissionCases({
           const result = await admit(params);
           if (result.status === "owned") {
             admittedOperation = result.operation;
-            const bind = result.operation.bindToolAuthoritySnapshot.bind(result.operation);
+            const bind = result.operation.bindToolAuthoritySnapshotAsync.bind(result.operation);
             const binding = vi
-              .spyOn(result.operation, "bindToolAuthoritySnapshot")
-              .mockImplementation((snapshot) => {
+              .spyOn(result.operation, "bindToolAuthoritySnapshotAsync")
+              .mockImplementation(async (snapshot) => {
                 try {
                   // Stop before unrelated runtime preparation; publication must already be complete.
                   assertPublished();
@@ -350,7 +350,7 @@ export function registerReplyAdmissionCases({
           throw sqlFailure;
         }
       } finally {
-        // A handoff assertion precedes the runner's try/finally, so this fixture owns cleanup too.
+        // The fixture owns admission and observer cleanup even when a handoff assertion fails.
         restoreObserver();
         active.complete();
         await Promise.allSettled([pending]);

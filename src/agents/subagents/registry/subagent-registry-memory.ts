@@ -9,6 +9,7 @@ import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
   publishSubagentRunChanges,
@@ -34,9 +35,24 @@ function freezeValue(value: unknown): void {
   Object.freeze(value);
 }
 
-export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
+const immutableSessionListFacts = new WeakMap<SubagentRunRecord, SubagentRunReadRecord>();
+
+/** A row replacement owns a new projection; retired immutable rows release theirs through GC. */
+export function immutableSubagentRunSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
+  const prepared = immutableSessionListFacts.get(entry);
+  if (prepared) {
+    return prepared;
+  }
   prepareGatewayContextBindingOwner(entry);
-  return freezeSubagentRunReadRecord(entry);
+  freezeSubagentRunReadRecord(entry);
+  const projection = freezeSubagentRunReadRecord(projectSubagentRunForSessionList(entry));
+  immutableSessionListFacts.set(entry, projection);
+  return projection;
+}
+
+export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
+  immutableSubagentRunSessionList(entry);
+  return entry;
 }
 
 /** Registry projections contain only canonical JSON fields and owner-created containers. */

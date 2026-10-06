@@ -49,7 +49,7 @@ it("explains an empty exit-2 result", () => {
   vi.mocked(spawnSync).mockReturnValue(nativeResult(" \r\n", 2));
   expect(probeScheduledTaskState("OpenClaw Gateway")).toEqual({
     status: "unknown",
-    detail: "Scheduled Task probe failed (exit 2): no output from PowerShell.",
+    detail: "Scheduled Task check failed (exit 2): no output from PowerShell.",
     diagnostic: { kind: "native", exitCode: 2 },
   });
 });
@@ -87,7 +87,7 @@ it.each([
         detail:
           expected === 0
             ? "Scheduled Task inspection deadline expired."
-            : `Scheduled Task probe timed out after ${expected} ms (ETIMEDOUT).`,
+            : `Scheduled Task check timed out after ${expected} ms (ETIMEDOUT).`,
         timeoutMs: expected,
         diagnostic: { kind: "timeout", timeoutMs: expected },
       });

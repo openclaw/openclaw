@@ -388,7 +388,7 @@ export async function checkGatewayHealth(params: {
         [
           isGatewayCallTimeout(formatErrorMessage(channelsResult.reason))
             ? slowDiagnosticNote("channel")
-            : `Channel status probe failed: ${sanitizeTerminalText(formatErrorMessage(channelsResult.reason))}`,
+            : `Channel status check failed: ${sanitizeTerminalText(formatErrorMessage(channelsResult.reason))}`,
           `Retry: ${formatCliCommand("openclaw channels status --probe")}`,
         ].join("\n"),
         "Channel warnings",
@@ -507,7 +507,7 @@ export async function probeGatewayMemoryStatus(params: {
     return {
       checked: !timedOut,
       ready: false,
-      error: `gateway memory probe ${timedOut ? "timed out" : "unavailable"}: ${message}`,
+      error: `gateway memory check ${timedOut ? "timed out" : "unavailable"}: ${message}`,
       skipped: false,
     };
   }

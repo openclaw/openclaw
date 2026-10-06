@@ -91,7 +91,6 @@ export type ChatScrollHost = {
   chatReadingHistory: boolean;
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll?: () => boolean;
-  chatIsManualScroll?: () => boolean;
   chatIsMaintenanceScroll?: () => boolean;
   chatScrollElement?: () => HTMLElement | null;
   chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;
@@ -282,17 +281,7 @@ export function handleChatScrollTakeover(host: ChatScrollHost, towardEnd = false
 }
 
 /** Reader-controlled UI can take over even when the transcript is at its end. */
-export function lockChatScroll(
-  host: ChatScrollHost,
-  source: "reader" | "remote-input" = "reader",
-): void {
-  // Remote activity cannot cancel a queued or already-issued reader command.
-  if (
-    source === "remote-input" &&
-    (pendingChatScrolls.get(host)?.manual || host.chatIsManualScroll?.())
-  ) {
-    return;
-  }
+export function lockChatScroll(host: ChatScrollHost): void {
   const changed = !host.chatFollowLocked || host.chatUserNearBottom;
   cancelChatScroll(host);
   host.chatHasAutoScrolled = true;

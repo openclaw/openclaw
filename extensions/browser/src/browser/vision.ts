@@ -4,39 +4,22 @@
  */
 
 import { readFile } from "node:fs/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { RunMediaUnderstandingFileParams } from "openclaw/plugin-sdk/media-understanding-runtime";
 
 /** Default prompt for turning browser screenshots into text-only page context. */
 const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
   "Describe what is visible in this browser screenshot. Capture page layout, headings, primary content blocks, visible text, and notable interactive elements so a text-only assistant can reason about the page.";
 
 /** Input context for browser screenshot image understanding. */
-type BrowserScreenshotDescriptionContext = {
-  cfg: OpenClawConfig;
-  filePath: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  agentId?: string;
-  activeModel?: {
-    provider?: string;
-    model?: string;
-  };
-  mediaScope?: {
-    sessionKey?: string;
-    channel?: string;
-    chatType?: string;
-  };
+type BrowserScreenshotDescriptionContext = Pick<
+  RunMediaUnderstandingFileParams,
+  "cfg" | "filePath" | "agentDir" | "workspaceDir" | "agentId"
+> & {
+  activeModel?: Partial<NonNullable<RunMediaUnderstandingFileParams["activeModel"]>>;
+  mediaScope?: RunMediaUnderstandingFileParams["scopeContext"];
   imageSanitization?: {
     maxDimensionPx?: number;
   };
-};
-
-/** Result returned from browser screenshot description. */
-type BrowserScreenshotDescriptionResult = {
-  text: string;
-  provider?: string;
-  model?: string;
-  decision?: unknown;
 };
 
 function normalizeActiveModel(
@@ -76,9 +59,7 @@ async function resolveImageUnderstandingFilePath(
 }
 
 /** Produces a text description for a browser screenshot, or null when no text was produced. */
-export async function describeBrowserScreenshot(
-  ctx: BrowserScreenshotDescriptionContext,
-): Promise<BrowserScreenshotDescriptionResult | null> {
+export async function describeBrowserScreenshot(ctx: BrowserScreenshotDescriptionContext) {
   const filePath = await resolveImageUnderstandingFilePath(ctx);
   const agentId = ctx.agentDir
     ? undefined

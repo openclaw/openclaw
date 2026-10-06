@@ -38,7 +38,7 @@ and release metadata; neither needs the complete source tree.
 
 Child dispatch can also reuse an individual green child's sealed receipt even
 when its source parent failed, was cancelled, or is still active. It scans at
-most 100 recent dispatch runs, probes at most 40 target receipt inventories, and
+most 100 recent dispatch runs, checks at most 40 target receipt inventories, and
 fully validates at most five matching receipts per role within two minutes.
 Other-target and other-tooling runs do not consume the five-validation budget. Target, role,
 non-empty dispatch inputs/defaults, and candidate descriptor bytes must match;

@@ -201,22 +201,9 @@ export async function loadSessionEntryForAdmission(
       async (target, owner) => {
         const options = { ...target.database, path: target.sourcePath, env };
         const observed = readDatabasePathIdentitySync(options.path);
-        const assertOriginalTarget = () => {
-          const current = readDatabasePathIdentitySync(options.path);
-          if (
-            current.key !== observed.key ||
-            current.canonicalPath !== observed.canonicalPath ||
-            current.birthtime !== observed.birthtime
-          ) {
-            throw new Error("Session database changed while waiting for admission");
-          }
-        };
         return await runOpenClawAgentWorkerWrite(
           options,
           async () => {
-            await owner.refreshBeforeDispatch(assertOriginalTarget);
-            owner.assertCurrent();
-            assertOriginalTarget();
             // Discovery retains the file while queued; an earlier cancelled open may retire its executor.
             const execution = captureOpenClawAgentDatabaseExecution(
               options,
@@ -254,6 +241,8 @@ export async function loadSessionEntryForAdmission(
             };
             let transferred = false;
             try {
+              await owner.refreshBeforeDispatch(() => execution.assertCurrent());
+              assertSourceCurrent();
               await execution.prepare(source, preparation.signal);
               const entry = await execution.runExisting(source, (worker) =>
                 worker.execute(

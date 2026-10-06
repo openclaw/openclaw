@@ -45,7 +45,7 @@ If you have not configured models and `tools.media.audio.enabled` is not `false`
    - `parakeet-mlx` on Apple Silicon (MLX-capable; device use remains unobserved)
    - `whisper` (Python CLI; downloads models automatically)
 
-Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to probe a backend.
+Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to check a backend.
 Auto-detected whisper.cpp keeps its normal model-run logs enabled so OpenClaw can record the upstream `using … backend` line. Explicit CLI entries keep their configured output flags.
 
 Gemini CLI and Antigravity are not auto-detected for media understanding. Audio

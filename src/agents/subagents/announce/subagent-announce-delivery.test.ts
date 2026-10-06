@@ -996,9 +996,24 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("delivers the child result when requester synthesis omits it", async () => {
-    const callGateway = createGatewayMock({
-      result: { payloads: [{ text: "TG88042_NO_REOUTPUT" }] },
+  it.each([
+    {
+      name: "requester synthesis omits the child result",
+      response: { result: { payloads: [{ text: "TG88042_NO_REOUTPUT" }] } },
+      childResult: "TG88042_CHILD",
+    },
+    {
+      name: "requester synthesis returns incomplete",
+      error: new Error(
+        "FailoverError: mock-openai/gpt-5.5 ended with an incomplete terminal response: code=incomplete_result",
+      ),
+      childResult: "child completion output",
+    },
+  ])("delivers direct-message child text when $name", async ({ response, error, childResult }) => {
+    const callGateway = createGatewayMock(response, () => {
+      if (error) {
+        throw error;
+      }
     });
     const sendMessage = createSendMessageMock();
     const result = await deliverDiscordDirectMessageCompletion({
@@ -1006,7 +1021,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sendMessage,
       internalEvents: taskCompletionEvents({
         childSessionId: "child-session-id",
-        result: "TG88042_CHILD",
+        result: childResult,
       }),
     });
     expectDeliveryPath(result, "direct");
@@ -1015,7 +1030,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         channel: "discord",
         accountId: "acct-1",
         to: "dm:U123",
-        content: "TG88042_CHILD",
+        content: childResult,
         idempotencyKey: "announce-dm-fallback-empty:text-direct",
       }),
     );
@@ -1400,34 +1415,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       reason: "visible_reply_missing",
     });
     expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("directly delivers direct-message subagent text when the announce agent returns incomplete", async () => {
-    const callGateway = vi.fn(async () => {
-      throw new Error(
-        "FailoverError: mock-openai/gpt-5.5 ended with an incomplete terminal response: code=incomplete_result",
-      );
-    }) as unknown as typeof runtimeCallGateway;
-    const sendMessage = createSendMessageMock();
-
-    const result = await deliverDiscordDirectMessageCompletion({
-      callGateway,
-      sendMessage,
-      internalEvents: taskCompletionEvents({
-        childSessionId: "child-session-id",
-      }),
-    });
-
-    expectDeliveryPath(result, "direct");
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        accountId: "acct-1",
-        to: "dm:U123",
-        content: "child completion output",
-        idempotencyKey: "announce-dm-fallback-empty:text-direct",
-      }),
-    );
   });
 
   it("delivers dormant child completion under restrictive gateway roles with Gateway-owned timeout policy", async () => {
@@ -1874,54 +1861,156 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
 
-  it("queues generated video completions without opt-in or direct delivery", async () => {
-    const sourceTool = "video_generate";
-    const attachment: NonNullable<AgentInternalEvent["attachments"]>[number] = {
-      type: "video",
-      path: "/tmp/generated-corgi.mp4",
-      name: "generated-corgi.mp4",
-      mimeType: "video/mp4",
-      sizeBytes: 9012,
-      durationMs: 8_000,
-      width: 1280,
-      height: 720,
-    };
-    const mediaUrl = attachment.path;
-    if (!mediaUrl) {
-      throw new Error("generated media fixture requires a path");
-    }
-    const callGateway = createPayloadGatewayMock();
-    const sendMessage = createSendMessageMock();
-    const result = await deliverDiscordDirectMessageCompletion({
-      callGateway,
-      sendMessage,
-      sourceTool,
-      internalEvents: taskCompletionEvents({
+  const generatedVideoAttachment = {
+    type: "video",
+    path: "/tmp/generated-corgi.mp4",
+    name: "generated-corgi.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 9012,
+    durationMs: 8_000,
+    width: 1280,
+    height: 720,
+  } satisfies NonNullable<AgentInternalEvent["attachments"]>[number];
+  it.each<{
+    name: string;
+    route: keyof typeof deliveryRoutes;
+    sourceTool: string;
+    events: AgentInternalEvent[];
+    options?: Partial<DeliveryFixtureParams>;
+    expected: Record<string, unknown>;
+    noAttachments?: boolean;
+  }>([
+    {
+      name: "video completion without opt-in or direct delivery",
+      route: "discord",
+      sourceTool: "video_generate",
+      events: taskCompletionEvents({
         source: "video_generation",
         childSessionKey: "video_generate:task-123",
         childSessionId: "task-123",
         announceType: "video generation task",
-        mediaUrls: [mediaUrl],
-        attachments: [attachment],
+        mediaUrls: [generatedVideoAttachment.path],
+        attachments: [generatedVideoAttachment],
       }),
+      expected: {
+        kind: "agentTurn",
+        sessionKey: "agent:main:discord:dm:U123",
+        inputProvenance: expect.objectContaining({
+          kind: "inter_session",
+          sourceTool: "video_generate",
+        }),
+        sourceReplyDeliveryMode: "automatic",
+        expectedMediaUrls: [generatedVideoAttachment.path],
+        expectedMediaAttachments: { [generatedVideoAttachment.path]: generatedVideoAttachment },
+        idempotencyKey: "announce-dm-fallback-empty:agent-loop",
+      },
+    },
+    {
+      name: "generated-media failure notice without raw delivery",
+      route: "discord",
+      sourceTool: "music_generate",
+      events: musicCompletionEvents({
+        status: "error",
+        statusLabel: "failed",
+        result: "All music generation models failed.",
+        mediaUrls: undefined,
+      }),
+      expected: { expectedMediaUrls: [] },
+      noAttachments: true,
+    },
+    {
+      name: "video completion with a stringified Telegram topic",
+      route: "telegram",
+      sourceTool: "video_generate",
+      options: {
+        requesterSessionKey: "agent:main:telegram:group:-1003970070733:topic:1",
+        origin: {
+          channel: "telegram",
+          to: "telegram:-1003970070733",
+          accountId: "bot-1",
+          threadId: 1,
+        },
+      },
+      events: taskCompletionEvents({
+        source: "video_generation",
+        childSessionKey: "video_generate:task-123",
+        childSessionId: "task-123",
+        announceType: "video generation task",
+        taskLabel: "anime corgi skateboard",
+        result: "Generated 1 video.\nMEDIA:/tmp/generated-corgi.mp4",
+        mediaUrls: ["/tmp/generated-corgi.mp4"],
+        replyInstruction: "Deliver the generated video through the message tool.",
+      }),
+      expected: {
+        route: expect.objectContaining({
+          channel: "telegram",
+          accountId: "bot-1",
+          to: "telegram:-1003970070733",
+          threadId: "1",
+        }),
+        expectedMediaUrls: ["/tmp/generated-corgi.mp4"],
+      },
+    },
+    {
+      name: "generated media before attempting active-requester handoff",
+      route: "channel",
+      sourceTool: "image_generate",
+      options: {
+        isActive: true,
+        directIdempotencyKey: "announce-channel-media-handoff-locked",
+        runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      },
+      events: imageCompletionEvents({
+        childSessionKey: "image_generate:task-locked",
+        childSessionId: "task-locked",
+        taskLabel: "locked handoff image",
+        result: "Generated 1 image.\nMEDIA:/tmp/generated-locked.png",
+        mediaUrls: ["/tmp/generated-locked.png"],
+        replyInstruction: "Tell the user the image is ready and send it through the message tool.",
+      }),
+      expected: {
+        kind: "agentTurn",
+        sessionKey: "agent:main:slack:channel:C123",
+        message: expect.stringContaining("generated-locked.png"),
+        messageId: "announce-channel-media-handoff-locked:agent-loop",
+        route: { channel: "slack", to: "channel:C123", accountId: "acct-1", chatType: "channel" },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceChannel: "internal",
+          sourceTool: "image_generate",
+        },
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/generated-locked.png"],
+        idempotencyKey: "announce-channel-media-handoff-locked:agent-loop",
+      },
+    },
+  ])("queues $name", async ({ route, sourceTool, events, options, expected, noAttachments }) => {
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const result = await deliverFixture(route, {
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      sourceTool,
+      internalEvents: events,
+      ...options,
     });
 
     expectDeliveryPath(result, "queued");
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
     expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "agentTurn",
-        sessionKey: "agent:main:discord:dm:U123",
-        inputProvenance: expect.objectContaining({ kind: "inter_session", sourceTool }),
-        sourceReplyDeliveryMode: "automatic",
-        expectedMediaUrls: [mediaUrl],
-        expectedMediaAttachments: { [mediaUrl]: attachment },
-        idempotencyKey: "announce-dm-fallback-empty:agent-loop",
-      }),
+      expect.objectContaining(expected),
       expect.any(Number),
       expectQueueContext(),
     );
+    if (noAttachments) {
+      expect(
+        sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mock.calls.at(-1)?.[0],
+      ).not.toHaveProperty("expectedMediaAttachments");
+    }
     expect(sessionDeliveryQueueMocks.releaseSessionDeliveryClaim).toHaveBeenCalledWith(
       "session-delivery-media",
       expectQueueContext(),
@@ -1930,30 +2019,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       "session-delivery-media",
       expectQueueContext(),
     );
-  });
-
-  it("queues generated-media failure notices without raw delivery", async () => {
-    const callGateway = createGatewayMock();
-    const sendMessage = createSendMessageMock();
-    const result = await deliverDiscordDirectMessageCompletion({
-      callGateway,
-      sendMessage,
-      sourceTool: "music_generate",
-      internalEvents: musicCompletionEvents({
-        status: "error",
-        statusLabel: "failed",
-        result: "All music generation models failed.",
-        mediaUrls: undefined,
-      }),
-    });
-
-    expectDeliveryPath(result, "queued");
-    const queuedPayload =
-      sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mock.calls.at(-1)?.[0];
-    expect(queuedPayload).toMatchObject({ expectedMediaUrls: [] });
-    expect(queuedPayload).not.toHaveProperty("expectedMediaAttachments");
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it.each(["unavailable", "failed", "completed"] as const)(
@@ -1998,50 +2063,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       }
     },
   );
-
-  it("stringifies Telegram topic ids for generated video completion handoff", async () => {
-    const callGateway = createGatewayMock();
-    const sendMessage = createSendMessageMock();
-    const result = await deliverTelegramDirectMessageCompletion({
-      callGateway,
-      sendMessage,
-      requesterSessionKey: "agent:main:telegram:group:-1003970070733:topic:1",
-      origin: {
-        channel: "telegram",
-        to: "telegram:-1003970070733",
-        accountId: "bot-1",
-        threadId: 1,
-      },
-      sourceTool: "video_generate",
-      internalEvents: taskCompletionEvents({
-        source: "video_generation",
-        childSessionKey: "video_generate:task-123",
-        childSessionId: "task-123",
-        announceType: "video generation task",
-        taskLabel: "anime corgi skateboard",
-        result: "Generated 1 video.\nMEDIA:/tmp/generated-corgi.mp4",
-        mediaUrls: ["/tmp/generated-corgi.mp4"],
-        replyInstruction: "Deliver the generated video through the message tool.",
-      }),
-    });
-
-    expectDeliveryPath(result, "queued");
-    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        route: expect.objectContaining({
-          channel: "telegram",
-          accountId: "bot-1",
-          to: "telegram:-1003970070733",
-          threadId: "1",
-        }),
-        expectedMediaUrls: ["/tmp/generated-corgi.mp4"],
-      }),
-      expect.any(Number),
-      expectQueueContext(),
-    );
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
 
   it("keeps private generated media on the owning session agent loop", async () => {
     const callGateway = createGatewayMock();
@@ -2094,62 +2115,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           chatType: "direct",
         },
         sourceReplyDeliveryMode: "automatic",
-      }),
-      expect.any(Number),
-      expectQueueContext(),
-    );
-    expect(sessionDeliveryQueueMocks.scheduleSessionDelivery).toHaveBeenCalledWith(
-      "session-delivery-media",
-      expectQueueContext(),
-    );
-  });
-
-  it("queues generated media before attempting requester handoff", async () => {
-    const callGateway = createGatewayMock();
-    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
-    const sendMessage = createSendMessageMock();
-    const result = await deliverSlackChannelAnnouncement({
-      callGateway,
-      sendMessage,
-      queueEmbeddedAgentMessageWithOutcome,
-      isActive: true,
-      directIdempotencyKey: "announce-channel-media-handoff-locked",
-      sourceTool: "image_generate",
-      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
-      internalEvents: imageCompletionEvents({
-        childSessionKey: "image_generate:task-locked",
-        childSessionId: "task-locked",
-        taskLabel: "locked handoff image",
-        result: "Generated 1 image.\nMEDIA:/tmp/generated-locked.png",
-        mediaUrls: ["/tmp/generated-locked.png"],
-        replyInstruction: "Tell the user the image is ready and send it through the message tool.",
-      }),
-    });
-
-    expectDeliveryPath(result, "queued");
-    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "agentTurn",
-        sessionKey: "agent:main:slack:channel:C123",
-        message: expect.stringContaining("generated-locked.png"),
-        messageId: "announce-channel-media-handoff-locked:agent-loop",
-        route: {
-          channel: "slack",
-          to: "channel:C123",
-          accountId: "acct-1",
-          chatType: "channel",
-        },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceChannel: "internal",
-          sourceTool: "image_generate",
-        },
-        sourceReplyDeliveryMode: "message_tool_only",
-        expectedMediaUrls: ["/tmp/generated-locked.png"],
-        idempotencyKey: "announce-channel-media-handoff-locked:agent-loop",
       }),
       expect.any(Number),
       expectQueueContext(),

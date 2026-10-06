@@ -16,6 +16,7 @@ import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
+import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import { loadSessionEntryReadOnlyInScope } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
@@ -37,6 +38,7 @@ import {
   costRefreshLane,
   historyClearTimeout,
   historyLane,
+  maintenanceLane,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   releaseRetiredDatabaseCustody,
@@ -64,6 +66,18 @@ const historyPrewarms = new WeakMap<
     { promise: Promise<void>; pending: boolean; retiredSequence: number }
   >
 >();
+
+export function runSessionBranchSummaryWorkerRequest(
+  request: SessionBranchSummaryReadRequest,
+  signal: AbortSignal,
+) {
+  const { database, ...read } = request;
+  return withSessionHistoryWorkerDatabase(
+    database,
+    (owner) => owner.readBranchSummaries({ request: read }, signal),
+    maintenanceLane,
+  );
+}
 
 export function isSessionHistoryWorkerCold(lane: SessionHistoryWorkerLane = historyLane): boolean {
   return lane.pending === 0 && lane.nativeSequence <= lane.retiredSequence;
