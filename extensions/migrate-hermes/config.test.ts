@@ -105,12 +105,10 @@ describe("Hermes migration config mapping", () => {
     expect(manualMemory?.kind).toBe("manual");
     expect(manualMemory?.status).toBe("skipped");
 
-    const modelProviderValue = modelProviderValues(plan.items) as
-      | {
-          acme?: { baseUrl?: string; apiKey?: unknown; api?: string; models?: unknown[] };
-          "local-llm"?: { baseUrl?: string };
-        }
-      | undefined;
+    const modelProviderValue = modelProviderValues(plan.items) as {
+      acme?: { baseUrl?: string; apiKey?: unknown; api?: string; models?: unknown[] };
+      "local-llm"?: { baseUrl?: string };
+    };
     expect(modelProviderValue?.acme?.baseUrl).toBe("https://api.acme.example/v1");
     expect(modelProviderValue?.acme?.apiKey).toBeUndefined();
     expect(modelProviderValue?.acme?.api).toBe("openai-responses");
@@ -174,8 +172,7 @@ describe("Hermes migration config mapping", () => {
     );
     await writeFile(path.join(source, "memories", "MEMORY.md"), "Imported memory\n");
 
-    const provider = buildHermesMigrationProvider();
-    const result = await provider.apply(
+    const result = await buildHermesMigrationProvider().apply(
       makeContext({
         source,
         stateDir,
@@ -366,9 +363,10 @@ describe("Hermes migration config mapping", () => {
     const plan = await buildHermesMigrationProvider().plan(
       makeContext({ source, stateDir, workspaceDir }),
     );
-    const providers = modelProviderValues(plan.items) as
-      | Record<string, { baseUrl?: string; api?: string; apiKey?: unknown; models?: unknown[] }>
-      | undefined;
+    const providers = modelProviderValues(plan.items) as Record<
+      string,
+      { baseUrl?: string; api?: string; apiKey?: unknown; models?: unknown[] }
+    >;
     expect(providers?.custom).toMatchObject({
       baseUrl: "https://models.example",
       api: "anthropic-messages",
@@ -603,9 +601,7 @@ describe("Hermes migration config mapping", () => {
         workspaceDir: path.join(root, "workspace"),
       }),
     );
-    const providers = modelProviderValues(plan.items) as
-      | Record<string, { api?: string }>
-      | undefined;
+    const providers = modelProviderValues(plan.items) as Record<string, { api?: string }>;
     expect(providers?.["named-responses"]?.api).toBe("openai-responses");
     expect(providers?.custom?.api).toBe("anthropic-messages");
   });
@@ -1030,9 +1026,7 @@ describe("Hermes migration config mapping", () => {
     );
 
     expect(itemById(plan.items, "config:default-model")?.details?.model).toBe("openai/gpt-5.6");
-    const providers = modelProviderValues(plan.items) as
-      | Record<string, { api?: string }>
-      | undefined;
+    const providers = modelProviderValues(plan.items) as Record<string, { api?: string }>;
     expect(providers?.openai?.api).toBe("openai-chatgpt-responses");
     expect(providers?.["openai-codex"]).toBeUndefined();
   });
