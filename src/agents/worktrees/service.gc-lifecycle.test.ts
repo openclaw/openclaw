@@ -43,6 +43,25 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
     entry: session.entry,
   }),
 }));
+// mock-isolation: Owner metadata stays synthetic while checkout claims and lifecycle admission stay real.
+vi.mock("../../config/sessions/session-accessor.entry.js", () => ({
+  resolveSessionEntryAccessTarget: ({ sessionKey }: { sessionKey: string }) => ({
+    agentId: "main",
+    canonicalKey: sessionKey,
+    entry: session.entry,
+  }),
+  readResolvedSessionEntriesInWorker: async ({ sessionKeys }: { sessionKeys: string[] }) =>
+    new Map(
+      sessionKeys.map((sessionKey) => [
+        sessionKey,
+        {
+          agentId: "main",
+          canonicalKey: sessionKey,
+          entry: session.entry,
+        },
+      ]),
+    ),
+}));
 // mock-isolation: This local checkout has no remote worker placements.
 vi.mock("../../gateway/session-worker-placement-context.js", () => ({
   resolveSessionWorkerPlacementContext: () => ({

@@ -6,6 +6,7 @@ import {
   listChatCommandsForConfig,
   resolveTextCommand,
 } from "../auto-reply/commands-registry.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import {
   listThinkingLevelLabels,
   type ReasoningLevel,
@@ -34,6 +35,15 @@ type ParsedCommand = {
   name: string;
   args: string;
 };
+
+export function isTuiBtwCommand(text: string): boolean {
+  return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
+}
+
+export function isTuiSlashStopCommand(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith("/") && isAbortRequestText(trimmed);
+}
 
 type SlashCommandOptions = {
   cfg?: OpenClawConfig;
