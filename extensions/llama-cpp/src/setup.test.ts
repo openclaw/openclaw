@@ -472,9 +472,7 @@ describe("llama.cpp managed setup", () => {
     await expect(runLlamaCppSetup(ctx)).rejects.toThrow(
       "Managed llama.cpp setup is unavailable on this host. The verified llama-server build requires macOS 13.3+; this Mac runs macOS 12.7.6.",
     );
-    expect(mocks.ensureModel).not.toHaveBeenCalledWith(
-      expect.objectContaining({ download: true }),
-    );
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
     expect(mocks.prepareServer).not.toHaveBeenCalled();
   });
 
@@ -490,9 +488,7 @@ describe("llama.cpp managed setup", () => {
 
     await expect(runLlamaCppSetup(ctx)).resolves.toBeDefined();
     expect(mocks.ensureServerInstalled).toHaveBeenCalledTimes(1);
-    expect(mocks.ensureModel).toHaveBeenCalledWith(
-      expect.objectContaining({ download: true }),
-    );
+    expect(mocks.ensureModel).toHaveBeenCalledWith(expect.objectContaining({ download: true }));
     expect(mocks.prepareServer).toHaveBeenCalled();
   });
 

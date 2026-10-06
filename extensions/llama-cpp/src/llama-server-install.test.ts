@@ -764,14 +764,24 @@ describe("macOS runtime floor", () => {
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
-  it.each(["13.3", "26.0.1", Object.assign(new Error("sw_vers unavailable"), { cmd: "sw_vers" })])(
-    "keeps the verified build on macOS %s",
-    async (productVersion) => {
-      const { asset, command } = await prepareMac(productVersion, "valid");
+  it.each(["13.3", "26.0.1"])("keeps the verified build on macOS %s", async (productVersion) => {
+    const { asset, command } = await prepareMac(productVersion, "valid");
 
-      await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
-    },
-  );
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
+  });
+
+  it("keeps the launch error when the macOS version cannot be read", async () => {
+    const { asset, command } = await prepareMac(
+      Object.assign(new Error("sw_vers unavailable"), { cmd: "sw_vers" }),
+      "crashes",
+    );
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.not.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toThrow("dyld");
+    expect(mocks.execFile.mock.calls.map(([file]) => file)).toEqual([command, "/usr/bin/sw_vers"]);
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
 
   it("keeps the launch error for a build that cannot start on a supported Mac", async () => {
     const { asset } = await prepareMac("13.3", "crashes");

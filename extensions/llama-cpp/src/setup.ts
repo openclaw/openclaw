@@ -405,11 +405,9 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
 
   const progress = ctx.prompter.progress("Preparing managed llama.cpp server…");
   try {
-    // Run the server install/reuse decision before any model download so a dead-end
-    // host short-circuits before fetching GGUFs. The installer reuses a validating
-    // already-installed server on any macOS (preserving the self-built escape hatch)
-    // and only refuses when neither reuse nor fresh download can succeed; the later
-    // nested call from prepareManagedLlamaServer hits installationPromises as a no-op.
+    // Decide install/reuse before fetching GGUFs, preserving validating self-built
+    // servers on older macOS. prepareManagedLlamaServer revalidates the installed
+    // server after the model downloads; completed installations are not memoized.
     await ensureLlamaServerInstalled({
       asset,
       signal: ctx.signal,
