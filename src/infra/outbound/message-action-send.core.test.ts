@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { createMessageTool } from "../../agents/tools/message-tool-execution.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -94,6 +95,35 @@ function registerSlackTextPlugin(
 }
 
 describe("runMessageAction core send routing", () => {
+  it("renders active metadata on the requested recipient through the real send path", async () => {
+    const sendText = registerSlackTextPlugin();
+    const tool = createMessageTool({
+      config: {
+        channels: {
+          slack: { enabled: true, responsePrefix: "[{provider}/{model} | think:{think}]" },
+        },
+      },
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:source",
+      modelProvider: "test-provider",
+      modelId: "test-model-latest",
+      thinkingLevel: "high",
+    });
+    await tool.execute("metadata-send", {
+      action: "send",
+      channel: "slack",
+      target: "channel:destination",
+      message: "Visible reply",
+      replyTo: "requested-reply",
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(firstMockArg(sendText, "send text")).toMatchObject({
+      to: "channel:destination",
+      text: "[test-provider/test-model | think:high] Visible reply",
+      replyToId: "requested-reply",
+    });
+  });
+
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
     ttsMocks.maybeApplyTtsToPayload
@@ -578,6 +608,40 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).toHaveBeenCalledOnce();
     expect(firstMockArg(sendText, "send text").text).toBe("[Nexus] hello world");
   });
+
+  it.each([
+    { message: "Visible reply", expected: "[test-provider/test-model | think:high] Visible reply" },
+    {
+      message: "[test-provider/test-model | think:high] Already prefixed",
+      expected: "[test-provider/test-model | think:high] Already prefixed",
+    },
+  ])(
+    "uses active metadata without duplicating the prefix: $message",
+    async ({ message, expected }) => {
+      const sendText = registerSlackTextPlugin();
+      await runMessageAction({
+        cfg: {
+          channels: {
+            slack: { enabled: true, responsePrefix: "[{provider}/{model} | think:{think}]" },
+          },
+        },
+        action: "send",
+        params: { channel: "slack", target: "channel:fixture", message },
+        responsePrefixContext: {
+          provider: "test-provider",
+          model: "test-model",
+          modelFull: "test-provider/test-model",
+          thinkingLevel: "high",
+        },
+        dryRun: false,
+      });
+      expect(sendText).toHaveBeenCalledOnce();
+      expect(firstMockArg(sendText, "send text")).toMatchObject({
+        to: "channel:fixture",
+        text: expected,
+      });
+    },
+  );
 
   it("skips responsePrefix on tool sends when a model template cannot be resolved", async () => {
     const sendText = registerSlackTextPlugin();

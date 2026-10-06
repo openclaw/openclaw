@@ -55,6 +55,8 @@ Resolution (most specific wins): account → channel → global. `""` disables a
 
 Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 
+Message-tool sends use the active run metadata for these templates. Callers without the required metadata skip unresolved prefixes rather than sending literal placeholders.
+
 ### Ack reaction
 
 - Defaults to active agent's `identity.emoji`, otherwise `"👀"`. Set `""` to disable.

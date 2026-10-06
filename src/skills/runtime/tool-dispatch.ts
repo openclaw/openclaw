@@ -68,6 +68,7 @@ export async function resolveSkillDispatchTools(
     provider: string;
     model: string;
     senderIsOwner: boolean;
+    thinkingLevel?: string;
     senderId?: string;
     currentChannelId?: string;
     skillCommand?: Pick<SkillCommandSpec, "name" | "skillFile" | "skillName" | "skillSource"> & {
@@ -193,6 +194,7 @@ export async function resolveSkillDispatchTools(
     ...(beforeToolCallHookContext ? { beforeToolCallHookContext } : {}),
     modelProvider: params.provider,
     modelId: params.model,
+    thinkingLevel: params.thinkingLevel ?? params.sessionEntry?.thinkingLevel,
     pluginToolAllowlist: collectExplicitAllowlist(explicitPolicyList),
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,

@@ -358,6 +358,7 @@ function* assembleOpenClawCodingTools(
   });
   const pluginToolOptions = {
     ...options,
+    thinkingLevel: options?.thinkingLevel ?? options?.requesterThinkingLevel,
     agentSessionKey: options?.sessionKey,
     agentChannel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
     agentTo: options?.messageTo,

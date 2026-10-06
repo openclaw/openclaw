@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
+  extractShortModelName,
+  type ResponsePrefixContext,
+} from "../../auto-reply/reply/response-prefix-template.js";
+import {
   hasInboundMetadataSentinel,
   stripInboundMetadata,
 } from "../../auto-reply/reply/strip-inbound-meta.js";
@@ -15,6 +19,7 @@ import {
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
+import type { ModelAwareToolContext } from "../openclaw-tools.model-context.js";
 import { readStringArrayParam, readToolStringParam } from "./common.js";
 export function normalizeEscapedLineBreaksForVisibleText(text: string): string {
   if (!text.includes("\\")) {
@@ -279,4 +284,18 @@ export function sanitizeMessageToolVisiblePayload(
     params[field] = sanitizePresentationTextFields(params[field], sanitizeText);
   }
   return suppressedVisiblePayloadReason;
+}
+
+export function resolveMessageToolResponsePrefixContext(
+  options?: ModelAwareToolContext,
+): ResponsePrefixContext {
+  return {
+    provider: options?.modelProvider,
+    model: options?.modelId ? extractShortModelName(options.modelId) : undefined,
+    modelFull:
+      options?.modelProvider && options.modelId
+        ? `${options.modelProvider}/${options.modelId}`
+        : options?.modelId,
+    thinkingLevel: options?.thinkingLevel,
+  };
 }

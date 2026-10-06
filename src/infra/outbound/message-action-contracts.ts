@@ -2,6 +2,7 @@ import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/r
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { ResponsePrefixContext } from "../../auto-reply/reply/response-prefix-template.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
 import {
@@ -68,6 +69,8 @@ export type MessageActionInput = Pick<
   progressSnapshot?: ChannelProgressDraftCompositorSnapshot;
   /** @internal Identifies model-authored calls for lossy input normalization. */
   actionOrigin?: "message-tool";
+  /** @internal Active run metadata for configured visible reply prefixes. */
+  responsePrefixContext?: ResponsePrefixContext;
   defaultAccountId?: string;
   requesterAccountId?: string | null;
   requesterSenderId?: string | null;

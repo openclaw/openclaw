@@ -14,6 +14,8 @@ export type ModelAwareToolContext = {
   /** Active provider/model pair used for tool gating. */
   modelProvider?: string;
   modelId?: string;
+  /** Active thinking level for visible tool reply prefixes. */
+  thinkingLevel?: string;
   /** Effective context ceiling for selected-model model-visible projections. */
   modelContextWindowTokens?: number;
   /** Explicit agent ID override for cron and hook sessions. */
