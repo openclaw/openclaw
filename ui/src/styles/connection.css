@@ -10,7 +10,8 @@
   padding: var(--space-3) var(--space-4);
 }
 
-.config-host__identity {
+.config-host__identity,
+.config-host__stat {
   display: grid;
   align-content: start;
   gap: var(--space-1);
@@ -49,13 +50,6 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
   gap: var(--space-3);
-}
-
-.config-host__stat {
-  display: grid;
-  align-content: start;
-  gap: var(--space-1);
-  min-width: 0;
 }
 
 .config-host__stat-label {

@@ -36,7 +36,7 @@ export type PluginCredentialEditorContext = {
   onCommit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
   onDiscard: () => Promise<boolean>;
 };
-type CredentialField = Pick<ConfigNodeRenderParams, "path" | "value" | "disabled" | "onPatch"> & {
+type CredentialField = Pick<ConfigNodeRenderParams, "path" | "value" | "disabled"> & {
   descriptionId?: string;
 };
 

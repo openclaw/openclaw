@@ -411,7 +411,7 @@ describe("ManagedWorktreeService repository code isolation", () => {
         }
         acknowledged = { ...record };
         if (mode === "changed") {
-          updateRegistryWorktree(
+          await updateRegistryWorktree(
             { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
             record.id,
             { lastActiveAt: record.lastActiveAt + 1 },

@@ -1,11 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type {
   CapturedSessionEntryReadSource,
   SessionEntryReadSource,
 } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { GatewaySessionStoreRead } from "./session-utils-store-read.js";
+import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
+
+export type GatewaySessionStorePlan<T> = {
+  reads: GatewaySessionStoreRead[];
+  resolve: () => T;
+};
 
 export type GatewaySessionStoreLookup = {
   storePath: string;
@@ -16,6 +24,18 @@ export type GatewaySessionStoreLookup = {
   match: { entry: SessionEntry; key: string } | undefined;
   canonicalValidationError?: Error;
 };
+
+/** Ordinary Gateway lookups exclude rows reserved for suppressed run effects. */
+export function omitInternalSessionEffectsEntries(
+  store: Record<string, SessionEntry>,
+  storeKeys: readonly string[],
+): void {
+  for (const storeKey of storeKeys) {
+    if (isInternalSessionEffectsKey(storeKey)) {
+      delete store[storeKey];
+    }
+  }
+}
 
 export function findCanonicalStoreMatch<Entry extends SessionEntry>(
   store: Record<string, Entry>,
@@ -123,5 +143,52 @@ export function resolveGatewaySessionStoreReadResults<
     ),
     match: selectedMatch,
     ...(canonicalValidationError ? { canonicalValidationError } : {}),
+  };
+}
+
+/** Retain scanned stages without planning a replacement before legacy selection finishes. */
+export async function prepareGatewaySessionStoreReadPlan(params: {
+  legacy: GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore | null> | null;
+  prepareCurrent: () => GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>;
+  prepareReads: <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => Promise<T>;
+}): Promise<{
+  target: GatewaySessionStoreTargetWithStore;
+  plan: GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>;
+}> {
+  const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
+    return await params.prepareReads(plan.reads, () => {
+      if (plan.reads.some((read) => read.result === undefined)) {
+        throw new Error("Session lookup facts were not prepared");
+      }
+      return plan.resolve();
+    });
+  };
+  const deletedMain = params.legacy;
+  if (deletedMain) {
+    const target = await resolve(deletedMain);
+    if (target) {
+      return {
+        target,
+        plan: {
+          reads: deletedMain.reads,
+          resolve() {
+            const current = deletedMain.resolve();
+            if (!current) {
+              throw new Error("Prepared legacy session target changed");
+            }
+            return current;
+          },
+        },
+      };
+    }
+  }
+  const current = params.prepareCurrent();
+  const target = await resolve(current);
+  return {
+    target,
+    plan: {
+      reads: [...(deletedMain?.reads ?? []), ...current.reads],
+      resolve: () => deletedMain?.resolve() ?? current.resolve(),
+    },
   };
 }

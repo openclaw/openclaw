@@ -1,6 +1,7 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { SessionGateway, SessionListOptions, SessionState } from "./session-capability.ts";
 import { isPrimarySessionListQuery } from "./session-list-query.ts";
 import { normalizeManagedSessionListQuery } from "./session-requests.ts";
@@ -14,7 +15,7 @@ import {
   SESSION_ROSTER_STORE_NAME,
   SESSION_ROSTER_MAX_AGE_MS,
   SESSION_ROSTER_MAX_BYTES,
-  sessionRosterCacheGeneration,
+  sessionRosterGeneration,
   type RosterExpectation,
   type SessionRosterCache,
   type SessionRosterRecord,
@@ -42,6 +43,7 @@ function isRosterQuery(value: unknown): value is SessionListOptions {
           "includeDerivedTitles",
           "includeLastMessage",
           "ownerFirst",
+          "excludeDock",
         ].includes(key) && typeof entry === "boolean"
       );
     })
@@ -110,11 +112,17 @@ export function parseSessionRosterRecord(value: unknown): SessionRosterRecord | 
 }
 
 function sessionRosterQuery(options: SessionListOptions): SessionListOptions {
-  return normalizeManagedSessionListQuery({
+  const {
+    source: _source,
+    rowMode: _rowMode,
+    ...query
+  } = normalizeManagedSessionListQuery({
     ...options,
     includeDerivedTitles: options.includeDerivedTitles ?? true,
     includeLastMessage: options.includeLastMessage ?? true,
   });
+  // Wire diagnostics and detail projection do not change persisted roster membership.
+  return query;
 }
 
 function rosterRecordMatches(record: SessionRosterRecord, expected: RosterExpectation): boolean {
@@ -159,7 +167,7 @@ export async function readSessionRoster(
   expected: RosterExpectation,
   generation: number,
 ): Promise<SessionRosterRecord | null> {
-  if (generation !== sessionRosterCacheGeneration) {
+  if (generation !== sessionRosterGeneration(scope)) {
     return null;
   }
   const database = await openSessionRosterDatabase();
@@ -173,7 +181,7 @@ export async function readSessionRoster(
       transaction.objectStore(SESSION_ROSTER_STORE_NAME).get(scope),
     );
     await completed;
-    if (value === undefined || generation !== sessionRosterCacheGeneration) {
+    if (value === undefined || generation !== sessionRosterGeneration(scope)) {
       return null;
     }
     const record = parseSessionRosterRecord(value);
@@ -223,9 +231,12 @@ export async function hydrateSessionRoster(
     return;
   }
   const record = await cache.read(initial.scope, initial);
-  const scope = gateway.connection
+  const account = readOfflineStorageScope({ client: gateway.snapshot.client });
+  const gatewayScope = gateway.connection
     ? gatewayCredentialScope(gateway.connection.gatewayUrl)
-    : initial.scope;
+    : undefined;
+  const scope =
+    gatewayScope && account ? `account:${JSON.stringify([gatewayScope, account])}` : initial.scope;
   if (
     !record ||
     signal.aborted ||

@@ -27,7 +27,7 @@ const authStoreMocks = vi.hoisted(() => {
     store: { version: 1, profiles: {} },
   };
   const ensureAuthProfileStore = vi.fn(() => state.store);
-  const hasAnyAuthProfileStoreSource = vi.fn(() => state.hasSource);
+  const hasAnyAuthProfileStoreSourceAsync = vi.fn(() => state.hasSource);
   const isProfileInCooldown = vi.fn((_store: AuthProfileStore, _profileId: string) => false);
   const resolveProviderModelRoutes = vi.fn(
     ({ provider, modelId }: { provider: string; modelId?: string }) =>
@@ -36,7 +36,7 @@ const authStoreMocks = vi.hoisted(() => {
   return {
     state,
     ensureAuthProfileStore,
-    hasAnyAuthProfileStoreSource,
+    hasAnyAuthProfileStoreSourceAsync,
     isProfileInCooldown,
     resolveProviderModelRoutes,
     reset() {
@@ -44,7 +44,7 @@ const authStoreMocks = vi.hoisted(() => {
       state.routeResolutions.clear();
       state.store = { version: 1, profiles: {} };
       ensureAuthProfileStore.mockReset().mockImplementation(() => state.store);
-      hasAnyAuthProfileStoreSource.mockReset().mockImplementation(() => state.hasSource);
+      hasAnyAuthProfileStoreSourceAsync.mockReset().mockImplementation(() => state.hasSource);
       isProfileInCooldown
         .mockReset()
         .mockImplementation((_store: AuthProfileStore, _profileId: string) => false);
@@ -63,7 +63,10 @@ vi.mock("./store.js", async (importOriginal) => ({
   getRuntimeAuthProfileStoreSnapshot: () => authStoreMocks.state.store,
   findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
     authStoreMocks.state.store.profiles[profileId],
-  hasAnyAuthProfileStoreSource: authStoreMocks.hasAnyAuthProfileStoreSource,
+}));
+vi.mock("./source-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./source-check.js")>()),
+  hasAnyAuthProfileStoreSourceAsync: authStoreMocks.hasAnyAuthProfileStoreSourceAsync,
 }));
 vi.mock("./store-runtime.js", () => ({
   ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,

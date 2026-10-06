@@ -1,6 +1,5 @@
 import CoreGraphics
 import Foundation
-import OpenClawKit
 
 enum SystemPresenceInfo {
     static func lastHardwareInputSeconds() -> Int? {
@@ -10,9 +9,5 @@ enum SystemPresenceInfo {
             return nil
         }
         return Int(seconds.rounded())
-    }
-
-    static func primaryIPv4Address() -> String? {
-        NetworkInterfaces.primaryIPv4Address()
     }
 }

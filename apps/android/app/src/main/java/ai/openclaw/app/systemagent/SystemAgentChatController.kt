@@ -284,7 +284,11 @@ internal class SystemAgentChatController(
             markRouteChanged(requestGeneration)
             return@launch
           }
-          val result = parseResult(json.parseToJsonElement(response).jsonObject)
+          val result = json.parseToJsonElement(response).jsonObject
+          val reply = result["reply"]?.jsonPrimitive?.contentOrNull ?: ""
+          val action = result["action"]?.jsonPrimitive?.contentOrNull ?: "none"
+          val sensitive = result["sensitive"]?.jsonPrimitive?.booleanOrNull
+          val agentId = result["agentId"]?.jsonPrimitive?.contentOrNull
           if (!isCurrent(requestGeneration)) return@launch
           if (!lease.isCurrent()) {
             markRouteChanged(requestGeneration)
@@ -299,13 +303,13 @@ internal class SystemAgentChatController(
                     it.messages +
                       SystemAgentChatMessage(
                         role = SystemAgentChatMessage.Role.Assistant,
-                        text = result.reply,
-                        question = parseQuestion(result.question),
+                        text = reply,
+                        question = parseQuestion(result["question"]),
                       ),
                   sending = false,
-                  expectsSensitiveReply = result.sensitive == true,
+                  expectsSensitiveReply = sensitive == true,
                   errorText = null,
-                  handoff = if (result.action == "open-agent") SystemAgentChatHandoff(result.agentId) else null,
+                  handoff = if (action == "open-agent") SystemAgentChatHandoff(agentId) else null,
                 )
               }
             }
@@ -363,23 +367,6 @@ internal class SystemAgentChatController(
       )
     }
   }
-
-  private data class Result(
-    val reply: String,
-    val action: String,
-    val sensitive: Boolean?,
-    val agentId: String?,
-    val question: JsonElement?,
-  )
-
-  private fun parseResult(root: JsonObject): Result =
-    Result(
-      reply = root["reply"]?.jsonPrimitive?.contentOrNull ?: "",
-      action = root["action"]?.jsonPrimitive?.contentOrNull ?: "none",
-      sensitive = root["sensitive"]?.jsonPrimitive?.booleanOrNull,
-      agentId = root["agentId"]?.jsonPrimitive?.contentOrNull,
-      question = root["question"],
-    )
 
   private fun parseQuestion(value: JsonElement?): SystemAgentChatQuestion? {
     val root = value as? JsonObject ?: return null

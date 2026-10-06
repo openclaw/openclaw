@@ -265,7 +265,7 @@ describe("renderChatPullRequests", () => {
       const rows = [...container.querySelectorAll("article.chat-pr")];
       expect(rows).toHaveLength(2);
       for (const row of rows) {
-        expect(row.textContent).not.toContain("GitHub publication failed.");
+        expect(row.textContent).not.toContain("Check repository read access");
         expect(row.querySelector("[data-publication-account]")).toBeNull();
         expect(row.querySelector(".chat-pr__create")).toBeNull();
       }
@@ -392,9 +392,10 @@ describe("renderChatPullRequests", () => {
       expect(recovery?.closest("article")).toBeNull();
       expect(recovery?.closest("details:not([open])")).toBeNull();
       expect(container.querySelectorAll(".chat-pr__create")).toHaveLength(completed ? 0 : 1);
-      const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) =>
-          button.textContent?.trim() === (completed ? "Refresh publication" : "Retry publication"),
+      const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+        completed
+          ? button.getAttribute("aria-label") === "Refresh publication"
+          : button.textContent?.trim() === "Retry publication",
       );
       expect(action).toBeDefined();
       action?.click();
@@ -517,9 +518,14 @@ describe("renderChatPullRequests", () => {
       }),
     });
     const failure = container.querySelector('.chat-pr__publication-outcome[data-state="failed"]');
-    expect(failure?.textContent).toContain("GitHub publication failed.");
+    expect(failure?.textContent).toContain("Publication failed");
     expect(failure?.textContent).toContain("Check repository write access and retry.");
     expect(failure?.closest("details:not([open])")).toBeNull();
+    const status = failure?.querySelector<HTMLDetailsElement>(
+      "details.chat-pr__publication-status",
+    );
+    expect(status?.open).toBe(false);
+    expect(status?.querySelector("summary")?.textContent?.trim()).toBe("Publication failed");
     expect(failure?.closest("article")?.getAttribute("data-state")).toBe("branch");
     expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.textContent).toContain(
       "Choose a new publication",

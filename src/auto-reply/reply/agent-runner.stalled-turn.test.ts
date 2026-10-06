@@ -6,6 +6,9 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
+import { createChatSendLateReplyFinalizer } from "../../gateway/server-methods/chat-send-source-finalization.js";
+import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
+import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   createSqliteTranscriptTarget,
@@ -399,12 +402,23 @@ describe("runReplyAgent stalled turn continuation", () => {
     mocks.executeFollowups = true;
     const settled = createDeferred();
     mocks.followupSettled = settled.resolve;
-    const gatewayDeliver = vi.fn(async () => ({ kind: "delivered" as const }));
+    const context = createGatewayRequestContext(makeContextParams());
     const chatSendOwner = createChatSendLateFollowupDisposition({
       runId: "chat-send-run",
       originatingChannel: "webchat",
-      logGateway: { info: vi.fn() } as never,
-      deliver: gatewayDeliver,
+      logGateway: context.logGateway,
+      deliver: createChatSendLateReplyFinalizer({
+        accountId: undefined,
+        context,
+        session: {
+          agentId: "main",
+          backingSessionId: "stalled-session",
+          cfg: {},
+          clientRunId: "chat-send-run",
+          sessionKey: queueKey,
+          sessionLoadOptions: { agentId: "main" },
+        },
+      }),
     });
     const stalled = createStalledRun({
       originatingChannel: "webchat",
@@ -423,15 +437,17 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(drainedRuns).toHaveBeenCalledOnce();
     expect(executeAgentTurnMock).toHaveBeenCalledTimes(2);
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
-    expect(gatewayDeliver).toHaveBeenCalledExactlyOnceWith(
+    const chatEvents = vi
+      .mocked(context.broadcast)
+      .mock.calls.filter(([event]) => event === "chat")
+      .map(([, payload]) => payload);
+    expect(chatEvents).toEqual([
       expect.objectContaining({
-        payloads: [
-          expect.objectContaining({
-            text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
-          }),
-        ],
+        state: "error",
+        errorMessage:
+          "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
       }),
-    );
+    ]);
   });
 
   it.each(["personal", "workspace"] as const)(

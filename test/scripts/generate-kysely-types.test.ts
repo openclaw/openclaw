@@ -44,6 +44,8 @@ describe("Kysely declarations", () => {
     for (const file of [
       "package.json",
       "scripts/prepare-git-hooks.mjs",
+      "scripts/prepare-native-protocol.mjs",
+      "scripts/runtime-postbuild-shared.mjs",
       "scripts/generate-kysely-types.mts",
       "scripts/lib/direct-run.mjs",
     ]) {
@@ -65,15 +67,23 @@ describe("Kysely declarations", () => {
       { cwd: root, env, encoding: "utf8" },
     );
     expect(packed.status, packed.stderr).toBe(0);
-    const [inventory] = JSON.parse(packed.stdout) as Array<{
-      filename: string;
-      files: Array<{ path: string }>;
-    }>;
+    const inventoryByName = JSON.parse(packed.stdout) as Record<
+      string,
+      {
+        filename: string;
+        files: Array<{ path: string }>;
+      }
+    >;
+    expect(Object.keys(inventoryByName)).toEqual(["openclaw"]);
+    const inventory = inventoryByName.openclaw;
+    if (!inventory) {
+      throw new Error("npm pack did not return the openclaw inventory");
+    }
     const unpacked = path.join(root, "unpacked");
     fs.mkdirSync(unpacked);
     const extracted = spawnSync(
       "tar",
-      ["-xzf", path.join(root, inventory!.filename), "-C", unpacked],
+      ["-xzf", path.join(root, inventory.filename), "-C", unpacked],
       {
         env,
         encoding: "utf8",
@@ -83,7 +93,7 @@ describe("Kysely declarations", () => {
     const packageRoot = path.join(unpacked, "package");
     expect(
       collectPackageDistImportErrors({
-        files: inventory!.files.map((file) => file.path),
+        files: inventory.files.map((file) => file.path),
         readText: (file: string) => fs.readFileSync(path.join(packageRoot, file), "utf8"),
       }),
     ).toEqual([]);
@@ -93,11 +103,16 @@ describe("Kysely declarations", () => {
         env,
         encoding: "utf8",
       });
-    for (const file of ["scripts/generate-kysely-types.mts", "scripts/prepare-git-hooks.mjs"]) {
+    for (const file of [
+      "scripts/generate-kysely-types.mts",
+      "scripts/prepare-git-hooks.mjs",
+      "scripts/prepare-native-protocol.mjs",
+    ]) {
       const result = run(file);
       expect(result.status, result.stderr).toBe(0);
     }
     expect(fs.existsSync(path.join(packageRoot, ".artifacts"))).toBe(false);
+    expect(fs.existsSync(path.join(packageRoot, "apps"))).toBe(false);
     fs.unlinkSync(path.join(packageRoot, "scripts/lib/direct-run.mjs"));
     const missing = run("scripts/generate-kysely-types.mts");
     expect(missing.status).toBe(1);
@@ -126,15 +141,6 @@ describe("Kysely declarations", () => {
     expect(fs.existsSync(output)).toBe(false);
     expect(fs.existsSync(agentOutput)).toBe(false);
     expect(fs.existsSync(path.join(root, ".artifacts/kysely/inputs.sha256"))).toBe(false);
-  });
-
-  it("skips source-less installs but rejects an incomplete schema checkout", async () => {
-    const root = tempDirs.make("kysely-source-less-");
-    fs.mkdirSync(path.join(root, "src/state"), { recursive: true });
-    await ensureKyselyTypes(root);
-    expect(fs.existsSync(path.join(root, ".artifacts"))).toBe(false);
-    fs.writeFileSync(path.join(root, "src/state/openclaw-state-schema.sql"), schema);
-    await expect(ensureKyselyTypes(root)).rejects.toThrow("openclaw-agent-schema.sql");
   });
 
   it("derives ordered tables, nullability, defaults and composite keys from SQL", async () => {

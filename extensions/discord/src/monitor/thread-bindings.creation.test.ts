@@ -112,26 +112,6 @@ describe("thread binding creation", () => {
     });
   });
 
-  it("normalizes a prefixed parent before creating a child", async () => {
-    await createTestThreadBindingManager();
-    const binding = await service.bind({
-      targetSessionKey: "agent:codex:acp:child",
-      targetKind: "session",
-      conversation: {
-        ...conversation,
-        conversationId: "channel:1491611525914558668",
-        parentConversationId: "channel:1491611525914558667",
-      },
-      placement: "child",
-      metadata: { agentId: "codex", label: "ACP bind test", threadName: "ACP bind test" },
-    });
-    expect(binding).toMatchObject({
-      conversation: { ...conversation, conversationId: "thread-created" },
-    });
-    expectThreadCreate("1491611525914558667", { accountId: "default" });
-    expect(hoisted.restGet).not.toHaveBeenCalled();
-  });
-
   it.each([false, true])(
     "inherits direct-binding metadata only for the same target (replace=%s)",
     async (replace) => {

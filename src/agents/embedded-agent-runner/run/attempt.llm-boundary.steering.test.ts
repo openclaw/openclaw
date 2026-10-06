@@ -16,7 +16,10 @@ import {
   normalizeMessagesForLlmBoundary,
 } from "./attempt-llm-boundary.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
-import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+import {
+  attachSteeringRuntimeContext,
+  buildRuntimeContextCustomMessage,
+} from "./runtime-context-prompt.js";
 
 function createSession() {
   return {
@@ -43,6 +46,34 @@ const runtimeContext = () =>
   expectDefined(buildRuntimeContextCustomMessage("original context"), "runtime context fixture");
 
 describe("active prompt steering context", () => {
+  it("keeps steering context through tool use and retires it after a settled answer", () => {
+    const first = steeringUser();
+    attachSteeringRuntimeContext(first, { text: "first quoted context" });
+    const second = { ...steeringUser(), timestamp: 2 };
+    attachSteeringRuntimeContext(second, { text: "second quoted context" });
+    const toolUse = createAssistant(testModel, []);
+    toolUse.stopReason = "toolUse";
+
+    expect(JSON.stringify(normalizeMessagesForLlmBoundary([first, toolUse]))).toContain(
+      "first quoted context",
+    );
+    for (const stopReason of ["error", "aborted"] as const) {
+      const failed = createAssistant(testModel, []);
+      failed.stopReason = stopReason;
+      const retry = JSON.stringify(normalizeMessagesForLlmBoundary([first, second, failed]));
+      expect(retry).toContain("first quoted context");
+      expect(retry).toContain("second quoted context");
+    }
+
+    const settled = createAssistant(testModel, [{ type: "text", text: "done" }]);
+    const third = { ...steeringUser(), timestamp: 3 };
+    attachSteeringRuntimeContext(third, { text: "third quoted context" });
+    const next = JSON.stringify(normalizeMessagesForLlmBoundary([first, second, settled, third]));
+    expect(next).not.toContain("first quoted context");
+    expect(next).not.toContain("second quoted context");
+    expect(next).toContain("third quoted context");
+  });
+
   it("keeps keyless context on the original prompt through pre-prompt rebuilding and initial steering", async () => {
     const manager = SessionManager.inMemory();
     const kept = manager.appendMessage({ role: "user", content: "older request", timestamp: 1 });
@@ -123,9 +154,13 @@ describe("active prompt steering context", () => {
     },
   );
 
-  it.each([false, true])(
-    "replays a carrierless keyless prompt only with an unambiguous canonical timestamp (ambiguous=%s)",
-    async (ambiguous) => {
+  it.each([
+    { replay: "rehydrated", ambiguous: false },
+    { replay: "rehydrated", ambiguous: true },
+    { replay: "retained", ambiguous: true },
+  ])(
+    "selects a carrierless keyless prompt from $replay history (same-time steering=$ambiguous)",
+    async ({ replay, ambiguous }) => {
       const original = originalUser();
       const manager = SessionManager.inMemory();
       const session = createSession();
@@ -136,13 +171,23 @@ describe("active prompt steering context", () => {
         manager.appendMessage(steeringUser());
       }
       manager.appendCompaction("Earlier context was summarized.", persisted.entryId, 100);
-      const canonical = manager.buildSessionContext().messages;
+      const restored =
+        replay === "rehydrated"
+          ? SessionManager.fromEntries(manager.getPersistedEntries())
+          : manager;
+      const canonical = restored.buildSessionContext().messages;
+      expect(canonical.includes(original)).toBe(replay === "retained");
       const projected = await session.agent.transformContext(canonical);
       cleanup();
-      if (ambiguous) {
+      if (replay === "rehydrated" && ambiguous) {
         expect(projected).toEqual(canonical);
       } else {
-        expect(projected.at(-1)).toMatchObject({ content: "before\n\noriginal" });
+        expect(projected.at(ambiguous ? -2 : -1)).toMatchObject({
+          content: "before\n\noriginal",
+        });
+        if (ambiguous) {
+          expect(projected.at(-1)).toBe(canonical.at(-1));
+        }
       }
     },
   );

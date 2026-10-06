@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import { findEdgeAuthIssue } from "../shared/gateway-edge-auth-headers.js";
 import { McpServerSchema } from "./zod-schema.mcp-server.js";
 import { MemorySearchSchema } from "./zod-schema.memory-search.js";
@@ -239,9 +240,7 @@ export const TalkSchema = z
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     realtime: TalkRealtimeSchema.optional(),
-    consultThinkingLevel: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
-      .optional(),
+    consultThinkingLevel: z.enum(ALL_THINKING_LEVELS).optional(),
     consultFastMode: z.boolean().optional(),
     speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),

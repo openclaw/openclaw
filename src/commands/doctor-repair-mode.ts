@@ -1,15 +1,9 @@
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { DoctorOptions } from "./doctor.types.js";
 
-export type DoctorRepairMode = {
-  shouldRepair: boolean;
-  shouldForce: boolean;
-  nonInteractive: boolean;
-  canPrompt: boolean;
-  updateInProgress: boolean;
-};
+export type DoctorRepairMode = ReturnType<typeof resolveDoctorRepairMode>;
 
-export function resolveDoctorRepairMode(options: DoctorOptions): DoctorRepairMode {
+export function resolveDoctorRepairMode(options: DoctorOptions) {
   const yes = options.yes === true;
   const requestedNonInteractive = options.nonInteractive === true;
   const shouldRepair = options.repair === true || yes;

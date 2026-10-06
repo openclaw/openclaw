@@ -16,6 +16,7 @@ import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import {
   bindGatewayContextResolver,
@@ -29,6 +30,7 @@ import {
   setPluginRuntimeLoadContext,
   type PluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
+import { subscribeRuntimeSessionChanges } from "../plugins/runtime/session-changes.js";
 import type {
   CreatePluginRuntimeOptions,
   PluginRuntime,
@@ -38,12 +40,16 @@ import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayContextResolver, GatewayRequestHandler } from "./server-methods/types.js";
+import { resolveTrustedPluginGitHubAccount } from "./server-plugin-github-account.js";
 import {
   dispatchGatewayMethodInProcess,
   dispatchGatewayMethodInProcessRaw,
   getInProcessGatewayRequestContext,
 } from "./server-plugin-in-process-dispatch.js";
-import { readTrustedPluginSessionFacts } from "./server-plugin-session-facts.js";
+import {
+  readTrustedPluginSessionFacts,
+  withTrustedPluginSessionFacts,
+} from "./server-plugin-session-facts.js";
 import {
   canTrustedOfficialPluginRequestScopes,
   createGatewaySubagentRuntime,
@@ -52,7 +58,6 @@ import {
 } from "./server-plugin-subagent-runtime.js";
 import { withTrustedPluginUserProfileIdentity } from "./server-plugin-user-profile.js";
 import {
-  createGatewayHooksRuntime,
   hasInProcessGatewayContext,
   openGatewayNodeDuplex,
   projectGatewayRuntimeNodes,
@@ -66,7 +71,12 @@ export {
 export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-dispatch.js";
 export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
-export { readTrustedPluginSessionFacts, withTrustedPluginUserProfileIdentity };
+export {
+  readTrustedPluginSessionFacts,
+  withTrustedPluginSessionFacts,
+  withTrustedPluginUserProfileIdentity,
+  resolveTrustedPluginGitHubAccount,
+};
 export { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
 
 export async function dispatchTrustedPluginGatewayMethod<T>(
@@ -93,6 +103,47 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
     ...(syntheticScopes ? { syntheticScopes } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
+}
+
+/** Narrow requester-only presentation capability; unlike arbitrary RPC it grants no plugin scopes. */
+export async function openPluginPanelForRequester(
+  params: Parameters<PluginRuntime["gateway"]["openPluginPanel"]>[0],
+  resolveGatewayContext?: GatewayContextResolver,
+): Promise<{ ok: true }> {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  const registry = scope?.pluginRegistry;
+  const record = registry?.plugins.find((candidate) => candidate.id === scope?.pluginId);
+  if (!registry || !record) {
+    throw new Error("Opening a plugin panel requires a current plugin runtime.");
+  }
+  const live = capturePluginLifecycleAuthority(registry, record, { admittedRuntime: true });
+  const assertCurrent = () => {
+    scope?.signal?.throwIfAborted();
+    if (!live?.()) {
+      throw new Error("Opening a plugin panel requires a current plugin runtime.");
+    }
+  };
+  assertCurrent();
+  return await dispatchGatewayMethodInProcess<{ ok: true }>(
+    "ui.command",
+    {
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      command: {
+        kind: "panel",
+        panel: "plugin",
+        pluginId: record.id,
+        panelId: params.panelId,
+        open: true,
+      },
+    },
+    {
+      pluginRuntimeOwnerId: record.id,
+      resolveGatewayContext,
+      syntheticScopeMode: "minimum",
+      sessionMutationCommitGuard: assertCurrent,
+    },
+  );
 }
 
 type GatewayRuntimeNodes = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
@@ -219,12 +270,34 @@ function createGatewayPluginRuntimeBindings(
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
+        openPluginPanel: (params) =>
+          openPluginPanelForRequester(params, resolveBoundGatewayContext),
         readSessionFacts: (params) =>
           readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
+        withSessionFacts: (select, run) =>
+          withTrustedPluginSessionFacts(select, run, resolveBoundGatewayContext),
+        subscribeSessionChanges: subscribeRuntimeSessionChanges,
         withUserProfileIdentity: (params, run) =>
           withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),
+        resolveGitHubAccount: (params) =>
+          resolveTrustedPluginGitHubAccount(
+            {
+              ...params,
+              signal: params.signal ? AbortSignal.any([params.signal, signal]) : signal,
+            },
+            resolveBoundGatewayContext,
+          ),
       },
-      hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
+      hooks: {
+        dispatchHookAgentTurn: async (params) => {
+          const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
+          const gatewayContext = resolveBoundGatewayContext?.();
+          if (!pluginId || !gatewayContext?.dispatchHookAgentTurn) {
+            throw new Error("Plugin hook runtime requires an active Gateway and plugin identity.");
+          }
+          return await gatewayContext.dispatchHookAgentTurn(pluginId, params);
+        },
+      },
       nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, signal),
       subagent: createGatewaySubagentRuntime(resolveBoundGatewayContext, overridePolicies, signal),
     },

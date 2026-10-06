@@ -155,10 +155,7 @@ function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
 
 export function isNonFatalSystemdInstallProbeError(error: unknown): boolean {
   const detail = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  const normalized = normalizeLowercaseStringOrEmpty(detail);
-  return (
-    isSystemdUserBusUnavailableDetail(normalized) || isGenericSystemctlIsEnabledFailure(normalized)
-  );
+  return isSystemdUserBusUnavailableDetail(detail) || isGenericSystemctlIsEnabledFailure(detail);
 }
 
 async function execSystemdUserCommand(

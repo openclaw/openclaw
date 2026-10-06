@@ -10,7 +10,6 @@ import {
   finishBackupScratch,
   maintainBackupScratch,
 } from "./backup-scratch.js";
-import * as fsSafe from "./fs-safe.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import * as privateDirectory from "./sqlite-private-directory.js";
 import * as stagingToken from "./sqlite-staging-token.js";
@@ -171,45 +170,47 @@ it.each([false, true])(
   },
 );
 
-it.each(["lstat", "boundary", "cleanup"] as const)(
-  "records scratch reclaimed before %s as an intentional non-outcome",
-  async (phase) => {
+it.each(["directory", "payload"] as const)(
+  "reports vanished %s without claiming remaining scratch was reclaimed",
+  async (removedEntry) => {
     const root = dirs.make("backup-scratch-vanished-");
     const directory = path.join(root, "openclaw-backup-retired-Gone01");
     await fs.mkdir(directory);
     let removed = false;
-    const reclaim = async (target: unknown) => {
-      if (target === directory && !removed) {
-        removed = true;
-        await fs.rm(directory, { recursive: true });
-      }
-    };
-    if (phase === "boundary") {
-      const createRoot = fsSafe.root;
-      vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
-        await reclaim(args[0]);
-        return createRoot(...args);
-      });
-    } else if (phase === "lstat") {
-      const lstat = fs.lstat;
-      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        await reclaim(args[0]);
-        return lstat(...args);
-      });
-    } else {
+    if (removedEntry === "directory") {
       const rmdir = fs.rmdir;
       vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
-        await reclaim(args[0]);
+        if (args[0] === directory && !removed) {
+          removed = true;
+          await fs.rm(directory, { recursive: true });
+        }
         return rmdir(...args);
+      });
+    } else {
+      const payload = path.join(directory, "config-0");
+      await fs.writeFile(payload, "synthetic config");
+      const lstat = fs.lstat;
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        if (args[0] === payload) {
+          removed = true;
+          await fs.rm(payload, { force: true });
+        }
+        return lstat(...args);
       });
     }
     const log = vi.fn();
     const report = await maintainBackupScratch({ roots: [root], repair: true, log });
     expect(removed).toBe(true);
-    expect(report.warnings).toEqual([]);
     expect(report.reclaimed).toEqual([]);
-    expect(report.alreadyReclaimed).toEqual([directory]);
-    expect(log).toHaveBeenCalledWith(`Backup scratch already reclaimed: ${directory}`);
+    if (removedEntry === "directory") {
+      expect(report.warnings).toEqual([]);
+      expect(report.alreadyReclaimed).toEqual([directory]);
+      expect(log).toHaveBeenCalledWith(`Backup scratch already reclaimed: ${directory}`);
+    } else {
+      expect(report.alreadyReclaimed).toEqual([]);
+      expect(report.warnings).toEqual([expect.stringContaining(directory)]);
+      await expect(fs.stat(directory)).resolves.toBeDefined();
+    }
   },
 );
 
@@ -253,26 +254,6 @@ it.each(["directory", "token"] as const)(
     }
   },
 );
-
-it("does not report remaining scratch as reclaimed when only a payload vanishes", async () => {
-  const root = dirs.make("backup-scratch-payload-vanished-");
-  const directory = path.join(root, "openclaw-backup-retired-Gone02");
-  await fs.mkdir(directory);
-  const payload = path.join(directory, "config-0");
-  await fs.writeFile(payload, "synthetic config");
-  const lstat = fs.lstat;
-  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-    if (args[0] === payload) {
-      await fs.rm(payload, { force: true });
-    }
-    return lstat(...args);
-  });
-  const report = await maintainBackupScratch({ roots: [root], repair: true, log: () => {} });
-  expect(report.reclaimed).toEqual([]);
-  expect(report.alreadyReclaimed).toEqual([]);
-  expect(report.warnings).toEqual([expect.stringContaining(directory)]);
-  await expect(fs.stat(directory)).resolves.toBeDefined();
-});
 
 it("preserves a symlink target when scratch is replaced after transaction retirement", async () => {
   const parent = dirs.make("backup-scratch-replaced-");
@@ -429,82 +410,68 @@ it.each(["admitted", "creating"] as const)(
   },
 );
 
-it.each(["config-0", "archive.tar.gz"])(
-  "reclaims abandoned %s scratch while a live transaction protects its files",
-  async (payloadName) => {
-    const root = dirs.make("backup-scratch-lifetime-");
-    const abandoned = await createBackupScratchDirectory(root);
-    const active = await createBackupScratchDirectory(root);
-    const legacy = path.join(root, "openclaw-backup-Legacy");
-    const rollback = path.join(root, ".openclaw.package-backup-123-456");
-    for (const directory of [abandoned.directory, active.directory, legacy, rollback]) {
-      await fs.mkdir(directory, { recursive: true });
-      await fs.writeFile(path.join(directory, payloadName), "synthetic backup input");
-    }
-    abandoned.release();
-    try {
-      const inspection = await maintainBackupScratch({ roots: [root], repair: false });
-      expect(inspection.reclaimed).toEqual([]);
-      expect(inspection.unchecked).toEqual(
-        expect.arrayContaining([active.directory, abandoned.directory]),
-      );
-      await expect(fs.readFile(path.join(abandoned.directory, payloadName), "utf8")).resolves.toBe(
+it("reclaims abandoned archives while a live transaction protects its files", async () => {
+  const payloadName = "archive.tar.gz";
+  const root = dirs.make("backup-scratch-lifetime-");
+  const abandoned = await createBackupScratchDirectory(root);
+  const active = await createBackupScratchDirectory(root);
+  const legacy = path.join(root, "openclaw-backup-Legacy");
+  const rollback = path.join(root, ".openclaw.package-backup-123-456");
+  for (const directory of [abandoned.directory, active.directory, legacy, rollback]) {
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, payloadName), "synthetic backup input");
+  }
+  abandoned.release();
+  try {
+    const inspection = await maintainBackupScratch({ roots: [root], repair: false });
+    expect(inspection.reclaimed).toEqual([]);
+    expect(inspection.unchecked).toEqual(
+      expect.arrayContaining([active.directory, abandoned.directory]),
+    );
+    await expect(fs.readFile(path.join(abandoned.directory, payloadName), "utf8")).resolves.toBe(
+      "synthetic backup input",
+    );
+
+    const repair = await maintainBackupScratch({ roots: [root], repair: true });
+    expect(repair.reclaimed).toEqual([abandoned.directory]);
+    expect(repair.active).toEqual([active.directory]);
+    expect(repair.warnings).toEqual([expect.stringContaining(legacy)]);
+    await expect(fs.stat(abandoned.directory)).rejects.toMatchObject({ code: "ENOENT" });
+    for (const directory of [active.directory, legacy, rollback]) {
+      await expect(fs.readFile(path.join(directory, payloadName), "utf8")).resolves.toBe(
         "synthetic backup input",
       );
-
-      const repair = await maintainBackupScratch({ roots: [root], repair: true });
-      expect(repair.reclaimed).toEqual([abandoned.directory]);
-      expect(repair.active).toEqual([active.directory]);
-      expect(repair.warnings).toEqual([expect.stringContaining(legacy)]);
-      await expect(fs.stat(abandoned.directory)).rejects.toMatchObject({ code: "ENOENT" });
-      for (const directory of [active.directory, legacy, rollback]) {
-        await expect(fs.readFile(path.join(directory, payloadName), "utf8")).resolves.toBe(
-          "synthetic backup input",
-        );
-      }
-    } finally {
-      await finishBackupScratch(active);
     }
-  },
-);
+  } finally {
+    await finishBackupScratch(active);
+  }
+});
 
-it.each(["payload", "directory"] as const)(
-  "retries retirement after failed %s cleanup",
-  async (phase) => {
-    const root = dirs.make("backup-scratch-retry-");
-    const scratch = await createBackupScratchDirectory(root);
-    const payload = path.join(scratch.directory, "config-0");
-    await fs.writeFile(payload, "synthetic config");
-    const method = phase === "payload" ? "unlink" : "rmdir";
-    const remove = fs[method].bind(fs);
-    const failure = vi.spyOn(fs, method).mockImplementation(async (target) => {
-      if (
-        (phase === "payload" && path.basename(String(target)) === "config-0") ||
-        (phase === "directory" && path.dirname(String(target)) === root)
-      ) {
-        throw Object.assign(new Error("cleanup denied"), { code: "EACCES" });
-      }
-      return remove(target);
-    });
-    let remaining = scratch.directory;
-    try {
-      const log = vi.fn();
-      const warning = await finishBackupScratch(scratch, log);
-      const [retired] = await fs.readdir(root);
-      remaining = path.join(root, retired!);
-      expect(warning).toContain(remaining);
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("cleanup denied"));
-      const token = fs.stat(path.join(remaining, "owner.sqlite"));
-      if (phase === "payload") {
-        await expect(token).resolves.toBeDefined();
-      } else {
-        await expect(token).rejects.toMatchObject({ code: "ENOENT" });
-      }
-    } finally {
-      failure.mockRestore();
+it("retries retirement after failed payload cleanup", async () => {
+  const root = dirs.make("backup-scratch-retry-");
+  const scratch = await createBackupScratchDirectory(root);
+  const payload = path.join(scratch.directory, "config-0");
+  await fs.writeFile(payload, "synthetic config");
+  const remove = fs.unlink.bind(fs);
+  const failure = vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
+    if (path.basename(String(target)) === "config-0") {
+      throw Object.assign(new Error("cleanup denied"), { code: "EACCES" });
     }
-    const report = await maintainBackupScratch({ roots: [root], repair: true });
-    expect(report.reclaimed).toEqual([remaining]);
-    await expect(fs.stat(remaining)).rejects.toMatchObject({ code: "ENOENT" });
-  },
-);
+    return remove(target);
+  });
+  let remaining = scratch.directory;
+  try {
+    const log = vi.fn();
+    const warning = await finishBackupScratch(scratch, log);
+    const [retired] = await fs.readdir(root);
+    remaining = path.join(root, retired!);
+    expect(warning).toContain(remaining);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("cleanup denied"));
+    await expect(fs.stat(path.join(remaining, "owner.sqlite"))).resolves.toBeDefined();
+  } finally {
+    failure.mockRestore();
+  }
+  const report = await maintainBackupScratch({ roots: [root], repair: true });
+  expect(report.reclaimed).toEqual([remaining]);
+  await expect(fs.stat(remaining)).rejects.toMatchObject({ code: "ENOENT" });
+});

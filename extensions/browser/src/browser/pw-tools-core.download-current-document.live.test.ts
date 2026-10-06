@@ -4,9 +4,11 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isLiveTestEnabled } from "../../test-support.js";
+import * as outputFiles from "./output-files.js";
 import { closePlaywrightBrowserConnection } from "./pw-session.js";
 import { downloadCurrentDocumentViaPlaywright } from "./pw-tools-core.downloads.js";
 
@@ -186,7 +188,23 @@ describe.skipIf(!isLiveTestEnabled())("current-document downloads (real Chromium
     expect(requests).toHaveLength(count);
   });
 
-  it("cancels a streaming native download without publishing partial bytes", async () => {
+  it("cancels a streaming native download without publishing partial bytes", async ({
+    signal,
+    onTestFinished,
+  }) => {
+    const writeSettled = Promise.withResolvers<void>();
+    const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
+    const write = vi
+      .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")
+      .mockImplementation((params) => {
+        const pending = writeOutput(params);
+        void pending.then(
+          () => writeSettled.resolve(),
+          () => writeSettled.resolve(),
+        );
+        return pending;
+      });
+    onTestFinished(() => write.mockRestore());
     const url = `${baseUrl}/slow.png`;
     await page.goto(url);
     const existing = await fs.readdir(path.join(rootDir, "downloads"));
@@ -197,7 +215,11 @@ describe.skipIf(!isLiveTestEnabled())("current-document downloads (real Chromium
     controller.abort(new Error("caller cancelled"));
     await rejected;
     await expect.poll(() => heldResponses.size).toBe(0);
-    await expect.poll(() => fs.readdir(path.join(rootDir, "downloads"))).toEqual(existing);
+    // Abort fences later writer admission; an admitted writer still owns staging cleanup.
+    if (write.mock.calls.length > 0) {
+      await withinTest(writeSettled.promise, signal);
+    }
+    expect(await fs.readdir(path.join(rootDir, "downloads"))).toEqual(existing);
     expect(page.url()).toBe(url);
   }, 20_000);
 });

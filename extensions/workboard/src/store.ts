@@ -489,7 +489,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
               latest.execution?.status === "running"
                 ? { ...latest.execution, status: "blocked" as const, updatedAt: now }
                 : latest.execution;
-            latest = await this.updateCard(latest.id, {
+            latest = await this.updateCard(await this.requireCard(latest.id), {
               status: "blocked",
               ...(execution ? { execution } : {}),
               metadata: {
@@ -511,7 +511,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
             });
             blocked.push(latest);
           } else if (claimExpired) {
-            latest = await this.updateCard(latest.id, {
+            latest = await this.updateCard(await this.requireCard(latest.id), {
               metadata: { ...latest.metadata, claim: undefined },
             });
             reclaimed.push(latest);
@@ -521,7 +521,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
             retriesExhausted &&
             isDependencyPromotableStatus(latest.status)
           ) {
-            latest = await this.updateCard(latest.id, {
+            latest = await this.updateCard(await this.requireCard(latest.id), {
               status: "blocked",
               metadata: {
                 ...latest.metadata,

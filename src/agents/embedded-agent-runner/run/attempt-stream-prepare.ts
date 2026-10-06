@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ReplyToolAuthorityPreparation } from "../../../auto-reply/reply/reply-run-registry.contracts.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import { validateAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
@@ -13,13 +14,11 @@ import {
 } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
-import {
-  projectNestedToolActivityForHooks,
-  type NestedToolActivity,
-} from "../../../sessions/nested-tool-activity.js";
+import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
+import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
@@ -47,6 +46,10 @@ import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
 } from "./attempt-async-tasks.js";
+import {
+  readAttemptNestedToolActivity,
+  type AttemptNestedToolActivityState,
+} from "./attempt-nested-tool-activity.js";
 import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
@@ -88,6 +91,7 @@ type PrepareEmbeddedAttemptStreamInput = {
     | "coreBuiltinToolNames"
     | "replaySafeToolNames"
     | "codeModeExecToolNames"
+    | "sourceReplyCapableToolNames"
     | "sideEffectToolOwners"
     | "trustedLocalMediaToolNames"
   >;
@@ -99,7 +103,7 @@ type PrepareEmbeddedAttemptStreamInput = {
   runtimeChannel?: string;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
-  nestedToolActivities: NestedToolActivity[];
+  nestedToolActivityState: AttemptNestedToolActivityState;
   isReplaySafeTool: (tool: Parameters<ToolSearchCatalogToolExecutor>[0]["tool"]) => boolean;
   runAbortController: AbortController;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
@@ -208,30 +212,43 @@ function prepareStream(
               action: "continue",
             };
             if (shouldRunBeforeAgentFinalize && !hookRevisionLimitReached) {
-              const hookMessages = projectNestedToolActivityForHooks(
-                activeSession.messages,
-                input.nestedToolActivities,
-              );
               const reportedModelRef = resolveReportedModelRef({
                 provider: attempt.provider,
                 model: attempt.modelId,
                 assistant: lastAssistant,
               });
               outcome = await runAgentHarnessBeforeAgentFinalizeHook({
-                event: {
-                  runId: attempt.runId,
-                  sessionId: attempt.sessionId,
-                  ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-                  provider: reportedModelRef.provider,
-                  model: reportedModelRef.model,
-                  ...((attempt.cwd ?? attempt.workspaceDir)
-                    ? { cwd: attempt.cwd ?? attempt.workspaceDir }
-                    : {}),
-                  ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
-                  stopHookActive: false,
-                  lastAssistantMessage,
-                  messages: hookMessages,
-                },
+                event: bindAgentHarnessHookMessages(
+                  {
+                    runId: attempt.runId,
+                    sessionId: attempt.sessionId,
+                    ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
+                    provider: reportedModelRef.provider,
+                    model: reportedModelRef.model,
+                    ...((attempt.cwd ?? attempt.workspaceDir)
+                      ? { cwd: attempt.cwd ?? attempt.workspaceDir }
+                      : {}),
+                    ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
+                    stopHookActive: false,
+                    lastAssistantMessage,
+                    messages: activeSession.messages,
+                  },
+                  async () => {
+                    const activities = await readAttemptNestedToolActivity(
+                      activeSession.sessionManager,
+                      input.nestedToolActivityState,
+                    );
+                    if (
+                      input.runAbortController.signal.aborted ||
+                      input.getRunState().aborted ||
+                      admission.closed ||
+                      ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) !== queueHandle
+                    ) {
+                      throw new Error("Nested tool finalization is no longer current");
+                    }
+                    return projectNestedToolActivityForHooks(activeSession.messages, activities);
+                  },
+                ),
                 ctx: {
                   ...buildEmbeddedAgentHookContext(
                     attempt,
@@ -292,8 +309,7 @@ function prepareStream(
               {
                 customType: "openclaw.plan-completion-check",
                 display: false,
-                content:
-                  "This run’s latest successfully saved plan still has unfinished steps. Before ending, check whether those steps remain required and authorized under the latest user instructions. Continue feasible work from the current transcript; do not repeat completed actions, and reconcile uncertain effects before retrying. If work is complete, reconcile the plan. If user input, approval, an external dependency, or an explicit pause prevents further work, report that concrete limitation. Do not invent completion or new authority.",
+                content: `This run’s latest successfully saved plan still has unfinished steps. Before ending, check whether those steps remain required and authorized under the latest user instructions. Continue feasible work from the current transcript; do not repeat completed actions, and reconcile uncertain effects before retrying. If work is complete, reconcile the plan. If user input, approval, an external dependency, or an explicit pause prevents further work, report that concrete limitation; if your previous reply already reported it, end with only ${SILENT_REPLY_TOKEN}. Do not invent completion or new authority.`,
               },
               { deliverAs: "followUp" },
             );
@@ -405,6 +421,7 @@ function prepareStream(
     coreBuiltinToolNames: agentSession.coreBuiltinToolNames,
     replaySafeToolNames: agentSession.replaySafeToolNames,
     codeModeExecToolNames: agentSession.codeModeExecToolNames,
+    sourceReplyCapableToolNames: agentSession.sourceReplyCapableToolNames,
     sideEffectToolOwners: agentSession.sideEffectToolOwners,
     trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
     internalEvents: attempt.internalEvents,
@@ -421,7 +438,7 @@ function prepareStream(
     isCurrent: () =>
       ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle && !input.getRunState().aborted,
     isReplaySafeTool: input.isReplaySafeTool,
-    nestedToolActivities: input.nestedToolActivities,
+    nestedToolActivityState: input.nestedToolActivityState,
   });
 
   let externalAbortAccepted = false;
@@ -465,8 +482,10 @@ function prepareStream(
   const questionAuthority = (
     assertCurrent: (() => void) | undefined,
     kind: InputAuthority["kind"],
+    toolAuthorityPreparation?: ReplyToolAuthorityPreparation,
   ): InputAuthority => ({
     kind,
+    toolAuthorityPreparation,
     assertCurrent: () => {
       if (!composeInjectionGuard(assertCurrent)()) {
         throw new Error("active session is finalizing");
@@ -479,6 +498,8 @@ function prepareStream(
     options?: EmbeddedAgentQueueMessageOptions,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    prepareCurrent?: () => Promise<void>,
+    toolAuthorityPreparation?: ReplyToolAuthorityPreparation,
   ) => {
     const canInjectMessage = composeInjectionGuard(assertCurrent);
     if (!canInjectMessage()) {
@@ -495,7 +516,8 @@ function prepareStream(
         options,
         attempt.sessionKey,
         canInjectMessage,
-        questionAuthority(assertCurrent, authorityKind),
+        questionAuthority(assertCurrent, authorityKind, toolAuthorityPreparation),
+        prepareCurrent,
       );
     } finally {
       activeQueueAdmissions--;
@@ -506,23 +528,25 @@ function prepareStream(
     options?: EmbeddedAgentQueueMessageOptions,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    preparation?: ReplyToolAuthorityPreparation,
   ) =>
     claimEmbeddedPendingUserInputAnswer(
       text,
       options,
       attempt.sessionKey,
       composeInjectionGuard(assertCurrent),
-      questionAuthority(assertCurrent, authorityKind),
+      questionAuthority(assertCurrent, authorityKind, preparation),
     );
   const cancelPendingUserInput = (
     resolvedBy: string,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    preparation?: ReplyToolAuthorityPreparation,
   ) =>
     cancelPendingAgentQuestionForSession({
       sessionKey: attempt.sessionKey,
       resolvedBy,
-      authority: questionAuthority(assertCurrent, authorityKind),
+      authority: questionAuthority(assertCurrent, authorityKind, preparation),
     });
   const messageInjection = {
     version: 2 as const,
@@ -530,7 +554,20 @@ function prepareStream(
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
-  };
+    queueMessageAsync: (text, options, preparation, kind) =>
+      queueMessage(
+        text,
+        options,
+        preparation.assertCurrent,
+        kind,
+        preparation.prepareCurrent,
+        preparation,
+      ),
+    claimPendingUserInputAnswerAsync: (text, options, preparation, kind) =>
+      claimPendingUserInputAnswer(text, options, preparation.assertCurrent, kind, preparation),
+    cancelPendingUserInputAsync: (resolvedBy, preparation, kind) =>
+      cancelPendingUserInput(resolvedBy, preparation.assertCurrent, kind, preparation),
+  } satisfies NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>;
   const heartbeatReplyOperation =
     attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
   const applyPermissionMode = input.applyPermissionMode;

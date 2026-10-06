@@ -1,7 +1,12 @@
 import { EventEmitter, once } from "node:events";
 import { createServer, type Server, type Socket } from "node:net";
 import { ImapFlow } from "imapflow";
-import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveImapConfig, type ImapAccountConfig } from "./config.js";
@@ -199,7 +204,6 @@ afterEach(async () => {
   await Promise.all(activeWatchers.splice(0).map((watcher) => watcher.stop()));
   await Promise.all(activeServers.splice(0).map((server) => server.close()));
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 async function startWatcher(
@@ -212,6 +216,7 @@ async function startWatcher(
     configureServer?: (server: ScriptedImapServer) => void;
     waitForStartup?: boolean;
     account?: Partial<ImapAccountConfig>;
+    clock?: ReturnType<typeof createGatewaySchedulerClock>;
   } = {},
 ) {
   const server = new ScriptedImapServer(options.supportsIdle);
@@ -267,7 +272,10 @@ async function startWatcher(
   const connectionFailure = new Promise<unknown>((resolve) => {
     resolveFailure = resolve;
   });
-  const context: OpenClawPluginServiceContext = {
+  const context: OpenClawPluginServiceContextV2 = {
+    scheduler: createTestPluginServiceScheduler(
+      options.clock ? createTestGatewayScheduler(options.clock.clock) : undefined,
+    ),
     config: {},
     stateDir: "/unused-imap-test-state",
     logger: {
@@ -295,6 +303,7 @@ async function startWatcher(
   });
   activeWatchers.push(watcher);
   watcher.start();
+  void options.clock?.wake();
   // start() is fire-and-forget; observe the committed baseline before driving mail.
   // Authentication-failure tests intentionally never reach cursor registration.
   if (!options.rejectAuthentication && options.waitForStartup !== false) {
@@ -455,16 +464,18 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("never sends an overflowing UID range after baselining the maximum UID", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const clock = createGatewaySchedulerClock();
     const { server, watcher, state } = await startWatcher({
       omitUidNext: true,
       messages: existingMail([101, 505, 4_294_967_295]),
+      clock,
       account: { watch: { mode: "auto", pollSeconds: 0.02 } },
     });
     expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 4_294_967_295 });
     const fetch = vi.spyOn(ImapFlow.prototype, "fetch");
     const lookup = vi.spyOn(state.cursors, "lookup");
-    await vi.advanceTimersByTimeAsync(20);
+    await clock.advanceBy(20);
+    await clock.advanceBy(0);
     expect(lookup).toHaveBeenCalledWith("inbox");
     expect(fetch).not.toHaveBeenCalled();
     await watcher.stop();
@@ -501,12 +512,13 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("keeps arrivals after the baseline FETCH snapshot eligible for the next sweep", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const clock = createGatewaySchedulerClock();
     let releaseFetch!: () => void;
     const fetchGate = new Promise<void>((resolve) => {
       releaseFetch = resolve;
     });
     const { server, state, dispatchHookAgentTurn, startup, waitForCursor } = await startWatcher({
+      clock,
       omitUidNext: true,
       messages: existingMail(),
       account: { watch: { mode: "auto", pollSeconds: 0.02 } },
@@ -521,8 +533,9 @@ describe("IMAP watcher protocol boundary", () => {
     await startup;
     expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 9007 });
     // EXISTS arrived before the watcher registered its listener; the owned
-    // reconciliation interval must still find mail beyond the saved watermark.
-    await vi.advanceTimersByTimeAsync(20);
+    // reconciliation job must still find mail beyond the saved watermark.
+    await clock.advanceBy(20);
+    await clock.advanceBy(0);
     await waitForCursor(9008);
     expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(1);
   });

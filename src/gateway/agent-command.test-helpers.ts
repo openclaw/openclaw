@@ -15,6 +15,7 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
   const requestModule = await import("./server-methods.js");
   const admission = await import("../process/gateway-work-admission.js");
   const asyncWork = await import("../shared/async-work-scope.js");
+  const sessionWork = await import("../sessions/session-lifecycle-admission.js");
   const chatModule = selection
     ? undefined
     : await import("./server-methods/chat-send-dispatch-errors.js");
@@ -23,6 +24,7 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
   const retainWork = admission.runWithRetainedGatewayRootWork;
   const continueWork = admission.runWithGatewayIndependentRootWorkContinuation;
   const trackWork = asyncWork.trackAsyncWork;
+  const beginSessionWork = sessionWork.beginSessionWorkAdmission;
   type ObservedRequest = {
     runId?: string;
     request?: Promise<void>;
@@ -42,6 +44,16 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
     }
     return pending;
   };
+  const sessionWorkSpy = vi
+    .spyOn(sessionWork, "beginSessionWorkAdmission")
+    .mockImplementation((params) => {
+      const pending = beginSessionWork(params);
+      if (observedRequest.getStore()) {
+        // Queued custody can finish outside the request frame after dispatch settles.
+        void captureEffect(pending.then((lease) => lease.released));
+      }
+      return pending;
+    });
   // Best-effort participant persistence is request-owned async work, not a
   // retained Gateway root. Observe its existing promise without changing admission.
   const observeAsyncWork: typeof trackWork = (run) => captureEffect(trackWork(run));
@@ -132,6 +144,7 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
         }
       } finally {
         chatSpy?.mockRestore();
+        sessionWorkSpy.mockRestore();
         asyncWorkSpy.mockRestore();
         executionSpy.mockRestore();
         requestSpy.mockRestore();

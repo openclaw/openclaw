@@ -19,7 +19,7 @@ export async function usesSourceOnlyWorktreeGit(
     { resolveSessionStorePathCore },
     { resolveSessionAgentId },
     { resolveSandboxRuntimeStatusesForPersistedSessions },
-    { localWorkspaceStore },
+    { hasLocalWorkspaceProjection },
   ] = await Promise.all([
     import("../../config/sessions/session-accessor.js"),
     import("../../config/sessions/paths.js"),
@@ -27,7 +27,7 @@ export async function usesSourceOnlyWorktreeGit(
     import("../sandbox/runtime-status.js"),
     import("../../gateway/worker-environments/local-workspace-store.js"),
   ]);
-  if (localWorkspaceStore(env).get(record.id)) {
+  if (await hasLocalWorkspaceProjection(record.id, env)) {
     return true;
   }
   const cfg = getConfig();

@@ -3,7 +3,7 @@
   "categories": ["voice"],
   "doctorContract": {
     "resolveSessionStoreAgentIds": true,
-    "stateMigrations": [{ "id": "voice-call-calls-jsonl-to-plugin-state" }]
+    "stateMigrations": [{ "id": "voice-call-calls-jsonl-to-plugin-state" }, { "id": "voice-call-sqlite-schema" }]
   },
   "name": "Voice Call",
   "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
@@ -148,6 +148,11 @@
     },
     "realtime.streamPath": {
       "label": "Realtime Stream Path",
+      "advanced": true
+    },
+    "realtime.idleHangupMs": {
+      "label": "Realtime Speech Idle Hangup (ms)",
+      "help": "Ends an active realtime call after neither side speaks for this long. Unset disables speech-idle hangup.",
       "advanced": true
     },
     "realtime.instructions": {
@@ -604,6 +609,10 @@
           },
           "streamPath": {
             "type": "string"
+          },
+          "idleHangupMs": {
+            "type": "integer",
+            "minimum": 1
           },
           "instructions": {
             "type": "string"

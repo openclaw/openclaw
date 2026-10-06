@@ -1,9 +1,36 @@
 // Irc tests cover client plugin behavior.
+import { syncBuiltinESMExports } from "node:module";
+import net from "node:net";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { connectIrcClient } from "./client.js";
 import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js";
+
+const effectGate = vi.hoisted(() => ({
+  beforeInitiate: undefined as (() => Promise<void>) | undefined,
+}));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const beforeInitiate = effectGate.beforeInitiate;
+      return beforeInitiate
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await beforeInitiate();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 
 type LoopbackIrcServer = {
   port: number;
@@ -231,7 +258,7 @@ async function collectPrivmsgBodies(
     messageChunkMaxChars,
   });
   try {
-    client.sendPrivmsg("#general", text);
+    await client.sendPrivmsg("#general", text);
     client.quit("test complete");
     await withTimeout(server.quitReceived, 5000, "IRC PRIVMSG output");
     return server.lines
@@ -251,6 +278,114 @@ function maxLineBytes(bodies: string[]): number {
 }
 
 describe("irc client PRIVMSG chunking on the wire", () => {
+  it("admits all raw chunks before sending the message", async () => {
+    const server = await startLoopbackIrcServer();
+    const refusal = new PlatformMessageNotDispatchedError("authority ended", {
+      cause: new Error("scheduled sender retired"),
+    });
+    let attempts = 0;
+    effectGate.beforeInitiate = async () => {
+      if (++attempts > 1) {
+        throw refusal;
+      }
+    };
+    try {
+      await expect(collectPrivmsgBodies(server, "abcdefghi", 3)).resolves.toEqual([
+        "abc",
+        "def",
+        "ghi",
+      ]);
+    } finally {
+      effectGate.beforeInitiate = undefined;
+      await server.close();
+    }
+  });
+
+  it("preserves an admission refusal without sending any raw chunks", async () => {
+    const server = await startLoopbackIrcServer();
+    const refusal = new PlatformMessageNotDispatchedError("authority ended", {
+      cause: new Error("scheduled sender retired"),
+    });
+    effectGate.beforeInitiate = async () => {
+      throw refusal;
+    };
+    const client = await connectIrcClient({
+      host: "127.0.0.1",
+      port: server.port,
+      tls: false,
+      nick: "bot",
+      username: "bot",
+      realname: "OpenClaw Bot",
+      messageChunkMaxChars: 3,
+    });
+    try {
+      await expect(client.sendPrivmsg("#general", "abcdefghi")).rejects.toBe(refusal);
+      client.quit("refusal test complete");
+      await server.quitReceived;
+      expect(server.lines.some((line) => line.startsWith("PRIVMSG #general :"))).toBe(false);
+    } finally {
+      effectGate.beforeInitiate = undefined;
+      client.close();
+      await server.close();
+    }
+  });
+
+  it("retains partial delivery when a later raw socket write fails", async () => {
+    const server = await startLoopbackIrcServer();
+    const socket = new net.Socket();
+    const connect = vi
+      .spyOn(net, "connect")
+      .mockImplementationOnce((...args) => socket.connect(...args));
+    // Node's named exports otherwise retain the original connection factory.
+    syncBuiltinESMExports();
+    try {
+      const client = await connectIrcClient({
+        host: "127.0.0.1",
+        port: server.port,
+        tls: false,
+        nick: "bot",
+        username: "bot",
+        realname: "OpenClaw Bot",
+        messageChunkMaxChars: 3,
+      });
+      const failure = new Error("socket write failed");
+      const originalWrite = socket.write.bind(socket);
+      let sends = 0;
+      // Socket.connect restores write, so install this fault after connection.
+      const write = vi.spyOn(socket, "write").mockImplementation((...args) => {
+        if (typeof args[0] === "string" && args[0].startsWith("PRIVMSG #general :")) {
+          if (++sends === 2) {
+            throw failure;
+          }
+        }
+        return originalWrite(...args);
+      });
+      try {
+        const error = await client
+          .sendPrivmsg("#general", "abcdefghi")
+          .catch((caughtError: unknown) => caughtError);
+        expect(isChannelPartialDeliveryError(error)).toBe(true);
+        expect(error).toMatchObject({
+          cause: failure,
+          deliveryResult: { messageIds: [], visibleReplySent: true },
+        });
+        client.quit("partial test complete");
+        await server.quitReceived;
+        expect(server.lines.filter((line) => line.startsWith("PRIVMSG #general :"))).toEqual([
+          "PRIVMSG #general :abc",
+        ]);
+      } finally {
+        write.mockRestore();
+        client.close();
+      }
+    } finally {
+      connect.mockRestore();
+      syncBuiltinESMExports();
+      socket.destroy();
+      await server.close();
+    }
+  });
+
   it("rejects text that becomes empty after transport sanitization", async () => {
     const server = await startLoopbackIrcServer();
     try {
@@ -333,4 +468,126 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       }
     },
   );
+});
+
+describe("irc client inbound line bound", () => {
+  type FloodOptions = {
+    payload: () => string;
+    terminated?: boolean;
+  };
+
+  async function startFloodServer(options: FloodOptions) {
+    const closed = createDeferred<void>();
+    const server = await startIrcTestServer((socket) => {
+      socket.on("error", () => {});
+      socket.on("close", () => closed.resolve());
+      onIrcTestLine(socket, (line) => {
+        if (line.startsWith("USER ")) {
+          socket.write(":server 001 bot :welcome\r\n");
+          socket.write(options.payload());
+        }
+      });
+    });
+    return { ...server, socketClosed: closed.promise };
+  }
+
+  async function connectToFlood(server: { port: number }) {
+    const errors: Error[] = [];
+    const lines: string[] = [];
+    const lineWaiters = new Map<string, ReturnType<typeof createDeferred<void>>>();
+    const waitForLine = (expected: string) => {
+      if (lines.includes(expected)) {
+        return Promise.resolve();
+      }
+      const waiter = lineWaiters.get(expected) ?? createDeferred<void>();
+      lineWaiters.set(expected, waiter);
+      return waiter.promise;
+    };
+    const disconnected = createDeferred<void>();
+    const client = await connectIrcClient({
+      host: "127.0.0.1",
+      port: server.port,
+      tls: false,
+      nick: "bot",
+      username: "bot",
+      realname: "OpenClaw Bot",
+      onError: (error) => errors.push(error),
+      onLine: (line) => {
+        lines.push(line);
+        lineWaiters.get(line)?.resolve();
+      },
+      onDisconnect: () => disconnected.resolve(),
+    });
+    return { client, errors, lines, waitForLine, disconnected: disconnected.promise };
+  }
+
+  it("drops a peer that never terminates a line and reports a disconnect", async () => {
+    const server = await startFloodServer({ payload: () => "A".repeat(256 * 1024) });
+    try {
+      const { client, errors, disconnected } = await connectToFlood(server);
+      await withTimeout(disconnected, 2000, "IRC disconnect after unterminated flood");
+      await withTimeout(server.socketClosed, 2000, "IRC peer socket close");
+      expect(errors.some((error) => error.message.includes("longer than"))).toBe(true);
+      expect(client.isReady()).toBe(false);
+      expect(server.openSocketCount()).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("drops a peer that sends an oversized terminated line", async () => {
+    const server = await startFloodServer({ payload: () => `${"B".repeat(64 * 1024)}\r\n` });
+    try {
+      const { errors, lines, disconnected } = await connectToFlood(server);
+      await withTimeout(disconnected, 2000, "IRC disconnect after oversized line");
+      expect(errors.some((error) => error.message.includes("longer than"))).toBe(true);
+      expect(lines.some((line) => line.startsWith("BBBB"))).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps accepting lines at the IRCv3 tag plus body maximum", async () => {
+    const tags = `@${"t".repeat(8189)}=1`;
+    const longLine = `${tags} :server NOTICE bot :${"x".repeat(400)}`;
+    const server = await startFloodServer({ payload: () => `${longLine}\r\n:server PING :ok\r\n` });
+    try {
+      const { client, errors, lines, waitForLine } = await connectToFlood(server);
+      await withTimeout(
+        waitForLine(":server PING :ok"),
+        2000,
+        "IRC lines after maximal tagged line",
+      );
+      expect(lines).toContain(longLine);
+      expect(errors).toEqual([]);
+      expect(client.isReady()).toBe(true);
+      client.quit("test complete");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not retain state across many small chunks of a normal line", async () => {
+    const chunks = Array.from({ length: 2000 }, () => "c".repeat(8));
+    const server = await startIrcTestServer((socket) => {
+      socket.on("error", () => {});
+      onIrcTestLine(socket, (line) => {
+        if (line.startsWith("USER ")) {
+          socket.write(":server 001 bot :welcome\r\n");
+          for (let i = 0; i < 20; i += 1) {
+            socket.write(`${chunks.slice(0, 100).join("")}\r\n`);
+          }
+          socket.write(":server PING :done\r\n");
+        }
+      });
+    });
+    try {
+      const { client, errors, waitForLine } = await connectToFlood(server);
+      await withTimeout(waitForLine(":server PING :done"), 2000, "IRC repeated normal lines");
+      expect(errors).toEqual([]);
+      client.quit("test complete");
+    } finally {
+      await server.close();
+    }
+  });
 });

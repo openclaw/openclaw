@@ -177,8 +177,8 @@ export function renderTelegramProgressDraftPreview(
   }
   const plan = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection: true });
   return options.richMessages
-    ? { text: plan.plainText, richMessage: plan.richMessage, complete: true }
-    : { text: html.join("<br>"), parseMode: "HTML", complete: true };
+    ? { text: plan.plainText, richMessage: plan.richMessage, complete: true, linkPreview: false }
+    : { text: html.join("<br>"), parseMode: "HTML", complete: true, linkPreview: false };
 }
 
 /** Renders a progress snapshot with one account's progress-draft settings. */

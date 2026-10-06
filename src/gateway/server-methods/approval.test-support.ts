@@ -111,6 +111,8 @@ type ApprovalInvocationParams = {
     | "approval.resolve"
     | "exec.approval.get"
     | "exec.approval.list"
+    | "exec.approval.grants.list"
+    | "exec.approval.grants.revoke"
     | "exec.approval.resolve"
     | "exec.approval.waitDecision"
     | "plugin.approval.list"

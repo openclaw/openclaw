@@ -1,5 +1,6 @@
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createCpuTrackedWorker } from "openclaw/plugin-sdk/process-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 export const TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER = "openclaw.telegram-ingress-worker";
 const TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS = 2_000;
@@ -84,24 +85,17 @@ async function stopTelegramIngressWorker(params: {
   task: Promise<void>;
   terminate: () => Promise<number>;
 }): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const forcedTermination = new Promise<void>((resolve, reject) => {
-    timeout = setTimeout(() => {
-      void params.terminate().then(() => resolve(), reject);
-    }, TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS);
-    timeout.unref?.();
-  });
-  try {
-    params.requestStop();
-    // Keep the cooperative close path, but finish inside the host channel's
-    // stop budget. Forced termination is replay-safe because updates advance
-    // only after the parent durably spools and acknowledges them.
-    await Promise.race([params.task.catch(() => undefined), forcedTermination]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  // Forced termination is replay-safe because updates advance only after the
+  // parent durably spools and acknowledges them.
+  await raceWithTimeout(
+    () => {
+      params.requestStop();
+      return params.task.catch(() => undefined);
+    },
+    TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS,
+    () => params.terminate().then(() => undefined),
+    { ref: false },
+  );
 }
 
 export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (options) => {

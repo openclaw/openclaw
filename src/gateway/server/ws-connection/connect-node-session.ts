@@ -139,17 +139,34 @@ export async function prepareGatewayNodeConnect(
     }
     throw error;
   }
-  // SSH verification proves machine ownership, while an admin-minted setup code
-  // records that admin's consent to this machine's initial declared surface.
-  // Approve either initial surface directly; later manifest upgrades still prompt.
+  // Same-host silent pairing trusts the local user; SSH proves machine ownership,
+  // and an admin-minted setup code records consent. Stored local provenance alone
+  // cannot authorize a later remote/browser connection or override the local opt-out.
+  const isLocalApprovalCurrent = () =>
+    !context.handler.isClosed() &&
+    getRuntimeConfig().gateway?.nodes?.pairing?.autoApproveLocal !== false;
+  const approveLocalSurface =
+    deviceApprovedVia === "silent" &&
+    isLocalApprovalCurrent() &&
+    (state.pairingLocality === "direct_local" ||
+      state.pairingLocality === "shared_secret_loopback_local") &&
+    !context.hasProxyHeaders &&
+    !context.hasBrowserOriginHeader &&
+    !state.isControlUi &&
+    !state.isWebchat;
+  // Only the initial surface inherits device approval; manifest upgrades still prompt.
   if (
-    (deviceApprovedVia === "ssh-verified" || deviceApprovedVia === "bootstrap") &&
+    (approveLocalSurface ||
+      deviceApprovedVia === "ssh-verified" ||
+      deviceApprovedVia === "bootstrap") &&
     !pairedNode &&
     reconciliation.pendingPairing
   ) {
     const surfaceRequestId = reconciliation.pendingPairing.request.requestId;
     const approvedSurface = await approveNodePairing(surfaceRequestId, {
       callerScopes: [ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE],
+      initialOnly: true,
+      isApprovalCurrent: approveLocalSurface ? isLocalApprovalCurrent : undefined,
     });
     if (approvedSurface && "node" in approvedSurface) {
       logGateway.info(

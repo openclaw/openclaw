@@ -96,9 +96,11 @@ describe("I18nManager pending locale retry", () => {
     const second = manager.setLocale("de");
 
     expect(loadTranslation).toHaveBeenCalledExactlyOnceWith("de");
+    expect(manager.getRequestedLocale()).toBe("de");
     firstLoad.reject(new Error("gateway unavailable"));
     await Promise.all([first, second]);
     expect(manager.getLocale()).toBe("en");
+    expect(manager.getRequestedLocale()).toBe("de");
     expect(subscriber).not.toHaveBeenCalled();
 
     await retryPendingLocale();
@@ -145,6 +147,7 @@ describe("I18nManager pending locale retry", () => {
     await retryPendingLocale();
 
     expect(manager.getLocale()).toBe("es");
+    expect(manager.getRequestedLocale()).toBe("es");
     expect(loadTranslation).toHaveBeenCalledTimes(2);
   });
 

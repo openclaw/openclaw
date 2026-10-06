@@ -121,7 +121,7 @@ function listConcreteCronDeliveryTargets(
   for (const job of jobs) {
     // Only an explicit delivery object pins a concrete channel; without one the plan resolves
     // to the pseudo "last" route decided at run time, which doctor cannot validate ahead of time.
-    if (job.enabled === false || !isRecord(job.delivery)) {
+    if (job.enabled === false || !isRecord(job.delivery) || job.delivery.mode !== "announce") {
       continue;
     }
     const plan = resolveCronDeliveryPlan(job as unknown as CronJob);

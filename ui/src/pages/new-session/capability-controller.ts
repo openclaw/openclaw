@@ -4,7 +4,7 @@ import { t } from "../../i18n/index.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
+import type { ChatComposerCapabilityMenuProps } from "../chat/components/chat-composer-plus-menu.ts";
 import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,
@@ -15,14 +15,11 @@ import type { DraftGatewayState } from "./draft-gateway-state.ts";
 export class NewSessionCapabilityController {
   private readonly skillCatalog: ComposerSkillCatalog;
   private toolOverridesValue: SessionToolOverrides | null = null;
-  private onMutation = () => {};
-
-  constructor(private readonly notify: () => void) {
+  constructor(
+    private readonly notify: () => void,
+    private readonly onMutation: () => void,
+  ) {
     this.skillCatalog = new ComposerSkillCatalog(notify);
-  }
-
-  setMutationCallback(onMutation: () => void) {
-    this.onMutation = onMutation;
   }
 
   get toolOverrides(): SessionToolOverrides | null {
@@ -72,7 +69,7 @@ export class NewSessionCapabilityController {
     context: ApplicationContext,
     gateway: DraftGatewayState,
     agentId: string,
-  ): CapabilityMenuProps {
+  ): ChatComposerCapabilityMenuProps {
     this.skillCatalog.synchronize(gateway.client, gateway.connectionEpoch);
     const config = context.runtimeConfig.state;
     const runtimeConfig = config.configSnapshot?.runtimeConfig ?? null;

@@ -3,6 +3,11 @@ import {
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../../daemon/constants.js";
+import {
+  clearFsSafeEnvFallback,
+  fsSafeEnvInput,
+  normalizeFsSafeNativeEnv,
+} from "../../infra/fs-safe-env.js";
 import { mergePathPrepend } from "../../infra/path-prepend.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
@@ -53,16 +58,14 @@ export function resolveServiceRecoveryContext(
   };
 }
 
-function applyManagedServiceSelectorEnv(params: {
-  baseEnv: NodeJS.ProcessEnv;
-  serviceEnv: NodeJS.ProcessEnv;
-  selectorEnv?: NodeJS.ProcessEnv;
-}): NodeJS.ProcessEnv {
-  const resolved = { ...params.baseEnv };
-  const selectorEnv = params.selectorEnv ?? params.serviceEnv;
+function applyManagedServiceSelectorEnv(
+  resolved: NodeJS.ProcessEnv,
+  serviceEnv: NodeJS.ProcessEnv,
+  selectorEnv = serviceEnv,
+): NodeJS.ProcessEnv {
   for (const key of MANAGED_UPDATE_SELECTOR_ENV_KEYS) {
     if (resolveEnvironmentValue(selectorEnv, key)?.trim()) {
-      resolved[key] = params.serviceEnv[key];
+      resolved[key] = serviceEnv[key];
     } else {
       delete resolved[key];
     }
@@ -79,9 +82,12 @@ export function resolveServiceRefreshEnv(
   const resolvedEnv: NodeJS.ProcessEnv =
     process.platform === "win32"
       ? Object.fromEntries(
-          Object.entries(mergeProcessEnv([env])).map(([key, value]) => [key.toUpperCase(), value]),
+          Object.entries(mergeProcessEnv([fsSafeEnvInput(env)])).map(([key, value]) => [
+            key.toUpperCase(),
+            value,
+          ]),
         )
-      : { ...env };
+      : { ...fsSafeEnvInput(env) };
   for (const key of SERVICE_REFRESH_PATH_ENV_KEYS) {
     const rawValue = resolvedEnv[key]?.trim();
     if (!rawValue) {
@@ -108,25 +114,27 @@ export async function withOwnedManagedUpdateEnv<T>(
   }
   // Update finalization is a single serialized CLI phase. Some plugin/config owners still read
   // process.env, so switch the complete phase atomically and restore the caller afterward.
-  const previousEnv = { ...process.env };
-  for (const key of Object.keys(process.env)) {
-    delete process.env[key];
-  }
-  // A caller may pass process.env itself; clearing it must not erase the supplied scope.
-  const phaseEnv = env === process.env ? previousEnv : env;
-  for (const [key, value] of Object.entries(phaseEnv)) {
-    // Node stringifies undefined on assignment; unset selectors must remain absent.
-    if (value !== undefined) {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return await run();
-  } finally {
+  const previousEnv = { ...fsSafeEnvInput(process.env) };
+  // Snapshot an aliased input before clearing the process environment.
+  const phaseEnv = env === process.env ? previousEnv : { ...fsSafeEnvInput(env) };
+  const replace = (snapshot: NodeJS.ProcessEnv) => {
+    clearFsSafeEnvFallback(process.env);
     for (const key of Object.keys(process.env)) {
       delete process.env[key];
     }
-    Object.assign(process.env, previousEnv);
+    for (const [key, value] of Object.entries(snapshot)) {
+      // Node stringifies undefined on assignment; unset selectors must remain absent.
+      if (value !== undefined) {
+        process.env[key] = value;
+      }
+    }
+    normalizeFsSafeNativeEnv();
+  };
+  replace(phaseEnv);
+  try {
+    return await run();
+  } finally {
+    replace(previousEnv);
   }
 }
 
@@ -135,8 +143,17 @@ export async function withUpdateEnv<T>(
   overrides: NodeJS.ProcessEnv,
   run: () => Promise<T>,
 ): Promise<T> {
-  const previous = Object.keys(overrides).map((key) => [key, process.env[key]] as const);
+  const inputs = fsSafeEnvInput(overrides);
+  const before = fsSafeEnvInput(process.env);
+  const previous = Object.keys(inputs).map(
+    (key) =>
+      [
+        key,
+        process.platform === "win32" ? resolveEnvironmentValue(before, key) : before[key],
+      ] as const,
+  );
   const apply = (entries: Iterable<readonly [string, string | undefined]>) => {
+    clearFsSafeEnvFallback(process.env);
     for (const [key, value] of entries) {
       if (value === undefined) {
         delete process.env[key];
@@ -144,8 +161,9 @@ export async function withUpdateEnv<T>(
         process.env[key] = value;
       }
     }
+    normalizeFsSafeNativeEnv();
   };
-  apply(Object.entries(overrides));
+  apply(Object.entries(inputs));
   try {
     return await run();
   } finally {
@@ -203,19 +221,18 @@ export function resolveUpdatedInstallCommandEnv(params?: {
   });
 }
 
-export function resolveOwnedManagedUpdateEnv(params: {
-  processEnv?: NodeJS.ProcessEnv;
-  serviceEnv: NodeJS.ProcessEnv;
-  serviceDefinitionEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
-}): NodeJS.ProcessEnv {
+export function resolveOwnedManagedUpdateEnv(
+  params: NonNullable<Parameters<typeof resolveUpdatedInstallCommandEnv>[0]> & {
+    serviceEnv: NodeJS.ProcessEnv;
+    serviceDefinitionEnv?: NodeJS.ProcessEnv;
+  },
+): NodeJS.ProcessEnv {
   const resolved = resolveUpdatedInstallCommandEnv(params);
-  const definitionEnv = params.serviceDefinitionEnv ?? params.serviceEnv;
-  return applyManagedServiceSelectorEnv({
-    baseEnv: resolved,
-    serviceEnv: resolved,
-    selectorEnv: definitionEnv,
-  });
+  return applyManagedServiceSelectorEnv(
+    resolved,
+    resolved,
+    params.serviceDefinitionEnv ?? params.serviceEnv,
+  );
 }
 
 export function resolveUpdateTargetEnv(params?: {
@@ -234,5 +251,5 @@ export function resolveUpdateTargetEnv(params?: {
     return resolvedEnv;
   }
   const serviceEnv = resolveServiceRefreshEnv(params.serviceEnv, params.invocationCwd);
-  return applyManagedServiceSelectorEnv({ baseEnv: resolvedEnv, serviceEnv });
+  return applyManagedServiceSelectorEnv(resolvedEnv, serviceEnv);
 }

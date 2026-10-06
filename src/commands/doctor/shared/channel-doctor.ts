@@ -8,7 +8,6 @@ import { getLoadedChannelPlugin } from "../../../channels/plugins/registry.js";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,
-  ChannelDoctorEmptyAllowlistAccountContext,
   ChannelDoctorSequenceResult,
 } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -23,18 +22,9 @@ type ChannelDoctorEntry = {
   doctor: ChannelDoctorAdapter;
 };
 
-type ChannelDoctorPluginCandidate = {
-  id: string;
-  doctor?: ChannelDoctorAdapter;
-};
-
 type ChannelDoctorLookupContext = {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-};
-
-type ChannelDoctorEmptyAllowlistLookupParams = ChannelDoctorEmptyAllowlistAccountContext & {
-  cfg?: OpenClawConfig;
 };
 
 const channelDoctorFunctionKeys = new Set<keyof ChannelDoctorAdapter>([
@@ -59,13 +49,8 @@ const channelDoctorEnumValues: Partial<Record<keyof ChannelDoctorAdapter, Readon
 };
 
 export type ChannelDoctorEmptyAllowlistPolicyHooks = {
-  /** Collect plugin-specific warning lines for a configured channel/account allowlist. */
-  extraWarningsForAccount: (params: ChannelDoctorEmptyAllowlistAccountContext) => string[];
-  /** Let a channel doctor suppress the generic empty group-allowlist warning. */
-  shouldSkipDefaultEmptyGroupAllowlistWarning: (
-    params: ChannelDoctorEmptyAllowlistAccountContext,
-  ) => boolean;
-};
+  extraWarningsForAccount: NonNullable<ChannelDoctorAdapter["collectEmptyAllowlistExtraWarnings"]>;
+} & Required<Pick<ChannelDoctorAdapter, "shouldSkipDefaultEmptyGroupAllowlistWarning">>;
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
   return listDoctorConfiguredChannelIds(cfg, {
@@ -99,22 +84,20 @@ function safelyResolveChannelPlugin<T>(id: string, resolve: (id: string) => T): 
   }
 }
 
-function safeListReadOnlyChannelPlugins(context: ChannelDoctorLookupContext) {
-  try {
-    return resolveReadOnlyChannelPluginsForConfig(context.cfg, {
-      ...(context.env ? { env: context.env } : {}),
-      includePersistedAuthState: false,
-      includeSetupFallbackPlugins: true,
-    }).plugins;
-  } catch {
-    return [];
-  }
-}
-
-function listReadOnlyChannelPluginsById(
+function listReadOnlyChannelDoctorsById(
   context: ChannelDoctorLookupContext,
-): Map<string, ChannelDoctorPluginCandidate> {
-  return new Map(safeListReadOnlyChannelPlugins(context).map((plugin) => [plugin.id, plugin]));
+): Map<string, ChannelDoctorAdapter | undefined> {
+  try {
+    return new Map(
+      resolveReadOnlyChannelPluginsForConfig(context.cfg, {
+        ...(context.env ? { env: context.env } : {}),
+        includePersistedAuthState: false,
+        includeSetupFallbackPlugins: true,
+      }).plugins.map(({ id, doctor }) => [id, doctor]),
+    );
+  } catch {
+    return new Map();
+  }
 }
 
 function mergeDoctorAdapters(
@@ -160,9 +143,7 @@ function isValidChannelDoctorAdapterValue(
 function listChannelDoctorEntries(
   channelIds: readonly string[],
   context: ChannelDoctorLookupContext,
-  options: {
-    readOnlyPluginsById?: ReadonlyMap<string, ChannelDoctorPluginCandidate>;
-  } = {},
+  readOnlyDoctorsById?: ReadonlyMap<string, ChannelDoctorAdapter | undefined>,
 ): ChannelDoctorEntry[] {
   const selectedIds = new Set(
     channelIds.filter((id) => !isChannelDoctorBlockedByConfig(id, context.cfg)),
@@ -170,13 +151,12 @@ function listChannelDoctorEntries(
   if (selectedIds.size === 0) {
     return [];
   }
-  const readOnlyPluginsById =
-    options.readOnlyPluginsById ?? listReadOnlyChannelPluginsById(context);
+  const doctors = readOnlyDoctorsById ?? listReadOnlyChannelDoctorsById(context);
 
   const entries: ChannelDoctorEntry[] = [];
   for (const id of selectedIds) {
     const doctor = mergeDoctorAdapters([
-      readOnlyPluginsById.get(id)?.doctor,
+      doctors.get(id),
       safelyResolveChannelPlugin(id, getLoadedChannelPlugin)?.doctor,
       safelyResolveChannelPlugin(id, getBundledChannelSetupPlugin)?.doctor,
       safelyResolveChannelPlugin(id, getBundledChannelPlugin)?.doctor,
@@ -187,23 +167,6 @@ function listChannelDoctorEntries(
     entries.push({ id, doctor });
   }
   return entries;
-}
-
-function toPluginEmptyAllowlistContext({
-  cfg: _cfg,
-  ...params
-}: ChannelDoctorEmptyAllowlistLookupParams): ChannelDoctorEmptyAllowlistAccountContext {
-  return params;
-}
-
-function shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
-  entries: readonly ChannelDoctorEntry[],
-  params: ChannelDoctorEmptyAllowlistLookupParams,
-): boolean {
-  const pluginParams = toPluginEmptyAllowlistContext(params);
-  return entries.some(
-    (entry) => entry.doctor.shouldSkipDefaultEmptyGroupAllowlistWarning?.(pluginParams) === true,
-  );
 }
 
 function appendChannelDoctorMutation(
@@ -237,41 +200,33 @@ function preserveUnavailableChannelConfig(
 export function createChannelDoctorEmptyAllowlistPolicyHooks(
   context: ChannelDoctorLookupContext,
 ): ChannelDoctorEmptyAllowlistPolicyHooks {
-  const readOnlyPluginsById = listReadOnlyChannelPluginsById(context);
+  const readOnlyDoctorsById = listReadOnlyChannelDoctorsById(context);
   const entriesByChannel = new Map<string, ChannelDoctorEntry[]>();
   const entriesForChannel = (channelName: string) => {
     const existing = entriesByChannel.get(channelName);
     if (existing) {
       return existing;
     }
-    const entries = listChannelDoctorEntries([channelName], context, { readOnlyPluginsById });
+    const entries = listChannelDoctorEntries([channelName], context, readOnlyDoctorsById);
     entriesByChannel.set(channelName, entries);
     return entries;
   };
   return {
-    extraWarningsForAccount: (params) => {
-      const entries = entriesForChannel(params.channelName);
-      const pluginParams = toPluginEmptyAllowlistContext(params);
-      const warnings: string[] = [];
-      for (const entry of entries) {
-        warnings.push(...(entry.doctor.collectEmptyAllowlistExtraWarnings?.(pluginParams) ?? []));
-      }
-      return warnings;
-    },
+    extraWarningsForAccount: (params) =>
+      entriesForChannel(params.channelName).flatMap(
+        (entry) => entry.doctor.collectEmptyAllowlistExtraWarnings?.(params) ?? [],
+      ),
     shouldSkipDefaultEmptyGroupAllowlistWarning: (params) =>
-      shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
-        entriesForChannel(params.channelName),
-        params,
+      entriesForChannel(params.channelName).some(
+        (entry) => entry.doctor.shouldSkipDefaultEmptyGroupAllowlistWarning?.(params) === true,
       ),
   };
 }
 
 /** Run interactive/non-interactive channel setup repair sequences and collect notes. */
-export async function runChannelDoctorConfigSequences(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  shouldRepair: boolean;
-}): Promise<ChannelDoctorSequenceResult> {
+export async function runChannelDoctorConfigSequences(
+  params: Parameters<NonNullable<ChannelDoctorAdapter["runConfigSequence"]>>[0],
+): Promise<ChannelDoctorSequenceResult> {
   const preserved = preserveUnavailableChannelConfig(params);
   if (preserved) {
     return { changeNotes: [], warningNotes: preserved.warnings ?? [] };
@@ -335,11 +290,9 @@ export async function collectChannelDoctorStaleConfigMutations(
 }
 
 /** Collect channel-specific doctor preview warnings for configured channels. */
-export async function collectChannelDoctorPreviewWarnings(params: {
-  cfg: OpenClawConfig;
-  doctorFixCommand: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<string[]> {
+export async function collectChannelDoctorPreviewWarnings(
+  params: Parameters<NonNullable<ChannelDoctorAdapter["collectPreviewWarnings"]>>[0],
+): Promise<string[]> {
   const warnings: string[] = [];
   for (const entry of listChannelDoctorEntries(collectConfiguredChannelIds(params.cfg), params)) {
     let lines: string[] | undefined;
@@ -362,10 +315,9 @@ export async function collectChannelDoctorPreviewWarnings(params: {
 }
 
 /** Collect warnings for mutable channel allowlists that doctor cannot safely edit. */
-export async function collectChannelDoctorMutableAllowlistWarnings(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): Promise<string[]> {
+export async function collectChannelDoctorMutableAllowlistWarnings(
+  params: ChannelDoctorLookupContext,
+): Promise<string[]> {
   const warnings: string[] = [];
   for (const entry of listChannelDoctorEntries(collectConfiguredChannelIds(params.cfg), params)) {
     const lines = await entry.doctor.collectMutableAllowlistWarnings?.(params);
@@ -377,11 +329,9 @@ export async function collectChannelDoctorMutableAllowlistWarnings(params: {
 }
 
 /** Collect channel repair mutations and warning-only repair results from doctor adapters. */
-export async function collectChannelDoctorRepairMutations(params: {
-  cfg: OpenClawConfig;
-  doctorFixCommand: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<ChannelDoctorConfigMutation[]> {
+export async function collectChannelDoctorRepairMutations(
+  params: Parameters<NonNullable<ChannelDoctorAdapter["repairConfig"]>>[0],
+): Promise<ChannelDoctorConfigMutation[]> {
   const preserved = preserveUnavailableChannelConfig(params);
   if (preserved) {
     return [preserved];
@@ -397,16 +347,4 @@ export async function collectChannelDoctorRepairMutations(params: {
     nextCfg = appendChannelDoctorMutation(mutations, nextCfg, mutation);
   }
   return mutations;
-}
-
-/** Return true when a channel doctor owns empty group-allowlist warning behavior. */
-export function shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning(
-  params: ChannelDoctorEmptyAllowlistLookupParams,
-): boolean {
-  return shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
-    listChannelDoctorEntries([params.channelName], {
-      cfg: params.cfg ?? {},
-    }),
-    params,
-  );
 }

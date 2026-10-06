@@ -15,20 +15,23 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
-import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { describeUnavailableCronAgent, type CronAgentAvailability } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronAgentScope } from "../types-shared.js";
 import type { CronJob } from "../types.js";
+import {
+  CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+  hasCanonicalCronDeliveryMode,
+} from "./delivery-codec.js";
 import { cronStoreKey } from "./key.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import {
   matchesCronRunReceiptOwner,
   receiptFromRow,
   receiptHandle,
-  readActiveCronRunReceiptsInDatabase,
   type CronRunReceiptDatabase,
   type CronRunReceiptRow,
 } from "./run-receipt-read.js";
@@ -73,9 +76,6 @@ type CronReceiptCurrentPolicy<Job = CronJob> = {
   env?: NodeJS.ProcessEnv;
 };
 
-const CRON_RUN_RECEIPT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS cron_run_receipts (";
-const CRON_RUN_RECEIPT_SCHEMA_END =
-  "ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);";
 const CRON_RUN_RECEIPT_TERMINAL_RETENTION = 64;
 const CRON_RUN_RECEIPT_DELETE_BATCH_SIZE = 500;
 /** Recovery horizon for abandoned markers and unverifiable foreign receipts. */
@@ -113,14 +113,12 @@ export const {
 } = settlement;
 
 export function ensureCronRunReceiptSchema(database: DatabaseSync): void {
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(CRON_RUN_RECEIPT_SCHEMA_START);
-  const endMarker = OPENCLAW_STATE_SCHEMA_SQL.indexOf(CRON_RUN_RECEIPT_SCHEMA_END, start);
-  if (start < 0 || endMarker < start) {
-    throw new Error("OpenClaw cron run receipt schema marker is missing.");
-  }
   // sqlite-allow-raw -- Canonical feature-local additive DDL only.
   database.exec(
-    OPENCLAW_STATE_SCHEMA_SQL.slice(start, endMarker + CRON_RUN_RECEIPT_SCHEMA_END.length),
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "cron_run_receipts", {
+      endMarker: "ON cron_run_receipts(store_key, job_id, started_at_ms DESC, receipt_id DESC);",
+      errorMessage: "OpenClaw cron run receipt schema marker is missing.",
+    }),
   );
 }
 
@@ -237,6 +235,12 @@ function validateCurrentReceiptJob<Job>(
     throw new CronRunReceiptRevisionError(params.handle.receiptId);
   }
   return job;
+}
+
+function assertCronRunDelivery(hasCanonicalMode: boolean, receiptId: string): void {
+  if (!hasCanonicalMode) {
+    throw new CronRunReceiptRevisionError(receiptId, CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE);
+  }
 }
 
 function pruneTerminalReceipts(
@@ -396,6 +400,7 @@ export function claimCronRunReceiptInDatabase(params: {
     handle,
     resolveAgentId: params.resolveAgentId,
   });
+  assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), handle.receiptId);
   pruneTerminalReceipts(params.database, handle.storeKey, handle.jobId, job, params.receiptSchema);
   executeSqliteQuerySync(
     params.database,
@@ -480,9 +485,9 @@ export function assertCronRunReceiptCurrentInDatabase(params: {
   database: DatabaseSync;
   handle: CronRunReceiptHandle;
   resolveAgentId: ResolveReceiptAgentId;
-}): void {
+}): CronJob {
   assertCronRunReceiptOwnedInDatabase(params);
-  validateCurrentJob({
+  return validateCurrentJob({
     database: params.database,
     handle: params.handle,
     resolveAgentId: params.resolveAgentId,
@@ -496,7 +501,8 @@ export function activateCronRunReceiptInDatabase(params: {
   startedAtMs: number;
   resolveAgentId: ResolveReceiptAgentId;
 }): CronRunReceiptHandle {
-  assertCronRunReceiptCurrentInDatabase(params);
+  const job = assertCronRunReceiptCurrentInDatabase(params);
+  assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), params.handle.receiptId);
   executeSqliteQuerySync(
     params.database,
     query(params.database)
@@ -510,10 +516,9 @@ export function activateCronRunReceiptInDatabase(params: {
 
 function assertReceiptAgentAvailable(
   params: Pick<CronReceiptCurrentPolicy, "handle" | "isAgentAvailable" | "env">,
-  database?: DatabaseSync,
-  facts?: Parameters<CronAgentAvailability>[2],
+  facts: Parameters<CronAgentAvailability>[2],
 ) {
-  if (params.isAgentAvailable?.(params.handle.agentId, database, facts) === false) {
+  if (params.isAgentAvailable?.(params.handle.agentId, undefined, facts) === false) {
     throw new CronRunReceiptRevisionError(
       params.handle.receiptId,
       describeUnavailableCronAgent(params.handle.agentId, params.env),
@@ -533,45 +538,12 @@ export function assertCronRunReceiptCurrentFacts(
       "cron run fence is no longer current",
     );
   }
-  assertReceiptAgentAvailable(params, undefined, { deletionBlocked: params.facts.deletionBlocked });
+  assertReceiptAgentAvailable(params, { deletionBlocked: params.facts.deletionBlocked });
   assertReceiptOwner(params.facts.receipt, params.handle);
   if (!params.allowMissingJob) {
-    validateCurrentReceiptJob(params.facts.job, params);
+    const job = validateCurrentReceiptJob(params.facts.job, params);
+    assertCronRunDelivery(job.hasCanonicalDeliveryMode, params.handle.receiptId);
   }
-}
-
-/** Reads the canonical definition under the same exact receipt check used by execution. */
-export function readCronRunReceiptCurrentJob(
-  params: CronReceiptCurrentPolicy,
-): CronJob | undefined {
-  // A worker may hold BEGIN while asking this host guard for commit authority.
-  const result = withExistingOpenClawStateDatabaseCurrentReadOnly(
-    ({ db: database }) => {
-      assertReceiptAgentAvailable(params, database);
-      let current: CronRunReceiptHandle | undefined;
-      try {
-        current = readActiveCronRunReceiptsInDatabase(database, params.handle.storeKey, [
-          params.handle.jobId,
-        ])[0];
-      } catch (error) {
-        if (!(error instanceof Error) || error.message !== "no such table: cron_run_receipts") {
-          throw error;
-        }
-      }
-      assertReceiptOwner(current, params.handle);
-      return {
-        job: params.allowMissingJob ? undefined : validateCurrentJob({ database, ...params }),
-      };
-    },
-    params.env ? { env: params.env } : {},
-  );
-  if (!result) {
-    throw new CronRunReceiptRevisionError(
-      params.handle.receiptId,
-      "cron run fence is no longer current",
-    );
-  }
-  return result.job;
 }
 
 /** Completes the exact active receipt inside its caller's cron-state transaction. */

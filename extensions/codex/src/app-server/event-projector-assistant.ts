@@ -9,13 +9,21 @@ import {
   createAssistantMessage as buildAssistantMessage,
   type AssistantMessageOptions,
 } from "./event-projector-assistant-message.js";
-import { shouldClearTerminalPresentationForNativeItem } from "./event-projector-items.js";
+import {
+  shouldAdvancePersistableAssistantBarrier,
+  shouldClearTerminalPresentationForNativeItem,
+} from "./event-projector-items.js";
+import { CodexSteeringAssistantSegments } from "./event-projector-steering.js";
 import { extractRawAssistantText } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 type AnswerCandidateStatus = "candidate" | "superseded" | "selected";
+type AssistantCompletion = Pick<CodexThreadItem, "type" | "id" | "text"> & {
+  phase?: unknown;
+  delivery?: unknown;
+};
 
 export class CodexAssistantProjection {
   private readonly assistantTextByItem = new Map<string, string>();
@@ -48,15 +56,12 @@ export class CodexAssistantProjection {
   private responseModel: string | undefined;
   private streamedPartialAssistantItemId: string | undefined;
   private streamedPartialAssistantItemReplaceable = false;
-  // turn/completed.items is a Summary of last_agent_message only. Tool
-  // invalidation has to be recorded from the first item notification for each
-  // native or dynamic handoff, or a later coda would revive every pre-tool final.
+  // Native handoffs retire earlier finals; terminal summaries contain only the last answer.
   private persistableAssistantBarrier = 0;
   // A completed answer mirrored before a steer is already durable. Do not
   // replay it as the enclosing turn's terminal answer if Codex emits no coda.
   private persistedAssistantBoundary = false;
-  private readonly persistableAssistantBarrierItemIds = new Set<string>();
-  private readonly completedAssistantItemIds = new Set<string>();
+  private readonly steeringSegments = new CodexSteeringAssistantSegments();
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -126,6 +131,7 @@ export class CodexAssistantProjection {
       delta: replacement ? "" : delta,
       ...(replacement ? { replace: true as const } : {}),
     };
+    this.steeringSegments.recordStream(itemId, replacement);
     this.emitAgentEvent({
       stream: "assistant",
       data: {
@@ -186,8 +192,9 @@ export class CodexAssistantProjection {
     itemId: string | undefined,
     activeItemIds: ReadonlySet<string>,
   ): { itemId: string; message: AssistantMessage; text: string } | undefined {
+    this.adoptSteeringPrefixForCompletion(item);
     if (itemId && item?.type === "agentMessage") {
-      this.completedAssistantItemIds.add(itemId);
+      this.steeringSegments.recordCompletion(itemId);
     }
     this.noteNativeWorkBarrier(item);
     this.rememberAssistantPhase(item);
@@ -231,8 +238,9 @@ export class CodexAssistantProjection {
   recordSnapshotItem(
     item: CodexThreadItem,
   ): { itemId: string; message: AssistantMessage; text: string } | undefined {
+    this.adoptSteeringPrefixForCompletion(item);
     if (item.type === "agentMessage") {
-      this.completedAssistantItemIds.add(item.id);
+      this.steeringSegments.recordCompletion(item.id);
     }
     this.rememberAssistantPhase(item);
     if (item.type === "agentMessage" && typeof item.text === "string") {
@@ -297,10 +305,11 @@ export class CodexAssistantProjection {
     ) {
       return;
     }
+    this.adoptSteeringPrefixForCompletion({ ...item, type: "agentMessage", id: itemId, text });
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
     }
-    this.completedAssistantItemIds.add(itemId);
+    this.steeringSegments.recordCompletion(itemId);
     this.rememberAssistantItem(itemId);
     this.assistantTextByItem.set(itemId, text);
     // Empty raw finals prove an actual stop; retain that fact without publishing fake output.
@@ -335,7 +344,7 @@ export class CodexAssistantProjection {
     if (recoveredAudible.length > 0) {
       return recoveredAudible.slice(-1);
     }
-    const recovered = this.resolveFinalAssistantTextItem()?.text;
+    const recovered = this.resolveFinalAssistantText();
     return recovered ? [recovered] : [];
   }
 
@@ -361,35 +370,43 @@ export class CodexAssistantProjection {
     });
   }
 
-  collectCompletedAssistantMessages(
+  collectSteeringAssistantMessages(
     completedItemIds: ReadonlySet<string>,
     options: AssistantMessageOptions,
   ): Array<{ itemId: string; message: AssistantMessage }> {
-    // Steering history covers visible completed items even across final-answer
-    // handoffs. Mirror identities deduplicate them across subsequent steers.
+    this.steeringSegments.beginSnapshot();
     return this.assistantItemOrder.flatMap((itemId) => {
-      const text = this.assistantTextByItem.get(itemId)?.trim();
+      const sourceText = this.assistantTextByItem.get(itemId);
+      const completed = completedItemIds.has(itemId);
       if (
-        !completedItemIds.has(itemId) ||
+        (!completed && !this.steeringSegments.isVisible(itemId)) ||
         this.isNonTerminalAssistantItem(itemId) ||
-        !text ||
-        isSilentReplyPayloadText(text) ||
-        this.isToolProgressEchoText(itemId, text)
+        (sourceText && this.isToolProgressEchoText(itemId, sourceText.trim()))
       ) {
         return [];
       }
-      const message = this.createAssistantMessage(text, options);
-      const timestamp = this.assistantTimestampByItem.get(itemId) ?? message.timestamp;
-      return [{ itemId, message: { ...message, timestamp } }];
+      const segment = this.steeringSegments.capture(itemId, sourceText, completed);
+      if (!segment) {
+        return [];
+      }
+      const message = this.createAssistantMessage(segment.text, options);
+      message.timestamp = segment.split
+        ? this.nextTranscriptTimestamp()
+        : (this.assistantTimestampByItem.get(itemId) ?? message.timestamp);
+      return [{ itemId: segment.itemId, message }];
     });
   }
 
-  markAssistantBoundaryPersisted(itemId: string): void {
-    const index = this.assistantItemOrder.indexOf(itemId);
-    if (index >= 0) {
-      this.persistableAssistantBarrier = Math.max(this.persistableAssistantBarrier, index + 1);
-      this.persistedAssistantBoundary = true;
+  markSteeringMessagePersisted(mirrorItemId: string): void {
+    const prefix = this.steeringSegments.consume(mirrorItemId);
+    if (!prefix) {
+      return;
     }
+    if (prefix.completed) {
+      const index = this.assistantItemOrder.indexOf(prefix.itemId);
+      this.persistableAssistantBarrier = Math.max(this.persistableAssistantBarrier, index + 1);
+    }
+    this.persistedAssistantBoundary = true;
   }
 
   finalizeAnswerCandidate(turn: { status?: string; items?: CodexThreadItem[] }): void {
@@ -397,15 +414,11 @@ export class CodexAssistantProjection {
       this.supersedeVisibleAnswerCandidate();
       return;
     }
-    // Codex 0.154.0 can stream under an output-item ID that differs from the
-    // completed item's ID. Only completion receipts own successful history;
-    // retaining the preview would concatenate it with the completed answer.
-    // Remove text before checkpoint close too, so queued commentary readers
-    // cannot persist an orphan preview. Failed turns retain their partial work;
-    // unphased replacement snapshots retain their existing replacement authority.
+    // Native completion may replace a streamed item ID. Cutoffs already own durable
+    // prefixes; retire unmatched previews so they cannot replay beside the authoritative answer.
     for (const itemId of this.assistantItemOrder) {
       if (
-        !this.completedAssistantItemIds.has(itemId) &&
+        !this.steeringSegments.isCompleted(itemId) &&
         !this.isAsyncAssistantItem(itemId) &&
         (this.isFinalAnswerAssistantItem(itemId) || this.isCommentaryAssistantItem(itemId))
       ) {
@@ -453,17 +466,10 @@ export class CodexAssistantProjection {
   }
 
   hasAssistantItemTextForSynthesis(): boolean {
-    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
-      const itemId = this.assistantItemOrder[i];
-      if (!itemId || this.isNonTerminalAssistantItem(itemId)) {
-        continue;
-      }
-      const text = this.assistantTextByItem.get(itemId);
-      if (text && text.length > 0) {
-        return true;
-      }
-    }
-    return false;
+    return this.assistantItemOrder.some(
+      (itemId) =>
+        !this.isNonTerminalAssistantItem(itemId) && Boolean(this.assistantTextByItem.get(itemId)),
+    );
   }
 
   createCurrentAttemptAssistantMessage(
@@ -478,7 +484,7 @@ export class CodexAssistantProjection {
       ) {
         continue;
       }
-      const text = this.assistantTextByItem.get(itemId) ?? "";
+      const text = this.remainingAssistantText(itemId) ?? "";
       const normalizedText = text.trim();
       if (normalizedText && this.isToolProgressEchoText(itemId, normalizedText)) {
         continue;
@@ -491,6 +497,38 @@ export class CodexAssistantProjection {
   createAssistantMessage(text: string, options: AssistantMessageOptions): AssistantMessage {
     const message = buildAssistantMessage(this.params, text, options);
     return this.responseModel ? { ...message, responseModel: this.responseModel } : message;
+  }
+
+  private remainingAssistantText(itemId: string): string | undefined {
+    const text = this.assistantTextByItem.get(itemId);
+    return text === undefined ? undefined : this.steeringSegments.remainingText(itemId, text);
+  }
+
+  private adoptSteeringPrefixForCompletion(item: AssistantCompletion | undefined): void {
+    const sourceId = this.streamedPartialAssistantItemId;
+    if (
+      item?.type !== "agentMessage" ||
+      !sourceId ||
+      item.id === sourceId ||
+      this.steeringSegments.isCompleted(sourceId) ||
+      this.assistantTimestampByItem.has(item.id) ||
+      this.isNonTerminalAssistantItem(sourceId) ||
+      item.delivery === "async" ||
+      (item.phase !== undefined && item.phase !== this.assistantPhaseByItem.get(sourceId))
+    ) {
+      return;
+    }
+    const sourceText = this.assistantTextByItem.get(sourceId);
+    if (!this.steeringSegments.adoptCompletion(sourceId, item.id, item.text, sourceText)) {
+      return;
+    }
+    // A completion may replace the current uncompleted output ID. A separately
+    // started item owns its own text even when it happens to repeat this prefix.
+    if (this.visibleAnswerCandidateItemId === sourceId) {
+      this.supersedeVisibleAnswerCandidate();
+    }
+    this.assistantTextByItem.delete(sourceId);
+    this.streamedPartialAssistantItemId = item.id;
   }
 
   private rememberAssistantPhase(item: CodexThreadItem | undefined): void {
@@ -629,21 +667,16 @@ export class CodexAssistantProjection {
     this.supersedeVisibleAnswerCandidate();
   }
 
-  private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
-    for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
-      const itemId = this.assistantItemOrder[i];
-      if (!itemId) {
-        continue;
-      }
-      const text = this.assistantTextByItem.get(itemId)?.trim();
-      if (this.isNonTerminalAssistantItem(itemId)) {
-        continue;
-      }
-      if (text && !this.isToolProgressEchoText(itemId, text)) {
-        return { itemId, text };
-      }
-    }
-    return undefined;
+  private resolveFinalAssistantText(): string | undefined {
+    const selectedId = this.assistantItemOrder.findLast((itemId) => {
+      const text = this.remainingAssistantText(itemId)?.trim();
+      return Boolean(
+        text &&
+        !this.isNonTerminalAssistantItem(itemId) &&
+        !this.isToolProgressEchoText(itemId, text),
+      );
+    });
+    return selectedId ? this.remainingAssistantText(selectedId)?.trim() : undefined;
   }
 
   private collectPersistableAssistantTexts(minIndex: number): string[] {
@@ -652,12 +685,16 @@ export class CodexAssistantProjection {
     // Walk time order. Unphased text replaces the current segment. Explicit
     // finals accumulate unless they follow a replacement. Silent payloads
     // never replace; they only ride along for post-handoff identity.
-    for (let index = minIndex; index < this.assistantItemOrder.length; index += 1) {
+    for (let index = 0; index < this.assistantItemOrder.length; index += 1) {
       const itemId = this.assistantItemOrder[index];
-      if (!itemId || this.isNonTerminalAssistantItem(itemId)) {
+      if (
+        !itemId ||
+        this.isNonTerminalAssistantItem(itemId) ||
+        (index < minIndex && !this.steeringSegments.survivesHandoff(itemId))
+      ) {
         continue;
       }
-      const text = this.assistantTextByItem.get(itemId)?.trim();
+      const text = this.remainingAssistantText(itemId)?.trim();
       if (!text || this.isToolProgressEchoText(itemId, text)) {
         continue;
       }
@@ -677,16 +714,13 @@ export class CodexAssistantProjection {
   }
 
   private noteNativeWorkBarrier(item: CodexThreadItem | undefined): void {
-    if (!item || !shouldAdvancePersistableAssistantBarrier(item)) {
-      return;
+    if (
+      item &&
+      shouldAdvancePersistableAssistantBarrier(item) &&
+      this.steeringSegments.recordHandoff(item.id)
+    ) {
+      this.persistableAssistantBarrier = this.assistantItemOrder.length;
     }
-    if (item.id && this.persistableAssistantBarrierItemIds.has(item.id)) {
-      return;
-    }
-    if (item.id) {
-      this.persistableAssistantBarrierItemIds.add(item.id);
-    }
-    this.persistableAssistantBarrier = this.assistantItemOrder.length;
   }
 
   private rememberAssistantItem(itemId: string): void {
@@ -700,7 +734,7 @@ export class CodexAssistantProjection {
     if (this.isCommentaryAssistantItem(itemId)) {
       this.checkpointCommentary?.(itemId, {
         read: () => this.readCommentaryMessage(itemId),
-        ready: () => this.completedAssistantItemIds.has(itemId),
+        ready: () => this.steeringSegments.isCompleted(itemId),
       });
     }
   }
@@ -732,14 +766,4 @@ export class CodexAssistantProjection {
   private isToolProgressEchoText(itemId: string, text: string): boolean {
     return this.rawPromotedAssistantItemIds.has(itemId) && this.matchesToolProgressEcho(text);
   }
-}
-
-function shouldAdvancePersistableAssistantBarrier(item: CodexThreadItem): boolean {
-  // Sleep is a Codex public Sleep handoff, not mutating presentation work.
-  // Record it here so a later final cannot join the pre-sleep answer.
-  return (
-    shouldClearTerminalPresentationForNativeItem(item) ||
-    item.type === "dynamicToolCall" ||
-    item.type === "sleep"
-  );
 }

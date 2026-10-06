@@ -74,17 +74,6 @@ describe("upload handoff", () => {
     });
   });
 
-  it("sets resolved files once and leaves browser events to Playwright", async () => {
-    await upload();
-    expect(resolveStrictExistingUploadPaths).toHaveBeenCalledWith({ requestedPaths: paths });
-    expect(session.refLocator).toHaveBeenCalledWith(page, "e7");
-    expect(stat).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
-    expect(detectMime).not.toHaveBeenCalled();
-    expect(setInputFiles).toHaveBeenCalledExactlyOnceWith([canonical], nativeOptions);
-    expect(elementHandle).not.toHaveBeenCalled();
-  });
-
   it("uses an octet-stream payload when mime detection has no answer", async () => {
     detectMime.mockResolvedValueOnce(undefined);
     await upload({ cdpUrl: "https://browser.example/cdp", ssrfPolicy: {} });
@@ -122,6 +111,9 @@ describe("upload handoff", () => {
     expect(readFile).not.toHaveBeenCalled();
     expect(detectMime).not.toHaveBeenCalled();
     expect(setInputFiles).toHaveBeenCalledExactlyOnceWith([canonical], nativeOptions);
+    expect(resolveStrictExistingUploadPaths).toHaveBeenCalledWith({ requestedPaths: paths });
+    expect(session.refLocator).toHaveBeenCalledWith(page, "e7");
+    expect(elementHandle).not.toHaveBeenCalled();
     expect(session.withPageNavigationRequestGuard).toHaveBeenCalledOnce();
     expect(session.assertPageNavigationCompletedSafely).toHaveBeenCalledOnce();
   });

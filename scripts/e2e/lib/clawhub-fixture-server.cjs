@@ -31,9 +31,7 @@ async function assertPrepublishRequests(
   baseUrl,
   requestedPackage,
   version,
-  securityMode = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE === requestedPackage
-    ? "absent"
-    : "required",
+  securityMode = "required",
   attempts = "1",
   minimumAttempts = "1",
 ) {
@@ -77,27 +75,6 @@ async function assertNoRequests(baseUrl) {
     throw new Error("assert-no-requests requires <base-url>");
   }
   const requests = await readRequests(baseUrl);
-  const legacyPackage = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE;
-  if (legacyPackage) {
-    const packagePath = `/api/v1/packages/${encodeURIComponent(legacyPackage)}`;
-    const artifactPrefix = `GET ${packagePath}/versions/`;
-    const artifactSuffix = "/artifact";
-    const artifactRequest = requests[1] ?? "";
-    const version =
-      artifactRequest.startsWith(artifactPrefix) && artifactRequest.endsWith(artifactSuffix)
-        ? decodeURIComponent(artifactRequest.slice(artifactPrefix.length, -artifactSuffix.length))
-        : "";
-    const expected = [
-      `GET ${packagePath}`,
-      `GET ${packagePath}/versions/${encodeURIComponent(version)}/artifact`,
-      `GET ${packagePath}/versions/${encodeURIComponent(version)}/artifact/download`,
-    ];
-    if (!version || JSON.stringify(requests) !== JSON.stringify(expected)) {
-      throw new Error(`unexpected legacy ClawHub fixture requests: ${JSON.stringify(requests)}`);
-    }
-    console.log("Verified complete legacy ClawHub artifact audit sequence.");
-    return;
-  }
   if (requests.length !== 0) {
     throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(requests)}`);
   }
@@ -265,6 +242,7 @@ function startPrepublishArtifactServer() {
   });
   server.listen(0, "127.0.0.1", () => {
     fs.writeFileSync(portFile, String(server.address().port));
+    process.send?.({ port: server.address().port });
   });
 }
 
@@ -879,6 +857,7 @@ async function main() {
 
   server.listen(0, "127.0.0.1", () => {
     fs.writeFileSync(portFile, String(server.address().port));
+    process.send?.({ port: server.address().port });
   });
 }
 

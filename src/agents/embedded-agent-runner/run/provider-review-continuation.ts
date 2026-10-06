@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { bindResponsesInputMessage, responsesRequestLifecycle } from "@openclaw/ai/internal/openai";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasRuntimeContextMarker } from "../../../llm/types.js";
 import {
   acceptProviderReviewAcknowledgment,
   assertSessionProviderReviewWorkStart,
@@ -74,9 +75,7 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
       throw new Error("Provider review continuation cannot be retried or change transport");
     }
     const message = snapshot.review.review?.continuation?.message;
-    const latestIndex = context.messages.findLastIndex(
-      (item) => item.role !== "user" || item.runtimeContextCarrier !== true,
-    );
+    const latestIndex = context.messages.findLastIndex((item) => !hasRuntimeContextMarker(item));
     const latest = context.messages[latestIndex];
     if (!message || latest?.role !== "user") {
       throw new Error("Provider review continuation requires its exact next user input");
@@ -120,22 +119,26 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
         ) {
           throw new Error("Provider continuation payload changed the reviewed runtime or model");
         }
-        if (countUserInputSlots(finalPayload.input) > userInputSlots) {
-          throw new Error("Provider continuation payload added user input");
-        }
-        const lastInput = finalPayload.input.at(-1);
         const continuationInputs = finalPayload.input.filter(isContinuationInput);
         const nextInput = continuationInputs[0];
         const nextInputIndex = finalPayload.input.indexOf(nextInput);
+        const finalInputSuffix = finalPayload.input.slice(nextInputIndex + 1);
         if (
-          !isRecord(lastInput) ||
-          lastInput.role !== "user" ||
           continuationInputs.length !== 1 ||
           !isRecord(nextInput) ||
           nextInput.role !== "user" ||
-          !isDeepStrictEqual(finalPayload.input.slice(nextInputIndex + 1), inputSuffix)
+          !isDeepStrictEqual(finalInputSuffix, inputSuffix)
         ) {
+          if (
+            countUserInputSlots(finalPayload.input) > userInputSlots &&
+            finalInputSuffix.length > inputSuffix.length
+          ) {
+            throw new Error("Provider continuation payload added user input");
+          }
           throw new Error("Provider continuation payload changed its next user input");
+        }
+        if (countUserInputSlots(finalPayload.input) > userInputSlots) {
+          throw new Error("Provider continuation payload added user input");
         }
         const rawMetadata = finalPayload.client_metadata;
         if (rawMetadata !== undefined && !isRecord(rawMetadata)) {

@@ -598,9 +598,8 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
                     },
                     ...("agentAllowed" in testCase
                       ? {
-                          list: [
-                            {
-                              id: targetAgentId,
+                          entries: {
+                            [targetAgentId]: {
                               modelPolicy: { allow: testCase.agentAllowed },
                               ...("agentCap" in testCase
                                 ? { contextTokens: testCase.agentCap }
@@ -615,7 +614,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
                                   }
                                 : {}),
                             },
-                          ],
+                          },
                         }
                       : {}),
                   },

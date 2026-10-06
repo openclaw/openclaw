@@ -132,14 +132,10 @@ vi.mock("./client.js", async () => {
   };
 });
 
-vi.mock("./draft-stream.js", async () => {
-  const actual = await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
-  return {
-    createMattermostDraftStream: mockState.createMattermostDraftStream,
-    createMattermostDraftPreviewBoundaryController:
-      actual.createMattermostDraftPreviewBoundaryController,
-  };
-});
+vi.mock("./draft-stream.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./draft-stream.js")>()),
+  createMattermostDraftStream: mockState.createMattermostDraftStream,
+}));
 
 vi.mock("./monitor-resources.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./monitor-resources.js")>()),
@@ -806,14 +802,16 @@ describe("mattermost inbound user posts", () => {
     },
   );
 
-  it("dispatches an unavailable named attachment without enqueuing a system event", async () => {
-    mockState.resolveMattermostMedia.mockResolvedValueOnce([
+  it.each([1, 2])("dispatches ordered attachments (%i files)", async (fileCount) => {
+    const media = [
       { contentType: "application/pdf", fileName: "quarterly report.pdf", kind: "document" },
-    ]);
+      { path: "/tmp/mattermost-attachment.png", contentType: "image/png", kind: "image" },
+    ].slice(0, fileCount);
+    mockState.resolveMattermostMedia.mockResolvedValueOnce(media);
     const ctx = await receivePost({
       id: "post-regular",
       message: "hello from mattermost",
-      fileIds: ["file-1"],
+      fileIds: ["file-1", "image-1"].slice(0, fileCount),
     });
     expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
@@ -831,9 +829,7 @@ describe("mattermost inbound user posts", () => {
       OriginatingChannel: "mattermost",
       Provider: "mattermost",
     });
-    expect(ctx?.media).toEqual([
-      expect.objectContaining({ contentType: "application/pdf", fileName: "quarterly report.pdf" }),
-    ]);
+    expect(ctx?.media).toEqual(media.map((attachment) => expect.objectContaining(attachment)));
     expect(ctx?.media?.[0]?.path).toBeUndefined();
     expect(ctx?.media?.[0]?.url).toBeUndefined();
   });
@@ -889,7 +885,7 @@ describe("mattermost inbound user posts", () => {
       const verboseDebug = vi.fn();
       const baseUrl = `http://127.0.0.1:${address.port}`;
       const config: OpenClawConfig = {
-        agents: { defaults: { envelopeTimezone: "user", userTimezone: "Asia/Jakarta" } },
+        agents: { defaults: { userTimezone: "Asia/Jakarta" } },
         messages: { groupChat: { historyLimit: 2 } },
         channels: {
           ...(contextVisibility ? { defaults: { contextVisibility } } : {}),

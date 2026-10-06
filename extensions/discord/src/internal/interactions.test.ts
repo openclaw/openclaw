@@ -7,7 +7,7 @@ import {
   MessageFlags,
 } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
-import { Container, TextDisplay } from "./components.js";
+import { Container, TextDisplay } from "./components.message.js";
 import {
   AutocompleteInteraction,
   BaseComponentInteraction,

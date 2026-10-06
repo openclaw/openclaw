@@ -389,7 +389,7 @@ describe("Workshop draft-only review through the real provider and tool owners",
             if (failedReview) {
               await expect(run).rejects.toThrow(
                 scenario === "failed"
-                  ? "provider rejected the request schema or tool payload"
+                  ? "LLM request rejected: Controlled provider rejection"
                   : "Tool Call failed",
               );
             } else {

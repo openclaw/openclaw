@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for sandbox backends, SSH execution, and temp workspace helpers.
- */
 export type {
   CreateSandboxBackendParams,
   CreateReservedSandboxBackendParamsV1,
@@ -38,12 +35,10 @@ export {
   buildExecRemoteCommand,
   buildRemoteWorkdirValidationCommand,
   buildRemoteCommand,
-  buildSshSandboxArgv,
   buildValidatedExecRemoteCommand,
   createRemoteShellSandboxFsBridge,
   createWritableRenameTargetResolver,
   createSshSandboxSessionFromConfigText,
-  createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   getSandboxBackendFactory,
   getSandboxBackendManager,
@@ -53,12 +48,9 @@ export {
   registerSandboxBackend,
   requireSandboxBackendFactory,
   resolveSandboxRuntimeStatus,
-  resolveWritableRenameTargets,
-  resolveWritableRenameTargetsForBridge,
   runSshSandboxCommand,
   sanitizeEnvVars,
   shellEscape,
-  uploadDirectoryToSshTarget,
 } from "../agents/sandbox.js";
 
 export {
@@ -68,14 +60,17 @@ export {
 } from "./run-command.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export {
-  tempWorkspace,
   tempWorkspaceSync,
-  type TempWorkspace,
   type TempWorkspaceOptions,
   type TempWorkspaceSync,
-  withTempWorkspace,
   withTempWorkspaceSync,
 } from "@openclaw/fs-safe/temp";
+
+export {
+  tempWorkspace,
+  withTempWorkspace,
+  type CompatibleTempWorkspace as TempWorkspace,
+} from "../infra/fs-safe-compat.js";
 export { SandboxRuntimeRetiredError } from "../agents/sandbox/provisioning-error.js";
 export {
   createRemoteShellSandboxBackend,

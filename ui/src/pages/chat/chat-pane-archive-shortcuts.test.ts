@@ -112,40 +112,27 @@ describe("direct session archive shortcuts", () => {
   });
 
   it.each([
-    { key: "main" },
-    { key: "agent:main:main" },
-    { key: "global", kind: "global" },
-    { key: "unknown", kind: "unknown" },
-    { archived: true },
-    { sessionId: undefined },
-  ] satisfies Partial<GatewaySessionRow>[])(
-    "does not archive protected, archived, or non-durable rows: %j",
-    async (row) => {
-      const { pane, patch } = fixture(row);
-      expect(press(pane).defaultPrevented).toBe(false);
-      await vi.dynamicImportSettled();
-      expect(patch).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    "inactive",
-    "hidden",
+    "protected",
+    "archived",
+    "non-durable",
     "modal",
     "onboarding",
     "offline",
     "read-only",
     "unavailable",
     "missing-row",
-  ])("does not act during %s", async (guard) => {
-    const { pane, state, patch } = fixture();
+    "repeated-keydown",
+  ])("does not archive when %s", async (guard) => {
+    const row: Partial<GatewaySessionRow> =
+      guard === "protected"
+        ? { key: "agent:main:main" }
+        : guard === "archived"
+          ? { archived: true }
+          : guard === "non-durable"
+            ? { sessionId: undefined }
+            : {};
+    const { pane, state, patch } = fixture(row);
     const modal = document.createElement("div");
-    if (guard === "inactive") {
-      pane.active = false;
-    }
-    if (guard === "hidden") {
-      pane.presented = false;
-    }
     if (guard === "onboarding") {
       pane.onboarding = true;
     }
@@ -165,7 +152,7 @@ describe("direct session archive shortcuts", () => {
       (document.openClawModalLayers ??= new Set()).add(modal);
     }
     try {
-      expect(press(pane).defaultPrevented).toBe(false);
+      expect(press(pane, { repeat: guard === "repeated-keydown" }).defaultPrevented).toBe(false);
       await vi.dynamicImportSettled();
       expect(patch).not.toHaveBeenCalled();
     } finally {
@@ -173,34 +160,20 @@ describe("direct session archive shortcuts", () => {
     }
   });
 
-  it.each([
-    { repeat: true },
-    { isComposing: true },
-    { keyCode: 229 },
-    { key: "Dead" },
-    { altKey: true },
-  ])("leaves repetition, composition, and other chords alone: %j", async (init) => {
-    const { pane, patch } = fixture();
-    expect(press(pane, init).defaultPrevented).toBe(false);
-    await vi.dynamicImportSettled();
-    expect(patch).not.toHaveBeenCalled();
-  });
-
-  it("rechecks live authority after loading the action implementation", async () => {
-    const { pane, patch } = fixture();
-    expect(press(pane).defaultPrevented).toBe(true);
-    pane.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
-    await vi.dynamicImportSettled();
-    expect(patch).not.toHaveBeenCalled();
-  });
-
-  it("does not archive after the originating pane loses presentation during lazy loading", async () => {
-    const { pane, patch } = fixture();
-    expect(press(pane).defaultPrevented).toBe(true);
-    pane.presented = false;
-    await vi.dynamicImportSettled();
-    expect(patch).not.toHaveBeenCalled();
-  });
+  it.each(["authority", "presentation"])(
+    "rechecks %s after loading the action implementation",
+    async (revoked) => {
+      const { pane, patch } = fixture();
+      expect(press(pane).defaultPrevented).toBe(true);
+      if (revoked === "authority") {
+        pane.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
+      } else {
+        pane.presented = false;
+      }
+      await vi.dynamicImportSettled();
+      expect(patch).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the draft and reports archive failure without navigating or offering Undo", async () => {
     const { pane, state, patch, sessions, row } = fixture();

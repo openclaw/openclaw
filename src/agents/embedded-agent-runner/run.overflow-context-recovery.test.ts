@@ -53,6 +53,7 @@ vi.mock("./provider-prompt-state.js", () => ({
 
 vi.mock("./tool-result-truncation.js", () => ({
   resolveLiveToolResultMaxChars: () => 32_000,
+  restoreCacheTtlToolResultProjections: vi.fn(),
   sessionLikelyHasOversizedToolResults: mocks.sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSessionManager: mocks.truncateOversizedToolResults,
 }));
@@ -165,7 +166,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
         },
       };
     },
-    prepareRecoverySession: () => ({
+    prepareRecoverySession: async () => ({
       sessionManager: SessionManager.inMemory("/tmp/workspace"),
       assertActive: vi.fn(),
       withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
@@ -410,7 +411,8 @@ describe("recoverEmbeddedRunOverflow", () => {
     async (adoptsSuccessor) => {
       let sessionId = "session-1";
       getEmbeddedSessionPromptState(sessionId).toolResults.frozen.add("predecessor-only");
-      getEmbeddedSessionPromptState("rotated-session").toolResults.frozen.add("successor-only");
+      const successorProjection = getEmbeddedSessionPromptState("rotated-session").toolResults;
+      successorProjection.frozen.add("successor-only");
       mocks.truncateOversizedToolResults.mockReturnValueOnce({
         truncated: true,
         truncatedCount: 2,
@@ -435,7 +437,7 @@ describe("recoverEmbeddedRunOverflow", () => {
       expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
       expect(mocks.truncateOversizedToolResults).toHaveBeenCalledWith(
         expect.objectContaining({
-          projectionState: getEmbeddedSessionPromptState(sessionId).toolResults,
+          projectionState: successorProjection,
           protectTrailingToolResults: true,
         }),
       );

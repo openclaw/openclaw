@@ -249,33 +249,24 @@ extension View {
             }
     }
 
-    func openClawCraftSurface(cornerRadius: CGFloat = 24, shadow: Bool = true) -> some View {
-        self.modifier(OpenClawCraftSurfaceModifier(cornerRadius: cornerRadius, shadow: shadow))
-    }
-}
-
-private struct OpenClawCraftSurfaceModifier: ViewModifier {
-    let cornerRadius: CGFloat
-    let shadow: Bool
-
-    func body(content: Content) -> some View {
-        content
+    func openClawCraftSurface(cornerRadius: CGFloat = 24) -> some View {
+        self
             .background {
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(OpenClawBrand.activationSurface)
                     .shadow(
-                        color: self.shadow ? Color.black.opacity(0.07) : .clear,
+                        color: Color.black.opacity(0.07),
                         radius: 16,
                         x: 0,
                         y: 8)
             }
             .overlay(alignment: .top) {
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(Color.white.opacity(0.36), lineWidth: 0.5)
                     .blendMode(.plusLighter)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(OpenClawBrand.activationHairline, lineWidth: 0.5)
             }
     }
@@ -422,8 +413,6 @@ struct OpenClawSecondaryActionButtonStyle: ButtonStyle {
 
 struct OpenClawCloseButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
-    var minWidth: CGFloat = 36
-    var height: CGFloat = 36
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -433,8 +422,8 @@ struct OpenClawCloseButtonStyle: ButtonStyle {
                     ? OpenClawBrand.activationPrimaryAction
                     : Color.secondary)
             .fixedSize(horizontal: true, vertical: false)
-            .frame(minWidth: self.minWidth)
-            .frame(height: self.height)
+            .frame(minWidth: 36)
+            .frame(height: 36)
             .padding(.horizontal, 7)
             .background {
                 Capsule(style: .continuous)

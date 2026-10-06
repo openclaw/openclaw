@@ -18,6 +18,7 @@ import {
   installControlUiRpcDiagnostics,
 } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import type { ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 
 declare module "vitest" {
@@ -530,11 +531,14 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               }
               browser = await chromium.launch({
                 ...options.browserLaunchOptions,
+                // Full tile rasterization reduced cross-pass stroke noise in the capture fixtures.
+                args: ["--disable-partial-raster", ...(options.browserLaunchOptions?.args ?? [])],
                 executablePath: chromiumExecutablePath,
               });
             } else {
               browser = await chromium.launch({
                 ...options.browserLaunchOptions,
+                args: ["--disable-partial-raster", ...(options.browserLaunchOptions?.args ?? [])],
                 executablePath: chromiumExecutablePath,
               });
               if (stopping) {
@@ -615,6 +619,9 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
             const page = await context.newPage();
             fixture = { context, page };
             installControlUiRpcDiagnostics(page);
+            // A CDP session attached after a test's own session clears that session's
+            // emulation overrides (such as safe-area insets) on the next navigation.
+            await installControlUiE2eRendererStallProbe(page);
             try {
               return await run(fixture);
             } catch (error) {

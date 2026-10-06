@@ -35,22 +35,20 @@ function normalizeReplyToModeChatType(
 /** Resolve configured reply-to mode from channel and chat-type config. */
 function resolveConfiguredReplyToMode(
   cfg: OpenClawConfig,
-  channel?: OriginatingChannelType,
+  provider?: string,
   chatType?: string | null,
-  accountId?: string | null,
+  accountId?: string,
 ): ReplyToMode {
-  const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
   if (!provider) {
     return "all";
   }
   const channelConfig = (cfg.channels as Record<string, ReplyToModeChannelConfig> | undefined)?.[
     provider
   ];
-  const normalizedAccountId = accountId?.trim();
-  const accountConfig = normalizedAccountId
+  const accountConfig = accountId
     ? resolveChannelAccountEntry(
         channelConfig?.accounts,
-        normalizeAccountId(normalizedAccountId),
+        normalizeAccountId(accountId),
         provider,
         normalizeAccountId,
       )
@@ -58,15 +56,13 @@ function resolveConfiguredReplyToMode(
   const normalizedChatType = normalizeReplyToModeChatType(chatType);
   if (normalizedChatType) {
     // Exhaust account policy before channel defaults so a routed account cannot silently inherit.
-    const accountMode =
-      accountConfig?.replyToModeByChatType?.[normalizedChatType] ?? accountConfig?.replyToMode;
-    if (accountMode !== undefined) {
-      return accountMode;
-    }
-    const scopedMode = channelConfig?.replyToModeByChatType?.[normalizedChatType];
-    if (scopedMode !== undefined) {
-      return scopedMode;
-    }
+    return (
+      accountConfig?.replyToModeByChatType?.[normalizedChatType] ??
+      accountConfig?.replyToMode ??
+      channelConfig?.replyToModeByChatType?.[normalizedChatType] ??
+      channelConfig?.replyToMode ??
+      "all"
+    );
   }
   return accountConfig?.replyToMode ?? channelConfig?.replyToMode ?? "all";
 }
@@ -79,14 +75,12 @@ export function resolveReplyToMode(
   chatType?: string | null,
 ): ReplyToMode {
   const normalizedAccountId = normalizeOptionalLowercaseString(accountId);
-  if (!normalizedAccountId) {
-    return resolveConfiguredReplyToMode(cfg, channel, chatType);
-  }
   const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
-  const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
+  const threading =
+    normalizedAccountId && provider ? getChannelPlugin(provider)?.threading : undefined;
   return (
     threading?.resolveReplyToMode?.({ cfg, accountId: normalizedAccountId, chatType }) ??
-    resolveConfiguredReplyToMode(cfg, channel, chatType, normalizedAccountId)
+    resolveConfiguredReplyToMode(cfg, provider, chatType, normalizedAccountId)
   );
 }
 
@@ -151,11 +145,16 @@ function suppressReplyTarget(payload: ReplyPayload): ReplyPayload {
   );
 }
 
-/** Create a payload filter that strips reply targets according to reply-to mode. */
-function createReplyToModeFilter(
+/** Create a reply-to filter using channel-specific explicit-tag defaults. */
+export function createReplyToModeFilterForChannel(
   mode: ReplyToMode,
-  opts: { allowExplicitReplyTagsWhenOff?: boolean } = {},
+  channel?: OriginatingChannelType,
 ) {
+  const normalized = normalizeOptionalLowercaseString(channel);
+  const adapter = getLoadedChannelThreadingAdapter(normalized);
+  // Named channels allow explicit tags even when their plugin is not loaded.
+  const allowExplicitReplyTagsWhenOff =
+    adapter?.allowExplicitReplyTagsWhenOff ?? adapter?.allowTagsWhenOff ?? Boolean(normalized);
   let hasThreaded = false;
   const apply = (payload: ReplyPayload, preview = false): ReplyPayload => {
     const isStatusNotice = isReplyPayloadStatusNotice(payload);
@@ -165,7 +164,7 @@ function createReplyToModeFilter(
     if (mode === "off") {
       const isExplicit = Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
       // Explicit tags cannot override off-mode for transient status notices.
-      if (opts.allowExplicitReplyTagsWhenOff && isExplicit && !isStatusNotice) {
+      if (allowExplicitReplyTagsWhenOff && isExplicit && !isStatusNotice) {
         return payload;
       }
       return copyReplyPayloadMetadata(payload, {
@@ -216,22 +215,4 @@ export function resolveBatchedReplyThreadingPolicy(
   return {
     implicitCurrentMessage: isBatched ? "allow" : "deny",
   };
-}
-
-/** Create a reply-to filter using channel-specific explicit-tag defaults. */
-export function createReplyToModeFilterForChannel(
-  mode: ReplyToMode,
-  channel?: OriginatingChannelType,
-) {
-  const normalized = normalizeOptionalLowercaseString(channel);
-  const adapter = getLoadedChannelThreadingAdapter(normalized);
-  // Channels may opt out via their threading adapter. Any named channel defaults to
-  // allowing explicit tags — including ids with no loaded plugin, because this filter
-  // also runs where plugins are not loaded and stripping there would break real
-  // channels. Only an absent channel fails closed. Accepted tradeoff, not an oversight.
-  const allowExplicitReplyTagsWhenOff =
-    adapter?.allowExplicitReplyTagsWhenOff ?? adapter?.allowTagsWhenOff ?? Boolean(normalized);
-  return createReplyToModeFilter(mode, {
-    allowExplicitReplyTagsWhenOff,
-  });
 }

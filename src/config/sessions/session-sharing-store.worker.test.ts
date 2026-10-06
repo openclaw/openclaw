@@ -43,8 +43,8 @@ import {
   readCommittedSessionEntryCache,
   readSessionEntryCache,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { recordSessionParticipant } from "./session-accessor.sqlite-participants.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
+import { recordSessionParticipantInWorker as recordSessionParticipant } from "./session-sharing-store.async.js";
 import {
   addSessionMember,
   listSessionMembersInWorker,
@@ -276,7 +276,7 @@ it("commits aliased worker membership and participant facts before publishing, a
       updatedAt: 1,
       createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
     };
-    await upsertSessionEntryCore(scope, entry);
+    replaceSessionEntrySync(scope, entry);
     const expectedEntry = {
       sessionId: entry.sessionId,
       createdActor: entry.createdActor,
@@ -448,12 +448,14 @@ it("rejects the complete aliased category update when a later member changes aft
 });
 
 it.each([
-  { mutation: "membership", generation: "replacement" },
-  { mutation: "category", generation: "replacement" },
-  { mutation: "category", generation: "same-session" },
+  { mutation: "membership", generation: "replacement", lostReply: false },
+  { mutation: "category", generation: "replacement", lostReply: false },
+  { mutation: "category", generation: "same-session", lostReply: false },
+  { mutation: "category", generation: "replacement", lostReply: true },
+  { mutation: "category", generation: "same-session", lostReply: true },
 ] as const)(
-  "keeps newer $generation facts when an earlier $mutation worker reply arrives",
-  async ({ mutation, generation }) => {
+  "keeps newer $generation facts when an earlier $mutation worker reply settles (lost: $lostReply)",
+  async ({ mutation, generation, lostReply }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = { ...rolePolicyConfig(), agents: { entries: { main: {} } } };
       await state.writeConfig(cfg);
@@ -480,6 +482,9 @@ it.each([
       readSessionEntryCache(database, { cache: true });
       const committed = createDeferredCore();
       const releaseReply = createDeferredCore();
+      const failure = new SqliteWorkerError("superseded category reply lost", "outcome-unknown");
+      const changes: SessionRowChange[] = [];
+      const stopChanges = sessionChanges.subscribeFacts((change) => changes.push(change));
       const original = agentWorkers.openOpenClawAgentSqliteWorkerStore;
       const open = vi
         .spyOn(agentWorkers, "openOpenClawAgentSqliteWorkerStore")
@@ -504,6 +509,9 @@ it.each([
                         ) {
                           committed.resolve();
                           await releaseReply.promise;
+                          if (lostReply) {
+                            throw failure;
+                          }
                         }
                         return result;
                       },
@@ -567,8 +575,21 @@ it.each([
           }
         };
         assertNewerFacts();
+        changes.length = 0;
         releaseReply.resolve();
-        if (mutation === "membership") {
+        if (lostReply) {
+          await expect(pending).rejects.toBe(failure);
+          expect(changes).toEqual([
+            expect.objectContaining({
+              all: true,
+              scope: { storePath: database.path },
+              factsInvalidated: true,
+            }),
+          ]);
+          expect(readCommittedSessionEntryCache(database.db)).toBeUndefined();
+          await projection.prepare();
+          readSessionEntryCache(database, { cache: true });
+        } else if (mutation === "membership") {
           await expect(pending).resolves.toMatchObject({ inserted: true });
         } else {
           await expect(pending).resolves.toBe(1);
@@ -581,6 +602,7 @@ it.each([
         await pending.catch(() => undefined);
         replacement?.release();
         open.mockRestore();
+        stopChanges();
         stop();
         projection.dispose();
       }
@@ -591,15 +613,33 @@ it.each([
 it.each(["membership", "category"] as const)(
   "fences cached %s facts when a committed mutation loses its worker reply",
   async (mutation) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const scope = { agentId: "main", sessionKey: "agent:main:lost-member-reply" };
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:lost-member-reply",
+        ...(mutation === "category"
+          ? { storePath: state.statePath("shared-category.sqlite") }
+          : {}),
+      };
       await upsertSessionEntryCore(scope, {
         sessionId: "lost-member-reply",
         updatedAt: 1,
         category: " Work ",
       });
       await addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 });
-      const database = openOpenClawAgentDatabase(scope);
+      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+      const aliasedScope = {
+        agentId: "other",
+        storePath: database.path,
+        sessionKey: "agent:other:lost-category-reply",
+      };
+      if (mutation === "category") {
+        await upsertSessionEntryCore(aliasedScope, {
+          sessionId: "aliased-category",
+          updatedAt: 1,
+          category: "Work",
+        });
+      }
       readSessionEntryCache(database, { cache: true });
       const projection = createSessionMembershipProjection();
       projection.updateTargets([
@@ -675,23 +715,24 @@ it.each(["membership", "category"] as const)(
           " Work ",
         );
         await expect(run()).rejects.toBe(failure);
-        expect(changes).toEqual([
-          expect.objectContaining(
-            mutation === "category"
-              ? {
-                  all: true,
-                  scope: { storePath: database.path },
-                  factsInvalidated: true,
-                }
-              : {
+        expect(changes).toEqual(
+          mutation === "category"
+            ? [scope.sessionKey, aliasedScope.sessionKey].map((sessionKey) => ({
+                sessionKey,
+                storePath: database.path,
+                factsInvalidated: "category",
+              }))
+            : [
+                expect.objectContaining({
                   sessionKey: scope.sessionKey,
                   storePath: database.path,
                   factsInvalidated: true,
-                },
-          ),
-        ]);
+                }),
+              ],
+        );
         if (mutation === "category") {
-          expect(cachesAtInvalidation).toEqual([undefined]);
+          expect(cachesAtInvalidation).toEqual([undefined, undefined]);
+          expect(loadSessionEntry(aliasedScope)?.category).toBeUndefined();
         }
         expect(projection.membership(database.path, scope.sessionKey)).toEqual([]);
         expect(projection.needsPreparation).toBe(true);

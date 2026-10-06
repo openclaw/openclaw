@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "@openclaw/retry";
 import pLimit from "p-limit";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
@@ -47,6 +48,7 @@ import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-
 import {
   createCatalogAttemptReporter,
   notifyPreparedModelCatalogPublication,
+  notifyPreparedModelRuntimePublication,
 } from "./prepared-model-runtime.publication-events.js";
 import { preparedSyntheticAuthProviderScope } from "./prepared-model-runtime.synthetic-auth.js";
 import type {
@@ -82,6 +84,20 @@ export async function createFullModelCatalogAccess(
     assertBuildCurrent,
   );
   assertBuildCurrent();
+  const accountCatalog = createPreparedAccountCatalogAccess(
+    params.isCurrent,
+    params.retirementSignal,
+    params.agentFacts.input.config,
+    () => {
+      if (params.catalogOwner && params.isPublished?.() !== false) {
+        notifyPreparedModelRuntimePublication({
+          phase: "catalog-observation",
+          modelFactsChanged: false,
+          agentId: params.catalogOwner.agentId,
+        });
+      }
+    },
+  );
   const readUsage = createPreparedRuntimeAuthProfileUsageReader(
     params.agentFacts.input.agentDir,
     params.agentFacts.input.inheritedAuthDir,
@@ -386,6 +402,9 @@ export async function createFullModelCatalogAccess(
       const inventory = providerIds
         ? mergePreparedModelCatalogInventory(retained, acquired, scope, normalizeProvider)
         : acquired;
+      accountCatalog.reconcileAuth(discoveredAuth.authStore, (provider) =>
+        scope.has(normalizeProvider(provider)),
+      );
       setCatalogAuth(inventory.catalog, auth);
       return {
         inventory,
@@ -499,6 +518,11 @@ export async function createFullModelCatalogAccess(
           }
         : latestInventory;
       if (nextInventory) {
+        if (nativeAuth) {
+          accountCatalog.reconcileAuth(nativeAuth.authStore, (provider) =>
+            nativeScope.has(normalizeProvider(provider)),
+          );
+        }
         setCatalogAuth(nextInventory.catalog, catalogAuth);
       }
       if (completed) {
@@ -635,7 +659,7 @@ export async function createFullModelCatalogAccess(
     return promise;
   };
   return {
-    accountCatalog: createPreparedAccountCatalogAccess(params.isCurrent, params.retirementSignal),
+    accountCatalog,
     initialAuth: currentAuth,
     isCurrent: params.isCurrent,
     withRefreshStatus: attempt.withRefreshStatus,
@@ -657,6 +681,11 @@ export async function createFullModelCatalogAccess(
         refreshed,
         (provider) => scope.has(normalizeProvider(provider)),
       );
+      accountCatalog.reconcileAuth(
+        refreshed.authStore,
+        (provider) => scope.has(normalizeProvider(provider)),
+        profileIds,
+      );
       return { authStore, authModes: Object.freeze(authModes) };
     },
     readFullModelCatalog: () => {
@@ -675,21 +704,12 @@ export async function createFullModelCatalogAccess(
       if (options?.refresh && params.inventoryOwner.provenance === "standalone") {
         return await acquireCatalog(options);
       }
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        return await Promise.race([
-          acquireCatalog(options),
-          new Promise<ModelCatalogSnapshot>((resolve) => {
-            timer = setTimeout(
-              () => resolve(published.catalog ?? staticCatalog),
-              MODEL_CATALOG_FOREGROUND_WAIT_MS,
-            );
-            timer.unref?.();
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
+      return await raceWithTimeout(
+        acquireCatalog(options),
+        MODEL_CATALOG_FOREGROUND_WAIT_MS,
+        () => published.catalog ?? staticCatalog,
+        { ref: false },
+      );
     },
   };
 }

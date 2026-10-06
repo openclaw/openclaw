@@ -14,43 +14,30 @@ import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-sessio
 
 type TranscriptScrollRenderState = { atEnd: boolean; touchActive: boolean };
 
-type TranscriptOffsetState = {
-  pendingScrollOffset: ChatTranscriptPendingScrollOffset | null;
+/** State shared by native input observation and transcript commands. */
+export class TranscriptOffsetState {
+  pendingScrollOffset: ChatTranscriptPendingScrollOffset | null = null;
   scrollCommand:
-    | { behavior: ScrollBehavior; target: "end"; source: "auto" | "manual" }
+    | { behavior: ScrollBehavior; target: "end" }
     | { behavior: ScrollBehavior; target: "index" }
     | { behavior: ScrollBehavior; target: "message"; messageId: string }
-    | null;
-  touching: boolean;
-  touchScrolling: boolean;
-  readonly touchActive: boolean;
-  renderedScrollState: TranscriptScrollRenderState;
-  renderState(atEnd: boolean): TranscriptScrollRenderState;
-  maintenanceScrollOffset: number | null;
-  pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null;
-  syncNativeOffset: (() => void) | null;
-  recordProgrammaticScroll: ((before: number, after: number, maintenance: boolean) => void) | null;
-};
+    | null = null;
+  touching = false;
+  touchScrolling = false;
+  renderedScrollState = { atEnd: false, touchActive: false };
+  maintenanceScrollOffset: number | null = null;
+  pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
+  syncNativeOffset: (() => void) | null = null;
+  recordProgrammaticScroll: ((before: number, after: number, maintenance: boolean) => void) | null =
+    null;
 
-/** Create the state shared by native input observation and transcript commands. */
-export function createTranscriptOffsetState(): TranscriptOffsetState {
-  return {
-    pendingScrollOffset: null,
-    scrollCommand: null,
-    touching: false,
-    touchScrolling: false,
-    get touchActive() {
-      return this.touching || this.touchScrolling;
-    },
-    renderedScrollState: { atEnd: false, touchActive: false },
-    renderState(atEnd) {
-      return { atEnd, touchActive: this.touchActive };
-    },
-    maintenanceScrollOffset: null,
-    pendingInteractionAnchor: null,
-    syncNativeOffset: null,
-    recordProgrammaticScroll: null,
-  };
+  get touchActive(): boolean {
+    return this.touching || this.touchScrolling;
+  }
+
+  renderState(atEnd: boolean): TranscriptScrollRenderState {
+    return { atEnd, touchActive: this.touchActive };
+  }
 }
 
 export function isTranscriptMaintenanceScroll(
@@ -79,21 +66,6 @@ export function isTranscriptProgrammaticScroll(
   );
 }
 
-export function isTranscriptManualScroll(
-  state: TranscriptOffsetState,
-  element: HTMLDivElement | null,
-): boolean {
-  const command = state.scrollCommand;
-  if (!command || (command.target === "end" && command.source !== "manual")) {
-    return false;
-  }
-  // Native idle can lag a completed journey or never fire for a no-op.
-  return (
-    command.target !== "end" ||
-    Math.abs((maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0)) > 1
-  );
-}
-
 export function scrollTranscriptToEnd(
   state: TranscriptOffsetState,
   instance: Virtualizer<HTMLDivElement, HTMLElement>,
@@ -101,7 +73,7 @@ export function scrollTranscriptToEnd(
   cancelScroll: () => void,
   measureSkippedRows: () => void,
 ): void {
-  // Retargeting automatic follow must not insert an instant stop or lose manual ownership.
+  // Retargeting automatic follow must not insert an instant stop.
   if (source !== "auto" || state.scrollCommand?.target !== "end") {
     cancelScroll();
   } else if (state.scrollCommand.behavior === "smooth" && behavior !== "smooth") {
@@ -109,11 +81,9 @@ export function scrollTranscriptToEnd(
     // TanStack suppressed outside the outgoing smooth command’s target buffer.
     measureSkippedRows();
   }
-  const current = state.scrollCommand;
   state.scrollCommand = {
     behavior,
     target: "end",
-    source: source === "auto" && current?.target === "end" ? current.source : source,
   };
   instance.scrollToEnd({ behavior });
   // Instant commands and smooth no-ops can reach their target before any
@@ -363,14 +333,16 @@ export function observeTranscriptOffset(
   // Commit editor-induced geometry before Lit's bubble listener classifies
   // the native offset. Only the actual correction carries maintenance provenance.
   const commitComposerResize = () => owner.onComposerLayout(true);
-  element?.addEventListener("scroll", commitComposerResize, { capture: true, passive: true });
-  element?.addEventListener("touchmove", moveTouch, { passive: true });
+  const listeners = new AbortController();
+  const passive = { passive: true, signal: listeners.signal };
+  element?.addEventListener("scroll", commitComposerResize, { ...passive, capture: true });
+  element?.addEventListener("touchmove", moveTouch, passive);
   for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
-    element?.addEventListener(type, interrupt, { passive: true });
+    element?.addEventListener(type, interrupt, passive);
   }
-  element?.addEventListener("scrollend", finishScroll, { passive: true });
-  element?.addEventListener("touchend", finishTouch, { passive: true });
-  element?.addEventListener("touchcancel", finishTouch, { passive: true });
+  element?.addEventListener("scrollend", finishScroll, passive);
+  element?.addEventListener("touchend", finishTouch, passive);
+  element?.addEventListener("touchcancel", finishTouch, passive);
   const cleanup = observeElementOffset(instance, (offset, scrolling) => {
     if (element !== owner.getScrollElement()) {
       return;
@@ -435,13 +407,6 @@ export function observeTranscriptOffset(
     contactIds.clear();
     owner.state.touching = false;
     owner.state.touchScrolling = false;
-    element?.removeEventListener("scroll", commitComposerResize, true);
-    element?.removeEventListener("scrollend", finishScroll);
-    element?.removeEventListener("touchend", finishTouch);
-    element?.removeEventListener("touchmove", moveTouch);
-    element?.removeEventListener("touchcancel", finishTouch);
-    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
-      element?.removeEventListener(type, interrupt);
-    }
+    listeners.abort();
   };
 }

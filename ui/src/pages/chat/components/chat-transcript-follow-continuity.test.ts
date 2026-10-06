@@ -166,7 +166,7 @@ describe("transcript follow continuity", () => {
     { source: "manual", settled: false },
     { source: "manual", settled: true },
   ] as const)(
-    "preserves $source ownership while retargeting follow (settled=$settled)",
+    "allows reader takeover after retargeting $source follow (settled=$settled)",
     async ({ source, settled }) => {
       stubAnimationFrames();
       const policy = makeChatHost({ chatHasAutoScrolled: true });
@@ -182,7 +182,6 @@ describe("transcript follow continuity", () => {
       );
       Object.assign(policy, {
         chatCancelScroll: () => transcript.cancelScroll(),
-        chatIsManualScroll: () => transcript.isManualScroll,
       });
       const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
         kind: "content",
@@ -211,15 +210,95 @@ describe("transcript follow continuity", () => {
         container.scrollTop = 4200;
       }
       writes.length = 0;
-      lockChatScroll(policy, "remote-input");
-      const shouldLock = source === "auto" || settled;
-      expect(policy.chatFollowLocked).toBe(shouldLock);
-      expect(writes).toEqual(
-        shouldLock
-          ? [expect.objectContaining({ behavior: "instant", top: settled ? 4200 : 1000 })]
-          : [],
-      );
+      lockChatScroll(policy);
+      expect(policy.chatFollowLocked).toBe(true);
+      expect(writes).toEqual([
+        expect.objectContaining({ behavior: "instant", top: settled ? 4200 : 1000 }),
+      ]);
       transcript.hostDisconnected();
+    },
+  );
+  it.each([
+    { distance: 0, followEnabled: true, nativePending: false },
+    { distance: 8, followEnabled: true, nativePending: false },
+    { distance: 50, followEnabled: true, nativePending: false },
+    { distance: 0, followEnabled: false, nativePending: false },
+    { distance: 8, followEnabled: false, nativePending: false },
+    { distance: 0, followEnabled: true, nativePending: true },
+  ])(
+    "follows typing growth only from the resting end ($distance, $followEnabled, native movement pending=$nativePending)",
+    async ({ distance, followEnabled, nativePending }) => {
+      const flushFrames = stubAnimationFrames();
+      const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
+        kind: "content",
+        key: "row:" + index,
+        content: html`<div>row ${index}</div>`,
+      }));
+      const { container, renderRows, transcript } = await mountTestTranscript(
+        `typing-distance-${distance}`,
+        rows,
+        new ChatTranscriptController(
+          {
+            addController: () => undefined,
+            removeController: () => undefined,
+            requestUpdate: () => undefined,
+            updateComplete: Promise.resolve(true),
+          },
+          () => `typing-distance-${distance}-${followEnabled}`,
+          { canFollowEnd: () => followEnabled },
+        ),
+      );
+      try {
+        const total = transcriptSize(container);
+        let scrollHeight = total + (nativePending ? 88 : 84);
+        Object.defineProperties(container, {
+          clientHeight: { configurable: true, value: 600 },
+          scrollHeight: { configurable: true, get: () => scrollHeight },
+        });
+        for (const observer of resizeObservers) {
+          observer.emitTarget(container, 800, 600);
+        }
+        container.scrollTop = container.scrollHeight - container.clientHeight - distance;
+        container.dispatchEvent(new Event("scroll"));
+        if (nativePending) {
+          // Native movement can precede the offset observer.
+          container.scrollTop -= 100;
+        }
+        const readerOffset = container.scrollTop;
+        const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+          if (typeof options === "object" && options.top !== undefined) {
+            container.scrollTop = options.top;
+          }
+        });
+        container.scrollTo = scrollTo;
+        renderRows([
+          ...rows,
+          { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
+        ]);
+        expect(scrollTo).not.toHaveBeenCalled();
+        expect(container.scrollTop).toBe(readerOffset);
+        scrollHeight += 100;
+        flushFrames();
+        expect(container.scrollTop).toBe(
+          distance === 0 && followEnabled && !nativePending ? readerOffset + 100 : readerOffset,
+        );
+        if (nativePending) {
+          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+          expect(scrollTo).not.toHaveBeenCalled();
+          container.scrollTop -= 100;
+          container.dispatchEvent(new Event("scroll"));
+          scrollTo.mockClear();
+          Object.defineProperty(container, "scrollHeight", {
+            configurable: true,
+            value: total + 188,
+          });
+          flushFrames();
+          expect(scrollTo).not.toHaveBeenCalled();
+          expect(container.scrollTop).toBe(readerOffset - 100);
+        }
+      } finally {
+        transcript.hostDisconnected();
+      }
     },
   );
 });

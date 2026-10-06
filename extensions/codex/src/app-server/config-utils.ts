@@ -8,7 +8,9 @@ import {
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawExecAsk, OpenClawExecSecurity } from "./config-contracts.shared.js";
-import type { CodexServiceTier } from "./protocol.js";
+import { normalizeCodexServiceTier } from "./service-tier-normalization.js";
+
+export { normalizeCodexServiceTier } from "./service-tier-normalization.js";
 
 const START_OPTIONS_KEY_SECRET = resolveGlobalSingleton(
   Symbol.for("openclaw.codexAppServerStartOptionsKeySecret"),
@@ -18,34 +20,15 @@ const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 export { readNonEmptyString, readRecord };
 
-export function normalizeCodexServiceTier(value: unknown): CodexServiceTier | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (normalized === "fast" || normalized === "priority") {
-    return "priority";
-  }
-  if (normalized === "flex") {
-    return "flex";
-  }
-  return trimmed;
-}
-
 export function isCodexFastServiceTier(value: unknown): boolean {
   return normalizeCodexServiceTier(value) === "priority";
 }
 
-export function normalizeHeaders(value: unknown): Record<string, string> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
+export function normalizeHeaders(
+  value: Record<string, unknown> | undefined,
+): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(value)
+    Object.entries(value ?? {})
       .map(
         ([key, child]) =>
           [
@@ -77,13 +60,16 @@ export function readNumberEnv(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-export function resolveArgs(configArgs: unknown, envArgs: string | undefined): string[] {
+export function resolveArgs(
+  configArgs: string | string[] | undefined,
+  envArgs: string | undefined,
+): string[] {
   if (Array.isArray(configArgs)) {
     return normalizeTrimmedStringList(configArgs);
   }
   // v2026.9.1 string overrides preserve backslashes and accept unfinished quotes;
   // applying shell escaping or strict quote validation would change existing argv.
-  return splitCommandArgs(typeof configArgs === "string" ? configArgs : (envArgs ?? ""), {
+  return splitCommandArgs(configArgs ?? envArgs ?? "", {
     allowUnclosedQuotes: true,
   });
 }

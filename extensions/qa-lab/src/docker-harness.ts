@@ -51,7 +51,6 @@ function renderCompose(params: {
   bindUiDist: boolean;
   gatewayPort: number;
   qaLabPort: number;
-  includeQaLabUi: boolean;
 }) {
   const imageBlock = renderImageBlock(params);
   const repoMount = toRepoRelativePath(params.outputDir, params.repoRoot) || ".";
@@ -79,9 +78,7 @@ ${renderHealthcheck(44080, 6, 3)}    environment:
       - "0.0.0.0"
       - --port
       - "44080"
-${
-  params.includeQaLabUi
-    ? `  qa-lab:
+  qa-lab:
 ${imageBlock}    pull_policy: never
     ports:
       - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
@@ -103,9 +100,7 @@ ${params.bindUiDist ? `      - ${JSON.stringify(`${qaLabUiMount}:${QA_LAB_UI_OVE
     depends_on:
       qa-mock-openai:
         condition: service_healthy
-`
-    : ""
-}  openclaw-qa-gateway:
+  openclaw-qa-gateway:
 ${imageBlock}    pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -123,13 +118,9 @@ ${imageBlock}    pull_policy: never
       - ./state:/opt/openclaw-scaffold:ro
       - ${JSON.stringify(`${repoMount}:/opt/openclaw-repo:ro`)}
 ${renderHealthcheck(18789, 12, 15)}    depends_on:
-${
-  params.includeQaLabUi
-    ? `      qa-lab:
+      qa-lab:
         condition: service_healthy
-`
-    : ""
-}      qa-mock-openai:
+      qa-mock-openai:
         condition: service_healthy
     command:
       - sh
@@ -144,21 +135,20 @@ function renderEnvExample(params: {
   gatewayToken: string;
   providerBaseUrl: string;
   qaBusBaseUrl: string;
-  includeQaLabUi: boolean;
 }) {
   return `# QA Docker harness example env
 OPENCLAW_GATEWAY_TOKEN=${params.gatewayToken}
 QA_GATEWAY_PORT=${params.gatewayPort}
 QA_BUS_BASE_URL=${params.qaBusBaseUrl}
 QA_PROVIDER_BASE_URL=${params.providerBaseUrl}
-${params.includeQaLabUi ? `QA_LAB_URL=http://127.0.0.1:${params.qaLabPort}\n` : ""}`;
+QA_LAB_URL=http://127.0.0.1:${params.qaLabPort}
+`;
 }
 
 function renderReadme(params: {
   gatewayPort: number;
   qaLabPort: number;
   usePrebuiltImage: boolean;
-  includeQaLabUi: boolean;
 }) {
   return `# QA Docker Harness
 
@@ -177,7 +167,7 @@ Suggested flow:
 2. Start the stack:
    - \`docker compose -f docker-compose.qa.yml up${params.usePrebuiltImage ? "" : " --build"} -d\`
 3. Open the QA dashboard:
-   - \`${params.includeQaLabUi ? `http://127.0.0.1:${params.qaLabPort}` : "not published in this scaffold"}\`
+   - \`http://127.0.0.1:${params.qaLabPort}\`
 4. The single QA site embeds both panes:
    - left: Control UI
    - right: Slack-ish QA lab
@@ -214,7 +204,6 @@ export async function writeQaDockerHarnessFiles(params: {
   imageName?: string;
   usePrebuiltImage?: boolean;
   bindUiDist?: boolean;
-  includeQaLabUi?: boolean;
 }) {
   const gatewayPort = params.gatewayPort ?? 18789;
   const qaLabPort = params.qaLabPort ?? 43124;
@@ -224,7 +213,6 @@ export async function writeQaDockerHarnessFiles(params: {
   const imageName = params.imageName ?? "openclaw:qa-local-prebaked";
   const usePrebuiltImage = params.usePrebuiltImage ?? false;
   const bindUiDist = params.bindUiDist ?? false;
-  const includeQaLabUi = params.includeQaLabUi ?? true;
 
   await fs.mkdir(path.join(params.outputDir, "state", "seed-workspace"), { recursive: true });
   await seedQaAgentWorkspace({
@@ -257,7 +245,6 @@ export async function writeQaDockerHarnessFiles(params: {
         bindUiDist,
         gatewayPort,
         qaLabPort,
-        includeQaLabUi,
       }),
     ],
     [
@@ -268,7 +255,6 @@ export async function writeQaDockerHarnessFiles(params: {
         gatewayToken,
         providerBaseUrl,
         qaBusBaseUrl,
-        includeQaLabUi,
       }),
     ],
     [
@@ -277,7 +263,6 @@ export async function writeQaDockerHarnessFiles(params: {
         gatewayPort,
         qaLabPort,
         usePrebuiltImage,
-        includeQaLabUi,
       }),
     ],
     [path.join("state", "openclaw.json"), `${JSON.stringify(config, null, 2)}\n`],

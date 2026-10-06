@@ -30,6 +30,7 @@ import {
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createSubagentSessionStore } from "./subagent-session-store.js";
+import { createSessionCapabilityLookup } from "./subagent-session-store.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -173,6 +174,12 @@ describe("persisted subagent capability lookups", () => {
     write(4);
     expect(resolveStoredSubagentCapabilities(key, { cfg }).depth).toBe(4);
     expect(exact).toHaveBeenCalledTimes(3);
+    expect(
+      resolveStoredSubagentCapabilities(key, {
+        cfg,
+        store: { [key]: { spawnedBy: "agent:main:main" } },
+      }).depth,
+    ).toBe(4);
   });
 
   it.each([true, false])(
@@ -201,25 +208,7 @@ describe("persisted subagent capability lookups", () => {
     },
   );
 
-  it("keeps canonical depth fallback for a partial explicit record", () => {
-    const storePath = path.join(tempDirs.make("subagent-capability-partial-"), "sessions.sqlite");
-    const cfg = { session: { store: storePath } };
-    const key = "agent:main:subagent:child";
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        writeSessionEntry(database, key, { sessionId: "child", updatedAt: 1, spawnDepth: 3 });
-      },
-      { agentId: "main", path: storePath },
-    );
-    expect(
-      resolveStoredSubagentCapabilities(key, {
-        cfg,
-        store: { [key]: { spawnedBy: "agent:main:main" } },
-      }).depth,
-    ).toBe(3);
-  });
-
-  it.each(["", " ", "\t\r\n", "\u00a0\u2003\u2028\ufeff"])(
+  it.each(["", " \t\r\n\u00a0\u2003\u2028\ufeff"])(
     "matches explicit stores for nested and by-id lineage without listing unrelated sessions (padding=%j)",
     (padding) => {
       const storePath = path.join(tempDirs.make("subagent-capability-lookup-"), "sessions.sqlite");
@@ -231,7 +220,7 @@ describe("persisted subagent capability lookups", () => {
       const dashboard = "agent:main:dashboard:spawned";
       const byId = "agent:main:subagent:by-id";
       const cycle = "agent:main:acp:cycle-one";
-      const store: Record<string, SessionEntry> = {
+      const entries: Record<string, SessionEntry> = {
         [root]: { sessionId: "root", updatedAt: 1, spawnDepth: 0 },
         [parent]: { sessionId: "parent-id", updatedAt: 1, spawnedBy: root },
         [child]: { sessionId: `${padding}child-id${padding}`, updatedAt: 1, spawnedBy: parent },
@@ -255,7 +244,7 @@ describe("persisted subagent capability lookups", () => {
       };
       runOpenClawAgentWriteTransaction(
         (database) => {
-          for (const [key, entry] of Object.entries(store)) {
+          for (const [key, entry] of Object.entries(entries)) {
             writeSessionEntry(database, key, entry);
           }
           for (let i = 0; i < 64; i++) {
@@ -269,24 +258,32 @@ describe("persisted subagent capability lookups", () => {
         { agentId: "main", path: storePath },
       );
       const listing = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+      const explicit = {
+        ...entries,
+        "agent:main:subagent:later": { sessionId: "child-id", updatedAt: 1, spawnDepth: 4 },
+      };
+      expect(getSubagentDepthFromSessionStore(" child-id ", { store: explicit })).toBe(2);
+      const stores = [explicit, createSessionCapabilityLookup(entries)];
       for (const key of [parent, child, acp, dashboard, byId, "child-id", cycle]) {
         const persisted = resolveSubagentCapabilityStore(key, { cfg });
-        expect(resolveStoredSubagentCapabilities(key, { cfg, store: persisted })).toEqual(
-          resolveStoredSubagentCapabilities(key, { store }),
-        );
-        expect(getSubagentDepthFromSessionStore(key, { cfg, store: persisted })).toBe(
-          getSubagentDepthFromSessionStore(key, { store }),
-        );
-        if (key !== "child-id") {
-          expect(isSubagentEnvelopeSession(key, { cfg, store: persisted })).toBe(
-            isSubagentEnvelopeSession(key, { store }),
+        for (const store of stores) {
+          expect(resolveStoredSubagentCapabilities(key, { cfg, store: persisted })).toEqual(
+            resolveStoredSubagentCapabilities(key, { store }),
           );
-          expect(
-            resolveStoredSubagentInheritedToolAllowlist(key, { cfg, store: persisted }),
-          ).toEqual(resolveStoredSubagentInheritedToolAllowlist(key, { store }));
-          expect(
-            resolveStoredSubagentInheritedToolDenylist(key, { cfg, store: persisted }),
-          ).toEqual(resolveStoredSubagentInheritedToolDenylist(key, { store }));
+          expect(getSubagentDepthFromSessionStore(key, { cfg, store: persisted })).toBe(
+            getSubagentDepthFromSessionStore(key, { store }),
+          );
+          if (key !== "child-id") {
+            expect(isSubagentEnvelopeSession(key, { cfg, store: persisted })).toBe(
+              isSubagentEnvelopeSession(key, { store }),
+            );
+            expect(
+              resolveStoredSubagentInheritedToolAllowlist(key, { cfg, store: persisted }),
+            ).toEqual(resolveStoredSubagentInheritedToolAllowlist(key, { store }));
+            expect(
+              resolveStoredSubagentInheritedToolDenylist(key, { cfg, store: persisted }),
+            ).toEqual(resolveStoredSubagentInheritedToolDenylist(key, { store }));
+          }
         }
       }
       expect(

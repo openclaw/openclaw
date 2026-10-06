@@ -70,7 +70,7 @@ import {
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
   createCodexSessionCatalogNodeInvokePolicies,
-  codexSessionCatalogRuntime,
+  registerCodexSessionCatalog,
 } from "./src/session-catalog.js";
 import {
   CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
@@ -117,7 +117,7 @@ export default definePluginEntry({
         // codex config block, so a live block is the plugin-side default. Gating
         // on a feature flag (supervision) here would silently drop unrelated
         // harness settings such as appServer.homeScope; feature gates belong in
-        // the feature's own surface (see requireSupervisionEnabled).
+        // the feature's own surface (see requireLiveToolPolicy).
         enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
       if (!enabled) {
@@ -221,7 +221,7 @@ export default definePluginEntry({
       stop: () => sessionCatalogControlFactory.stop(),
     });
     if (sessionCatalogEnabled) {
-      codexSessionCatalogRuntime.register({
+      registerCodexSessionCatalog({
         api,
         resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
         bindingStore,

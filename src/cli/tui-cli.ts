@@ -55,16 +55,17 @@ export async function runTuiCliAction(
     throw new Error(`--history-limit must be at most ${CHAT_HISTORY_MAX_ENTRIES}.`);
   }
 
+  const gateway = {
+    url: opts.url,
+    token: opts.token,
+    password: opts.password,
+    tlsFingerprint: opts.tlsFingerprint,
+  };
   const resolved = target
     ? await resolveSessionTarget({
         raw: target,
         requiredScope: "operator.admin",
-        gateway: {
-          url: opts.url,
-          token: opts.token,
-          password: opts.password,
-          tlsFingerprint: opts.tlsFingerprint,
-        },
+        gateway,
       })
     : undefined;
   const { runTui } = await import("../tui/tui.js");
@@ -79,12 +80,7 @@ export async function runTuiCliAction(
             tlsFingerprint: resolved.gateway.tlsFingerprint,
           },
         }
-      : {
-          url: opts.url,
-          token: opts.token,
-          password: opts.password,
-          tlsFingerprint: opts.tlsFingerprint,
-        }),
+      : gateway),
     session: resolved?.sessionKey ?? opts.session,
     ...(resolved ? { agentId: resolved.agentId } : {}),
     deliver: Boolean(opts.deliver),

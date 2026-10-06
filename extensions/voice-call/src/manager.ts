@@ -9,6 +9,7 @@ import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./ma
 import {
   continueCall as continueCallWithContext,
   endCall as endCallWithContext,
+  hasConversationStreamConnect,
   initiateCall as initiateCallWithContext,
   sendDtmf as sendDtmfWithContext,
   speak as speakWithContext,
@@ -24,6 +25,7 @@ import {
 import { resolveVoiceCallSecondsTimerDelayMs } from "./manager/timer-delays.js";
 import { startMaxDurationTimer } from "./manager/timers.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import type { VoiceCallStateRuntime } from "./runtime-state.js";
 import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
 import {
@@ -42,24 +44,13 @@ function markRestoredCallSkipped(call: CallRecord, endReason: "completed" | "tim
   call.state = endReason;
 }
 
-function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
-  const rawOverride = storePath?.trim() || config.store?.trim();
-  if (rawOverride) {
-    return resolveUserPath(rawOverride);
-  }
-  return resolveDefaultVoiceCallStoreDir();
-}
-
 export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
   private providerCallIdMap = new Map<string, CallId>();
   private processedEventIds = new Set<string>();
   private rejectedProviderCallIds = new Map<string, symbol>();
   private provider: VoiceCallProvider | null = null;
-  private config: VoiceCallConfig;
-  private coreSession: VoiceCallCoreSessionConfig | undefined;
   private storePath: string;
-  private stateRuntime: VoiceCallStateRuntime["state"] | undefined;
   private webhookUrl: string | null = null;
   private activeTurnCalls = new Set<CallId>();
   private endCallOperations = new Map<CallId, Promise<CallEndResult>>();
@@ -157,21 +148,15 @@ export class CallManager {
   streamSessionIssuer: StreamSessionIssuer | undefined;
 
   constructor(
-    config: VoiceCallConfig,
+    private readonly config: VoiceCallConfig,
     storePath?: string,
-    coreSession?: VoiceCallCoreSessionConfig,
-    stateRuntime?: VoiceCallStateRuntime["state"],
+    private readonly coreSession?: VoiceCallCoreSessionConfig,
+    private readonly stateRuntime?: VoiceCallStateRuntime["state"],
   ) {
-    this.config = config;
-    this.coreSession = coreSession;
-    this.storePath = resolveDefaultStoreBase(config, storePath);
-    this.stateRuntime = stateRuntime;
+    const rawOverride = storePath?.trim() || config.store?.trim();
+    this.storePath = rawOverride ? resolveUserPath(rawOverride) : resolveDefaultVoiceCallStoreDir();
   }
 
-  /**
-   * Initialize the call manager with a provider.
-   * Verifies persisted calls with the provider and restarts timers.
-   */
   initialize(provider: VoiceCallProvider, webhookUrl: string): Promise<void> {
     if (this.closing) {
       return Promise.reject(new Error("Voice Call manager is stopping"));
@@ -273,10 +258,6 @@ export class CallManager {
     provider: VoiceCallProvider,
     candidates: Map<CallId, CallRecord>,
   ): Promise<Map<CallId, CallRecord>> {
-    if (candidates.size === 0) {
-      return new Map();
-    }
-
     const maxAgeMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
     const now = Date.now();
     const verified = new Map<CallId, CallRecord>();
@@ -294,13 +275,19 @@ export class CallManager {
         if (this.closing) {
           break;
         }
-        // Skip calls without a provider ID — can't verify
+        try {
+          resolveCallAgentId(call);
+        } catch (error) {
+          console.warn(
+            `[voice-call] Skipped restored call ${callId}: ${formatErrorMessage(error)}`,
+          );
+          continue;
+        }
         if (!call.providerCallId) {
           skippedNoProviderCallId += 1;
           continue;
         }
 
-        // Skip calls older than maxDurationSeconds (time-based fallback)
         if (now - call.startedAt > maxAgeMs) {
           skippedOlderThanMaxDuration += 1;
           markRestoredCallSkipped(call, "timeout");
@@ -360,35 +347,20 @@ export class CallManager {
         throw outcome.reason;
       }
     }
-    if (skippedNoProviderCallId > 0) {
-      console.log(
-        `[voice-call] Skipped ${skippedNoProviderCallId} restored call(s) with no providerCallId`,
-      );
-    }
-    if (skippedOlderThanMaxDuration > 0) {
-      console.log(
-        `[voice-call] Skipped ${skippedOlderThanMaxDuration} restored call(s) older than maxDurationSeconds`,
-      );
-    }
-    for (const [status, count] of [...skippedTerminalStatuses].toSorted(([a], [b]) =>
-      a.localeCompare(b),
-    )) {
-      console.log(`[voice-call] Skipped ${count} restored call(s) with provider status: ${status}`);
-    }
-    if (keptVerifiedActive > 0) {
-      console.log(
-        `[voice-call] Kept ${keptVerifiedActive} restored call(s) confirmed active by provider`,
-      );
-    }
-    if (keptUnknownProviderStatus > 0) {
-      console.log(
-        `[voice-call] Kept ${keptUnknownProviderStatus} restored call(s) with unknown provider status (relying on timer)`,
-      );
-    }
-    if (keptVerificationFailures > 0) {
-      console.log(
-        `[voice-call] Kept ${keptVerificationFailures} restored call(s) after verification failure (relying on timer)`,
-      );
+    const summaries = [
+      ["Skipped", skippedNoProviderCallId, "with no providerCallId"],
+      ["Skipped", skippedOlderThanMaxDuration, "older than maxDurationSeconds"],
+      ...[...skippedTerminalStatuses]
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([status, count]) => ["Skipped", count, `with provider status: ${status}`] as const),
+      ["Kept", keptVerifiedActive, "confirmed active by provider"],
+      ["Kept", keptUnknownProviderStatus, "with unknown provider status (relying on timer)"],
+      ["Kept", keptVerificationFailures, "after verification failure (relying on timer)"],
+    ] as const;
+    for (const [action, count, reason] of summaries) {
+      if (count > 0) {
+        console.log(`[voice-call] ${action} ${count} restored call(s) ${reason}`);
+      }
     }
     return verified;
   }
@@ -396,7 +368,7 @@ export class CallManager {
   async initiateCall(
     to: string,
     sessionKey?: string,
-    options?: OutboundCallOptions | string,
+    options?: OutboundCallOptions,
   ): Promise<{ callId: CallId; success: boolean; error?: string }> {
     return this.runOperation(() =>
       initiateCallWithContext(this.getContext(), to, sessionKey, options),
@@ -415,18 +387,12 @@ export class CallManager {
     return this.runOperation(() => sendDtmfWithContext(this.getContext(), callId, digits));
   }
 
-  /**
-   * Speak the initial message for a call (called when media stream connects).
-   */
   async speakInitialMessage(providerCallId: string): Promise<void> {
     return this.runOperation(() =>
       speakInitialMessageWithContext(this.getContext(), providerCallId),
     );
   }
 
-  /**
-   * Continue call: speak prompt, then wait for user's final transcript.
-   */
   async continueCall(
     callId: CallId,
     prompt: string,
@@ -461,9 +427,7 @@ export class CallManager {
       maxDurationTimers: this.maxDurationTimers,
       initialMessageInFlight: this.initialMessageInFlight,
       onCallerSpeech: (call) => this.invalidateAutoResponse(call),
-      onCallAnswered: (call) => {
-        this.maybeSpeakInitialMessageOnAnswered(call);
-      },
+      onCallAnswered: (call) => this.maybeSpeakInitialMessageOnAnswered(call),
       streamSessionIssuer: this.streamSessionIssuer,
     };
   }
@@ -495,18 +459,6 @@ export class CallManager {
     this.autoResponseOwners.delete(call);
   }
 
-  private shouldDeferConversationInitialMessageUntilStreamConnect(): boolean {
-    if (!this.provider || this.provider.name !== "twilio" || !this.config.streaming.enabled) {
-      return false;
-    }
-
-    if (typeof this.provider.isConversationStreamConnectEnabled !== "function") {
-      return false;
-    }
-
-    return this.provider.isConversationStreamConnectEnabled();
-  }
-
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {
     const initialMessage = normalizeOptionalString(call.metadata?.initialMessage) ?? "";
 
@@ -517,14 +469,12 @@ export class CallManager {
     // Notify mode should speak as soon as the provider reports "answered".
     // Conversation mode should defer only when the Twilio stream-connect path
     // is actually available; otherwise speak immediately on answered.
-    const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
+    const mode = call.metadata?.mode ?? "conversation";
     if (mode === "conversation") {
-      if (this.config.realtime.enabled) {
-        return;
-      }
-      const shouldWaitForStreamConnect =
-        this.shouldDeferConversationInitialMessageUntilStreamConnect();
-      if (shouldWaitForStreamConnect) {
+      if (
+        this.config.realtime.enabled ||
+        hasConversationStreamConnect(this.provider, this.config)
+      ) {
         return;
       }
     } else if (mode !== "notify") {

@@ -1,6 +1,20 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 type ErrorPattern = RegExp | string;
 
+const EXECUTION_APPROVAL_FAILURE_MESSAGES = new Set([
+  "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
+  "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
+  "Codex node execution requires an available approval reviewer.",
+]);
+
+/** Node launch refusals are not provider failures; only known, bounded copy is public. */
+export function resolveExecutionApprovalFailureMessage(
+  raw: string | undefined,
+): string | undefined {
+  const message = raw?.trim().replace(/\s+\|\s+INVALID_REQUEST$/, "");
+  return message && EXECUTION_APPROVAL_FAILURE_MESSAGES.has(message) ? message : undefined;
+}
+
 // Both figures must be denominated in tokens and come from one clause. A message can state an RPM
 // limit and mention TPM elsewhere, and reading the pair on its own would compare a request count
 // against a token budget; requiring the unit to lead the clause keeps the numbers commensurable.
@@ -26,8 +40,9 @@ export function isProviderRequestSizeCeilingError(errorMessage?: string): boolea
 
 // Match model-transport EOF contracts, not plugin lifecycle stream failures.
 // Unresolved calls at EOF differ from an inconsistent completed response.
+// A body cut inside an SSE frame is a disconnect; a whole frame of malformed JSON is not.
 export const INCOMPLETE_ASSISTANT_STREAM_RE =
-  /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)|Responses stream ended with unresolved tool calls)[.!]?$/i;
+  /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason|with an incomplete frame)|Responses stream ended with unresolved tool calls)[.!]?$/i;
 // Undici ends a stream body with this exact bare transport message. Keep it
 // anchored so unrelated failures that merely contain the word do not match.
 export const TERMINATED_TRANSPORT_MESSAGE_RE = /^terminated$/i;
@@ -328,7 +343,9 @@ export function isAuthPermanentErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.authPermanent);
 }
 export function isAuthErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.auth);
+  return (
+    !resolveExecutionApprovalFailureMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.auth)
+  );
 }
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);

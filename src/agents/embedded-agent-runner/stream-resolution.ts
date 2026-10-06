@@ -66,29 +66,6 @@ function isDefaultOpenClawStreamFnForModel(
   return streamFn === provider?.streamSimple || streamFn === provider?.stream;
 }
 
-function isOpenAICodexResponsesModel(model: EmbeddedRunAttemptParams["model"]): boolean {
-  return model.provider === "openai" && model.api === "openai-chatgpt-responses";
-}
-
-function resolveOpenClawNativeCodexResponsesStreamFn(params: {
-  model: EmbeddedRunAttemptParams["model"];
-  currentStreamFn: StreamFn | undefined;
-  llmRuntime: LlmRuntime;
-}): StreamFn | undefined {
-  if (!isOpenAICodexResponsesModel(params.model)) {
-    return undefined;
-  }
-  // Lifecycle-owned session streams wrap auth/retry policy, so their runtime
-  // binding preserves native Codex transport even when function identity differs.
-  if (
-    !isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, params.llmRuntime) &&
-    getStreamLlmRuntime(params.currentStreamFn) !== params.llmRuntime
-  ) {
-    return undefined;
-  }
-  return params.currentStreamFn ?? params.llmRuntime.streamSimple;
-}
-
 export async function resolveEmbeddedAgentApiKey(params: {
   provider: string;
   resolvedApiKey?: string;
@@ -178,14 +155,16 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
     };
   }
 
-  const nativeStreamFn = resolveOpenClawNativeCodexResponsesStreamFn({
-    model: params.model,
-    currentStreamFn: params.currentStreamFn,
-    llmRuntime,
-  });
-  if (nativeStreamFn) {
+  // Lifecycle-owned session streams retain their native transport through the
+  // runtime binding even when auth/retry wrappers change function identity.
+  if (
+    params.model.provider === "openai" &&
+    params.model.api === "openai-chatgpt-responses" &&
+    (isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, llmRuntime) ||
+      getStreamLlmRuntime(params.currentStreamFn) === llmRuntime)
+  ) {
     return {
-      streamFn: wrapEmbeddedAgentStreamFn(nativeStreamFn, {
+      streamFn: wrapEmbeddedAgentStreamFn(currentStreamFn, {
         ...wrapOptions,
         sessionId: params.sessionId,
         transformContext: stripCacheBoundary,
@@ -241,9 +220,9 @@ function composeRunSignal(callerSignal: AbortSignal, runSignal: AbortSignal): Ab
   const composedSignal = AbortSignal.any([callerSignal, runSignal]);
   // The activity registry owns this bridge weakly; an abort listener on either
   // reusable source would retain its composite after a successful request.
-  onLlmRequestActivity(composedSignal, () => {
+  onLlmRequestActivity(composedSignal, (progress) => {
     if (!composedSignal.aborted) {
-      notifyLlmRequestActivity(callerSignal);
+      notifyLlmRequestActivity(callerSignal, progress);
     }
   });
   return composedSignal;

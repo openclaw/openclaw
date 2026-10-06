@@ -4,11 +4,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { PassThrough } from "node:stream";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { gatewayWorkAdmissionActual } from "./run-loop-mocks.test-support.js";
 import {
+  createActiveWorkSnapshot,
+  expectRestartCloseCall,
   createGatewayServer,
   setPlatform,
   withIsolatedSignals,
@@ -29,25 +32,7 @@ export function registerGracefulGatewayShutdownTests({
   flushLogger,
   requestGatewayRestartWithSignalAdmission,
   armShutdownHardExitWatchdog,
-}: Pick<
-  UpdateRespawnFixtures,
-  | "acquireGatewayLock"
-  | "consumeGatewayRestartIntentPayloadSync"
-  | "restartGatewayProcessWithFreshPid"
-  | "respawnGatewayProcessForUpdate"
-  | "waitForGatewayActiveWork"
-  | "gatewayLog"
-  | "createSignaledLoopHarness"
-  | "hasManagedProviderLocalServices"
-  | "stopManagedProviderLocalServices"
-  | "flushLogger"
-> & {
-  consumeGatewaySuspendHandoff: Mock<
-    typeof import("../../infra/gateway-suspend-coordinator.js").consumeGatewaySuspendHandoff
-  >;
-  requestGatewayRestartWithSignalAdmission: Mock;
-  armShutdownHardExitWatchdog: Mock;
-}): void {
+}: UpdateRespawnFixtures): void {
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
     const gatewayStateOwner = { release: vi.fn(async () => {}) };
@@ -352,6 +337,11 @@ export function registerGracefulGatewayShutdownTests({
 }
 
 export function registerShutdownCompletionTests({
+  consumeGatewayRestartIntentPayloadSync,
+  createGatewayActiveWorkSnapshot,
+  waitForGatewayActiveWork,
+  idleActiveWorkSnapshot,
+  abortEmbeddedAgentRun,
   hasManagedProviderLocalServices,
   stopManagedProviderLocalServices,
   createSignaledLoopHarness,
@@ -367,25 +357,7 @@ export function registerShutdownCompletionTests({
   armShutdownHardExitWatchdog,
   cancelShutdownHardExitWatchdog,
   writeDiagnosticStabilityBundleForFailureSync,
-}: Pick<
-  UpdateRespawnFixtures,
-  | "hasManagedProviderLocalServices"
-  | "stopManagedProviderLocalServices"
-  | "createSignaledLoopHarness"
-  | "consumeGatewayRestartIntent"
-  | "managedUpdateSuccessorOwner"
-  | "cancelManagedServiceUpdateHandoff"
-  | "commitManagedServiceUpdateHandoff"
-  | "requestManagedServiceUpdateHandoffPark"
-  | "writeGatewayRestartHandoffSync"
-  | "flushLogger"
-  | "restartGatewayProcessWithFreshPid"
-> & {
-  gatewayLog: { error: Mock; warn: Mock };
-  armShutdownHardExitWatchdog: Mock;
-  cancelShutdownHardExitWatchdog: Mock;
-  writeDiagnosticStabilityBundleForFailureSync: Mock;
-}): void {
+}: UpdateRespawnFixtures): void {
   it("reports failure when foreground provider service cleanup times out after server close", async () => {
     vi.clearAllMocks();
     hasManagedProviderLocalServices.mockReturnValue(true);
@@ -458,14 +430,14 @@ export function registerShutdownCompletionTests({
   });
 
   it.each([true, false])(
-    "bounds abandoned cleanup after an exhausted deferral and managed parking (restore commit=%s)",
+    "bounds abandoned cleanup after a zero-drain request and managed parking (restore commit=%s)",
     async (restoreCommitted) => {
       vi.clearAllMocks();
       process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
       setPlatform("linux");
       consumeGatewayRestartIntent.mockReturnValueOnce({
         force: true,
-        drainBudgetExhausted: true,
+        waitMs: 0,
         reason: "update.run",
         successorOwner: managedUpdateSuccessorOwner,
       });
@@ -507,7 +479,7 @@ export function registerShutdownCompletionTests({
   it("retains external supervisor recovery when timeout prevents a restart handoff", async () => {
     vi.clearAllMocks();
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, drainBudgetExhausted: true });
+    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, runtime } = await createSignaledLoopHarness();
       close.mockReturnValue(new Promise<void>(() => {}));
@@ -558,7 +530,7 @@ export function registerShutdownCompletionTests({
   it("retains the restart deadline when a managed update arrives after final cleanup fails", async () => {
     vi.clearAllMocks();
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, drainBudgetExhausted: true });
+    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
     restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, runtime, exited } = await createSignaledLoopHarness(undefined, true);
@@ -635,4 +607,48 @@ export function registerShutdownCompletionTests({
       });
     },
   );
+
+  it("waits for the drain before handing recovery ownership to server close", async () => {
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 0 });
+    const drainStart = createActiveWorkSnapshot({ embeddedRuns: 2 }, [
+      { kind: "embedded-run", count: 2, message: "2 active embedded run(s)" },
+    ]);
+    let releaseDrain: (() => void) | undefined;
+    const pendingDrain = new Promise<void>((resolve) => {
+      releaseDrain = resolve;
+    });
+    createGatewayActiveWorkSnapshot.mockReturnValueOnce(drainStart);
+    waitForGatewayActiveWork.mockImplementationOnce(async () => {
+      // Recovery ownership must be collected later by server close, after this
+      // window lets active work settle.
+      await pendingDrain;
+      return { drained: true, snapshot: idleActiveWorkSnapshot };
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, exited } = await createSignaledLoopHarness();
+      const cleanupSignal = gatewayWorkAdmissionActual.getGatewayShutdownCleanupSignal();
+      close.mockImplementationOnce(async () => {
+        expect(cleanupSignal.aborted).toBe(true);
+      });
+      const sigterm = captureSignal("SIGTERM");
+
+      sigterm();
+      await vi.waitFor(() => expect(waitForGatewayActiveWork).toHaveBeenCalledOnce());
+
+      expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
+        mode: "compacting",
+        reason: "restart",
+      });
+      expect(close).not.toHaveBeenCalled();
+      expect(cleanupSignal.aborted).toBe(false);
+
+      releaseDrain?.();
+      await expect(exited).resolves.toBe(0);
+
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(undefined, expect.any(Object));
+      expectRestartCloseCall(close, 315_000);
+      expect(start).toHaveBeenCalledOnce();
+    });
+  });
 }

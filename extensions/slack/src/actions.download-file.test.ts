@@ -1,5 +1,6 @@
 import type { WebClient } from "@slack/web-api";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { downloadSlackFile } from "./actions.js";
 
 const resolveSlackMedia = vi.fn<typeof import("./monitor/media.js").resolveSlackMedia>();
 const createSlackLookupClientMock = vi.hoisted(() => vi.fn());
@@ -10,7 +11,6 @@ vi.mock("./client.js", () => ({
   createSlackLookupClient: createSlackLookupClientMock,
   getSlackWriteClient: vi.fn(),
 }));
-let downloadSlackFile: typeof import("./actions.js").downloadSlackFile;
 
 function createClient() {
   return { files: { info: vi.fn(async () => ({ file: {} })) } } as unknown as WebClient & {
@@ -46,9 +46,6 @@ function download(
 }
 
 describe("downloadSlackFile", () => {
-  beforeAll(async () => {
-    ({ downloadSlackFile } = await import("./actions.js"));
-  });
   beforeEach(() => {
     resolveSlackMedia.mockReset().mockResolvedValueOnce([media]);
     createSlackLookupClientMock.mockReset();

@@ -1,6 +1,8 @@
 /** A fresh conversation must not inherit the prior task's progress card. */
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import {
@@ -75,7 +77,12 @@ it.each(
           });
         }
       });
-      const entry = { ...previous, lifecycleRevision: "after", updatedAt: 2 };
+      const entry = {
+        ...previous,
+        ...(rollback ? { parentSessionKey: "invalid-reset-parent" } : {}),
+        lifecycleRevision: "after",
+        updatedAt: 2,
+      };
       const resetBoundary = { context, reason: "reset" as const, cwd: state.workspaceDir };
       const reset = async () => {
         if (writer === "single") {
@@ -95,30 +102,36 @@ it.each(
           });
         }
       };
-      if (rollback) {
-        // Fail the entry write after the boundary/card mutation, not its admission guard.
-        database.db.exec(`CREATE TEMP TRIGGER reject_reset_entry
-          BEFORE UPDATE OF entry_json ON session_nodes
-          BEGIN SELECT RAISE(ABORT, 'injected reset entry failure'); END;`);
-      }
       try {
         if (rollback) {
-          await expect(reset()).rejects.toThrow("injected reset entry failure");
+          await expect(reset()).rejects.toThrow(
+            "refusing non-canonical session key write invalid-reset-parent",
+          );
           expect(loadSessionEntry(scope)).toEqual(entryBefore);
           expect(await loadTranscriptEvents(scope)).toEqual(historyBefore);
         } else {
-          await reset();
+          const sql = writer === "batched" ? observeHostDataSql() : undefined;
+          try {
+            await reset();
+            if (sql) {
+              expect(sql.queries, "batched reset caller-thread SQL").toEqual([]);
+            }
+          } finally {
+            sql?.restore();
+          }
         }
       } finally {
         unsubscribe();
-        if (rollback) {
-          database.db.exec("DROP TRIGGER reject_reset_entry");
-        }
       }
       // A fresh read-only connection proves this is durable state, not client/cache invalidation.
-      expect(readSessionProgressCard(database.path, sessionKey)).toEqual(
-        context === "clear" && !rollback ? null : before,
-      );
+      const reader = new DatabaseSync(database.path, { readOnly: true });
+      try {
+        expect(readSessionProgressCard(reader, sessionKey)).toEqual(
+          context === "clear" && !rollback ? null : before,
+        );
+      } finally {
+        reader.close();
+      }
       expect(await boards.getSnapshot({ sessionKey })).toEqual(boardBefore);
       expect((await readBoardHtml(boards, { sessionKey }, "retained-widget"))?.html).toBe(
         "<p>Keep this dashboard</p>",

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { FailoverError } from "../agents/failover-error.js";
 import type { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -23,7 +23,9 @@ import {
   createBackgroundWorkOwner,
   getBackgroundWorkSnapshot,
 } from "../process/background-work.js";
+import * as commandQueue from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
+import { CommandLane } from "../process/lanes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -385,6 +387,19 @@ describe("plugin background completions", () => {
       const profile = ensureProfileForEmail("completion-mutation@example.com");
       config.agents!.entries!.main!.model = "test-provider/main-model@main-profile";
       const blockers = blockBackgroundSlots(3);
+      const queued = createDeferred();
+      const enqueue = commandQueue.enqueueCommandInLane;
+      vi.spyOn(commandQueue, "enqueueCommandInLane").mockImplementation((lane, task, options) =>
+        enqueue(lane, task, {
+          ...options,
+          onQueued: () => {
+            options?.onQueued?.();
+            if (lane === `${CommandLane.Background}:plugin:${PLUGIN_ID}`) {
+              queued.resolve();
+            }
+          },
+        }),
+      );
       const runtime = createRuntime();
       const request = { agentId: "main", message: "Review these notes" };
       const result = withPluginRuntimeGatewayRequestScope(
@@ -401,8 +416,12 @@ describe("plugin background completions", () => {
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
-      await vi.dynamicImportSettled();
-      await vi.waitFor(() => expect(getBackgroundWorkSnapshot().queuedCount).toBe(1));
+      await awaitGateBeforeSettlement(
+        queued.promise,
+        result,
+        "Completion settled before its queue admission",
+      );
+      expect(getBackgroundWorkSnapshot().queuedCount).toBe(1);
       request.agentId = "research";
       blockers.release();
       await blockers.settled();

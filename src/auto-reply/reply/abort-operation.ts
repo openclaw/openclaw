@@ -6,7 +6,8 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
 import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/subagent-control.js";
-import { listSubagentRunsForController } from "../../agents/subagents/registry/subagent-registry-read.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { listRunsForControllerFromRuns } from "../../agents/subagents/registry/subagent-registry-queries.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -129,7 +130,7 @@ async function resolveBoundAcpAbortTargetSessionKey(params: {
   if (!bindingContext) {
     return undefined;
   }
-  return await resolveEffectiveResetTargetSessionKey({
+  return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,
@@ -141,29 +142,19 @@ async function resolveBoundAcpAbortTargetSessionKey(params: {
   });
 }
 
-function normalizeRequesterSessionKey(
-  cfg: OpenClawConfig,
-  key: string | undefined,
-): string | undefined {
-  const cleaned = normalizeOptionalString(key);
-  if (!cleaned) {
-    return undefined;
-  }
-  const { mainKey, alias } = resolveMainSessionAlias(cfg);
-  return resolveInternalSessionKey({ key: cleaned, alias, mainKey });
-}
-
 export async function stopSubagentsForRequester(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
   requesterAgentId?: string;
   beforeKill?: Parameters<typeof killAllControlledSubagentRuns>[0]["beforeKill"];
 }): Promise<{ stopped: number; failed: number }> {
-  const requesterKey = normalizeRequesterSessionKey(params.cfg, params.requesterSessionKey);
-  if (!requesterKey) {
+  const cleaned = normalizeOptionalString(params.requesterSessionKey);
+  if (!cleaned) {
     await params.beforeKill?.();
     return { stopped: 0, failed: 0 };
   }
+  const { alias } = resolveMainSessionAlias(params.cfg);
+  const requesterKey = resolveInternalSessionKey({ key: cleaned, alias });
   const controllerAgentId = resolveSessionAgentId({
     config: params.cfg,
     sessionKey: requesterKey,
@@ -178,7 +169,7 @@ export async function stopSubagentsForRequester(params: {
       callerIsSubagent: isSubagentSessionKey(requesterKey),
       controlScope: "children",
     },
-    runs: listSubagentRunsForController(requesterKey),
+    runs: listRunsForControllerFromRuns(subagentRuns, requesterKey),
     suppressTaskDelivery: true,
     beforeKill: params.beforeKill,
   });

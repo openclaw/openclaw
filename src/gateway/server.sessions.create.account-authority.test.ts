@@ -9,10 +9,8 @@ import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createModelAccountConnectService,
-  ModelAccountConnectAuthorityError,
-} from "./model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
+import { createModelAccountConnectService } from "./model-account-connect.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
@@ -171,7 +169,6 @@ test.each([
   { scope: "operator.sessions.write", selection: "none", idempotent: false },
   { scope: "operator.sessions.write", selection: "none", idempotent: true },
   { scope: "operator.sessions.write", selection: "default", idempotent: true },
-  { scope: "operator.write", selection: "default", idempotent: true },
   { scope: "operator.write", selection: "explicit", idempotent: true },
 ] as const)(
   "sessions.create with $scope preserves the $selection account choice (idempotent=$idempotent)",

@@ -178,15 +178,24 @@ export function noVisiblePayloadStatus(
   };
 }
 
-/** Payloads a tool-only source may still receive: only host-granted ones (diagnostics, media). */
+/**
+ * Payloads the source may receive. A tool-only source gets only host-granted ones
+ * (diagnostics, media); a host-owned turn may also keep runtime error payloads out of it.
+ */
 export function selectSourceDeliverablePayloads<T extends ReplyPayload>(
   payloads: T[],
-  mode: SourceReplyDeliveryMode | undefined,
+  opts: {
+    sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    internalDeliverySuppressErrors?: boolean;
+  },
 ): T[] {
-  return mode === "message_tool_only"
-    ? payloads.filter(
+  const deliverable = opts.internalDeliverySuppressErrors
+    ? payloads.filter((payload) => payload.isError !== true)
+    : payloads;
+  return opts.sourceReplyDeliveryMode === "message_tool_only"
+    ? deliverable.filter(
         (payload) =>
           getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
       )
-    : payloads;
+    : deliverable;
 }

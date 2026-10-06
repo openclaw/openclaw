@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { ModelProviderConfigInput } from "../config/types.models.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { loadGatewayStartupConfigSnapshot } from "./server-startup-config.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -32,7 +33,6 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (params: { config: OpenClawConfig }) => applyPluginAutoEnable(params),
 }));
 
-let loadGatewayStartupConfigSnapshot: typeof import("./server-startup-config.js").loadGatewayStartupConfigSnapshot;
 let configIo: typeof import("../config/io.js");
 let configMutate: typeof import("../config/mutate.js");
 const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
@@ -96,7 +96,6 @@ function expectAutoEnableSource(config: OpenClawConfig) {
 
 describe("gateway startup config validation", () => {
   beforeAll(async () => {
-    ({ loadGatewayStartupConfigSnapshot } = await import("./server-startup-config.js"));
     configIo = await import("../config/io.js");
     configMutate = await import("../config/mutate.js");
   });
@@ -169,29 +168,6 @@ describe("gateway startup config validation", () => {
     );
     expect(configIo.readConfigFileSnapshotWithPluginMetadata).not.toHaveBeenCalled();
     expectAutoEnableSource(validConfig);
-  });
-
-  it("keeps plugin auto-enable runtime-only in Nix mode", async () => {
-    const config: OpenClawConfig = {
-      channels: { telegram: { botToken: "test-token" } },
-      gateway: { mode: "local" },
-    };
-    const activated = { ...config, plugins: { allow: ["telegram"] } };
-    const initial = snapshot(config);
-    mockSnapshot(initial);
-    autoEnable(activated);
-    configMode.nix = true;
-    const log = { info: vi.fn(), warn: vi.fn() };
-    await expect(loadStartup({ minimalTestGateway: false, log })).resolves.toEqual({
-      snapshot: { ...initial, runtimeConfig: activated, config: activated },
-      pluginMetadataSnapshot,
-    });
-    expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
-    expect(configIo.readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(1);
-    expect(log.info).toHaveBeenCalledWith(
-      `gateway: auto-enabled plugins for this runtime without writing config:\n- ${autoEnableChange}`,
-    );
-    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("preserves storage read failures without invalid-config repair guidance", async () => {

@@ -114,16 +114,17 @@ export async function listSandboxBrowsers(
 
 /** Retire only the physical generation fenced by local workspace settlement. */
 export async function removeSandboxRuntimeGeneration(params: {
-  runtime:
+  runtime: { assertCurrent: () => void } & (
     | { kind: "container"; entry: SandboxRegistryEntry }
-    | { kind: "browser"; entry: SandboxBrowserRegistryEntry };
+    | { kind: "browser"; entry: SandboxBrowserRegistryEntry }
+  );
   engine: SandboxContainerEngine;
   id: string | null;
   bridges: ReadonlyArray<readonly [string, CachedBrowserBridge]>;
   assertCurrent: () => void;
 }): Promise<void> {
   const { runtime, engine, id } = params;
-  const assertCurrent = () => {
+  const assertOwnerCurrent = () => {
     params.assertCurrent();
     if (
       runtime.kind === "browser" &&
@@ -137,6 +138,10 @@ export async function removeSandboxRuntimeGeneration(params: {
     ) {
       throw new Error("Sandbox browser bridge generation changed during retirement");
     }
+  };
+  const assertCurrent = () => {
+    assertOwnerCurrent();
+    runtime.assertCurrent();
   };
   if (id !== null && !/^[a-f0-9]{64}$/u.test(id)) {
     throw new Error("Invalid sandbox runtime generation");
@@ -172,7 +177,7 @@ export async function removeSandboxRuntimeGeneration(params: {
   if (params.bridges.length) {
     await assertAbsent();
   }
-  removeSandboxRegistryGeneration(runtime.kind, runtime.entry, assertCurrent);
+  await removeSandboxRegistryGeneration(runtime.kind, runtime.entry, assertOwnerCurrent);
 }
 
 export async function removeSandboxContainer(containerName: string): Promise<void> {

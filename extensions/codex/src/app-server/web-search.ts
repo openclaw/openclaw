@@ -20,17 +20,6 @@ const CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG: JsonObject = {
   web_search: "disabled",
 };
 
-function hasManagedSearchProvider(config: OpenClawConfig | undefined): boolean {
-  return normalizeOptionalString(config?.tools?.web?.search?.provider) !== undefined;
-}
-
-function hasNativeDomainRestrictions(config: OpenClawConfig | undefined): boolean {
-  return (
-    normalizeUniqueTrimmedStringList(config?.tools?.web?.search?.openaiCodex?.allowedDomains)
-      .length > 0
-  );
-}
-
 export function buildCodexNativeWebSearchThreadConfig(
   config: OpenClawConfig | undefined,
 ): JsonObject {
@@ -79,26 +68,22 @@ export function resolveCodexWebSearchPlan(params: {
   }
   const nativeConfig = params.config?.tools?.web?.search?.openaiCodex;
   const managedSearchExplicit =
-    hasManagedSearchProvider(params.config) || nativeConfig?.enabled === false;
+    normalizeOptionalString(params.config?.tools?.web?.search?.provider) !== undefined ||
+    nativeConfig?.enabled === false;
   const nativeProviderSupportsSearch =
     params.nativeProviderWebSearchSupport === undefined ||
     params.nativeProviderWebSearchSupport === "supported";
   const nativeSearchEnabled =
     params.nativeToolSurfaceEnabled !== false &&
     nativeProviderSupportsSearch &&
-    nativeConfig?.enabled !== false &&
-    !hasManagedSearchProvider(params.config);
+    !managedSearchExplicit;
   if (!nativeSearchEnabled) {
-    if (!managedSearchExplicit && hasNativeDomainRestrictions(params.config)) {
-      return {
-        kind: "disabled",
-        suppressManagedWebSearch: true,
-        threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
-      };
-    }
+    const suppressManagedWebSearch =
+      !managedSearchExplicit &&
+      normalizeUniqueTrimmedStringList(nativeConfig?.allowedDomains).length > 0;
     return {
-      kind: "managed",
-      suppressManagedWebSearch: false,
+      kind: suppressManagedWebSearch ? "disabled" : "managed",
+      suppressManagedWebSearch,
       threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
     };
   }

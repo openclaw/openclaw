@@ -1,6 +1,5 @@
-import childProcess, { execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-database-worker-ratchet.mts";
@@ -8,21 +7,9 @@ import { inventory } from "../../scripts/database-worker-inventory.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  vi.restoreAllMocks();
-  syncBuiltinESMExports();
-});
+afterEach(() => vi.restoreAllMocks());
 
-it("checks working and staged T1 growth without ripgrep", () => {
-  const spawnSync = childProcess.spawnSync;
-  vi.spyOn(childProcess, "spawnSync").mockImplementation((...args) => {
-    if (args[0] === "rg") {
-      throw Object.assign(new Error("spawnSync rg ENOENT"), { code: "ENOENT" });
-    }
-    return spawnSync(...args);
-  });
-  // The inventory imports the named builtin export rather than the default object.
-  syncBuiltinESMExports();
+it("rejects total T1 growth with call sites and allows splits, shrinkage, and worker calls", () => {
   const root = tempDirs.make("openclaw-sqlite-ratchet-");
   const git = (...args: string[]) =>
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
@@ -67,68 +54,75 @@ it("checks working and staged T1 growth without ripgrep", () => {
   );
 });
 
-it("scans working-tree source and untracked files with Git ignores and literal paths", () => {
-  const root = tempDirs.make("openclaw-sqlite-inventory-");
-  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
+it("keeps operation exceptions scoped across line shifts without masking runtime growth", () => {
+  const root = tempDirs.make("openclaw-sqlite-mixed-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  const relative = "src/gateway/worker-environments/placement-turn-claims.ts";
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const source = `
+import { executeSqliteQuerySync as query } from "./queries.js";
+function createPlacementTurnClaimOps() {
+  return {
+    releaseTurn() { transaction(() => query(sql)); },
+    clearLocalTurnClaimsAfterRestart: () => query(sql),
+    claimTurn() { query(sql); },
+  };
+}
+function anotherFactory() {
+  return { releaseTurn() { query(sql); } };
+}
+`;
+  fs.writeFileSync(file, source);
+  const eventRelative = "src/sessions/session-state-events.kernel.ts";
+  const eventFile = path.join(root, eventRelative);
+  fs.mkdirSync(path.dirname(eventFile), { recursive: true });
+  const eventSource = `
+import { executeSqliteQuerySync as query } from "./queries.js";
+function recordSessionStateEventInDatabase() {
+  query(sql);
+  const registeredWatcherKeys = notify
+    ? query(sql).rows.map(() => query(sql))
+    : [];
+  const otherKeys = query(sql);
+}
+function anotherRecorder() {
+  const registeredWatcherKeys = query(sql);
+}
+`;
+  fs.writeFileSync(eventFile, eventSource);
   git("init");
-  git("config", "color.grep", "always");
-  git("config", "grep.recurseSubmodules", "true");
-  const source = "executeSqliteQuerySync(query);\n";
-  const included = [
-    "src/runtime.ts",
-    "src/tracked-ignored.ts",
-    "src/untracked.ts",
-    "src/.hidden.ts",
-    "src/space name.ts",
-    ...(process.platform === "win32" ? [] : ["src/new\nline.ts"]),
-    "src/view.tsx",
-    "src/common.cts",
-    "extensions/plugin/runtime.js",
-    "packages/lib/runtime.cjs",
-    "scripts/probe.mts",
-    "scripts/probe.mjs",
-  ];
-  const excluded = [
-    "src/ignored.ts",
-    "src/local-only.ts",
-    "src/generated/runtime.ts",
-    "src/runtime.test.ts",
-    "src/test-support.ts",
-    "src/notes.md",
-    "docs/outside.ts",
-  ];
-  for (const file of [...included, ...excluded]) {
-    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-    fs.writeFileSync(path.join(root, file), source);
-  }
-  fs.writeFileSync(
-    path.join(root, ".gitignore"),
-    "src/ignored.ts\nsrc/tracked-ignored.ts\nsrc/generated/\n",
+  git("add", ".");
+  git("commit", "-m", "base");
+  const rows = inventory(root);
+  expect(rows.map(({ tier, calls }) => [tier, calls.length])).toEqual([
+    ["T1", 2],
+    ["T1", 1],
+    ["T2", 1],
+    ["W", 1],
+    ["W", 4],
+  ]);
+  expect(rows.find(({ tier }) => tier === "W")?.calls[0].operation).toBe(
+    "createPlacementTurnClaimOps.releaseTurn",
   );
-  fs.writeFileSync(path.join(root, ".git/info/exclude"), "src/local-only.ts\n");
-  fs.writeFileSync(path.join(root, "src/binary.ts"), Buffer.from(source + "\0"));
-  fs.writeFileSync(path.join(root, "src/runtime.ts"), "export {};\n");
-  git("add", "src/runtime.ts");
-  git("add", "-f", "src/tracked-ignored.ts");
-  fs.writeFileSync(path.join(root, "src/runtime.ts"), source);
-
+  expect(rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls).toEqual(
+    Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventInDatabase" })),
+  );
   expect(
-    inventory(root)
-      .map((row) => row.file)
-      .toSorted(),
-  ).toEqual(included.toSorted());
-  expect(inventory(root, "", true).map((row) => row.file)).toEqual(["src/tracked-ignored.ts"]);
-});
-
-it("keeps an empty scan bounded to its roots and reports Git failures", () => {
-  const root = tempDirs.make("openclaw-sqlite-empty-");
-  execFileSync("git", ["init"], { cwd: root, stdio: "pipe" });
-  fs.writeFileSync(path.join(root, "outside.ts"), "executeSqliteQuerySync(query);\n");
-  expect(inventory(root)).toEqual([]);
-  fs.mkdirSync(path.join(root, "src"));
-  fs.writeFileSync(path.join(root, "src/clean.ts"), "export {};\n");
-  expect(inventory(root)).toEqual([]);
-  expect(() => inventory(tempDirs.make("openclaw-sqlite-not-a-repo-"))).toThrow(
-    /not a git repository/i,
+    rows.find((row) => row.file === eventRelative && row.tier === "T1")?.calls[0],
+  ).toMatchObject({ operation: "anotherRecorder", binding: "registeredWatcherKeys" });
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  fs.writeFileSync(file, "\n\n" + source);
+  fs.writeFileSync(eventFile, "\n\n" + eventSource);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fs.writeFileSync(path.join(root, "src/another-runtime.ts"), "executeSqliteQuerySync(sql);\n");
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(errors).toHaveBeenCalledWith(
+    expect.stringContaining("src/another-runtime.ts:1:1 executeSqliteQuerySync"),
   );
 });

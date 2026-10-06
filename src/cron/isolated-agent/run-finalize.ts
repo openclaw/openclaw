@@ -227,6 +227,7 @@ export async function finalizeCronRun(params: {
     outputText,
     hasFatalErrorPayload,
     embeddedRunError,
+    agentReportedFailure,
   } = cronPayloadOutcome;
   const terminalToolFailure = finalRunResult.meta?.terminalToolFailure;
   const hasTerminalToolFailure = isEmbeddedRunTerminalToolFailure(terminalToolFailure);
@@ -262,8 +263,8 @@ export async function finalizeCronRun(params: {
               error: runError,
               // The agent already judged the task blocked: rerunning it would repeat that turn,
               // and its prose must not be text-classified into a transient retry reason.
-              ...(cronPayloadOutcome.agentReportedFailure
-                ? { errorClassification: { kind: "permanent" as const } }
+              ...(agentReportedFailure
+                ? { errorClassification: { kind: "permanent" as const, reportedByAgent: true } }
                 : {}),
             }
           : {}),
@@ -411,6 +412,11 @@ export async function finalizeCronRun(params: {
   if (pendingPresentationWarningError && deliveryResult.delivered !== true) {
     hasFatalErrorPayload = true;
     embeddedRunError = pendingPresentationWarningError;
+  }
+  if (deliveryResult.agentReportedFailure && !hasFatalErrorPayload) {
+    hasFatalErrorPayload = true;
+    embeddedRunError = deliveryResult.agentReportedFailure;
+    agentReportedFailure = true;
   }
   return resolveRunOutcome({ ...deliveryResult, delivery: deliveryTrace });
 }

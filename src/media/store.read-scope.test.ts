@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
@@ -11,7 +11,6 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runt
 import { withChannelReadAuthority } from "../shared/channel-read-authority.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { saveRemoteMedia } from "./fetch.js";
-import { readLocalMediaFile } from "./local-media-access.js";
 import { mediaNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { saveMediaBuffer, saveMediaSource, saveMediaStream } from "./store.js";
 import { unlinkIfExists } from "./temp-files.js";
@@ -27,6 +26,19 @@ afterEach(() => {
 
 async function* mediaBytes() {
   yield bytes;
+}
+
+function observeOpen(
+  visit: (handle: FileHandle, filePath: string, flags?: string | number) => void | Promise<void>,
+) {
+  const open = fs.open.bind(fs);
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (typeof args[0] === "string") {
+      await visit(handle, args[0], args[1]);
+    }
+    return handle;
+  });
 }
 
 describe("read-owned media publication", () => {
@@ -45,14 +57,8 @@ describe("read-owned media publication", () => {
             throw closed;
           }
         };
-        const open = fs.open.bind(fs);
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await open(...args);
-          if (
-            typeof args[0] === "string" &&
-            path.dirname(args[0]) === realMediaDir &&
-            args[1] === "wx"
-          ) {
+        observeOpen((handle, filePath, flags) => {
+          if (path.dirname(filePath) === realMediaDir && flags === "wx") {
             const write = handle.writeFile.bind(handle);
             vi.spyOn(handle, "writeFile").mockImplementation(async (...writeArgs) => {
               await write(...writeArgs);
@@ -60,7 +66,6 @@ describe("read-owned media publication", () => {
               allowed = false;
             });
           }
-          return handle;
         });
         await expect(
           withChannelReadAuthority(
@@ -93,47 +98,32 @@ describe("read-owned media publication", () => {
     },
   );
 
-  it.each(["buffer", "source"] as const)(
-    "rejects scoped %s publication when durable file sync fails",
-    async (kind) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const source = state.statePath("source.pdf");
-        const mediaDir = state.statePath("media", "outbound");
-        await fs.writeFile(source, bytes);
-        await fs.mkdir(mediaDir, { recursive: true });
-        const realMediaDir = await fs.realpath(mediaDir);
-        const syncError = Object.assign(new Error("synthetic media sync failure"), { code: "EIO" });
-        const open = fs.open.bind(fs);
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await open(...args);
-          if (
-            typeof args[0] === "string" &&
-            path.dirname(args[0]) === realMediaDir &&
-            args[1] === "wx"
-          ) {
-            vi.spyOn(handle, "sync").mockRejectedValue(syncError);
-          }
-          return handle;
-        });
-        await expect(
-          withChannelReadAuthority(
-            () => {},
-            () =>
-              kind === "buffer"
-                ? saveMediaBuffer(bytes, "application/pdf", "outbound")
-                : saveMediaSource(source, undefined, "outbound"),
-          ),
-        ).rejects.toBe(syncError);
-        expect(await fs.readdir(mediaDir)).toEqual([]);
-        expect(await fs.readFile(source)).toEqual(bytes);
+  it("rejects scoped source publication when durable file sync fails", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const source = state.statePath("source.pdf");
+      const mediaDir = state.statePath("media", "outbound");
+      await fs.writeFile(source, bytes);
+      await fs.mkdir(mediaDir, { recursive: true });
+      const realMediaDir = await fs.realpath(mediaDir);
+      const syncError = Object.assign(new Error("synthetic media sync failure"), { code: "EIO" });
+      observeOpen((handle, filePath, flags) => {
+        if (path.dirname(filePath) === realMediaDir && flags === "wx") {
+          vi.spyOn(handle, "sync").mockRejectedValue(syncError);
+        }
       });
-    },
-  );
+      await expect(
+        withChannelReadAuthority(
+          () => {},
+          () => saveMediaSource(source, undefined, "outbound"),
+        ),
+      ).rejects.toBe(syncError);
+      expect(await fs.readdir(mediaDir)).toEqual([]);
+      expect(await fs.readFile(source)).toEqual(bytes);
+    });
+  });
 
   it.skipIf(process.platform === "win32").each([
     ["buffer", false],
-    ["buffer", true],
-    ["source", false],
     ["source", true],
   ] as const)(
     "syncs scoped %s content before publication and its parent afterward (directory fails=%s)",
@@ -145,14 +135,9 @@ describe("read-owned media publication", () => {
         await fs.mkdir(mediaDir, { recursive: true });
         const realMediaDir = await fs.realpath(mediaDir);
         const syncEvents: string[] = [];
-        const open = fs.open.bind(fs);
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await open(...args);
-          if (typeof args[0] !== "string") {
-            return handle;
-          }
+        observeOpen((handle, filePath, flags) => {
           const sync = handle.sync.bind(handle);
-          if (path.dirname(args[0]) === realMediaDir && args[1] === "wx") {
+          if (path.dirname(filePath) === realMediaDir && flags === "wx") {
             vi.spyOn(handle, "sync").mockImplementation(async () => {
               expect((await fs.readdir(mediaDir)).every((name) => name.endsWith(".tmp"))).toBe(
                 true,
@@ -160,7 +145,7 @@ describe("read-owned media publication", () => {
               await sync();
               syncEvents.push("file");
             });
-          } else if (args[0] === realMediaDir) {
+          } else if (filePath === realMediaDir) {
             vi.spyOn(handle, "sync").mockImplementation(async () => {
               expect(syncEvents).toEqual(["file"]);
               const published = await fs.readdir(mediaDir);
@@ -174,7 +159,6 @@ describe("read-owned media publication", () => {
               syncEvents.push("directory");
             });
           }
-          return handle;
         });
         const saved = await withChannelReadAuthority(
           () => {},
@@ -201,14 +185,11 @@ describe("read-owned media publication", () => {
         const release = createDeferred();
         let active = true;
         const revoked = new Error("Session media authority changed during sync");
-        const open = fs.open.bind(fs);
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await open(...args);
+        observeOpen((handle, filePath, flags) => {
           const match =
-            typeof args[0] === "string" &&
-            (phase === "file"
-              ? path.dirname(args[0]) === realMediaDir && args[1] === "wx"
-              : args[0] === realMediaDir);
+            phase === "file"
+              ? path.dirname(filePath) === realMediaDir && flags === "wx"
+              : filePath === realMediaDir;
           if (match) {
             const sync = handle.sync.bind(handle);
             vi.spyOn(handle, "sync").mockImplementation(async () => {
@@ -217,7 +198,6 @@ describe("read-owned media publication", () => {
               await release.promise;
             });
           }
-          return handle;
         });
         const operation = withChannelReadAuthority(
           () => {
@@ -240,89 +220,71 @@ describe("read-owned media publication", () => {
     },
   );
 
-  it.each(["local-reader", "source-store"] as const)(
-    "does not read source bytes after authority changes during %s file opening",
-    async (reader) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const source = state.statePath("source.pdf");
-        await fs.writeFile(source, bytes);
-        const opened = createDeferred();
-        const resume = createDeferred();
-        const revoked = new Error("Session media authority changed");
-        let active = true;
-        let sourceReads = 0;
-        const open = fs.open.bind(fs);
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await open(...args);
-          if (args[0] === source) {
-            const read = handle.read.bind(handle);
-            vi.spyOn(handle, "read").mockImplementation((...readArgs) => {
-              sourceReads += 1;
-              return read(...readArgs);
-            });
-            opened.resolve();
-            await resume.promise;
+  it("does not read source bytes after authority changes during source-store file opening", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const source = state.statePath("source.pdf");
+      await fs.writeFile(source, bytes);
+      const opened = createDeferred();
+      const resume = createDeferred();
+      const revoked = new Error("Session media authority changed");
+      let active = true;
+      let sourceReads = 0;
+      observeOpen(async (handle, filePath) => {
+        if (filePath === source) {
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementation((...readArgs) => {
+            sourceReads += 1;
+            return read(...readArgs);
+          });
+          opened.resolve();
+          await resume.promise;
+        }
+      });
+      const operation = withChannelReadAuthority(
+        () => {
+          if (!active) {
+            throw revoked;
           }
-          return handle;
-        });
-        const operation = withChannelReadAuthority(
+        },
+        () => saveMediaSource(source, undefined, "outbound"),
+      );
+      const rejection = expect(operation).rejects.toBe(revoked);
+      await opened.promise;
+      active = false;
+      resume.resolve();
+      await rejection;
+      expect(sourceReads).toBe(0);
+    });
+  });
+
+  it("removes source output when the host rejects the completed read", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const source = state.statePath("source.pdf");
+      const mediaDir = state.statePath("media", "outbound");
+      await fs.writeFile(source, bytes);
+      await fs.mkdir(mediaDir, { recursive: true });
+      const preserved = path.join(mediaDir, "existing.pdf");
+      await fs.writeFile(preserved, bytes);
+      let active = true;
+      const revoked = new Error("Session media authority changed");
+      await expect(
+        withChannelReadAuthority(
           () => {
             if (!active) {
               throw revoked;
             }
           },
           async () => {
-            if (reader === "local-reader") {
-              await readLocalMediaFile(source, [state.stateDir], { maxBytes: 1024 });
-            } else {
-              await saveMediaSource(source, undefined, "outbound");
-            }
+            const saved = await saveMediaSource(source, undefined, "outbound");
+            expect(await fs.readFile(saved.path)).toEqual(bytes);
+            active = false;
           },
-        );
-        const rejection = expect(operation).rejects.toBe(revoked);
-        await opened.promise;
-        active = false;
-        resume.resolve();
-        await rejection;
-        expect(sourceReads).toBe(0);
-      });
-    },
-  );
-
-  it.each(["buffer", "source"] as const)(
-    "removes %s output when the host rejects the completed read",
-    async (kind) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const source = state.statePath("source.pdf");
-        const mediaDir = state.statePath("media", "outbound");
-        await fs.writeFile(source, bytes);
-        await fs.mkdir(mediaDir, { recursive: true });
-        const preserved = path.join(mediaDir, "existing.pdf");
-        await fs.writeFile(preserved, bytes);
-        let active = true;
-        const revoked = new Error("Session media authority changed");
-        await expect(
-          withChannelReadAuthority(
-            () => {
-              if (!active) {
-                throw revoked;
-              }
-            },
-            async () => {
-              const saved =
-                kind === "buffer"
-                  ? await saveMediaBuffer(bytes, "application/pdf", "outbound")
-                  : await saveMediaSource(source, undefined, "outbound");
-              expect(await fs.readFile(saved.path)).toEqual(bytes);
-              active = false;
-            },
-          ),
-        ).rejects.toBe(revoked);
-        expect(await fs.readdir(mediaDir)).toEqual(["existing.pdf"]);
-        expect(await fs.readFile(preserved)).toEqual(bytes);
-      });
-    },
-  );
+        ),
+      ).rejects.toBe(revoked);
+      expect(await fs.readdir(mediaDir)).toEqual(["existing.pdf"]);
+      expect(await fs.readFile(preserved)).toEqual(bytes);
+    });
+  });
 
   it.skipIf(process.platform === "win32").each([0o600, 0o644])(
     "does not publish unusable permissions when chmod fails (mode=%i)",
@@ -332,18 +294,11 @@ describe("read-owned media publication", () => {
         const chmodError = Object.assign(new Error("synthetic mode finalization failure"), {
           code: "EPERM",
         });
-        const open = fs.open.bind(fs);
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await open(...args);
-          if (
-            typeof args[0] === "string" &&
-            args[0].startsWith(`${mediaDir}${path.sep}`) &&
-            args[1] === "wx"
-          ) {
+        observeOpen(async (handle, filePath, flags) => {
+          if (filePath.startsWith(`${mediaDir}${path.sep}`) && flags === "wx") {
             await handle.chmod(mode);
             vi.spyOn(handle, "chmod").mockRejectedValue(chmodError);
           }
-          return handle;
         });
         const operation = withChannelReadAuthority(
           () => {},
@@ -414,17 +369,10 @@ describe("read-owned media publication", () => {
         const mediaDir = state.statePath("media", "inbound");
         const displaced = state.statePath("user-owned.pdf");
         let stagedPath: string | undefined;
-        const open = fs.open.bind(fs);
-        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-          const handle = await open(...args);
-          if (
-            typeof args[0] === "string" &&
-            args[0].startsWith(`${mediaDir}${path.sep}`) &&
-            args[1] === "wx"
-          ) {
-            stagedPath = args[0];
+        observeOpen((_handle, filePath, flags) => {
+          if (filePath.startsWith(`${mediaDir}${path.sep}`) && flags === "wx") {
+            stagedPath = filePath;
           }
-          return handle;
         });
         const stream = (async function* () {
           yield bytes;

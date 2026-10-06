@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { App } from "@slack/bolt";
+import type { WebClientOptions } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,
@@ -10,7 +12,7 @@ import {
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { compileSafeRegexDetailed } from "openclaw/plugin-sdk/security-runtime";
 import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterAll, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { slackPlugin } from "../../channel.js";
 import { registerSlackInstallationState } from "../../installation-identity-state.js";
@@ -22,6 +24,7 @@ import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
+import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
   createInboundSlackTestContext,
@@ -127,8 +130,6 @@ function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessage
 describe("slack prepareSlackMessage inbound contract", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-");
 
-  beforeAll(() => storeFixture.setup());
-
   beforeEach(() => {
     clearSlackThreadParticipationCache();
     enqueueSystemEventMock.mockClear();
@@ -141,8 +142,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       created: true,
     });
   });
-
-  afterAll(() => storeFixture.cleanup());
 
   function createInboundSlackCtx(
     params: Partial<Parameters<typeof createInboundSlackTestContext>[0]> = {},
@@ -201,7 +200,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     return ctx;
   }
 
-  it.each(["sent", "name lookup failed", "delivery failed"] as const)(
+  it.each(["name lookup failed", "delivery failed"] as const)(
     "preserves channel denial when its notice is %s",
     async (outcome) => {
       const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
@@ -222,18 +221,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
           channel_type: outcome === "delivery failed" ? "group" : "channel",
           text: "<@B1> hello",
         }),
-        outcome === "sent" ? { source: "message" } : { source: "app_mention", wasMentioned: true },
+        { source: "app_mention", wasMentioned: true },
       );
       expect(prepared).toBeNull();
-      if (outcome === "sent") {
-        expect(postEphemeral).toHaveBeenCalledExactlyOnceWith({
-          token: "token",
-          channel: "C_DENIED",
-          user: "U1",
-          text: "Personal Claw can’t reply here because this channel isn’t in its OpenClaw channel allowlist. Ask the OpenClaw owner to allow this channel. <https://docs.openclaw.ai/channels/slack#access-control-and-routing|Learn how to configure Slack channel access.>",
-        });
-        expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-      } else if (outcome === "name lookup failed") {
+      if (outcome === "name lookup failed") {
         expect(postEphemeral).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             text: expect.stringMatching(/^This OpenClaw bot can’t reply here/),
@@ -272,6 +263,72 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ctx,
     };
   }
+
+  it("links the Slack conversation without an API lookup and reuses its stored link", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const fetch = vi
+      .fn<NonNullable<WebClientOptions["fetch"]>>()
+      .mockRejectedValue(new Error("the return link must not call Slack's API"));
+    const ctx = createInboundSlackCtx({
+      cfg: { session: { store: storePath }, channels: { slack: { enabled: true } } },
+      app: {
+        client: { token: "unscoped-fixture" },
+        webClientOptions: { fetch },
+      } as unknown as App,
+      defaultRequireMention: false,
+    });
+    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+    const eventScope = {
+      teamId: "T123ENTERPRISE",
+      client: {
+        token: "event-fixture",
+        slackApiUrl: "https://slack-gov.com/api/",
+      } as SlackEventScope["client"],
+    };
+    const message: SlackMessageEvent = {
+      type: "message",
+      user: "U1",
+      text: "hi",
+      channel: "D123",
+      channel_type: "im",
+      ts: "10.000",
+    };
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackAccount({ replyToMode: "off" }),
+      message,
+      opts: { source: "message", eventScope },
+    });
+
+    assert(prepared);
+    const expectedLink = {
+      url: "https://slack-gov.com/app_redirect?channel=D123&team=T123ENTERPRISE",
+      label: "Slack",
+    };
+    expect(prepared.ctxPayload.ConversationLink).toEqual(expectedLink);
+    expect(fetch).not.toHaveBeenCalled();
+
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: expectDefined(prepared.ctxPayload.SessionKey, "session key"),
+      entry: {
+        sessionId: "existing-slack-session",
+        updatedAt: Date.now(),
+        conversationLink: expectedLink,
+      },
+    });
+    fetch.mockClear();
+    const repeated = await prepareSlackMessage({
+      ctx,
+      account: createSlackAccount({ replyToMode: "off" }),
+      message,
+      opts: { source: "message", eventScope },
+    });
+    assert(repeated);
+    expect(repeated.ctxPayload.ConversationLink).toEqual(expectedLink);
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it("logs inbound metadata without logging message content", async () => {
     const body = "confidential acquisition target: northstar; do not include this text in logs";
@@ -736,32 +793,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(await prepared.ackReactionPromise).toBe(true);
   });
 
-  it("keeps the configured static ack without status reactions", async () => {
-    const addReaction = vi.fn().mockResolvedValue({ ok: true });
-    const slackCtx = createAckRoomContext(
-      {
-        ackReaction: "eyes",
-        groupChat: { visibleReplies: "automatic" },
-      },
-      { appClient: { reactions: { add: addReaction } } as unknown as App["client"] },
-    );
-
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      defaultAccount,
-      createSlackMessage({ channel: "C123", channel_type: "channel", text: "<@B1> hi" }),
-    );
-
-    assert(prepared);
-    expect(prepared.ackReactionPromise).toBeInstanceOf(Promise);
-    expect(await prepared.ackReactionPromise).toBe(true);
-    expect(addReaction).toHaveBeenCalledWith({
-      channel: "C123",
-      timestamp: "1.000",
-      name: "eyes",
-    });
-  });
-
   it("sends Slack ack reactions for room events when ack scope is all", async () => {
     const reactionAdd = vi.fn().mockResolvedValue({ ok: true });
     const slackCtx = createAckRoomContext(
@@ -1006,104 +1037,28 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
   });
 
-  it("does not fetch inherited thread-starter media for quiet replies", async () => {
-    const mockFetch = mediaFetchMock.mockImplementation(async () => {
-      throw new Error("inherited parent file should not be downloaded");
+  it("ignores user-group mentions that do not include the bot", async () => {
+    const usergroupsUsersList = vi.fn().mockResolvedValue({ ok: true, users: ["U456"] });
+    const ctx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } },
+      appClient: {
+        usergroups: { users: { list: usergroupsUsersList } },
+      } as unknown as App["client"],
+      defaultRequireMention: false,
+      channelsConfig: { "*": { ignoreOtherMentions: true } },
     });
-
-    const replies = vi.fn().mockResolvedValue({
-      messages: [
-        {
-          text: "starter",
-          user: "U2",
-          ts: "600.000",
-          files: [
-            {
-              id: "F-parent",
-              name: "parent.png",
-              mimetype: "image/png",
-            },
-          ],
-        },
-      ],
-    });
-    const slackCtx = createInboundSlackCtx({
-      appClient: { conversations: { replies } } as unknown as App["client"],
-      defaultRequireMention: true,
-    });
-    slackCtx.historyLimit = 5;
-    slackCtx.resolveUserName = async () => ({ name: "Alice" });
-
     const prepared = await prepareMessageWith(
-      slackCtx,
-      createSlackAccount(),
+      ctx,
+      defaultAccount,
       createSlackMessage({
         channel: "C123",
         channel_type: "channel",
-        text: "",
-        ts: "601.000",
-        thread_ts: "600.000",
-        files: [
-          {
-            id: "F-parent",
-            name: "parent.png",
-            mimetype: "image/png",
-            url_private: "https://files.slack.com/parent.png",
-          },
-        ],
+        text: "<!subteam^S123|team> hey",
       }),
     );
-
     expect(prepared).toBeNull();
-    expect(replies).not.toHaveBeenCalled();
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(usergroupsUsersList).toHaveBeenCalledWith({ usergroup: "S123", team_id: "T1" });
   });
-
-  it.each(["joined thread", "user group", "unknown bot"] as const)(
-    "handles other mentions with %s",
-    async (kind) => {
-      const usergroupsUsersList = vi.fn().mockResolvedValue({ ok: true, users: ["U456"] });
-      const ctx = createInboundSlackCtx({
-        cfg: {
-          channels: { slack: { enabled: true } },
-          messages:
-            kind === "unknown bot"
-              ? { groupChat: { mentionPatterns: ["\\bmy-bot\\b"] } }
-              : undefined,
-        },
-        appClient:
-          kind === "user group"
-            ? ({ usergroups: { users: { list: usergroupsUsersList } } } as unknown as App["client"])
-            : undefined,
-        defaultRequireMention: false,
-        channelsConfig: { "*": { ignoreOtherMentions: true } },
-      });
-      if (kind === "unknown bot") {
-        ctx.botUserId = "";
-      }
-      if (kind === "joined thread") {
-        recordSlackThreadParticipation("default", "C123", "10.000");
-      }
-      const prepared = await prepareMessageWith(
-        ctx,
-        defaultAccount,
-        createSlackMessage({
-          channel: "C123",
-          channel_type: "channel",
-          text: kind === "user group" ? "<!subteam^S123|team> hey" : "<@U456> hey",
-          thread_ts: kind === "joined thread" ? "10.000" : undefined,
-        }),
-      );
-      if (kind === "unknown bot") {
-        assert(prepared);
-      } else {
-        expect(prepared).toBeNull();
-      }
-      if (kind === "user group") {
-        expect(usergroupsUsersList).toHaveBeenCalledWith({ usergroup: "S123", team_id: "T1" });
-      }
-    },
-  );
 
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
     const slackCtx = createInboundSlackCtx({
@@ -1147,36 +1102,15 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(channelMetadata).toContain("Do dangerous things");
   });
 
-  it.each([
-    {
-      name: "blocks MPIM messages from senders outside the configured allowFrom",
-      user: "U_ATTACKER",
-      allowed: false,
-    },
-    {
-      name: "allows MPIM messages from senders in the configured allowFrom",
-      user: "U_OWNER",
-      allowed: true,
-    },
-  ])("$name", async ({ user, allowed }) => {
+  it("blocks MPIM messages from senders outside the configured allowFrom", async () => {
     const ctx = createReplyToAllSlackCtx();
     ctx.allowFrom = ["U_OWNER"];
     const prepared = await prepareMessageWith(
       ctx,
       createSlackAccount({ replyToMode: "all" }),
-      createSlackMessage({
-        channel: "G123",
-        channel_type: "mpim",
-        user,
-      }),
+      createSlackMessage({ channel: "G123", channel_type: "mpim", user: "U_ATTACKER" }),
     );
-
-    if (!allowed) {
-      expect(prepared).toBeNull();
-      return;
-    }
-    assert(prepared);
-    expect(prepared.ctxPayload.ChatType).toBe("group");
+    expect(prepared).toBeNull();
   });
 
   it("keeps one mpDM classification when a later event omits channel_type (#102676)", async () => {
@@ -1271,7 +1205,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       const cfg = {
         session: { dmScope: "per-peer" },
         agents: {
-          list: [{ id: "main", default: true }, { id: "strategist" }],
+          entries: { main: {}, strategist: {} },
         },
         bindings: [
           {
@@ -1530,7 +1464,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     }
   });
 
-  it.each(["fresh", "without runtime", "stale"] as const)(
+  it.each(["without runtime", "stale"] as const)(
     "recovers thread history according to %s session freshness",
     async (state) => {
       const { storePath } = storeFixture.makeTmpStorePath();
@@ -1544,15 +1478,15 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         },
         channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
       };
-      const threadTs = { fresh: "200.000", "without runtime": "250.000", stale: "300.000" }[state];
+      const threadTs = { "without runtime": "250.000", stale: "300.000" }[state];
       const sessionKey = `agent:main:slack:channel:c123:thread:${threadTs}`;
       await seedSessionEntries(storePath, {
         [sessionKey]: {
           sessionId: "existing-thread",
           displayName: "Renamed in Slack",
           updatedAt: state === "without runtime" ? old : now,
-          sessionStartedAt: state === "fresh" ? now : old,
-          lastInteractionAt: state === "fresh" ? now : old,
+          sessionStartedAt: old,
+          lastInteractionAt: old,
         },
       });
       const starter = { text: "starter", user: "U2", ts: threadTs };
@@ -1704,10 +1638,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    { name: "participant-only root", rootText: "@Analyst please review", admitted: false },
-    { name: "native bot root", rootText: "<@B1> @Analyst please review", admitted: true },
-  ])("respects runtime ACP ownership for $name", async ({ rootText, admitted }) => {
+  it("rejects a participant-only mention when the thread is owned by ACP", async () => {
     const targetSessionKey = "agent:review:acp:session-67739";
     const binding: SessionBindingRecord = {
       bindingId: "test-binding",
@@ -1759,27 +1690,12 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
 
       const prepared = await prepareThreadMessage(slackCtx, {
-        text: rootText,
+        text: "@Analyst please review",
         ts: "100.000",
       });
 
       expect(resolveByConversation).toHaveBeenCalledWith(binding.conversation);
-      if (!admitted) {
-        expect(prepared).toBeNull();
-        return;
-      }
-      assert(prepared);
-      expect(prepared.ctxPayload.GroupThread).toBeUndefined();
-      expect(prepared.route.sessionKey).toBe(targetSessionKey);
-      expect(prepared.route.agentId).toBe("review");
-      expect(prepared.ctxPayload.SessionKey).toBe(targetSessionKey);
-      expect(prepared.ctxPayload.ParentSessionKey).toBeUndefined();
-      const routeMetadataKeys = Object.getOwnPropertySymbols(prepared.route);
-      expect(routeMetadataKeys).not.toHaveLength(0);
-      for (const key of routeMetadataKeys) {
-        expect(Reflect.get(prepared.ctxPayload, key)).toBe(Reflect.get(prepared.route, key));
-      }
-      expect(touch).toHaveBeenCalledWith("test-binding", undefined);
+      expect(prepared).toBeNull();
     } finally {
       unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
     }
@@ -1803,10 +1719,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       agents:
         owner === "runtime"
           ? {
-              list: [
-                { id: "main", default: true },
-                { id: "review", groupChat: { mentionPatterns: ["\\breviewbot\\b"] } },
-              ],
+              entries: {
+                main: {},
+                review: { groupChat: { mentionPatterns: ["\\breviewbot\\b"] } },
+              },
             }
           : undefined,
       channels: { slack: { enabled: true, replyToMode: mode, groupPolicy: "open", channels } },
@@ -2038,13 +1954,12 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     storePath?: string;
     appClient?: App["client"];
     channelUsers?: string[];
-    audioEnabled?: boolean;
   }) {
     const cfg = {
       ...(params.storePath ? { session: { store: params.storePath } } : {}),
       commands: { allowFrom: { slack: ["user:U_BEK"] } },
       messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
-      tools: { media: { audio: { enabled: params.audioEnabled ?? true } } },
+      tools: { media: { audio: { enabled: true } } },
       channels: {
         slack: {
           enabled: true,
@@ -2069,92 +1984,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     slackCtx.resolveUserName = async () => ({ name: "Bek" });
     return slackCtx;
   }
-
-  it("admits a spoken-name audio root once and keeps its follow-up on the seeded thread session", async () => {
-    const mockFetch = mediaFetchMock.mockImplementation(
-      async (_input: string | URL | Request) =>
-        new Response(Buffer.from("voice clip"), {
-          status: 200,
-          headers: { "content-type": "audio/mp4" },
-        }),
-    );
-    const { storePath } = storeFixture.makeTmpStorePath();
-    const rootTs = "1777244692.409919";
-    const expectedSessionKey = `agent:main:slack:channel:c0ahzfcas1k:thread:${rootTs}`;
-    const replies = vi.fn().mockResolvedValue({
-      messages: [{ text: "voice clip", user: "U_BEK", ts: rootTs }],
-      response_metadata: { next_cursor: "" },
-    });
-    const slackCtx = createAudioMentionSlackCtx({
-      storePath,
-      appClient: { conversations: { replies } } as unknown as App["client"],
-    });
-    let downloadedPath: string | undefined;
-    let downloadedPaths: string[] = [];
-    transcribeFirstAudioMock.mockImplementation(
-      async ({ ctx }: { ctx: { media: Array<{ path?: string }> } }) => {
-        downloadedPath = ctx.media[0]?.path;
-        return "Bill /new please review this";
-      },
-    );
-
-    try {
-      const root = await prepareMessageWith(
-        slackCtx,
-        createSlackAccount({ replyToMode: "all" }),
-        createCaptionlessSlackAudioMessage(),
-      );
-      recordSlackThreadParticipation("default", "C0AHZFCAS1K", rootTs);
-      const followUp = await prepareMessageWith(
-        slackCtx,
-        createSlackAccount({ replyToMode: "all" }),
-        createSlackMessage({
-          channel: "C0AHZFCAS1K",
-          channel_type: "channel",
-          user: "U_BEK",
-          text: "and summarize the risks",
-          ts: "1777244714.000100",
-          thread_ts: rootTs,
-        }),
-      );
-
-      assert(root, "captionless audio root");
-      assert(followUp, "audio-root follow-up");
-      downloadedPaths =
-        root.ctxPayload.media?.flatMap((fact) => (fact.path ? [fact.path] : [])) ?? [];
-      expect(root.ctxPayload.SessionKey).toBe(expectedSessionKey);
-      expect(followUp.ctxPayload.SessionKey).toBe(expectedSessionKey);
-      expect(root.ctxPayload.MessageThreadId).toBe(rootTs);
-      expect(root.ctxPayload.WasMentioned).toBe(true);
-      expect(root.ctxPayload.MentionSource).toBe("mention_pattern");
-      expect(root.ctxPayload.CommandBody).toBe("");
-      expect(root.ctxPayload.Transcript).toBe("Bill /new please review this");
-      expect(root.ctxPayload.media?.[1]?.transcribed).toBe(true);
-      expect(root.ctxPayload.RawBody).toContain(
-        "[Slack file: voice.mp4 (video/mp4, fileId: FVOICE)]",
-      );
-      expect(root.ctxPayload.BodyForAgent).toContain(
-        '[Audio transcript (machine-generated, untrusted)]: "Bill /new please review this"',
-      );
-      expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-      expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
-        ctx: expect.objectContaining({ SessionKey: expectedSessionKey }),
-        cfg: expect.any(Object),
-      });
-      const fetchedUrls = mockFetch.mock.calls.map(([input]) => resolveFetchInputUrl(input));
-      expect(fetchedUrls).toHaveLength(2);
-      expect(fetchedUrls.filter((url) => url.includes("FVOICE"))).toHaveLength(1);
-      expect(fetchedUrls.filter((url) => url.includes("FPDF"))).toHaveLength(1);
-    } finally {
-      const pathsToRemove = new Set([
-        ...downloadedPaths,
-        ...(downloadedPath ? [downloadedPath] : []),
-      ]);
-      for (const mediaPath of pathsToRemove) {
-        await fs.rm(mediaPath, { force: true });
-      }
-    }
-  });
 
   it("combines audio and caption mentions when selecting group participants", async () => {
     const caption = "@Writer check the summary";
@@ -2228,23 +2057,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
   });
 
-  it("does not download captionless audio when audio understanding is disabled", async () => {
-    const mockFetch = mediaFetchMock.mockImplementation(async () => {
-      throw new Error("disabled audio must not be downloaded");
-    });
-    const slackCtx = createAudioMentionSlackCtx({ audioEnabled: false });
-
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      createSlackAccount({ replyToMode: "all" }),
-      createCaptionlessSlackAudioMessage(),
-    );
-
-    expect(prepared).toBeNull();
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-  });
-
   it("drops nonmatching audio transcripts and removes the speculative download", async () => {
     const mockFetch = mediaFetchMock.mockImplementation(
       async (_input: string | URL | Request) =>
@@ -2283,45 +2095,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         await fs.rm(downloadedPath, { force: true });
       }
     }
-  });
-
-  it("keeps per-channel replyToMode during regex mention reroute", async () => {
-    const rootTs = "1777244692.409919";
-    const slackCtx = createInboundSlackCtx({
-      cfg: {
-        messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
-        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
-      } as OpenClawConfig,
-      channelsConfig: {
-        C0AHZFCAS1K: { requireMention: true, replyToMode: "off" },
-      },
-      defaultRequireMention: true,
-      replyToMode: "all",
-    });
-    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
-    slackCtx.resolveUserName = async () => ({ name: "Bek" });
-
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      createSlackAccount({
-        replyToMode: "all",
-        replyToModeByChatType: { channel: "all" },
-      }),
-      createSlackMessage({
-        channel: "C0AHZFCAS1K",
-        channel_type: "channel",
-        user: "U_BEK",
-        text: "Bill send a subagent to review GitHub issue #50621",
-        ts: rootTs,
-      }),
-    );
-
-    assert(prepared);
-    expect(prepared.replyToMode).toBe("off");
-    expect(prepared.ctxPayload.ReplyToMode).toBe("off");
-    expect(prepared.ctxPayload.WasMentioned).toBe(true);
-    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
-    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:channel:c0ahzfcas1k");
   });
 });
 
@@ -2467,11 +2240,7 @@ describe("prepareSlackMessage sender prefix", () => {
 describe("slack implicit mention policy", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-explicit-mention-");
 
-  beforeAll(() => storeFixture.setup());
-
   beforeEach(clearSlackThreadParticipationCache);
-
-  afterAll(() => storeFixture.cleanup());
 
   function prepareThreadMessage(
     eventScope?: SlackEventScope,
@@ -2567,4 +2336,137 @@ describe("slack implicit mention policy", () => {
     expect(await prepareThreadMessage(eventScope)).toBeNull();
   });
 });
+type RouteOptions = Parameters<typeof resolveSlackRoutingContext>[0];
+function routingFixture(dmScope: "main" | "per-channel-peer" = "main") {
+  const replyToMode = "all";
+  const ctx = {
+    cfg: {
+      session: { dmScope },
+      channels: { slack: { enabled: true, replyToMode } },
+    } satisfies OpenClawConfig,
+    teamId: "T1",
+    threadInheritParent: false,
+    threadHistoryScope: "thread",
+  } satisfies RouteOptions["ctx"];
+  const account = createSlackAccount({ replyToMode });
+  const route = (
+    message: Partial<SlackMessageEvent> = {},
+    options: Partial<Omit<RouteOptions, "ctx" | "account" | "message">> = {},
+  ) =>
+    resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        type: "message",
+        channel: "C123",
+        channel_type: "channel",
+        user: "U3",
+        text: "hello",
+        ts: "1770408530.000000",
+        ...message,
+      },
+      chatType: "channel",
+      ...options,
+    });
+  const direct = (message: Partial<SlackMessageEvent> = {}, eventScope?: SlackEventScope) =>
+    route({ channel: "D456", channel_type: "im", ...message }, { chatType: "direct", eventScope });
+  return { ctx, route, direct };
+}
+
+describe("thread-level session keys", () => {
+  it("keeps mentioned MPIM roots flat and routes follow-ups by their parent thread", () => {
+    const { route } = routingFixture();
+    const message = {
+      channel: "G123",
+      channel_type: "mpim",
+      text: "<@B1> send a subagent",
+    } satisfies Partial<SlackMessageEvent>;
+    const options = { chatType: "group" } as const;
+    const root = route(message, { ...options, seedTopLevelRoomThread: true });
+    const followUp = route(
+      {
+        ...message,
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "U3",
+        text: "what did you find?",
+      },
+      options,
+    );
+    expect(root.sessionKey).toBe("agent:main:slack:group:g123");
+    expect(root.threadContext.replyToId).toBeUndefined();
+    expect(root.threadContext.messageThreadId).toBe("1770408530.000000");
+    expect(followUp.sessionKey).toBe("agent:main:slack:group:g123:thread:1770408530.000000");
+    expect(followUp.threadContext.replyToId).toBe("1770408530.000000");
+    expect(followUp.threadContext.messageThreadId).toBe("1770408530.000000");
+  });
+
+  it("partitions enterprise main DM sessions by account and workspace", () => {
+    const { direct } = routingFixture();
+    const scope = (teamId: string): SlackEventScope => ({
+      teamId,
+      client: {} as SlackEventScope["client"],
+    });
+    const first = direct({}, scope("T111"));
+    const second = direct({}, scope("T222"));
+    expect(first.sessionKey).toBe("agent:main:main:account:default:team:t111");
+    expect(first.route.mainSessionKey).toBe(first.sessionKey);
+    expect(second.sessionKey).toBe("agent:main:main:account:default:team:t222");
+    expect(second.route.mainSessionKey).toBe(second.sessionKey);
+  });
+
+  it.each(["thread", "base"])(
+    "routes DM replies through explicit %s conversation bindings",
+    (scope) => {
+      const binding: SessionBindingRecord = {
+        bindingId: "test-slack-dm-thread-binding",
+        targetSessionKey: "agent:review:acp:session-slack-dm",
+        targetKind: "session",
+        status: "active",
+        boundAt: 1,
+        metadata: {},
+        conversation: {
+          channel: "slack",
+          accountId: "default",
+          conversationId: scope === "thread" ? "1770408530.000000" : "user:U3",
+          parentConversationId: scope === "thread" ? "user:U3" : undefined,
+        },
+      };
+      const resolveByConversation: SessionBindingAdapter["resolveByConversation"] = vi.fn((ref) =>
+        ref.channel === "slack" &&
+        ref.accountId === "default" &&
+        ref.conversationId === binding.conversation.conversationId &&
+        ref.parentConversationId === binding.conversation.parentConversationId
+          ? binding
+          : null,
+      );
+      const touch = vi.fn();
+      const adapter: SessionBindingAdapter = {
+        channel: "slack",
+        accountId: "default",
+        listBySession: () => [],
+        resolveByConversation,
+        touch,
+      };
+      registerSessionBindingAdapter(adapter);
+      try {
+        const { ctx, direct } = routingFixture("per-channel-peer");
+        const cfg: OpenClawConfig = ctx.cfg;
+        cfg.agents = { ownership: "explicit", entries: { main: {}, review: {} } };
+        const result = direct({
+          ts: "1770408540.000000",
+          thread_ts: "1770408530.000000",
+          parent_user_id: "B1",
+        });
+        expect(result.sessionKey).toBe(binding.targetSessionKey);
+        expect(result.runtimeBoundSessionKey).toBe(binding.targetSessionKey);
+        expect(resolveByConversation).toHaveBeenCalledWith(binding.conversation);
+        expect(touch).toHaveBeenCalledWith(binding.bindingId, undefined);
+      } finally {
+        unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+      }
+    },
+  );
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

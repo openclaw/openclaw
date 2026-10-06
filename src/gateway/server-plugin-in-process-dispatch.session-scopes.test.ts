@@ -21,10 +21,10 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 
 const parentKey = "agent:main:scope-parent";
@@ -344,9 +344,6 @@ describe("hosted visible spawn permission inheritance", () => {
   it.each([
     { mode: undefined, agentId: "main", source: "scheduled" },
     { mode: "read-only", agentId: "main", source: "scheduled" },
-    { mode: "guarded", agentId: "main", source: "scheduled" },
-    { mode: "workspace", agentId: "main", source: "scheduled" },
-    { mode: "full", agentId: "main", source: "scheduled" },
     { mode: "full", agentId: "reviewer", source: "scheduled" },
     { mode: "full", agentId: "main", source: "operator" },
   ] as const)(

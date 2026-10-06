@@ -11,7 +11,6 @@ import type {
   AcpxPermissionMode,
   AcpxNonInteractivePermissionPolicy,
   McpServerConfig,
-  AcpxMcpServer,
   ResolvedAcpxPluginConfig,
 } from "./config-schema.js";
 export { type ResolvedAcpxPluginConfig } from "./config-schema.js";
@@ -163,7 +162,7 @@ function resolveConfiguredMcpServers(params: {
   return resolved;
 }
 
-export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): AcpxMcpServer[] {
+export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>) {
   return Object.entries(mcpServers).map(([name, server]) => ({
     name,
     command: server.command,

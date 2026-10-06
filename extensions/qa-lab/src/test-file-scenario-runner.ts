@@ -21,11 +21,7 @@ import {
 } from "./evidence-summary.js";
 import { sanitizeQaProgressValue } from "./progress-format.js";
 import type { QaProviderMode } from "./providers/index.js";
-import type {
-  QaSeedScenarioWithSource,
-  QaTestFileExecutionKind,
-  QaTestFileScenario,
-} from "./scenario-catalog.js";
+import type { QaSeedScenarioWithSource, QaTestFileScenario } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
 import {
@@ -111,13 +107,7 @@ type QaTestFileExecutionUnit =
       timeoutMs: number;
     };
 
-export type QaTestFileScenarioRunResult = {
-  evidence: QaEvidenceSummaryJson;
-  evidencePath: string;
-  executionKind: QaTestFileExecutionKind;
-  outputDir: string;
-  results: QaTestFileScenarioResult[];
-};
+export type QaTestFileScenarioRunResult = Awaited<ReturnType<typeof runQaTestFileScenarios>>;
 
 const DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS = 30 * 60_000;
 export function isQaTestFileScenario(
@@ -356,9 +346,7 @@ function resolveTestFileExecutionKind(scenarios: readonly QaTestFileScenario[]) 
   return kind;
 }
 
-export async function runQaTestFileScenarios(
-  params: QaTestFileScenarioRunParams,
-): Promise<QaTestFileScenarioRunResult> {
+export async function runQaTestFileScenarios(params: QaTestFileScenarioRunParams) {
   // Each scheduled instance owns its own object identity, even for repeated ids.
   const scenarios = params.scenarios
     .filter(isQaTestFileScenario)

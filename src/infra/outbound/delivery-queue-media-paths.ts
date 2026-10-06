@@ -19,16 +19,7 @@ export function spoolRelativePath(
 }
 
 export function payloadMediaSources(payload: ReplyPayload): string[] {
-  const sources: string[] = [];
-  if (isNonEmptyMediaSource(payload.mediaUrl)) {
-    sources.push(payload.mediaUrl);
-  }
-  for (const mediaUrl of payload.mediaUrls ?? []) {
-    if (isNonEmptyMediaSource(mediaUrl)) {
-      sources.push(mediaUrl);
-    }
-  }
-  return sources;
+  return [payload.mediaUrl, ...(payload.mediaUrls ?? [])].filter(isNonEmptyMediaSource);
 }
 
 /** Absolute spool paths a queue entry still needs in order to replay. */

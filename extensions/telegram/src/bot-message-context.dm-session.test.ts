@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { Bot } from "grammy";
 import type { Update } from "grammy/types";
@@ -28,7 +29,6 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   apiCalls,
@@ -45,13 +45,14 @@ import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.j
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let cfg: OpenClawConfig;
 let storePath: string;
 let updateId = 6000;
 
 beforeEach(() => {
-  storePath = path.join(tempDirs.make("telegram-context-session-"), "sessions.json");
+  const storeDir = harness.state.path("telegram-context-session");
+  mkdirSync(storeDir);
+  storePath = path.join(storeDir, "sessions.json");
   cfg = {
     session: { store: storePath },
     commands: { native: false },
@@ -107,27 +108,12 @@ async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
 }
 
 describe("Telegram recorded session destinations", () => {
-  it("records a deleted direct session again when the next DM is processed", async () => {
-    cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
-    const bot = await createBot(false, true, cfg);
-    await receive(bot, commandMessage("first turn"));
-    await deleteSessionEntry({ storePath, sessionKey: "agent:main:telegram:direct:42001" });
-    await receive(bot, commandMessage("hello again"));
-    expect(
-      getSessionEntry({ storePath, sessionKey: "agent:main:telegram:direct:42001" })?.delivery,
-    ).toMatchObject({
-      kind: "external",
-      context: { channel: "telegram", to: "telegram:42001" },
-      origin: { provider: "telegram", chatType: "direct" },
-    });
-  });
-
   it.each([
     {
-      name: "flat DM",
+      name: "deleted direct session",
       group: false,
       thread: undefined,
-      key: "agent:main:main",
+      key: "agent:main:telegram:direct:42001",
       to: "telegram:42001",
       savedThread: undefined,
     },
@@ -158,7 +144,14 @@ describe("Telegram recorded session destinations", () => {
   ])(
     "persists the deliverable destination for $name",
     async ({ group, thread, key, to, savedThread }) => {
-      const bot = await createBot(false, true, cfg, true);
+      if (!group && thread === undefined) {
+        cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
+      }
+      const bot = await createBot(false, true, cfg, group || thread !== undefined);
+      if (!group && thread === undefined) {
+        await receive(bot, commandMessage("first turn"));
+        await deleteSessionEntry({ storePath, sessionKey: key });
+      }
       await receive(bot, {
         ...commandMessage("remember this destination"),
         chat: group ? groupChat : chat,
@@ -168,6 +161,9 @@ describe("Telegram recorded session destinations", () => {
       const delivery = getSessionEntry({ storePath, sessionKey: key })?.delivery;
       expect(delivery).toMatchObject({ kind: "external", context: { channel: "telegram", to } });
       expect(delivery?.kind === "external" ? delivery.context.threadId : null).toBe(savedThread);
+      if (!group && thread === undefined) {
+        expect(delivery).toMatchObject({ origin: { provider: "telegram", chatType: "direct" } });
+      }
     },
   );
 
@@ -283,10 +279,12 @@ describe("Telegram recorded session destinations", () => {
     bind("42001", "agent:youtube:cron:monthly-report:run:closed-run-1");
     await receive(bot, commandMessage("a new live conversation"));
     expect(harness.replySpy.mock.calls[0]?.[0].SessionKey).toBe("agent:main:main");
-    expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })?.delivery).toMatchObject({
+    const delivery = getSessionEntry({ storePath, sessionKey: "agent:main:main" })?.delivery;
+    expect(delivery).toMatchObject({
       kind: "external",
-      context: { to: "telegram:42001" },
+      context: { channel: "telegram", to: "telegram:42001" },
     });
+    expect(delivery?.kind === "external" ? delivery.context.threadId : null).toBeUndefined();
     expect(
       getSessionEntry({
         storePath,

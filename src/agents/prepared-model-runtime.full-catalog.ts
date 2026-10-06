@@ -10,12 +10,14 @@ import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-
 import { runtimeAuthMetadataState } from "./auth-profiles/runtime-snapshot-owner.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
+import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import {
   enrichHarnessRows,
   modelCatalogRouteVariantKey,
   modelCatalogRowToEntry,
 } from "./model-catalog-entry.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
+import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
@@ -38,10 +40,7 @@ import {
   completeConfiguredRuntimeModels,
   prepareConfiguredModelAliases,
 } from "./prepared-model-runtime.configured-completion.js";
-import {
-  acquirePreparedMediaCapabilityProviders,
-  buildPreparedPluginModelCatalog,
-} from "./prepared-model-runtime.plugin-generation.js";
+import { acquirePreparedMediaCapabilityProviders } from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
@@ -123,7 +122,8 @@ export async function prepareFullCatalogFacts(
 ): Promise<PreparedModelRuntimeCatalogFacts> {
   const prepare = async (): Promise<PreparedModelRuntimeCatalogFacts> => {
     const { env, input, templateAuthStorage } = agentFacts;
-    const { pluginMetadataSnapshot, preparedStaticProviderCatalog } = pluginGeneration;
+    const { pluginMetadataSnapshot, pluginRegistry, preparedStaticProviderCatalog } =
+      pluginGeneration;
     const observedProviders = new Set(
       catalogSource.providerOutcomes?.map(({ provider }) => normalizeProviderId(provider)),
     );
@@ -141,14 +141,27 @@ export async function prepareFullCatalogFacts(
         ),
       ),
     });
-    const modelCatalog = await buildPreparedPluginModelCatalog({
-      ...options,
-      agentFacts,
-      catalogMode,
-      modelRegistry: templateModelRegistry,
-      providerOutcomes: catalogSource.providerOutcomes,
-      pluginGeneration,
-    });
+    const modelCatalog = await withPluginRuntimeGenerationScope(
+      { metadataSnapshot: pluginMetadataSnapshot, pluginRegistry },
+      async () => {
+        const snapshot = await buildPreparedModelCatalogSnapshot({
+          agentDir: input.agentDir,
+          authCredentials: agentFacts.credentials,
+          config: input.config,
+          modelRegistry: templateModelRegistry,
+          metadataSnapshot: pluginMetadataSnapshot,
+          providerOutcomes: catalogSource.providerOutcomes,
+          includeProviderPluginAugmentation: catalogMode === "live",
+          providerIds: options.providerIds,
+          ...(input.env ? { env: input.env } : {}),
+          ...(input.readOnly ? { readOnly: true } : {}),
+          ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        });
+        return catalogMode === "live" && options.includeNative !== false
+          ? await augmentPreparedModelCatalogWithAgentHarness({ input, snapshot, pluginRegistry })
+          : snapshot;
+      },
+    );
     const providerStaticModels =
       input.config.models?.mode === "replace"
         ? []
@@ -629,7 +642,7 @@ export function createPreparedModelRuntimeSnapshot(
   prepareModelCatalogThinkingPolicies({
     catalog: modelCatalog,
     metadataSnapshot: pluginMetadataSnapshot,
-    providers: pluginRegistry?.providers,
+    pluginRegistry,
   });
   const createStores = (): PreparedModelRuntimeStores => {
     // Runtime API keys and session extensions mutate these objects. Fork them per run while the

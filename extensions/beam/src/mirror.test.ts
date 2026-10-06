@@ -1,17 +1,19 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
 import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   beamTestLogger,
   beamTestMirrorConfig,
   beamTestNow,
   createBeamTestCatalog,
   createBeamTestRunner,
+  createScheduledBeamTestRunner,
   createBeamTestRuntime,
 } from "./beam.test-support.js";
 import {
@@ -22,6 +24,8 @@ import {
   parseBeamMirrorConfig,
 } from "./mirror.js";
 import { BEAM_MAX_ITEMS, parseBeamUpload, type BeamUpload } from "./types.js";
+
+afterEach(() => vi.useRealTimers());
 
 vi.mock("openclaw/plugin-sdk/session-catalog-runtime", async (importOriginal) => {
   const actual =
@@ -538,6 +542,7 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("stops before a paused transcript read settles without resuming mirror work", async () => {
+    vi.useFakeTimers();
     const readStarted = createDeferred<void>();
     const releaseRead = createDeferred<void>();
     const list = vi.fn();
@@ -547,7 +552,7 @@ describe("createBeamMirrorRunner", () => {
     });
     const sent: SentRequest[] = [];
     const warnings: string[] = [];
-    const runner = createBeamTestRunner({
+    const runner = createScheduledBeamTestRunner({
       logger: { warn: (message) => warnings.push(message), info: () => {} },
       fetchFn: captureFetch(sent),
       listCatalogs: () => [
@@ -583,7 +588,8 @@ describe("createBeamMirrorRunner", () => {
     }
   });
 
-  it("joins overlapping ticks into one catalog and upload path", async () => {
+  it("keeps one catalog and upload path active across missed scheduler periods", async () => {
+    vi.useFakeTimers();
     const listStarted = createDeferred<void>();
     const releaseList = createDeferred<void>();
     const list = vi.fn(async () => {
@@ -592,7 +598,7 @@ describe("createBeamMirrorRunner", () => {
     });
     const read = vi.fn();
     const sent: SentRequest[] = [];
-    const runner = createBeamTestRunner({
+    const runner = createScheduledBeamTestRunner({
       fetchFn: captureFetch(sent),
       listCatalogs: () => [
         createBeamTestCatalog({
@@ -605,12 +611,12 @@ describe("createBeamMirrorRunner", () => {
     try {
       const first = runner.tick();
       await listStarted.promise;
-      const second = runner.tick();
-      await Promise.resolve();
+      await first;
+      await vi.advanceTimersByTimeAsync(60_000);
       expect(list).toHaveBeenCalledOnce();
 
       releaseList.resolve();
-      await Promise.all([first, second]);
+      await runner.settled;
 
       expect(read).toHaveBeenCalledOnce();
       expect(sent).toHaveLength(1);
@@ -621,6 +627,7 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("waits for guarded response cleanup after lifecycle abort without warning", async () => {
+    vi.useFakeTimers();
     const fetchStarted = createDeferred<void>();
     const cleanupStarted = createDeferred<void>();
     const releaseCleanup = createDeferred<void>();
@@ -649,7 +656,7 @@ describe("createBeamMirrorRunner", () => {
           release,
         };
       });
-    const runner = createBeamTestRunner({
+    const runner = createScheduledBeamTestRunner({
       logger: { warn: (message) => warnings.push(message), info: () => {} },
       listCatalogs: () => [createBeamTestCatalog()],
     });
@@ -683,6 +690,7 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("aborts a stalled loopback transport on stop", async () => {
+    vi.useFakeTimers();
     const requestStarted = createDeferred<void>();
     const requestClosed = createDeferred<void>();
     await withServer(
@@ -697,7 +705,7 @@ describe("createBeamMirrorRunner", () => {
           signal = init?.signal ?? undefined;
           return fetch(input, init);
         }) as unknown as typeof fetch;
-        const runner = createBeamTestRunner({
+        const runner = createScheduledBeamTestRunner({
           endpoint: `${origin}/beam`,
           logger: { warn: (message) => warnings.push(message), info: () => {} },
           fetchFn,
@@ -832,6 +840,13 @@ describe("createBeamMirrorRunner", () => {
 
 describe("createBeamMirrorService", () => {
   it("stops before catalog listing settles without starting reads or uploads", async () => {
+    vi.useFakeTimers();
+    const context = {
+      config: {},
+      stateDir: "/unused",
+      logger: beamTestLogger,
+      scheduler: createTestPluginServiceScheduler(),
+    };
     const listingStarted = createDeferred<void>();
     const releaseListing = createDeferred<void>();
     const list = vi.fn(async () => {
@@ -857,10 +872,11 @@ describe("createBeamMirrorService", () => {
     });
 
     try {
-      service.start({ logger: beamTestLogger });
+      await service.start(context);
+      await vi.advanceTimersByTimeAsync(0);
       await listingStarted.promise;
 
-      await service.stop();
+      await context.scheduler.stop();
       expect(read).not.toHaveBeenCalled();
       expect(upload).not.toHaveBeenCalled();
 
@@ -873,7 +889,8 @@ describe("createBeamMirrorService", () => {
       releaseListing.resolve();
       upload.mockRestore();
       listCatalogs.mockRestore();
-      await service.stop();
+      await context.scheduler.stop();
+      vi.useRealTimers();
     }
   });
 });

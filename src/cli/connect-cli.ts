@@ -51,13 +51,8 @@ const MAX_TARGET_FILE_BYTES = 64 * 1024;
 const JOIN_FETCH_TIMEOUT_MS = 15_000;
 
 function parseJoinTarget(target: string): URL | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(target);
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+  const parsed = URL.parse(target);
+  if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
     return null;
   }
   const match = /(?:^|\/)j\/([^/]+)$/u.exec(parsed.pathname);

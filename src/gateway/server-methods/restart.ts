@@ -79,32 +79,23 @@ export const restartHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (target) {
-      if (params.safe !== undefined && typeof params.safe !== "boolean") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid safe targeted restart mode"),
-        );
-        return;
-      }
-      if (params.safe === true) {
-        if (params.restartIntent !== undefined) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "safe targeted restart does not accept intent"),
-          );
-          return;
-        }
-        const result = scheduleSafeGatewayRestart({
-          reason,
-          delayMs: 0,
-          skipDeferral: params.skipDeferral === true,
-        });
-        respond(true, result);
-        return;
-      }
+    if (target && params.safe !== undefined && typeof params.safe !== "boolean") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid safe targeted restart mode"),
+      );
+      return;
+    }
+    if (target && params.safe === true && params.restartIntent !== undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "safe targeted restart does not accept intent"),
+      );
+      return;
+    }
+    if (target && params.safe !== true) {
       const intent = parseTargetedGatewayRestartIntent(params.restartIntent, reason);
       if (!intent) {
         respond(
@@ -116,8 +107,7 @@ export const restartHandlers: GatewayRequestHandlers = {
       }
       const activeLock = await readActiveGatewayLockIdentity().catch(() => undefined);
       if (
-        !activeLock ||
-        activeLock.pid !== process.pid ||
+        activeLock?.pid !== process.pid ||
         activeLock.pid !== target.pid ||
         activeLock.ownerId !== target.ownerId ||
         activeLock.port !== target.port

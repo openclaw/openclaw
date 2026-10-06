@@ -230,7 +230,7 @@ outcome with `openclaw backup record`; see
 `openclaw status` shows the newest backup attempt and offsite result. The
 Control UI's Backups section on the Systems landing and Gateway host views shows each target's last success, size, destination,
 latest failure, and next scheduled run. Its storage location **Check** action
-probes access without writing a backup. `openclaw doctor` keeps the 14-day
+checks access without writing a backup. `openclaw doctor` keeps the 14-day
 freshness hint and also flags an offsite schedule after a failed attempt or
 when its last success is older than three schedule intervals. Diagnose that
 destination with `openclaw storage test <name>`.
@@ -366,6 +366,8 @@ Git restore converges derived search state: it rebuilds content-backed FTS5
 indexes, leaves transcript projection state for Gateway startup reconciliation,
 and leaves vector tables for memory indexing to recreate. It then verifies
 table hashes, SQLite integrity, and foreign keys.
+Trigger bodies can contain `CASE` expressions and SQL comments. Incomplete
+trigger definitions fail the restore before the target file is published.
 
 ## Continuous replication with Litestream
 
@@ -481,6 +483,11 @@ into live state or agent roots and has no force or in-place mode. Treat the
 restored directory as sensitive: it can contain credentials, auth profiles,
 sessions, and workspace data.
 
+Before restoring, ensure the target filesystem has room for the archive's full
+uncompressed payload, plus extraction overhead, while the live tree remains in
+place. Renaming or moving the live tree to a sibling path on the same filesystem
+does not free its blocks; a full restore therefore needs space for a second tree.
+
 <Warning>
   Restoring an archive is time travel. Messaging-channel credentials with
   ratchet state, especially WhatsApp, may desynchronize after rollback and need
@@ -520,6 +527,17 @@ location. On a new machine or under a different home directory, also use the
 manifest to map config, credentials, and workspace assets to their new paths.
 Run `openclaw doctor` before restarting the Gateway. See
 [Updating](/install/updating#rollback) for the rollback workflow.
+
+Selective extraction of raw tar members is an expert, offline last resort when a
+full staged restore cannot fit, not the recommended recovery path. It bypasses
+the restore command's complete-layout and cleanup safeguards. Keep the original
+archive unchanged, verify it first, stop every writer, and use `manifest.json`
+to confirm the exact asset path and agent ownership for each selected member.
+Restore the config, shared database, and all required per-agent databases from
+the same backup generation. Extract SQLite members only from the archive's
+managed snapshots; never combine a database with `-wal`, `-shm`, or `-journal`
+files from another generation. Prefer restoring onto storage with enough space
+for the complete archive whenever possible.
 
 ### Restore a database
 

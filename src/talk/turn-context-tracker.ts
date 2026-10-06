@@ -7,7 +7,7 @@ const DEFAULT_REALTIME_VOICE_IGNORED_CONTEXT_TTL_MS = 10_000;
 /**
  * Retention and clock controls for realtime voice turn context tracking.
  */
-export type RealtimeVoiceTurnContextTrackerOptions = {
+type RealtimeVoiceTurnContextTrackerOptions = {
   limit?: number;
   ignoredContextTtlMs?: number;
   now?: () => number;

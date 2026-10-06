@@ -215,7 +215,7 @@ export async function respondToDiscordVoiceTranscript(
     return;
   }
   if (voiceReplyAudio.status === "failed") {
-    logger.warn(`discord voice: TTS failed: ${voiceReplyAudio.error ?? "unknown error"}`);
+    logger.warn(`discord voice: TTS failed: ${voiceReplyAudio.error}`);
     return;
   }
   const streamFailure = voiceReplyAudio.mode === "file" ? voiceReplyAudio.streamFailure : undefined;

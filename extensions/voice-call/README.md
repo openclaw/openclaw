@@ -102,12 +102,13 @@ Notes:
 - Twilio defaults to US1. For a non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials created in that Region; see [Twilio's regional REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
-- Runtime accepts canonical config only. If older configs still use `provider: "log"`, `twilio.from`, or legacy `streaming.*` OpenAI keys, run `openclaw doctor --fix` to rewrite them.
+- Runtime accepts canonical config only. Doctor retains migrations for `provider: "log"`, `twilio.from`, legacy `streaming.*` OpenAI keys, and `realtime.agentContext.includeSystemPrompt` because supported releases can still preserve these settings. Run `openclaw doctor --fix` to normalize them; existing canonical values are preserved.
 - advanced webhook, streaming, and tunnel notes: `https://docs.openclaw.ai/plugins/voice-call`
 - `responseModel` is optional. When unset, voice responses use the runtime default model.
 - `sessionScope` defaults to `per-phone`, preserving caller memory across calls. Use `per-call` for reception, booking, IVR, and bridge flows where each carrier call should start fresh. Use `main` to share the configured agent's main session (`agent:<agentId>:main`, or `global` when core `session.scope` is `"global"`). Custom core `session.mainKey` values are ignored.
 - `realtime.consultThinkingLevel` is optional. When set, it overrides the thinking level used by the model behind realtime `openclaw_agent_consult` calls.
 - `realtime.consultFastMode` is optional. When set, it toggles fast mode for realtime `openclaw_agent_consult` calls.
+- `realtime.idleHangupMs` is optional. When set to a positive integer, an active realtime call ends after neither side has spoken for that many milliseconds; in-flight agent consults pause the timer. Unset keeps the current no-speech-idle-limit behavior.
 
 ## Stale call reaper
 

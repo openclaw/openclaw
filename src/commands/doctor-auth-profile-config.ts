@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty as normalizeProviderId,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,12 +16,6 @@ const AUTH_PROFILE_MODES = new Set<AuthProfileConfig["mode"]>([
   "oauth",
   "token",
 ]);
-
-type AuthProfileConfigProtectionResult = {
-  config: OpenClawConfig;
-  repairs: string[];
-  warnings: string[];
-};
 
 function normalizeMode(value: unknown): AuthProfileConfig["mode"] | null {
   return typeof value === "string" && AUTH_PROFILE_MODES.has(value as AuthProfileConfig["mode"])
@@ -45,11 +40,7 @@ function extractProviderFromProfileId(profileId: string): string | null {
   return normalizeProviderId(profileId.slice(0, colon)) || null;
 }
 
-function collectActiveAuthHints(config: OpenClawConfig): {
-  activeProviders: Set<string>;
-  explicitProfileIds: Set<string>;
-  explicitProfileProviders: Map<string, Set<string>>;
-} {
+function collectActiveAuthHints(config: OpenClawConfig) {
   const activeProviders = new Set<string>();
   const explicitProfileIds = new Set<string>();
   const explicitProfileProviders = new Map<string, Set<string>>();
@@ -157,7 +148,7 @@ export function ensureConfigAuthProfiles(
 export function protectActiveAuthProfileConfig(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
-}): AuthProfileConfigProtectionResult {
+}) {
   const { activeProviders, explicitProfileIds, explicitProfileProviders } = collectActiveAuthHints(
     params.before,
   );
@@ -213,4 +204,27 @@ export function protectActiveAuthProfileConfig(params: {
   }
 
   return { config, repairs, warnings };
+}
+
+export function stripImportedConfigAuthProfileCredentials(
+  cfg: OpenClawConfig,
+  store: AuthProfileStore,
+): boolean {
+  const profiles = ensureConfigAuthProfiles(cfg);
+  let changed = false;
+  for (const [profileId, credential] of Object.entries(store.profiles)) {
+    const current = profiles[profileId];
+    if (!current) {
+      continue;
+    }
+    const metadata: AuthProfileConfig = {
+      provider: current.provider || credential.provider,
+      mode: credential.type,
+      ...(current.email ? { email: current.email } : {}),
+      ...(current.displayName ? { displayName: current.displayName } : {}),
+    };
+    profiles[profileId] = metadata;
+    changed = true;
+  }
+  return changed;
 }

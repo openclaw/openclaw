@@ -6,6 +6,7 @@ import {
   ControlUiGitHubError,
   fetchGitHubApi,
   GITHUB_API_ORIGIN,
+  githubRestApiPath,
   githubApiCredentialCacheScope,
   isRecord,
   optionalNumber,
@@ -60,7 +61,9 @@ class GitHubDetailAccessError extends ControlUiGitHubError {
 }
 
 function redirectedRepositoryUrl(url: URL, suffix: string): string {
-  const match = /^(\/repos\/[^/]+\/[^/]+|\/repositories\/\d+)(\/.*)?$/u.exec(url.pathname);
+  const match = /^(\/repos\/[^/]+\/[^/]+|\/repositories\/\d+)(\/.*)?$/u.exec(
+    githubRestApiPath(url, GITHUB_API_ORIGIN),
+  );
   if (!match || (match[2] ?? "") !== suffix) {
     throw new GitHubDetailAccessError();
   }
@@ -82,6 +85,10 @@ async function readPublicRepository(
         redirectedRepositoryUrl(redirect, "");
       },
       identity,
+      undefined,
+      undefined,
+      undefined,
+      GITHUB_API_ORIGIN,
     ),
   );
   const id = isRecord(repository) ? optionalNumber(repository, "id") : undefined;
@@ -451,6 +458,10 @@ async function loadGitHubDetailWithIdentity(
             }
           : undefined,
         identity,
+        undefined,
+        undefined,
+        undefined,
+        GITHUB_API_ORIGIN,
       );
       return {
         hasNextPage: /;\s*rel="next"/u.test(response.headers.get("link") ?? ""),

@@ -1,14 +1,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
+import {
+  githubPublicationUnsafeConfigArgs,
+  parseGitHubPublicationBaseRef,
+} from "./github-publication-base.js";
 import {
   hasUnapprovedGitHubPublicationWorkflowChanges,
   isGitHubPublicationWorkflowPath,
@@ -20,15 +25,20 @@ type GitCommandOptions = {
   input?: string | Buffer;
   maxOutputBytes?: number;
   beforeRun?: () => void;
+  operation?: GitProcessOperation;
 };
 type GitCommandResult = { code: number | null; stdout: Buffer };
 
-export function githubPublicationApiArgs(endpoint: string, method = "GET"): string[] {
+export function githubPublicationApiArgs(
+  endpoint: string,
+  method = "GET",
+  host = "github.com",
+): string[] {
   return [
     "gh",
     "api",
     "--hostname",
-    "github.com",
+    host,
     "--method",
     method,
     endpoint,
@@ -37,24 +47,26 @@ export function githubPublicationApiArgs(endpoint: string, method = "GET"): stri
 }
 
 export async function runPublicationCommand(argv: string[], options: GitCommandOptions = {}) {
-  return await withGitNetworkRetry(
-    argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined,
-    { timeoutMs: 60_000, beforeRun: options.beforeRun },
-    (timeoutMs) =>
-      runCommandBuffered(argv, {
-        ...(options.cwd ? { cwd: options.cwd } : {}),
-        env: {
-          ...(options.env ?? process.env),
-          GIT_NO_REPLACE_OBJECTS: "1",
-          // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
-          GIT_CONFIG_COUNT: "1",
-          GIT_CONFIG_KEY_0: "core.hooksPath",
-          GIT_CONFIG_VALUE_0: os.devNull,
-        },
-        ...(options.input !== undefined ? { input: options.input } : {}),
-        timeoutMs,
-        maxOutputBytes: options.maxOutputBytes ?? 256 * 1024,
-      }),
+  return await withGitProcessOperation(options.operation ?? "publication", () =>
+    withGitNetworkRetry(
+      argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined,
+      { timeoutMs: 60_000, beforeRun: options.beforeRun },
+      (timeoutMs) =>
+        runCommandBuffered(argv, {
+          ...(options.cwd ? { cwd: options.cwd } : {}),
+          env: {
+            ...(options.env ?? process.env),
+            GIT_NO_REPLACE_OBJECTS: "1",
+            // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "core.hooksPath",
+            GIT_CONFIG_VALUE_0: os.devNull,
+          },
+          ...(options.input !== undefined ? { input: options.input } : {}),
+          timeoutMs,
+          maxOutputBytes: options.maxOutputBytes ?? 256 * 1024,
+        }),
+    ),
   );
 }
 
@@ -71,7 +83,10 @@ export async function requirePublicationCommand(
 
 // Guard ordinary steps on both sides of the await. Effects whose observations
 // must survive revocation use the raw transport and record before rechecking.
-export function createGitHubPublicationCommandRunner(assertCurrent?: () => void) {
+export function createGitHubPublicationCommandRunner(
+  assertCurrent?: () => void,
+  gitOperation: GitProcessOperation = "publication",
+) {
   const step = async <T>(operation: () => Promise<T>): Promise<T> => {
     assertCurrent?.();
     const result = await operation();
@@ -79,7 +94,11 @@ export function createGitHubPublicationCommandRunner(assertCurrent?: () => void)
     return result;
   };
   const run = async (argv: string[], options: GitCommandOptions = {}) => {
-    const result = await runPublicationCommand(argv, { ...options, beforeRun: assertCurrent });
+    const result = await runPublicationCommand(argv, {
+      ...options,
+      operation: gitOperation,
+      beforeRun: assertCurrent,
+    });
     assertCurrent?.();
     return result;
   };
@@ -89,12 +108,74 @@ export function createGitHubPublicationCommandRunner(assertCurrent?: () => void)
     require: async (argv: string[], options: GitCommandOptions = {}) => {
       const result = await requirePublicationCommand(argv, {
         ...options,
+        operation: gitOperation,
         beforeRun: assertCurrent,
       });
       assertCurrent?.();
       return result;
     },
   };
+}
+
+export async function readGitHubPublicationBaseSha(
+  run: ReturnType<typeof createGitHubPublicationCommandRunner>["run"],
+  repository: string,
+  branch: string,
+  host: string,
+  env: NodeJS.ProcessEnv,
+) {
+  const result = await run(
+    [
+      "gh",
+      "api",
+      "--hostname",
+      host,
+      `repos/${repository}/git/ref/heads/${branch}`,
+      "--jq",
+      "{ref: .ref, sha: .object.sha}",
+    ],
+    { env },
+  );
+  if (result.code !== 0) {
+    throw new Error("GitHub publication workspace base branch could not be verified.");
+  }
+  return parseGitHubPublicationBaseRef(result.stdout.toString("utf8"), branch);
+}
+
+export async function requireGitHubPublicationCommit(
+  run: ReturnType<typeof createGitHubPublicationCommandRunner>["run"],
+  repository: string,
+  sha: string,
+  host: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  failure: string,
+) {
+  const result = await run(
+    [
+      ...GITHUB_CREDENTIAL_ARGS,
+      "-c",
+      `core.hooksPath=${os.devNull}`,
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "gc.auto=0",
+      "fetch",
+      "--no-auto-maintenance",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--recurse-submodules=no",
+      "--",
+      githubRepositoryUrl(repository, host),
+      sha,
+    ],
+    { cwd, env },
+  );
+  if (result.code !== 0) {
+    throw new Error(failure);
+  }
 }
 
 // A recursive tree listing scales with repository size (openclaw itself is
@@ -316,7 +397,7 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   const { withSettledLocalWorkspacePath } =
     await import("./worker-environments/local-workspace-projection.js");
   return await withSettledLocalWorkspacePath(params, async (custody) => {
-    const admittedPaths = await custody?.canonicalPaths();
+    const admittedPaths = await custody?.canonicalPaths?.();
     const bound = {
       ...params,
       assertCurrent: () => {

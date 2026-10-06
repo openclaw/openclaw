@@ -112,10 +112,10 @@ export async function configureGatewayForSetup(
 
   let authMode = quickstartGateway.authMode;
 
-  const tailscaleMode: GatewayWizardSettings["tailscaleMode"] =
+  const tailscaleMode: QuickstartGatewayDefaults["tailscaleMode"] =
     flow === "quickstart"
       ? quickstartGateway.tailscaleMode
-      : await prompter.select<GatewayWizardSettings["tailscaleMode"]>({
+      : await prompter.select<QuickstartGatewayDefaults["tailscaleMode"]>({
           message: t("wizard.gateway.tailscaleExposure"),
           options: getLocalizedTailscaleExposureOptions(),
           initialValue: quickstartGateway.tailscaleMode,
@@ -151,6 +151,13 @@ export async function configureGatewayForSetup(
   }
 
   if (tailscaleMode === "funnel" && authMode !== "password") {
+    // Funnel must not replace the operator's proxy identity policy.
+    if (authMode !== "token") {
+      throw new Error(
+        `Tailscale Funnel requires password auth, but the Gateway is configured with "${authMode}" auth. ` +
+          `Re-run with --gateway-auth password to switch, or keep Tailscale exposure off.`,
+      );
+    }
     await prompter.note(t("wizard.gatewayNotes.tailscaleFunnelPassword"), t("wizard.gateway.auth"));
     authMode = "password";
   }
@@ -193,7 +200,7 @@ export async function configureGatewayForSetup(
         // Nothing exists for an env/file/exec ref to point at, so asking where the
         // token lives has no answerable option. Setup mints it into the shared
         // secret store instead and config keeps only the reference.
-        const provisioned = provisionGatewayTokenStoreRef({ config: nextConfig });
+        const provisioned = await provisionGatewayTokenStoreRef({ config: nextConfig });
         gatewayTokenInput = provisioned.ref;
         gatewayToken = provisioned.token;
         await prompter.note(
@@ -302,7 +309,6 @@ export async function configureGatewayForSetup(
       customBindHost: bind === "custom" ? customBindHost : undefined,
       authMode,
       gatewayToken,
-      tailscaleMode,
     },
   };
 }

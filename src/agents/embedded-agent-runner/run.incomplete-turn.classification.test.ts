@@ -104,83 +104,68 @@ describe("incomplete-turn retry classification", () => {
     ).toBe(expected);
   });
 
-  it("retries replay-safe errored turns that only emitted thinking blocks", () => {
-    expect(retryError({ errorMessage: undefined, content: thinking("signed") })).toBe(true);
-  });
-
-  it.each([
-    { errorMessage: REJECTION },
-    { errorMessage: "Provider rejected the tool call", errorCode: "malformed_tool_call_arguments" },
-  ])("retries positive-output pre-dispatch rejection: %j", (rejection) => {
-    expect(retryError(rejection)).toBe(true);
-  });
-
-  it.each([
-    { errorMessage: `${REJECTION} after dispatch` },
-    {
-      errorMessage: "Provider rejected the tool call",
-      errorCode: "malformed_tool_call_arguments_suffix",
-    },
-  ])("refuses non-exact rejection evidence: %j", (rejection) => {
-    expect(retryError(rejection)).toBe(false);
-  });
-
-  it.each([
-    { errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE },
-    {
-      errorCode: "malformed_tool_call_arguments",
-      diagnostics: [
-        {
-          type: "provider_refusal",
-          timestamp: 0,
-          details: { provider: "anthropic", category: "cyber" },
-        },
-      ],
-    },
-  ] satisfies Partial<Assistant>[])("preserves terminal rejection evidence: %j", (rejection) => {
-    expect(retryError(rejection)).toBe(false);
-  });
-
-  it.each([
-    ["visible text", { assistantTexts: ["Applying the edit now."] }],
-    ["accepted client call", { clientToolCalls: [{ name: "pending", params: {} }] }],
-    ["asynchronous work", { toolMetas: [{ toolName: "probe", asyncStarted: true }] }],
-  ] satisfies Array<[string, Attempt]>)(
-    "refuses a pre-dispatch rejection after %s",
-    (_name, attempt) => {
-      expect(retryError({}, attempt)).toBe(false);
-    },
-  );
-
-  it("does not retry an errored turn containing a tool call", () => {
-    expect(
-      retryError({
+  const errorCases: Array<[string, boolean, Partial<Assistant>?, Attempt?]> = [
+    ["signed thinking", true, { errorMessage: undefined, content: thinking("signed") }],
+    ["exact rejection message", true, { errorMessage: REJECTION }],
+    [
+      "rejection code",
+      true,
+      {
+        errorMessage: "Provider rejected the tool call",
+        errorCode: "malformed_tool_call_arguments",
+      },
+    ],
+    ["non-exact rejection message", false, { errorMessage: `${REJECTION} after dispatch` }],
+    [
+      "non-exact rejection code",
+      false,
+      {
+        errorMessage: "Provider rejected the tool call",
+        errorCode: "malformed_tool_call_arguments_suffix",
+      },
+    ],
+    ["post-dispatch ambiguity", false, { errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE }],
+    [
+      "provider refusal",
+      false,
+      {
+        errorCode: "malformed_tool_call_arguments",
+        diagnostics: [
+          {
+            type: "provider_refusal",
+            timestamp: 0,
+            details: { provider: "anthropic", category: "cyber" },
+          },
+        ],
+      },
+    ],
+    ["visible text", false, {}, { assistantTexts: ["Applying the edit now."] }],
+    ["accepted client call", false, {}, { clientToolCalls: [{ name: "pending", params: {} }] }],
+    ["asynchronous work", false, {}, { toolMetas: [{ toolName: "probe", asyncStarted: true }] }],
+    [
+      "tool call",
+      false,
+      {
         content: [
           ...thinking("signed"),
           { type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } },
         ],
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    ["current clean overrides cumulative dirty", true, false, true],
-    ["current dirty overrides cumulative clean", false, true, false],
-  ] as const)(
-    "uses current-attempt replay metadata when %s",
-    (_name, cumulative, current, expected) => {
-      expect(
-        retryError(
-          { errorMessage: undefined, usage: createMockUsage(100, 0) },
-          {
-            replayMetadata: { hadPotentialSideEffects: cumulative, replaySafe: !cumulative },
-            currentAttemptReplayMetadata: {
-              hadPotentialSideEffects: current,
-              replaySafe: !current,
-            },
-          },
-        ),
-      ).toBe(expected);
+      },
+    ],
+    ...[false, true].map((current): [string, boolean, Partial<Assistant>, Attempt] => [
+      `current ${current ? "dirty" : "clean"} overrides cumulative evidence`,
+      !current,
+      { errorMessage: undefined, usage: createMockUsage(100, 0) },
+      {
+        replayMetadata: { hadPotentialSideEffects: !current, replaySafe: current },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: current, replaySafe: !current },
+      },
+    ]),
+  ];
+  it.each(errorCases)(
+    "classifies silent error retry with %s",
+    (_name, expected, message, attempt) => {
+      expect(retryError(message, attempt)).toBe(expected);
     },
   );
 });
@@ -231,32 +216,22 @@ describe("incomplete-turn delivery ownership", () => {
     },
   );
 
-  it("treats committed messaging targets as replay-invalid side effect metadata", () => {
+  it.each([
+    { messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }] },
+    { acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:test:subagent:child" }] },
+  ])("marks committed outbound delivery as replay-invalid: %j", (evidence) => {
     expect(
       buildAttemptReplayMetadata({
         toolMetas: [],
         didSendViaMessagingTool: false,
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
+        ...evidence,
       }),
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
-  });
-
-  it("treats accepted sessions_spawn as replay-invalid outbound delivery", () => {
-    const acceptedSessionSpawns = [
-      { runId: "child", childSessionKey: "agent:test:subagent:child" },
-    ];
-    expect(
-      buildAttemptReplayMetadata({
-        toolMetas: [],
-        didSendViaMessagingTool: false,
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        acceptedSessionSpawns,
-      }),
-    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
-    expect(hasOutboundDeliveryEvidence({ acceptedSessionSpawns })).toBe(true);
+    if (evidence.acceptedSessionSpawns) {
+      expect(hasOutboundDeliveryEvidence(evidence)).toBe(true);
+    }
   });
 });
 
@@ -292,69 +267,66 @@ describe("incomplete-turn payload resolution", () => {
     ).toBe(false);
   });
 
-  it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {
-    expect(
-      warning(
-        {
-          assistantTexts: ["Let me update the file..."],
-          toolMetas: [{ toolName: "write" }],
-          lastAssistant: assistant({
-            stopReason: "toolUse",
-            content: [
-              { type: "text", text: "Let me update the file..." },
-              { type: "toolCall", id: "tool_1", name: "write", arguments: {} },
-            ],
-          }),
-        },
-        { payloadCount: 1 },
-      ),
-    ).toContain("verify before retrying");
+  const payloadCases: Array<[string, Attempt, number, string | null]> = [
+    [
+      "tool-use after pre-tool text (#76477)",
+      {
+        assistantTexts: ["Let me update the file..."],
+        toolMetas: [{ toolName: "write" }],
+        lastAssistant: assistant({
+          stopReason: "toolUse",
+          content: [
+            { type: "text", text: "Let me update the file..." },
+            { type: "toolCall", id: "tool_1", name: "write", arguments: {} },
+          ],
+        }),
+      },
+      1,
+      "verify before retrying",
+    ],
+    [
+      "unsigned thinking only (#89787)",
+      {
+        lastAssistant: assistant({ content: thinking() }),
+      },
+      1,
+      "couldn't generate a response",
+    ],
+    [
+      "unsigned thinking with visible text",
+      {
+        assistantTexts: ["Here is the answer."],
+        lastAssistant: assistant({
+          content: [...thinking(), { type: "text", text: "Here is the answer." }],
+        }),
+      },
+      1,
+      null,
+    ],
+    [
+      "errored signed thinking only",
+      {
+        lastAssistant: assistant({ stopReason: "error", content: thinking("signed") }),
+      },
+      1,
+      "couldn't generate a response",
+    ],
+    ...["", "Partial answer"].map((text): [string, Attempt, number, string | null] => [
+      `token-limited answer: ${text}`,
+      {
+        assistantTexts: text ? [text] : [],
+        lastAssistant: assistant({ stopReason: "length", content: [{ type: "text", text }] }),
+      },
+      text ? 1 : 0,
+      text ? null : "couldn't generate a response",
+    ]),
+  ];
+  it.each(payloadCases)("resolves warning for %s", (_name, attempt, payloadCount, expected) => {
+    const result = warning(attempt, { payloadCount });
+    if (expected === null) {
+      expect(result).toBeNull();
+    } else {
+      expect(result).toContain(expected);
+    }
   });
-
-  it("surfaces unsigned thinking without a visible answer even when payloadCount is one (#89787)", () => {
-    expect(
-      warning({ lastAssistant: assistant({ content: thinking() }) }, { payloadCount: 1 }),
-    ).toContain("couldn't generate a response");
-  });
-
-  it("does not surface a stall when unsigned thinking accompanies visible text", () => {
-    expect(
-      warning(
-        {
-          assistantTexts: ["Here is the answer."],
-          lastAssistant: assistant({
-            content: [...thinking(), { type: "text", text: "Here is the answer." }],
-          }),
-        },
-        { payloadCount: 1 },
-      ),
-    ).toBeNull();
-  });
-
-  it("surfaces an errored signed-thinking-only turn even when payloadCount is one", () => {
-    expect(
-      warning(
-        { lastAssistant: assistant({ stopReason: "error", content: thinking("signed") }) },
-        { payloadCount: 1 },
-      ),
-    ).toContain("couldn't generate a response");
-  });
-
-  it.each(["", "Partial answer"])(
-    "keeps token-limited answers deliverable only with visible text: %s",
-    (text) => {
-      const result = warning(
-        {
-          assistantTexts: text ? [text] : [],
-          lastAssistant: assistant({ stopReason: "length", content: [{ type: "text", text }] }),
-        },
-        { payloadCount: text ? 1 : 0 },
-      );
-      if (text) {
-        expect(result).toBeNull();
-      } else {
-        expect(result).toContain("couldn't generate a response");
-      }
-    },
-  );
 });

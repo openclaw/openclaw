@@ -14,7 +14,6 @@ import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
-import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
@@ -213,16 +212,13 @@ export async function convergeUpdatePlugins(params: {
       const runtimeStartedAt = Date.now();
       const runtime = targetRuntimeConverged
         ? { changed: false }
-        : await withPluginLifecycleLease({ assertCurrent }, (lease) =>
-            completeSourceUpdateRuntime({
-              root: postUpdateRoot,
-              sourceRuntimePrepared: params.result.sourceRuntimePrepared,
-              timeoutMs: params.updateStepTimeoutMs,
-              lease,
-              beforePersistentEffect: assertCurrent,
-              beforePublication: params.beforeRuntimePublication,
-            }),
-          );
+        : await completeSourceUpdateRuntime({
+            root: postUpdateRoot,
+            sourceRuntimePrepared: params.result.sourceRuntimePrepared,
+            timeoutMs: params.updateStepTimeoutMs,
+            assertCurrent,
+            beforePublication: params.beforeRuntimePublication,
+          });
       const runtimeDurationMs = Math.max(0, Date.now() - runtimeStartedAt);
       assertCurrent?.();
       if (!targetRuntimeConverged) {
@@ -252,7 +248,7 @@ export async function convergeUpdatePlugins(params: {
         postCorePluginUpdate &&
         (!params.coreAlreadyCurrent ||
           postCorePluginUpdate.changed ||
-          hasDeferredUpdateModelRetirement())
+          hasDeferredUpdateModelRetirement(params.opts.run?.env, params.opts.run?.runId))
       ) {
         // Release the plugin lease before fresh Doctor. The finalizer either
         // retains its stopped interval or parks an already-current core here.
@@ -260,11 +256,10 @@ export async function convergeUpdatePlugins(params: {
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
           databaseBackup: params.databaseBackup,
-          onDatabaseWriteStep: (step) => params.result.steps.push(step),
+          onDoctorStep: (step) => params.result.steps.push(step),
           opts: params.opts,
           ...(params.candidateRuntime ? { doctorConfigWrites: true as const } : {}),
           pluginUpdate: producedPluginUpdate,
-          freshDoctorRequired: producedPluginUpdate.changed,
           beforeDoctor: params.beforeDoctor,
           assertCurrent,
           yes: params.opts.yes === true,

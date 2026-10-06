@@ -1,6 +1,10 @@
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
+import {
+  createDiscordGatewayPlugin,
+  waitForDiscordGatewayPluginRegistration,
+} from "./gateway-plugin.js";
 
 const mocks = vi.hoisted(() => ({
   register: vi.fn(),
@@ -114,12 +118,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 }));
 
 describe("createDiscordGatewayPlugin", () => {
-  let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
-  let waitForDiscordGatewayPluginRegistration: typeof import("./gateway-plugin.js").waitForDiscordGatewayPluginRegistration;
-  beforeAll(async () => {
-    ({ createDiscordGatewayPlugin, waitForDiscordGatewayPluginRegistration } =
-      await import("./gateway-plugin.js"));
-  });
   beforeEach(() => {
     vi.unstubAllEnvs();
     for (const key of [

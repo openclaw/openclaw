@@ -78,59 +78,50 @@ async function readPortal(url: string, ca = certificate.cert) {
 }
 
 describe("direct HTTPS portal publication", () => {
-  it.each(["ip", "wildcard", "chain"] as const)(
-    "retains verified %s certificate access",
+  it.each(["ip", "wildcard", "chain", "LAN", "loopback", "configured"] as const)(
+    "publishes a certificate-valid hostname for %s access",
     async (kind) => {
       const material =
         kind === "ip" ? ipCertificate : kind === "wildcard" ? wildcardCertificate : certificate;
-      const hostname = kind === "ip" ? "127.0.0.1" : "gateway.example.test";
+      const hostname =
+        kind === "ip"
+          ? "127.0.0.1"
+          : kind === "configured"
+            ? "alternate.example.test"
+            : "gateway.example.test";
+      if (kind === "LAN" || kind === "loopback") {
+        // A broken candidate must fail on TLS, not routing.
+        vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore").mockResolvedValue("127.0.0.2");
+      }
       const service = createGatewayPortalService({
-        httpBindHosts: ["127.0.0.1"],
+        httpBindHosts: [kind === "LAN" ? "0.0.0.0" : "127.0.0.1"],
         httpServers: [],
         tlsOptions: { ...material, cert: kind === "chain" ? [material.cert] : material.cert },
-        gatewayOrigins: kind === "wildcard" ? ["*", `https://${hostname}`] : [],
+        gatewayOrigins:
+          kind === "wildcard"
+            ? ["*", `https://${hostname}`]
+            : kind === "configured"
+              ? ["https://unrelated.example.test", "https://alternate.example.test:8443"]
+              : [],
       });
       services.push(service);
-      const portal = await service.open({ targetPort: 3000 });
-      expect(new URL(portal.publicUrl).hostname).toBe(hostname);
-      expect((await readPortal(portal.publicUrl, material.cert)).status).toBe(401);
-    },
-  );
-
-  it.each(["0.0.0.0", "127.0.0.1"])(
-    "publishes a certificate-valid DNS name for bind %s",
-    async (bindHost) => {
-      // Keep the advertised IP locally reachable so the broken candidate fails on TLS, not routing.
-      vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore").mockResolvedValue("127.0.0.2");
-      await withServer(
-        (_req, res) => res.end("direct TLS app"),
-        async (targetUrl) => {
-          const service = createGatewayPortalService({
-            httpBindHosts: [bindHost],
-            httpServers: [],
-            tlsOptions: certificate,
-          });
-          services.push(service);
-          const portal = await service.open({ targetPort: Number(new URL(targetUrl).port) });
+      const checkPortal = async (targetPort: number) => {
+        const portal = await service.open({ targetPort });
+        expect(new URL(portal.publicUrl).hostname).toBe(hostname);
+        if (kind === "LAN" || kind === "loopback") {
           expect(await readPortal(portal.url)).toEqual({ status: 200, body: "direct TLS app" });
-          expect(new URL(portal.publicUrl).hostname).toBe("gateway.example.test");
           expect(service.list()[0]?.publicUrl).toBe(portal.publicUrl);
-          expect((await readPortal(portal.publicUrl)).status).toBe(401);
-        },
-      );
+        }
+        expect((await readPortal(portal.publicUrl, material.cert)).status).toBe(401);
+      };
+      if (kind === "LAN" || kind === "loopback") {
+        await withServer(
+          (_req, res) => res.end("direct TLS app"),
+          async (targetUrl) => checkPortal(Number(new URL(targetUrl).port)),
+        );
+      } else {
+        await checkPortal(3000);
+      }
     },
   );
-
-  it("prefers a configured certificate-valid Gateway name, ignoring unrelated origins", async () => {
-    const service = createGatewayPortalService({
-      httpBindHosts: ["127.0.0.1"],
-      httpServers: [],
-      tlsOptions: certificate,
-      gatewayOrigins: ["https://unrelated.example.test", "https://alternate.example.test:8443"],
-    });
-    services.push(service);
-    const portal = await service.open({ targetPort: 3000 });
-    expect(new URL(portal.publicUrl).hostname).toBe("alternate.example.test");
-    expect((await readPortal(portal.publicUrl)).status).toBe(401);
-  });
 });

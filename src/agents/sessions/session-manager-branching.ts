@@ -1,9 +1,21 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { replaceSessionWithBranchedTranscript } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
+import { publishCommittedSessionIdentity } from "../../config/sessions/session-accessor.sqlite-identity.js";
+import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  withOwnedSessionTranscriptWriterFence,
+} from "../../config/sessions/transcript-write-context.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
+import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { SessionManagerMetadata } from "./session-manager-metadata.js";
+import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import type {
   LabelEntry,
   PreservedOpaqueFileEntry,
@@ -11,6 +23,7 @@ import type {
   SessionHeader,
 } from "./session-manager-types.js";
 import type { SessionManagerPersistenceTarget } from "./session-manager-view-types.js";
+import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 
 export class SessionManagerBranching extends SessionManagerMetadata {
   private collectBranchedSessionPath(leafId: string): {
@@ -93,77 +106,198 @@ export class SessionManagerBranching extends SessionManagerMetadata {
   }
 
   async createBranchedSession(leafId: string): Promise<string | undefined> {
-    this.assertTranscriptWriteActive();
-    this.ensureCompletePersistedHistory();
-    const previousSessionId = this.sessionId;
-    const branchPath = this.collectBranchedSessionPath(leafId);
-    if (branchPath.entries.length === 0) {
-      throw new Error(`Entry ${leafId} not found`);
-    }
-
-    const newSessionId = createManagedSessionId();
-    const timestamp = new Date().toISOString();
-    const persistenceTarget = this.persistenceTarget;
-
-    const header: SessionHeader = {
-      type: "session",
-      version: this.getHeader()?.version,
-      id: newSessionId,
-      timestamp,
-      cwd: this.cwd,
-      parentSession: persistenceTarget ? previousSessionId : undefined,
-    };
-    const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
-    const labelEntries: LabelEntry[] = [];
-    let parentId = branchPath.tailId;
-    for (const [targetId, label] of this.labelsById) {
-      if (!pathEntryIds.has(targetId)) {
-        continue;
+    return withSessionManagerWrite(this, async (admission) => {
+      this.assertTranscriptWriteActive();
+      if (this.persistenceTarget && this.boundedContextIncomplete) {
+        await this.ensureCompletePersistedHistoryAsync();
       }
-      const labelEntry: LabelEntry = {
-        type: "label",
-        id: generateSessionEntryId(),
-        parentId,
-        timestamp: this.labelTimestampsById.get(targetId)!,
-        targetId,
-        label,
-      };
-      labelEntries.push(labelEntry);
-      parentId = labelEntry.id;
-    }
+      this.assertTranscriptWriteActive();
+      const assertNavigation = this.captureTranscriptNavigationAssertion();
+      const previousSessionId = this.sessionId;
+      const branchPath = this.collectBranchedSessionPath(leafId);
+      if (branchPath.entries.length === 0) {
+        throw new Error(`Entry ${leafId} not found`);
+      }
 
-    // Build leaf controls on a detached tree: queued or failed persistence must
-    // never expose a new in-memory identity paired with the old durable target.
-    const branch = new SessionManagerBranching(this.cwd, undefined, [
-      header,
-      ...branchPath.entries,
-      ...labelEntries,
-    ]);
-    branch.opaqueFileEntries = branchPath.opaqueEntries;
-    branch.buildIndex();
-    const adoptBranch = (
-      target?: SessionManagerPersistenceTarget,
-      version?: SessionTranscriptContextVersion,
-    ) => {
-      this.fileEntries = branch.fileEntries;
-      this.opaqueFileEntries = branch.opaqueFileEntries;
-      this.sessionId = newSessionId;
-      this.buildIndex();
-      this.persistenceTarget = target;
-      this.transcriptVersion = target ? version : undefined;
-      this.transcriptMutationAt = target ? version?.updatedAt : undefined;
-      this.persistenceHeaderPending = false;
-    };
-    if (persistenceTarget) {
-      await replaceSessionWithBranchedTranscript(
-        persistenceTarget,
-        { sessionId: newSessionId, events: branch.getPersistedFileEntries() },
-        adoptBranch,
-        () => this.assertTranscriptWriteActive(),
-      );
-    } else {
-      adoptBranch();
-    }
-    return persistenceTarget ? newSessionId : undefined;
+      const newSessionId = createManagedSessionId();
+      const timestamp = new Date().toISOString();
+      const persistenceTarget = this.persistenceTarget;
+
+      const header: SessionHeader = {
+        type: "session",
+        version: this.getHeader()?.version,
+        id: newSessionId,
+        timestamp,
+        cwd: this.cwd,
+        parentSession: persistenceTarget ? previousSessionId : undefined,
+      };
+      const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
+      const labelEntries: LabelEntry[] = [];
+      let parentId = branchPath.tailId;
+      for (const [targetId, label] of this.labelsById) {
+        if (!pathEntryIds.has(targetId)) {
+          continue;
+        }
+        const labelEntry: LabelEntry = {
+          type: "label",
+          id: generateSessionEntryId(),
+          parentId,
+          timestamp: this.labelTimestampsById.get(targetId)!,
+          targetId,
+          label,
+        };
+        labelEntries.push(labelEntry);
+        parentId = labelEntry.id;
+      }
+
+      // Build leaf controls on a detached tree: queued or failed persistence must
+      // never expose a new in-memory identity paired with the old durable target.
+      const branch = new SessionManagerBranching(this.cwd, undefined, [
+        header,
+        ...branchPath.entries,
+        ...labelEntries,
+      ]);
+      branch.opaqueFileEntries = branchPath.opaqueEntries;
+      branch.buildIndex();
+      const adoptBranch = (
+        target?: SessionManagerPersistenceTarget,
+        version?: SessionTranscriptContextVersion,
+      ) => {
+        this.fileEntries = branch.fileEntries;
+        this.opaqueFileEntries = branch.opaqueFileEntries;
+        this.sessionId = newSessionId;
+        this.buildIndex();
+        this.persistenceTarget = target;
+        this.transcriptVersion = target ? version : undefined;
+        this.transcriptMutationAt = target ? version?.updatedAt : undefined;
+        this.persistenceHeaderPending = false;
+      };
+      if (
+        persistenceTarget &&
+        admission &&
+        (!isIncognitoSessionKey(persistenceTarget.sessionKey) || !("db" in admission.database))
+      ) {
+        const identity = { ...persistenceTarget };
+        const version = this.transcriptVersion;
+        const assertOwned = captureOwnedTranscriptWriteAssertion(identity);
+        const assertDestinationOwned = captureOwnedTranscriptWriteAssertion({
+          ...identity,
+          sessionId: newSessionId,
+        });
+        const assertCurrent = () => {
+          admission.assertCurrent();
+          this.assertTranscriptWriteActive();
+          assertOwned();
+          assertNavigation();
+          if (
+            !sameSessionTranscriptTargetBinding(identity, this.persistenceTarget) ||
+            this.transcriptVersion !== version
+          ) {
+            throw new Error("Session transcript changed during branch preparation");
+          }
+        };
+        const { restoreSessionColdTranscript } =
+          await import("../../config/sessions/session-cold-storage.js");
+        if ("db" in admission.database) {
+          await restoreSessionColdTranscript(persistenceTarget, assertCurrent);
+        }
+        const reader = prepareSessionManagerHydration(persistenceTarget);
+        const facts = await reader.readMaintenance({ operation: "version" });
+        reader.assertCurrent();
+        assertCurrent();
+        const { withSessionMetadataWorker } = await import("./session-manager-metadata-runtime.js");
+        assertCurrent();
+        const fencedTarget = withOwnedSessionTranscriptWriterFence(persistenceTarget);
+        const { env: _env, ...scope } = fencedTarget;
+        const assertBranchCurrent = () => {
+          assertCurrent();
+          assertDestinationOwned();
+        };
+        const receipt = await receiveSessionManagerCommit("session.transcript.branch", () =>
+          withSessionMetadataWorker(
+            admission.options,
+            admission.database,
+            assertBranchCurrent,
+            (worker) =>
+              worker.execute({
+                type: "session.transcript.branch",
+                input: {
+                  scope: { ...scope, storePath: admission.database.path },
+                  branch: { sessionId: newSessionId, events: branch.getPersistedFileEntries() },
+                  expectedLifecycleRevision: facts.lifecycleRevision,
+                },
+              }),
+          ),
+        );
+        const committed = receipt.value;
+        if (committed.projectionNeedsReconcile && !receipt.failure) {
+          startSessionTranscriptIndexReconcile({
+            ...admission.options,
+            preferredSessionId: newSessionId,
+          });
+        }
+        let failure: { cause: unknown } | undefined;
+        try {
+          if (receipt.failure) {
+            throw receipt.failure;
+          }
+          assertCurrent();
+          adoptBranch({ ...fencedTarget, sessionId: newSessionId }, committed.version);
+        } catch (cause) {
+          failure = { cause };
+        }
+        try {
+          publishCommittedSessionIdentity(
+            scope.agentId,
+            "db" in admission.database
+              ? readOpenClawAgentDatabaseIdentity(admission.database).identity
+              : admission.database.identity.incarnation,
+            committed.identity.previous,
+            committed.identity.current,
+          );
+        } catch (cause) {
+          failure = {
+            cause: failure
+              ? new AggregateError(
+                  [failure.cause, cause],
+                  "Branch adoption and identity publication failed",
+                  { cause: failure.cause },
+                )
+              : cause,
+          };
+        }
+        if (failure) {
+          const error = Object.assign(
+            new Error(
+              "Session branch committed, but publication did not complete; do not replay the branch",
+              { cause: failure.cause },
+            ),
+            {
+              name: "SessionBranchCommittedError",
+              committedSessionId: newSessionId,
+              committedTarget: { ...fencedTarget, sessionId: newSessionId },
+              committedVersion: committed.version,
+            },
+          );
+          recordModelFallbackStop(error);
+          this.invalidateTranscriptView(error);
+          throw error;
+        }
+      } else if (persistenceTarget) {
+        // Incognito retains its process-held owner until its worker migration activates.
+        await replaceSessionWithBranchedTranscript(
+          persistenceTarget,
+          { sessionId: newSessionId, events: branch.getPersistedFileEntries() },
+          adoptBranch,
+          () => {
+            this.assertTranscriptWriteActive();
+            assertNavigation();
+          },
+        );
+      } else {
+        adoptBranch();
+      }
+      return persistenceTarget ? newSessionId : undefined;
+    });
   }
 }

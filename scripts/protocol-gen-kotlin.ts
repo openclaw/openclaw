@@ -1,6 +1,5 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import {
   MIN_NODE_PROTOCOL_VERSION,
@@ -8,6 +7,7 @@ import {
 } from "../packages/gateway-protocol/src/version.js";
 import { listCoreGatewayMethodNames } from "../src/gateway/methods/core-method-policy.js";
 import { extractGatewayEventNames } from "./check-protocol-event-coverage.mts";
+import { lowerCamel, upperCamel } from "./lib/protocol-codegen-names.mts";
 import { type JsonSchema, schemaSignature } from "./lib/protocol-codegen-schema.js";
 
 type EnumSpec = {
@@ -16,16 +16,6 @@ type EnumSpec = {
   namespacePrefix?: string;
 };
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
-const gatewayOutputPath = path.join(
-  repoRoot,
-  "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt",
-);
-const constantsOutputPath = path.join(
-  repoRoot,
-  "apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
-);
 const protocolSchemas = ProtocolSchemas as Record<string, JsonSchema>;
 
 const schemaNames = new Map<string, string>([
@@ -166,26 +156,6 @@ function enumSpec(
   };
 }
 
-function words(value: string): string[] {
-  return (
-    value.match(/[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+/g)?.map((part) => part.toLowerCase()) ??
-    []
-  );
-}
-
-function upperCamel(value: string): string {
-  const parts = words(value);
-  if (parts.length === 0) {
-    throw new Error(`Cannot create Kotlin identifier from ${JSON.stringify(value)}`);
-  }
-  return parts.map((part) => part[0]!.toUpperCase() + part.slice(1)).join("");
-}
-
-function lowerCamel(value: string): string {
-  const name = upperCamel(value);
-  return name[0]!.toLowerCase() + name.slice(1);
-}
-
 function literalValue(schema: JsonSchema): boolean | number | string | null | undefined {
   if ("const" in schema) {
     return schema.const;
@@ -311,7 +281,7 @@ function emitWireModels(): string[] {
         const literal = literalValue(propertySchema);
         const optional = !required.has(wireName);
         const useLiteralDefault =
-          literal !== undefined && (optional || typeof literal !== "boolean");
+          literal !== undefined && !optional && typeof literal !== "boolean";
         const lines = [
           `  val ${propertyName}: ${type}${optional ? "?" : ""}${
             useLiteralDefault ? ` = ${kotlinLiteral(literal)}` : optional ? " = null" : ""
@@ -377,7 +347,7 @@ function emitGatewayCatalogEnum(name: string, values: readonly string[]): string
   return emitEnum({ name, values: entries });
 }
 
-async function generate(): Promise<void> {
+export async function generateKotlinProtocol(repoRoot: string): Promise<Record<string, string>> {
   const gatewayEventSource = await fs.readFile(
     path.join(repoRoot, "src/gateway/server-methods-list.ts"),
     "utf8",
@@ -418,13 +388,8 @@ async function generate(): Promise<void> {
     ...androidEnums.flatMap((spec) => [emitEnum(spec), ""]),
   ].join("\n");
 
-  await fs.writeFile(gatewayOutputPath, gatewayContent);
-  await fs.writeFile(constantsOutputPath, constantsContent);
-  console.log(`wrote ${path.relative(repoRoot, gatewayOutputPath)}`);
-  console.log(`wrote ${path.relative(repoRoot, constantsOutputPath)}`);
+  return {
+    "ai/openclaw/app/gateway/GatewayProtocol.kt": gatewayContent,
+    "ai/openclaw/app/protocol/OpenClawProtocolConstants.kt": constantsContent,
+  };
 }
-
-generate().catch((error: unknown) => {
-  console.error(error);
-  process.exit(1);
-});

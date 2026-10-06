@@ -10,6 +10,7 @@ import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import type { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -31,7 +32,7 @@ export function registerAdmissionDrainControlTests({
       const controllerSessionKey = "agent:main:main";
       const childSessionKey = "agent:main:subagent:kill-admission-timeout";
       const sessionId = "sess-kill-admission-timeout";
-      const entry = createSubagentRunRecord({
+      let entry = createSubagentRunRecord({
         runId: "run-kill-admission-timeout",
         childSessionKey,
         controllerSessionKey,
@@ -43,7 +44,8 @@ export function registerAdmissionDrainControlTests({
           ? { status: "queued" }
           : { status: "running", startedAt: Date.now() - 1_000 },
       });
-      addSubagentRunForTests(entry);
+      await addSubagentRunForTests(entry);
+      entry = subagentRuns.get(entry.runId)!;
       const storePath = await writeSessionStoreFixture("kill-admission-timeout", {
         [childSessionKey]: { sessionId, updatedAt: Date.now() },
       });
@@ -97,8 +99,12 @@ export function registerAdmissionDrainControlTests({
           error:
             "hold admission during kill: Subagent is still active; try the kill again in a moment.",
         });
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.killIntent).toBeUndefined();
+        expect(
+          (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
+        ).toBeUndefined();
+        expect(
+          (await getSubagentRunByChildSessionKey(childSessionKey))?.killIntent,
+        ).toBeUndefined();
         if (queued) {
           await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
         }

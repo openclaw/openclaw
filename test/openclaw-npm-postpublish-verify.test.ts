@@ -22,6 +22,7 @@ import {
   collectInstalledPackageErrors,
   fetchRegistryJson,
   parseOpenClawNpmPostpublishVerifyArgs,
+  resolvePublishedInstallSourceVerification,
   resolveInstalledBinaryCommandInvocation,
   retryNpmRegistryProvenanceRead,
   verifyNpmProvenanceAttestation,
@@ -94,6 +95,44 @@ describe("buildPublishedInstallScenarios", () => {
         expectedVersion: "2026.3.23-2",
       },
     ]);
+  });
+});
+
+describe("resolvePublishedInstallSourceVerification", () => {
+  it("uses exact legacy source manifests for published chunk ownership", () => {
+    const sourceRoot = createTempDir("openclaw-postpublish-source-");
+    writePackageFile(sourceRoot, "package.json", {
+      name: "openclaw",
+      version: "2026.8.34",
+    });
+    writePackageFile(sourceRoot, "extensions/discord/package.json", {
+      name: "@openclaw/discord",
+      version: "2026.8.34",
+      dependencies: { "@discordjs/voice": "0.19.2" },
+    });
+
+    expect(resolvePublishedInstallSourceVerification(sourceRoot, "2026.8.34")).toEqual({
+      additionalCompanionManifestRoots: [join(sourceRoot, "extensions")],
+      allowLegacyGeneratedOwnership: true,
+    });
+
+    writeInstalledFile(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts");
+    expect(resolvePublishedInstallSourceVerification(sourceRoot, "2026.8.34")).toEqual({
+      additionalCompanionManifestRoots: [join(sourceRoot, "extensions")],
+      allowLegacyGeneratedOwnership: false,
+    });
+  });
+
+  it("rejects source manifests from another release", () => {
+    const sourceRoot = createTempDir("openclaw-postpublish-source-");
+    writePackageFile(sourceRoot, "package.json", {
+      name: "openclaw",
+      version: "2026.9.7",
+    });
+
+    expect(() => resolvePublishedInstallSourceVerification(sourceRoot, "2026.8.34")).toThrow(
+      "source checkout version mismatch",
+    );
   });
 });
 
@@ -527,6 +566,17 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
     expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
       `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
     ]);
+  });
+
+  it("keeps split worker chunks within their own bounded scan", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    writeInstalledFile(packageRoot, "dist/root.js");
+    for (let index = 0; index < INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT; index += 1) {
+      writeInstalledFile(packageRoot, `dist/worker/worker-chunk-${index}.mjs`);
+    }
+
+    expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
   });
 });
 

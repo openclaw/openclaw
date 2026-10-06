@@ -20,30 +20,17 @@ import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailscale-config.js";
 
-/**
- * E.164 phone number format: +[country code][number]
- * Examples use 555 prefix (reserved for fictional numbers)
- */
 const E164Schema = z
   .string()
   .regex(/^\+[1-9]\d{1,14}$/, "Expected E.164 format, e.g. +15550001234");
 
-/**
- * Controls how inbound calls are handled:
- * - "disabled": Block all inbound calls (outbound only)
- * - "allowlist": Only accept calls from numbers in allowFrom
- * - "pairing": Unknown callers can request pairing (future)
- * - "open": Accept all inbound calls (dangerous!)
- */
 const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"]);
 
 const SecretInputSchema = buildSecretInputSchema();
 
 const TelnyxConfigSchema = z
   .object({
-    /** Telnyx API v2 key */
     apiKey: z.string().min(1).optional(),
-    /** Telnyx connection ID (from Call Control app) */
     connectionId: z.string().min(1).optional(),
     /** Public key for webhook signature verification */
     publicKey: z.string().min(1).optional(),
@@ -62,7 +49,6 @@ const TwilioConfigSchema = z
 
 const PlivoConfigSchema = z
   .object({
-    /** Plivo Auth ID (starts with MA/SA) */
     authId: z.string().min(1).optional(),
     authToken: z.string().min(1).optional(),
   })
@@ -82,7 +68,6 @@ const VoiceCallNumberRouteConfigSchema = z
     responseTimeoutMs: z.number().int().positive().optional(),
   })
   .strict();
-type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
 
 const VoiceCallServeConfigSchema = z
   .object({
@@ -90,41 +75,23 @@ const VoiceCallServeConfigSchema = z
     bind: z.string().default("127.0.0.1"),
     path: z.string().min(1).default("/voice/webhook"),
   })
-  .strict()
-  .default({ port: 3334, bind: "127.0.0.1", path: "/voice/webhook" });
+  .strict();
 
 const VoiceCallTunnelConfigSchema = z
   .object({
-    /**
-     * Tunnel provider:
-     * - "none": No tunnel (use publicUrl if set, or manual setup)
-     * - "ngrok": Use ngrok for public HTTPS tunnel
-     * - "tailscale-serve": Tailscale serve (private to tailnet)
-     * - "tailscale-funnel": Tailscale funnel (public HTTPS)
-     */
     provider: z.enum(["none", "ngrok", "tailscale-serve", "tailscale-funnel"]).default("none"),
     /** ngrok auth token (optional, enables longer sessions and more features) */
     ngrokAuthToken: z.string().min(1).optional(),
     /** ngrok custom domain (paid feature, e.g., "myapp.ngrok.io") */
     ngrokDomain: z.string().min(1).optional(),
-    /**
-     * Allow ngrok free tier compatibility mode.
-     * When true, forwarded headers may be trusted for loopback requests
-     * to reconstruct the public ngrok URL used for signing.
-     *
-     * IMPORTANT: This does NOT bypass signature verification.
-     */
+    /** Trust loopback forwarding for ngrok URL reconstruction; signatures remain mandatory. */
     allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
   })
-  .strict()
-  .default({ provider: "none", allowNgrokFreeTierLoopbackBypass: false });
+  .strict();
 
 const VoiceCallWebhookSecurityConfigSchema = z
   .object({
-    /**
-     * Allowed hostnames for webhook URL reconstruction.
-     * Only these hosts are accepted from forwarding headers.
-     */
+    /** Only these hosts are accepted from forwarding headers. */
     allowedHosts: z.array(z.string().min(1)).default([]),
     /**
      * Trust X-Forwarded-* headers without a hostname allowlist.
@@ -137,15 +104,9 @@ const VoiceCallWebhookSecurityConfigSchema = z
      */
     trustedProxyIPs: z.array(z.string().min(1)).default([]),
   })
-  .strict()
-  .default({ allowedHosts: [], trustForwardingHeaders: false, trustedProxyIPs: [] });
+  .strict();
 export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfigSchema>;
 
-/**
- * Call mode determines how outbound calls behave:
- * - "notify": Deliver message and auto-hangup after delay (one-way notification)
- * - "conversation": Stay open for back-and-forth until explicit end or timeout
- */
 const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
@@ -157,8 +118,7 @@ const OutboundConfigSchema = z
     /** Seconds to wait after TTS before auto-hangup in notify mode */
     notifyHangupDelaySec: z.number().int().nonnegative().default(3),
   })
-  .strict()
-  .default({ defaultMode: "notify", notifyHangupDelaySec: 3 });
+  .strict();
 
 const RealtimeToolSchema = z
   .object({
@@ -199,14 +159,7 @@ const VoiceCallRealtimeFastContextConfigSchema = z
     /** Fall back to the full agent consult when fast context has no answer. */
     fallbackToConsult: z.boolean().default(false),
   })
-  .strict()
-  .default({
-    enabled: false,
-    timeoutMs: 800,
-    maxResults: 3,
-    sources: ["memory", "sessions"],
-    fallbackToConsult: false,
-  });
+  .strict();
 const VoiceCallRealtimeAgentContextConfigSchema = z
   .object({
     /** Include configured identity and selected profile files alongside the always-on agent context. */
@@ -219,14 +172,7 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     /** Workspace-relative files to include, bounded by maxChars. */
     files: z.array(z.string().min(1)).default(["SOUL.md", "IDENTITY.md", "USER.md"]),
   })
-  .strict()
-  .default({
-    enabled: false,
-    maxChars: 6000,
-    includeIdentity: true,
-    includeWorkspaceFiles: true,
-    files: ["SOUL.md", "IDENTITY.md", "USER.md"],
-  });
+  .strict();
 
 const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
@@ -247,6 +193,8 @@ const VoiceCallRealtimeConfigSchema = z
     provider: z.string().min(1).optional(),
     /** Optional override for the local WebSocket route path. */
     streamPath: z.string().min(1).optional(),
+    /** End an active realtime call after this much speech inactivity. */
+    idleHangupMs: z.number().int().positive().optional(),
     /** System instructions passed to the realtime provider. */
     instructions: z.string().default(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS),
     /** Tool policy for the shared OpenClaw agent consult tool. */
@@ -259,9 +207,13 @@ const VoiceCallRealtimeConfigSchema = z
     consultFastMode: z.boolean().optional(),
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */
-    fastContext: VoiceCallRealtimeFastContextConfigSchema,
+    fastContext: VoiceCallRealtimeFastContextConfigSchema.default(
+      VoiceCallRealtimeFastContextConfigSchema.parse({}),
+    ),
     /** Bounded agent persona/context injection for the fast realtime voice path. */
-    agentContext: VoiceCallRealtimeAgentContextConfigSchema,
+    agentContext: VoiceCallRealtimeAgentContextConfigSchema.default(
+      VoiceCallRealtimeAgentContextConfigSchema.parse({}),
+    ),
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallProvidersConfigSchema,
   })
@@ -272,20 +224,9 @@ const VoiceCallRealtimeConfigSchema = z
     toolPolicy: "safe-read-only",
     consultPolicy: "auto",
     tools: [],
-    fastContext: {
-      enabled: false,
-      timeoutMs: 800,
-      maxResults: 3,
-      sources: ["memory", "sessions"],
-      fallbackToConsult: false,
-    },
-    agentContext: {
-      enabled: false,
-      maxChars: 6000,
-      includeIdentity: true,
-      includeWorkspaceFiles: true,
-      files: ["SOUL.md", "IDENTITY.md", "USER.md"],
-    },
+    // Keep outer defaults' arrays independent of the inner object defaults.
+    fastContext: VoiceCallRealtimeFastContextConfigSchema.parse({}),
+    agentContext: VoiceCallRealtimeAgentContextConfigSchema.parse({}),
     providers: {},
   });
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
@@ -311,16 +252,7 @@ const VoiceCallStreamingConfigSchema = z
     /** Hard cap for all open media stream sockets (pending + active). */
     maxConnections: z.number().int().positive().default(128),
   })
-  .strict()
-  .default({
-    enabled: false,
-    streamPath: "/voice/stream",
-    providers: {},
-    preStartTimeoutMs: 5000,
-    maxPendingConnections: 32,
-    maxPendingConnectionsPerIp: 4,
-    maxConnections: 128,
-  });
+  .strict();
 
 export const VoiceCallConfigSchema = z
   .object({
@@ -334,15 +266,13 @@ export const VoiceCallConfigSchema = z
 
     plivo: PlivoConfigSchema.optional(),
 
-    /** Phone number to call from (E.164) */
     fromNumber: E164Schema.optional(),
 
-    /** Default phone number to call (E.164) */
+    /** Default outbound target. */
     toNumber: E164Schema.optional(),
 
     inboundPolicy: InboundPolicySchema.default("disabled"),
 
-    /** Allowlist of phone numbers for inbound calls (E.164) */
     allowFrom: z.array(E164Schema).default([]),
 
     inboundGreeting: z.string().optional(),
@@ -350,7 +280,7 @@ export const VoiceCallConfigSchema = z
     /** Per-dialed-number overrides for inbound calls. Keys are E.164 numbers. */
     numbers: z.record(E164Schema, VoiceCallNumberRouteConfigSchema).default({}),
 
-    outbound: OutboundConfigSchema,
+    outbound: OutboundConfigSchema.default(OutboundConfigSchema.parse({})),
 
     maxDurationSeconds: z.number().int().positive().default(300),
 
@@ -370,18 +300,18 @@ export const VoiceCallConfigSchema = z
 
     maxConcurrentCalls: z.number().int().positive().default(1),
 
-    serve: VoiceCallServeConfigSchema,
+    serve: VoiceCallServeConfigSchema.default(VoiceCallServeConfigSchema.parse({})),
 
     /** @deprecated Prefer tunnel config. */
     tailscale: VoiceCallTailscaleConfigSchema,
 
-    /** Tunnel configuration (unified ngrok/tailscale) */
-    tunnel: VoiceCallTunnelConfigSchema,
+    tunnel: VoiceCallTunnelConfigSchema.default(VoiceCallTunnelConfigSchema.parse({})),
 
-    /** Webhook signature reconstruction and proxy trust configuration */
-    webhookSecurity: VoiceCallWebhookSecurityConfigSchema,
+    webhookSecurity: VoiceCallWebhookSecurityConfigSchema.default(
+      VoiceCallWebhookSecurityConfigSchema.parse({}),
+    ),
 
-    streaming: VoiceCallStreamingConfigSchema,
+    streaming: VoiceCallStreamingConfigSchema.default(VoiceCallStreamingConfigSchema.parse({})),
 
     realtime: VoiceCallRealtimeConfigSchema,
 
@@ -397,7 +327,6 @@ export const VoiceCallConfigSchema = z
     /** TTS override (deep-merges with core tts) */
     tts: TtsConfigSchema,
 
-    /** Store path for call logs */
     store: z.string().optional(),
 
     /** Response/session owner. Required when multiple agents have no legacy owner. */
@@ -501,9 +430,6 @@ function resolveVoiceCallNumberRouteKey(
   phone: string | undefined,
 ): string | undefined {
   const routes = config.numbers;
-  if (!routes) {
-    return undefined;
-  }
   if (phone && Object.hasOwn(routes, phone)) {
     return phone;
   }
@@ -551,7 +477,6 @@ export function resolveVoiceCallEffectiveConfig(
       ...config,
       ...route,
       tts: normalizeVoiceCallTtsConfig(config.tts, route.tts),
-      numbers: config.numbers,
     },
   };
 }
@@ -559,11 +484,8 @@ export function resolveVoiceCallEffectiveConfig(
 function sanitizeVoiceCallProviderConfigs(
   value: Record<string, Record<string, unknown> | undefined> | undefined,
 ): Record<string, Record<string, unknown>> {
-  if (!value) {
-    return {};
-  }
   return Object.fromEntries(
-    Object.entries(value).filter(
+    Object.entries(value ?? {}).filter(
       (entry): entry is [string, Record<string, unknown>] => entry[1] !== undefined,
     ),
   );
@@ -571,13 +493,10 @@ function sanitizeVoiceCallProviderConfigs(
 
 function sanitizeVoiceCallNumberRoutes(
   value: Record<string, unknown> | undefined,
-): Record<string, VoiceCallNumberRouteConfig> {
-  if (!value) {
-    return {};
-  }
+): VoiceCallConfig["numbers"] {
   return Object.fromEntries(
-    Object.entries(value)
-      .filter((entry): entry is [string, unknown] => entry[1] !== undefined)
+    Object.entries(value ?? {})
+      .filter(([, route]) => route !== undefined)
       .map(([key, route]) => [key, VoiceCallNumberRouteConfigSchema.parse(route)]),
   );
 }
@@ -616,9 +535,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     ...defaults,
     ...config,
     allowFrom: config.allowFrom ?? defaults.allowFrom,
-    numbers: sanitizeVoiceCallNumberRoutes(
-      (config.numbers ?? defaults.numbers) as Record<string, unknown>,
-    ),
+    numbers: sanitizeVoiceCallNumberRoutes(config.numbers ?? defaults.numbers),
     outbound: { ...defaults.outbound, ...config.outbound },
     serve,
     tailscale: { ...defaults.tailscale, ...config.tailscale },
@@ -667,17 +584,10 @@ export function resolveVoiceCallSessionKey(params: {
   coreSession?: VoiceCallCoreSessionConfig;
 }): string {
   const explicit = params.explicitSessionKey?.trim();
-  if (explicit) {
+  if (explicit || params.config.sessionScope === "main") {
     return resolveVoiceCallAgentSessionKey({
       config: params.config,
-      sessionKey: explicit,
-      coreSession: params.coreSession,
-    });
-  }
-  if (params.config.sessionScope === "main") {
-    return resolveVoiceCallAgentSessionKey({
-      config: params.config,
-      sessionKey: "main",
+      sessionKey: explicit || "main",
       coreSession: params.coreSession,
     });
   }
@@ -732,14 +642,9 @@ function resolveVoiceCallAgentSessionKey(params: {
   });
 }
 
-/**
- * Resolves the configuration by merging environment variables into missing fields.
- * Returns a new configuration object with environment variables applied.
- */
 export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const resolved = normalizeVoiceCallConfig(config);
 
-  // Telnyx
   if (resolved.provider === "telnyx") {
     resolved.telnyx = resolved.telnyx ?? {};
     resolved.telnyx.apiKey =
@@ -750,7 +655,6 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
       resolved.telnyx.publicKey ?? resolveSpeechProviderApiKey(process.env.TELNYX_PUBLIC_KEY);
   }
 
-  // Twilio
   if (resolved.provider === "twilio") {
     resolved.fromNumber =
       resolved.fromNumber ?? resolveSpeechProviderApiKey(process.env.TWILIO_FROM_NUMBER);
@@ -761,7 +665,6 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
       resolved.twilio.authToken ?? resolveSpeechProviderApiKey(process.env.TWILIO_AUTH_TOKEN);
   }
 
-  // Plivo
   if (resolved.provider === "plivo") {
     resolved.plivo = resolved.plivo ?? {};
     resolved.plivo.authId =
@@ -777,17 +680,12 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   resolved.tunnel.ngrokDomain =
     resolved.tunnel.ngrokDomain ?? resolveSpeechProviderApiKey(process.env.NGROK_DOMAIN);
 
-  resolved.webhookSecurity.allowedHosts = resolved.webhookSecurity.allowedHosts ?? [];
   resolved.webhookSecurity.trustForwardingHeaders =
     resolved.webhookSecurity.trustForwardingHeaders ?? false;
-  resolved.webhookSecurity.trustedProxyIPs = resolved.webhookSecurity.trustedProxyIPs ?? [];
 
-  return normalizeVoiceCallConfig(resolved);
+  return resolved;
 }
 
-/**
- * Validate that the configuration has all required fields for the selected provider.
- */
 export function validateProviderConfig(config: VoiceCallConfig): {
   valid: boolean;
   errors: string[];
@@ -810,48 +708,35 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     );
   }
 
+  const requireCredential = (
+    field: string,
+    value: string | boolean | undefined,
+    envName: string,
+  ) => {
+    if (!value) {
+      errors.push(
+        `plugins.entries.voice-call.config.${config.provider}.${field} is required (or set ${envName} env)`,
+      );
+    }
+  };
   if (config.provider === "telnyx") {
-    if (!config.telnyx?.apiKey) {
-      errors.push(
-        "plugins.entries.voice-call.config.telnyx.apiKey is required (or set TELNYX_API_KEY env)",
-      );
-    }
-    if (!config.telnyx?.connectionId) {
-      errors.push(
-        "plugins.entries.voice-call.config.telnyx.connectionId is required (or set TELNYX_CONNECTION_ID env)",
-      );
-    }
-    if (!config.skipSignatureVerification && !config.telnyx?.publicKey) {
-      errors.push(
-        "plugins.entries.voice-call.config.telnyx.publicKey is required (or set TELNYX_PUBLIC_KEY env)",
-      );
+    requireCredential("apiKey", config.telnyx?.apiKey, "TELNYX_API_KEY");
+    requireCredential("connectionId", config.telnyx?.connectionId, "TELNYX_CONNECTION_ID");
+    if (!config.skipSignatureVerification) {
+      requireCredential("publicKey", config.telnyx?.publicKey, "TELNYX_PUBLIC_KEY");
     }
   }
-
   if (config.provider === "twilio") {
-    if (!config.twilio?.accountSid) {
-      errors.push(
-        "plugins.entries.voice-call.config.twilio.accountSid is required (or set TWILIO_ACCOUNT_SID env)",
-      );
-    }
-    if (!hasConfiguredSecretInput(config.twilio?.authToken)) {
-      errors.push(
-        "plugins.entries.voice-call.config.twilio.authToken is required (or set TWILIO_AUTH_TOKEN env)",
-      );
-    }
+    requireCredential("accountSid", config.twilio?.accountSid, "TWILIO_ACCOUNT_SID");
+    requireCredential(
+      "authToken",
+      hasConfiguredSecretInput(config.twilio?.authToken),
+      "TWILIO_AUTH_TOKEN",
+    );
   }
-
   if (config.provider === "plivo") {
-    if (!config.plivo?.authId) {
-      errors.push(
-        "plugins.entries.voice-call.config.plivo.authId is required (or set PLIVO_AUTH_ID env)",
-      );
-    }
-    if (!config.plivo?.authToken) {
-      errors.push(
-        "plugins.entries.voice-call.config.plivo.authToken is required (or set PLIVO_AUTH_TOKEN env)",
-      );
-    }
+    requireCredential("authId", config.plivo?.authId, "PLIVO_AUTH_ID");
+    requireCredential("authToken", config.plivo?.authToken, "PLIVO_AUTH_TOKEN");
   }
 
   if (config.realtime.enabled && config.inboundPolicy === "disabled") {

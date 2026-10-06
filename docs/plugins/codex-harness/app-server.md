@@ -230,8 +230,8 @@ failures, and connector refresh failures fail closed.
 
 ## Scheduled app authority
 
-Automations inherit the creator turn's callable tools and app policy without an
-explicit `toolsAllow` list. With a prepared ChatGPT profile, scheduled app access
+When a Codex creator turn captures scheduled app authority, an automation without an explicit
+`toolsAllow` list saves that turn's callable tools and app policy. With a prepared ChatGPT profile, scheduled app access
 remains bound to that exact profile and account. Without a prepared profile, an
 agent-scoped configured WebSocket app-server owns the schedule through its
 connection fingerprint. Reauthenticating that same endpoint to another account

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
@@ -13,12 +13,104 @@ import {
   requireMockCall,
   expectMockCallArgFields,
   createMinimalRunAgentTurnParams,
+  useProductionEmbeddedRunExecutionParamsForTest,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
+
+const loadProviderScopedThinkingCatalog = vi.hoisted(() => vi.fn());
+
+vi.mock("../../agents/model-catalog.runtime.js", () => ({
+  loadProviderScopedThinkingCatalog,
+}));
 
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: runtime selection", () => {
+  it.each([
+    {
+      provider: "xai",
+      model: "grok-4.3",
+      api: "openai-completions" as const,
+      baseUrl: "https://api.x.ai/v1",
+      agentRuntime: "openclaw",
+      runtimeOverride: undefined,
+      thinkLevel: "high" as const,
+    },
+    {
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      api: "openai-chatgpt-responses" as const,
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      agentRuntime: "codex",
+      runtimeOverride: "codex",
+      thinkLevel: "max" as const,
+    },
+  ])(
+    "prepares $provider thinking capability for the concrete $agentRuntime runtime",
+    async ({ provider, model, api, baseUrl, agentRuntime, runtimeOverride, thinkLevel }) => {
+      await useProductionEmbeddedRunExecutionParamsForTest();
+      const compat = { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] };
+      const catalogEntry = {
+        provider,
+        id: model,
+        name: model,
+        api,
+        baseUrl,
+        reasoning: true,
+        input: ["text" as const],
+        compat,
+      };
+      loadProviderScopedThinkingCatalog.mockResolvedValue([catalogEntry]);
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => ({
+          result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
+          provider,
+          model,
+          attempts: [],
+        }),
+      );
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "final" }], meta: {} });
+      const followupRun = createFollowupRun();
+      followupRun.run.provider = provider;
+      followupRun.run.model = model;
+      followupRun.run.thinkLevel = thinkLevel;
+      followupRun.run.skipProviderRuntimeHints = true;
+      followupRun.run.thinkingCatalog = [catalogEntry];
+      followupRun.run.config = {
+        models: { providers: { [provider]: { api, baseUrl, models: [] } } },
+      };
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+        getActiveSessionEntry: () => ({
+          sessionId: "session",
+          updatedAt: 1,
+          agentRuntimeOverride: runtimeOverride,
+        }),
+      });
+
+      expect(result.kind).toBe("success");
+      expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded thinking params", {
+        thinkLevel,
+        modelThinkingCapability: {
+          provider,
+          modelId: model,
+          agentRuntime,
+          ...(agentRuntime === "openclaw" ? { route: { api, baseUrl } } : {}),
+          compat,
+        },
+      });
+      if (agentRuntime === "codex") {
+        expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ provider, model, agentRuntime: "codex" }),
+        );
+      } else {
+        expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each(["group", "channel"] as const)(
     "forwards authoritative %s type through CLI fallback for opaque session keys",
     async (chatType) => {
@@ -173,7 +265,7 @@ describe("executeAgentTurn: runtime selection", () => {
     followupRun.run.config = {
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli" },
+          models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
         },
       },
     };
@@ -467,7 +559,7 @@ describe("executeAgentTurn: runtime selection", () => {
     followupRun.run.config = {
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli" },
+          models: { "openai/gpt-5.4": { agentRuntime: { id: "claude-cli" } } },
         },
       },
     };

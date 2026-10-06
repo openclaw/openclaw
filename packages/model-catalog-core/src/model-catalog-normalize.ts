@@ -703,5 +703,5 @@ export function normalizeModelCatalogProviderRows(params: {
     });
   }
 
-  return rows.toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
+  return rows.toSorted((a, b) => a.id.localeCompare(b.id));
 }

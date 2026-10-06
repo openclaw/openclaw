@@ -2,10 +2,9 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
-import { isJobEnabled } from "../service/jobs-scheduling.js";
+import { isJobEnabled, resolveNextRunAtMsOrDisable } from "../service/jobs-scheduling.js";
 import { resolveCronNotificationQueueOwner } from "../service/notification-intents.js";
 import type { CronJobPolicyContext } from "../service/state.js";
-import { resolveNextRunAtMsOrDisable } from "../service/timer-trigger.js";
 import type { CronJob } from "../types.js";
 import {
   findActiveCronRunReceiptInDatabase,

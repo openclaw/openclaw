@@ -1,3 +1,4 @@
+import type { SpawnResult } from "../process/exec-result.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
@@ -12,15 +13,10 @@ export type { UpdateRunResult } from "./update-run-result.js";
 export type CommandRunner = (
   argv: string[],
   options: CommandOptions,
-) => Promise<{
-  stdout: string;
-  stderr: string;
-  code: number | null;
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  outputLimitExceeded?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-}>;
+) => Promise<
+  Pick<SpawnResult, "stdout" | "stderr" | "code" | "outputLimitExceeded"> &
+    Partial<Pick<SpawnResult, "signal" | "killed" | "termination">>
+>;
 
 export type UpdateStepInfo = {
   name: string;
@@ -34,8 +30,8 @@ type UpdateStepCompletion = UpdateStepInfo & Omit<UpdateStepResult, "cwd">;
 export type UpdateStepProgress = {
   onRollbackOutcome?: (outcome: NonNullable<UpdateRunResult["rollbackOutcome"]>) => void;
   onHeartbeat?: () => void;
-  onStepStart?: (step: UpdateStepInfo) => void;
-  onStepComplete?: (step: UpdateStepCompletion) => void;
+  onStepStart?: (step: UpdateStepInfo) => void | Promise<void>;
+  onStepComplete?: (step: UpdateStepCompletion) => void | Promise<void>;
 };
 
 type GitUpdateTarget = {
@@ -84,6 +80,7 @@ export type UpdateRunnerOptions = {
 );
 
 export type UpdateInstallSurface =
+  | { kind: "immutable"; mode: "unknown"; root: string; packageRoot: string }
   | { kind: "git"; mode: "git"; root: string; packageRoot: string }
   | { kind: "global"; mode: GlobalInstallManager; root: string; packageRoot: string }
   | { kind: "package-root"; mode: "unknown"; root: string; packageRoot: string }

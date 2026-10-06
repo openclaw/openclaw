@@ -67,9 +67,6 @@ export function withCachedMigrationConfigRuntime(
     return undefined;
   }
   const configApi = runtime.config;
-  if (!configApi?.current || !configApi.mutateConfigFile) {
-    return runtime;
-  }
   let cachedConfig: MigrationProviderContext["config"] | undefined;
   const current = (): ReturnType<typeof configApi.current> => {
     cachedConfig ??= structuredClone(
@@ -94,15 +91,11 @@ export function withCachedMigrationConfigRuntime(
         cachedConfig = structuredClone(result.nextConfig);
         return result;
       },
-      ...(configApi.replaceConfigFile
-        ? {
-            replaceConfigFile: async (params) => {
-              const result = await configApi.replaceConfigFile(params);
-              cachedConfig = structuredClone(result.nextConfig);
-              return result;
-            },
-          }
-        : {}),
+      replaceConfigFile: async (params) => {
+        const result = await configApi.replaceConfigFile(params);
+        cachedConfig = structuredClone(result.nextConfig);
+        return result;
+      },
     },
   };
 }

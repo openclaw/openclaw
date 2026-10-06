@@ -17,6 +17,38 @@ import { recordGatewayRestartTraceDetail, recordGatewayRestartTraceSpan } from "
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type Awaitable<T> = T | Promise<T>;
+const STARTUP_PROGRESS_PHASES = new Set([
+  "process.bootstrap",
+  "state.schema-preflight",
+  "config.auth",
+  "post-ready.startup-maintenance",
+  "startup.maintenance.channels",
+  "state.desktop-approval-admission",
+  "sessions.admission",
+  "startup.maintenance.sessions",
+  "startup.maintenance.session-orphans",
+  "startup.maintenance.session-transcripts",
+  "startup.maintenance.pairing",
+  "http.bound",
+  "runtime.early",
+  "runtime.early.discovery",
+  "runtime.early.lazy-runtime-imports",
+  "runtime.early.skills-listener",
+  "post-attach.system-ca",
+  "plugins.runtime-post-bind",
+  "plugins.runtime-attach",
+  "sidecars.worker-environments",
+  "sidecars.internal-hooks",
+  "sidecars.main-session-recovery",
+  "sidecars.model-runtime",
+  "sidecars.reply-runtime",
+  "sidecars.chat-metadata",
+  "sidecars.channels",
+  "sidecars.plugin-services",
+  "sidecars.subagent-recovery",
+  "runtime.worker-pool-metrics",
+  "ready",
+]);
 
 export type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -141,6 +173,8 @@ export function createGatewayStartupTrace(
       log.info(
         `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
       );
+    } else if (STARTUP_PROGRESS_PHASES.has(name)) {
+      log.info(`startup phase: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`);
     }
   };
   return {
@@ -215,6 +249,9 @@ export function createGatewayStartupTrace(
       options: { omitErrorMessage?: boolean } = {},
     ): Promise<T> {
       const before = performance.now();
+      if (STARTUP_PROGRESS_PHASES.has(name)) {
+        log.info(`startup phase: ${name} starting total=${(before - started).toFixed(1)}ms`);
+      }
       const mappedName = mapTimelineName(name);
       const span = {
         name: mappedName,

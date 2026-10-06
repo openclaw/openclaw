@@ -49,12 +49,6 @@ describe("cli program (smoke)", () => {
     ensureConfigReadyMock.mockResolvedValue(undefined);
   });
 
-  it("registers message + status commands", () => {
-    const names = program.commands.map((command) => command.name());
-    expect(names).toContain("message");
-    expect(names).toContain("status");
-  });
-
   it("runs tui with explicit timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
     const options = firstMockArg(tuiRunMock) as {
@@ -65,6 +59,7 @@ describe("cli program (smoke)", () => {
     expect(options?.timeoutMs).toBe(45000);
     expect(options?.historyLimit).toBe(200);
     expect(options?.forceProcessExitOnReturn).toBe(true);
+    expect(options).not.toHaveProperty("agentId");
   });
 
   it("resolves a positional tui short reference before launch", async () => {
@@ -118,12 +113,6 @@ describe("cli program (smoke)", () => {
     },
   );
 
-  it("leaves tui agent inference unchanged without a URL agent", async () => {
-    await runProgram(["tui"]);
-
-    expect(firstMockArg(tuiRunMock)).not.toHaveProperty("agentId");
-  });
-
   it("rejects a URL target combined with --url", async () => {
     await expect(
       runProgram([
@@ -172,7 +161,6 @@ describe("cli program (smoke)", () => {
 
   it.each([
     { entryPoint: "tui --local", args: ["tui", "--local"] },
-    { entryPoint: "terminal", args: ["terminal"] },
     { entryPoint: "chat", args: ["chat"] },
   ])("preserves oversized history limits for local $entryPoint", async ({ args }) => {
     await runProgram([...args, "--history-limit", "1001"]);

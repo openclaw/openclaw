@@ -29,7 +29,6 @@ import {
 import {
   executeImageGenerationJob,
   inferImageGenerationResolution,
-  normalizeImageGenerationAspectRatio,
   normalizeImageGenerationResolution,
 } from "./image-generate-tool.execution.js";
 import {
@@ -52,7 +51,7 @@ import {
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import type { ToolModelConfig } from "./model-config.helpers.js";
+import { prepareToolAuthProfileStoreSource, type ToolModelConfig } from "./model-config.helpers.js";
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
@@ -62,6 +61,29 @@ const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const SUPPORTED_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const SUPPORTED_OPENAI_MODERATIONS = ["low", "auto"] as const;
 const SUPPORTED_FAL_CREATIVITY = ["raw", "low", "medium", "high"] as const;
+const SUPPORTED_ASPECT_RATIOS = [
+  "1:1",
+  "2:1",
+  "20:9",
+  "19.5:9",
+  "2:3",
+  "3:2",
+  "2.35:1",
+  "3:4",
+  "4:3",
+  "4:5",
+  "5:4",
+  "9:16",
+  "9:19.5",
+  "9:20",
+  "16:9",
+  "21:9",
+  "1:2",
+  "4:1",
+  "1:4",
+  "8:1",
+  "1:8",
+] as const;
 
 const log = createSubsystemLogger("agents/tools/image-generate");
 
@@ -281,6 +303,8 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
       const params = args as Record<string, unknown>;
       const action = resolveGenerateAction(params);
       if (action === "list") {
+        const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+        signal?.throwIfAborted();
         return withImageGenerationProviders(cfg, (providers) =>
           createImageGenerateListActionResult({
             cfg,
@@ -288,6 +312,7 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
             workspaceDir: options?.workspaceDir,
             agentDir: options?.agentDir,
             authStore: options?.authProfileStore,
+            authProfileStoreSource,
           }),
         );
       }
@@ -332,8 +357,10 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
           });
           const filename = readToolStringParam(params, "filename");
           const size = readToolStringParam(params, "size");
-          const aspectRatio = normalizeImageGenerationAspectRatio(
+          const aspectRatio = parseImageOption(
             readToolStringParam(params, "aspectRatio"),
+            SUPPORTED_ASPECT_RATIOS,
+            "aspectRatio",
           );
           const explicitResolution = normalizeImageGenerationResolution(
             readToolStringParam(params, "resolution"),
@@ -359,7 +386,6 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
             providers: imageGenerationProviders,
             modelConfig: imageGenerationModelConfig,
             modelOverride: model,
-            parseModelRef: parseImageGenerationModelRef,
           });
           const explicitModelRef = parseImageGenerationModelRef(model);
           const primaryModelRef = parseImageGenerationModelRef(imageGenerationModelConfig.primary);

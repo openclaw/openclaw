@@ -58,8 +58,8 @@ export async function resolveBareResetBootstrapFileAccess(params: {
     modelId: params.modelId,
   });
   try {
-    return acquired.run((runtimeModelContext) => {
-      const inventory = resolveEffectiveToolInventory({
+    return await acquired.run(async (runtimeModelContext) => {
+      const inventory = await resolveEffectiveToolInventory({
         cfg,
         agentId: params.agentId,
         sessionKey: params.sessionKey,

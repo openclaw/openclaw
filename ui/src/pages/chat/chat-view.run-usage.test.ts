@@ -16,55 +16,32 @@ afterEach(() => {
 
 it("keeps multi-part run usage current when only output tokens change", () => {
   const runId = "run-composed";
-  const user = {
+  const group = (id: string, role: string, timestamp: number, message: unknown) => ({
     kind: "group",
-    key: "group:user:run-composed",
+    key: `group:${id}`,
+    role,
+    visibleContent: "text",
+    messages: [{ key: `message:${id}`, message }],
+    timestamp,
+    isStreaming: false,
+    ...(role === "user" ? {} : { runId }),
+  });
+  const user = group("user:run-composed", "user", 0, {
     role: "user",
-    visibleContent: "text",
-    messages: [
-      {
-        key: "message:user:run-composed",
-        message: {
-          role: "user",
-          content: "Start the work.",
-          timestamp: 0,
-          __openclaw: { id: "user:run-composed", idempotencyKey: `${runId}:user` },
-        },
-      },
-    ],
+    content: "Start the work.",
     timestamp: 0,
-    isStreaming: false,
-  };
-  const assistant = {
-    kind: "group",
-    key: "group:assistant:run-start",
+    __openclaw: { id: "user:run-composed", idempotencyKey: `${runId}:user` },
+  });
+  const assistant = group("assistant:run-start", "assistant", 1, {
     role: "assistant",
-    visibleContent: "text",
-    messages: [
-      {
-        key: "message:assistant:run-start",
-        message: { role: "assistant", content: "Starting the work.", timestamp: 1 },
-      },
-    ],
+    content: "Starting the work.",
     timestamp: 1,
-    isStreaming: false,
-    runId,
-  };
-  const tool = {
-    kind: "group",
-    key: "group:tool:run-work",
-    role: "tool",
-    visibleContent: "text",
-    messages: [
-      {
-        key: "message:tool:run-work",
-        message: { role: "toolResult", content: "Tool complete.", timestamp: 2 },
-      },
-    ],
+  });
+  const tool = group("tool:run-work", "tool", 2, {
+    role: "toolResult",
+    content: "Tool complete.",
     timestamp: 2,
-    isStreaming: false,
-    runId,
-  };
+  });
   const reading = {
     kind: "reading-indicator",
     key: "reading:run-composed",

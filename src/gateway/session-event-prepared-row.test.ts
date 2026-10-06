@@ -21,7 +21,7 @@ it.each([0, 7])(
     vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
     let now = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const keys = Array.from({ length: 12 }, (_, index) => `agent:main:burst-${index}`);
     const yieldedKey = "agent:main:burst-9";
@@ -86,7 +86,7 @@ it.each(["replacement", "reset"])(
     vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const changedKey = "agent:main:changed";
     const keys = ["agent:main:first", changedKey];
@@ -162,7 +162,7 @@ it("retains canonical deferral and rejects asynchronous prepared consumers", asy
 
 it("keeps prepared exact rows and ancestors inside the synchronous publication", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const parentKey = "agent:main:event-parent";
     const childKey = "agent:main:event-child";

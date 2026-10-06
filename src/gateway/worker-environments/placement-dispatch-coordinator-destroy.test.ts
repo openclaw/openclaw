@@ -164,38 +164,6 @@ describe("worker placement forced-destroy admission", () => {
     },
   );
 
-  it("releases attached sessions when the destroy owner read fails", async () => {
-    const owners = createDeferredCore<string[]>();
-    const failure = new Error("owner read failed");
-    const dispatch = vi.fn(async (request: WorkerPlacementDispatchRequest) => ({
-      ...ACTIVE_PLACEMENT,
-      ...request,
-    }));
-    const destroy = vi.fn();
-    const service = {
-      ...createCoordinatorTestService({
-        dispatch,
-        readEnvironmentSessionIds: () => owners.promise,
-        forceDestroyEnvironment: destroy,
-      }),
-      getEnvironmentAttachedSessionIds: () => [REQUEST.sessionId],
-    };
-    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
-    const destroying = coordinated.forceDestroyEnvironment("worker-active");
-    const outcome = expect(destroying).rejects.toBe(failure);
-    const later = coordinated.dispatch(REQUEST);
-    await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
-    const beforeFailure = dispatch.mock.calls.map(([request]) => request.sessionId);
-    owners.reject(failure);
-    await Promise.all([outcome, later]);
-    expect(beforeFailure).toEqual(["unrelated"]);
-    expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual([
-      "unrelated",
-      REQUEST.sessionId,
-    ]);
-    expect(destroy).not.toHaveBeenCalled();
-  });
-
   it("reserves a live placement before the destroy owner read even without an attachment", async () => {
     const dispatchEntered = createDeferredCore();
     const finishDispatch = createDeferredCore();
@@ -238,42 +206,62 @@ describe("worker placement forced-destroy admission", () => {
     expect(events).toEqual(["destroy", "move"]);
   });
 
-  it("holds idle durable and attached owners through destroy and releases failed work", async () => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const failure = new Error("teardown pending");
-    const dispatch = vi.fn(async (request: WorkerPlacementDispatchRequest) => ({
-      ...ACTIVE_PLACEMENT,
-      ...request,
-    }));
-    const coordinated = coordinateWorkerPlacementDispatch(
-      createCoordinatorTestService({
-        dispatch,
-        getEnvironmentAttachedSessionIds: () => ["attached-session"],
-        readEnvironmentSessionIds: async () => [REQUEST.sessionId, "attached-session"],
-        forceDestroyEnvironment: async () => {
-          entered.resolve();
-          await release.promise;
-          throw failure;
-        },
-      }),
-      (_request, run) => run(),
-    );
-    const destroying = coordinated
-      .forceDestroyEnvironment("worker-shared")
-      .catch((error: unknown) => error);
-    await entered.promise;
-    const owner = coordinated.dispatch(REQUEST);
-    const attached = coordinated.dispatch({ ...REQUEST, sessionId: "attached-session" });
-    await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
-    expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(["unrelated"]);
-    release.resolve();
-    expect(await destroying).toBe(failure);
-    await Promise.all([owner, attached]);
-    expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual([
-      "unrelated",
-      REQUEST.sessionId,
-      "attached-session",
-    ]);
-  });
+  it.each(["owner read", "destroy"])(
+    "holds owners until %s fails, then releases their queued work",
+    async (phase) => {
+      const owners = createDeferredCore<string[]>();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const failure = new Error(`${phase} failed`);
+      const dispatch = vi.fn(async (request: WorkerPlacementDispatchRequest) => ({
+        ...ACTIVE_PLACEMENT,
+        ...request,
+      }));
+      const destroy = vi.fn(async () => {
+        entered.resolve();
+        await release.promise;
+        throw failure;
+      });
+      const coordinated = coordinateWorkerPlacementDispatch(
+        createCoordinatorTestService({
+          dispatch,
+          getEnvironmentAttachedSessionIds: () => [
+            phase === "owner read" ? REQUEST.sessionId : "attached-session",
+          ],
+          readEnvironmentSessionIds: () => owners.promise,
+          forceDestroyEnvironment: destroy,
+        }),
+        (_request, run) => run(),
+      );
+      const destroying = coordinated
+        .forceDestroyEnvironment("worker-shared")
+        .catch((error: unknown) => error);
+      if (phase === "destroy") {
+        owners.resolve([REQUEST.sessionId, "attached-session"]);
+        await entered.promise;
+      }
+      const owner = coordinated.dispatch(REQUEST);
+      const attached =
+        phase === "destroy"
+          ? coordinated.dispatch({ ...REQUEST, sessionId: "attached-session" })
+          : undefined;
+      await coordinated.dispatch({ ...REQUEST, sessionId: "unrelated" });
+      expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(["unrelated"]);
+      if (phase === "owner read") {
+        owners.reject(failure);
+      } else {
+        release.resolve();
+      }
+      expect(await destroying).toBe(failure);
+      await Promise.all([owner, attached]);
+      expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual([
+        "unrelated",
+        REQUEST.sessionId,
+        ...(phase === "destroy" ? ["attached-session"] : []),
+      ]);
+      if (phase === "owner read") {
+        expect(destroy).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

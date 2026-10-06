@@ -9,7 +9,10 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type {
+  ReplyBackendMessageInjectionV2,
+  ReplyToolAuthorityOverlay,
+} from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
@@ -138,6 +141,7 @@ describe("native Talk spoken confirmation handoff", () => {
       if (!operationalRunInstance) {
         throw new Error("expected admitted Talk run");
       }
+      const project = (_overlay: ReplyToolAuthorityOverlay) => "authority";
       await withGatewayToolCallerIdentity(
         {
           agentId: "main",
@@ -145,7 +149,8 @@ describe("native Talk spoken confirmation handoff", () => {
           operationalRunInstance,
           embeddedRunToolAuthorityBinding: () => ({
             source: "attempt",
-            project: () => "authority",
+            project,
+            projectAsync: async (overlay) => project(overlay),
             assertActive: () => {},
           }),
         },

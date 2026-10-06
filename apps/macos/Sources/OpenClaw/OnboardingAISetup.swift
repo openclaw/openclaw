@@ -889,7 +889,7 @@ extension OnboardingAISetupModel {
                     originalServerLease: lease)
             } else {
                 let failure = Self.failure(label: request.label, status: result.status, error: result.error)
-                _ = await self.settleFailedActivation(
+                await self.settleFailedActivation(
                     failure, request: request, context: context, activationOwner: activationOwner, serverLease: lease)
             }
         } catch {
@@ -934,18 +934,17 @@ extension OnboardingAISetupModel {
         }
     }
 
-    @discardableResult
     private func settleFailedActivation(
         _ failure: Failure,
         request: ActivationRequest,
         context: AttemptContext,
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
-        serverLease: GatewayConnection.ServerLease) async -> Bool
+        serverLease: GatewayConnection.ServerLease) async
     {
         let leaseIsCurrent = await self.gateway.isCurrentServerLease(serverLease)
         // Lease validation can yield to a new UI attempt. Retire only the exact
         // failed owner, and never let its late continuation reset replacement state.
-        guard self.isCurrentAttempt(context) else { return false }
+        guard self.isCurrentAttempt(context) else { return }
         self.exposeActivationFailure(failure, for: request)
         self.pendingActivationVerification = false
         self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
@@ -953,15 +952,14 @@ extension OnboardingAISetupModel {
             self.detectError = failure
             self.beginPendingActivationDeadlineWait()
             self.onPendingActivationDeadline?(deadline, context.routeIdentity)
-            return false
+            return
         }
         guard leaseIsCurrent else {
             requireFreshDetection(after: failure)
-            return false
+            return
         }
         self.phase = .ready
         if !request.isManual { self.showManualEntry = !self.manualProviders.isEmpty }
-        return true
     }
 
     private func requestActivation(
@@ -1034,12 +1032,55 @@ extension OnboardingAISetupModel {
         originalServerLease: GatewayConnection.ServerLease) async -> Bool
     {
         let deadline = ReconciliationDeadline(timeout: .seconds(45))
-        let verification = PersistedActivationVerification(
-            expectedModel: expectedModel,
-            modelTarget: modelTarget,
-            routeIdentity: context.routeIdentity,
-            activationOwner: activationOwner,
-            before: before)
+        @MainActor
+        func verifyPersistedActivation(serverLease: GatewayConnection.ServerLease) async -> Bool {
+            let detectTimeoutMs = deadline.remainingMilliseconds(
+                cappedAt: Self.setupDetectionRequestTimeoutMs)
+            guard detectTimeoutMs > 0,
+                  self.isCurrentAttempt(context),
+                  !Task.isCancelled,
+                  OnboardingSystemAgentResumeStore.isOwned(
+                      by: activationOwner,
+                      for: context.routeIdentity,
+                      defaults: self.defaults),
+                  await self.gateway.activationOwnershipFingerprint(ifCurrentServerLease: serverLease) ==
+                  activationOwner.routeFingerprint
+            else { return false }
+            guard let detectData = try? await self.gateway.request(
+                method: "openclaw.setup.detect",
+                params: [:],
+                timeoutMs: Double(detectTimeoutMs),
+                ifCurrentServerLease: serverLease),
+                await self.gateway.isCurrentServerLease(serverLease),
+                self.isCurrentAttempt(context),
+                !Task.isCancelled,
+                let detection = try? JSONDecoder().decode(DetectResult.self, from: detectData),
+                Self.activationTransitionWasPersisted(
+                    expectedModel: expectedModel,
+                    modelTarget: modelTarget,
+                    before: before,
+                    after: detection.persistedActivationState)
+            else { return false }
+            let verifyTimeoutMs = deadline.remainingMilliseconds(
+                cappedAt: Self.setupDetectionRequestTimeoutMs)
+            guard verifyTimeoutMs > 0 else { return false }
+            guard let verifyData = try? await self.gateway.request(
+                method: "openclaw.setup.verify",
+                params: modelTarget == .utility ? ["modelTarget": AnyCodable("utility")] : [:],
+                timeoutMs: Double(verifyTimeoutMs),
+                ifCurrentServerLease: serverLease),
+                await self.gateway.isCurrentServerLease(serverLease),
+                self.isCurrentAttempt(context),
+                !Task.isCancelled,
+                let result = try? JSONDecoder().decode(ActivateResult.self, from: verifyData),
+                result.verifies(modelRef: expectedModel, modelTarget: modelTarget)
+            else { return false }
+            self.finishConnected(
+                kind: kind,
+                activationOwner: activationOwner,
+                handoff: result.handoff(for: kind))
+            return self.connected
+        }
         var delayMs = 250
         while deadline.hasTimeRemaining {
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return false }
@@ -1051,19 +1092,7 @@ extension OnboardingAISetupModel {
                let replacementLease = try? await self.gateway.acquireServerLease(
                    ifSameRouteAs: originalServerLease,
                    timeoutMs: Double(leaseTimeoutMs)),
-               await verification.reconcile(
-                   gateway: self.gateway,
-                   defaults: self.defaults,
-                   serverLease: replacementLease,
-                   deadline: deadline,
-                   isCurrentAttempt: { self.isCurrentAttempt(context) },
-                   onVerified: { result in
-                       self.finishConnected(
-                           kind: kind,
-                           activationOwner: activationOwner,
-                           handoff: result.handoff(for: kind))
-                       return self.connected
-                   })
+               await verifyPersistedActivation(serverLease: replacementLease)
             {
                 guard self.isCurrentAttempt(context), !Task.isCancelled else { return false }
                 self.serverLease = replacementLease

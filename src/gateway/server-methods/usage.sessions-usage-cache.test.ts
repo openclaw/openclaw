@@ -12,13 +12,15 @@ import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   discoverAllSessions: vi.fn(),
-  loadCombinedSessionStoreForGatewayCore: vi.fn(),
+  loadCombinedSessionStoreForGatewayCoreAsync: vi.fn(),
   loadSessionCostSummariesFromCache: vi.fn(),
 }));
 
-vi.mock("../session-utils.js", async () => ({
-  ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadCombinedSessionStoreForGatewayCore: mocks.loadCombinedSessionStoreForGatewayCore,
+vi.mock("../../config/sessions/combined-store-gateway-read.js", async () => ({
+  ...(await vi.importActual<typeof import("../../config/sessions/combined-store-gateway-read.js")>(
+    "../../config/sessions/combined-store-gateway-read.js",
+  )),
+  loadCombinedSessionStoreForGatewayCoreAsync: mocks.loadCombinedSessionStoreForGatewayCoreAsync,
 }));
 vi.mock("../../infra/session-cost-usage.js", async () => ({
   ...(await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -33,7 +35,11 @@ import { usageHandlers } from "./usage.js";
 
 let config: OpenClawConfig = {
   session: {},
-  agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
+    entries: { main: {}, opus: {} },
+  },
 };
 
 const baseParams = {
@@ -86,7 +92,7 @@ type StoredFixture = { key: string; agentId: string; entry: SessionEntry };
 
 function mockStore(rows: StoredFixture[], stateDir: string) {
   const store = Object.fromEntries(rows.map(({ key, entry }) => [key, entry]));
-  mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+  mocks.loadCombinedSessionStoreForGatewayCoreAsync.mockReturnValue({
     durableTargets: [],
     storePath: "(multiple)",
     store,

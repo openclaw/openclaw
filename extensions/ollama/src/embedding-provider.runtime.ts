@@ -1,5 +1,8 @@
 import type { EmbeddingProvider } from "openclaw/plugin-sdk/embedding-providers";
-import { sanitizeAndNormalizeEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  sanitizeAndNormalizeEmbedding,
+  type RemoteEmbeddingClient,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
@@ -22,7 +25,6 @@ import {
 import {
   formatErrorMessage,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
-  type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL, OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
@@ -51,11 +53,7 @@ type OllamaEmbeddingOptions = {
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
-export type OllamaEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  model: string;
+export type OllamaEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl"> & {
   outputDimensionality?: number;
   localServiceTarget?: Parameters<MemoryCoreAcquireLocalService>[0];
   acquireLocalService?: MemoryCoreAcquireLocalService;
@@ -134,11 +132,7 @@ function resolveConfiguredProvider(options: OllamaEmbeddingOptions) {
 type OllamaEmbeddingBaseUrlOrigin = "remote-config" | "provider-config" | "default";
 type OllamaEmbeddingSourceResolution = "unset" | "opt-out" | { apiKey: string };
 
-type OllamaEmbeddingResolvedKeys = {
-  remote: OllamaEmbeddingSourceResolution;
-  provider: OllamaEmbeddingSourceResolution;
-  env: string | undefined;
-};
+type OllamaEmbeddingResolvedKeys = Awaited<ReturnType<typeof resolveOllamaEmbeddingResolvedKeys>>;
 
 function resolveSourcedOllamaEmbeddingKey(params: {
   configString: string | undefined;
@@ -185,7 +179,7 @@ async function resolveOllamaEmbeddingResolvedKeys(
   options: OllamaEmbeddingOptions,
   providerConfig: ReturnType<typeof resolveConfiguredProvider>,
   providerOwnsHost: boolean,
-): Promise<OllamaEmbeddingResolvedKeys> {
+) {
   const remoteValue = options.remote?.apiKey;
   const remote = resolveSourcedOllamaEmbeddingKey({
     configString: resolveMemorySecretInputString({
@@ -228,18 +222,17 @@ function resolveOllamaEmbeddingBaseUrl(params: {
 }
 
 function normalizeOllamaHostKey(baseUrl: string): string | undefined {
-  try {
-    const parsed = new URL(baseUrl);
-    let hostname = parsed.hostname.toLowerCase();
-    if (hostname === "localhost" || hostname === "::1" || hostname === "[::1]") {
-      hostname = "127.0.0.1";
-    }
-    const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-    const path = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
-    return `${parsed.protocol}//${hostname}:${port}${path}`;
-  } catch {
+  const parsed = URL.parse(baseUrl);
+  if (!parsed) {
     return undefined;
   }
+  let hostname = parsed.hostname.toLowerCase();
+  if (hostname === "localhost" || hostname === "::1" || hostname === "[::1]") {
+    hostname = "127.0.0.1";
+  }
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  const path = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
+  return `${parsed.protocol}//${hostname}:${port}${path}`;
 }
 
 function areOllamaHostsEquivalent(a: string, b: string): boolean {

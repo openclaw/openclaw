@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ChatAbortOps } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
-  captureWorkerInferenceCancellation,
+  getWorkerInferenceSessionControl,
   type WorkerInferenceCancellation,
 } from "./worker-environments/inference-control-internal.js";
 
@@ -35,9 +35,7 @@ export function captureWorkerInferenceForSession(params: {
   if (!sessionId) {
     return undefined;
   }
-  return captureWorkerInferenceCancellation(
+  return getWorkerInferenceSessionControl(
     params.context.workerEnvironmentService,
-    sessionId,
-    params.runId,
-  );
+  )?.captureSessionCancellation(sessionId, params.runId);
 }

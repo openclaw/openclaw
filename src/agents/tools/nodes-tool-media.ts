@@ -34,6 +34,7 @@ import {
   readFiniteNumberParam,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
+  readToolStringParam,
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callNodesToolNodeInvoke, resolveNodesToolInvokeTimeouts } from "./nodes-tool-invoke.js";
@@ -64,7 +65,10 @@ export async function executeNodeMediaAction(
   if (!Object.hasOwn(NODE_MEDIA_ACTIONS, input.action)) {
     throw new Error("Unsupported node media action");
   }
-  const node = await resolveAgentNode(input.gatewayOpts, requireString(input.params, "node"));
+  const node = await resolveAgentNode(
+    input.gatewayOpts,
+    readToolStringParam(input.params, "node", { required: true }),
+  );
   return await NODE_MEDIA_ACTIONS[input.action]({ ...input, node });
 }
 
@@ -409,14 +413,6 @@ function assertMediaOutPathFormat(params: {
   throw new Error(
     `${params.command} returned ${params.format}; outPath must use a matching extension (got ${extnameFromAnyPath(params.outPath)})`,
   );
-}
-
-function requireString(params: Record<string, unknown>, key: string): string {
-  const raw = params[key];
-  if (typeof raw !== "string" || raw.trim().length === 0) {
-    throw new Error(`${key} required`);
-  }
-  return raw.trim();
 }
 
 const DEFAULT_PHOTOS_LIMIT = 1;

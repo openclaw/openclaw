@@ -72,11 +72,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   mentionRegexes: RegExp[];
   cfg: OpenClawConfig;
   abortSignal?: AbortSignal;
-}): Promise<{
-  hasAudioAttachment: boolean;
-  hasTypedText: boolean;
-  transcript?: string;
-}> {
+}) {
   const audioAttachments = collectAudioAttachments(params.message.attachments);
   const hasAudioAttachment = audioAttachments.length > 0;
   const hasTypedText = Boolean(params.message.content?.trim());

@@ -1,20 +1,11 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildFileConsentCard } from "./file-consent.js";
 import { storePendingUploadFs } from "./pending-uploads-fs.js";
-import { storePendingUpload } from "./pending-uploads.js";
+import { storePendingUpload, type PendingUpload } from "./pending-uploads.js";
 
 export const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
-type FileConsentMedia = {
-  buffer: Buffer;
-  filename: string;
-  contentType?: string;
-};
-
-type FileConsentActivityResult = {
-  activity: Record<string, unknown>;
-  uploadId: string;
-};
+type FileConsentMedia = Pick<PendingUpload, "buffer" | "filename" | "contentType">;
 
 function buildConsentActivity(params: {
   media: FileConsentMedia;
@@ -39,7 +30,7 @@ export function prepareFileConsentActivity(params: {
   media: FileConsentMedia;
   conversationId: string;
   description?: string;
-}): FileConsentActivityResult {
+}) {
   const { media, conversationId, description } = params;
 
   const uploadId = storePendingUpload({
@@ -53,24 +44,16 @@ export function prepareFileConsentActivity(params: {
 }
 
 /** Persist consent bytes for callbacks received by another process after the CLI exits. */
-export async function prepareFileConsentActivityFs(params: {
-  media: FileConsentMedia;
-  conversationId: string;
-  description?: string;
-}): Promise<FileConsentActivityResult> {
-  const { media, conversationId, description } = params;
-
-  // Both stores must use the same upload ID from the consent card.
-  const upload = {
-    buffer: media.buffer,
-    filename: media.filename,
-    contentType: media.contentType,
-    conversationId,
-  };
-  const uploadId = storePendingUpload(upload);
-  await storePendingUploadFs({ id: uploadId, ...upload });
-
-  return { activity: buildConsentActivity({ media, description, uploadId }), uploadId };
+export async function prepareFileConsentActivityFs(
+  params: Parameters<typeof prepareFileConsentActivity>[0],
+) {
+  const result = prepareFileConsentActivity(params);
+  await storePendingUploadFs({
+    id: result.uploadId,
+    ...params.media,
+    conversationId: params.conversationId,
+  });
+  return result;
 }
 
 export function requiresFileConsent(params: {

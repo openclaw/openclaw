@@ -25,17 +25,14 @@ import {
 } from "../../secrets/store/secret-store.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
 import { canSelectQuestion, usesOwnRunQuestionAccess } from "../question-access.js";
-import {
-  QuestionManager,
-  QuestionManagerError,
-  type QuestionObservation,
-} from "../question-manager.js";
+import { QuestionManager, type QuestionObservation } from "../question-manager.js";
 import {
   withQuestionSessionAccess,
   withPreparedQuestionSessions,
   type PreparedQuestionSession,
   questionNotFound,
   prepareQuestionAuthorization,
+  prepareQuestionCommitAuthority,
   questionBroadcastOptions,
 } from "../question-session-access.js";
 import type { QuestionSessionAccess } from "../question-session-access.types.js";
@@ -43,28 +40,18 @@ import { questionShapeError } from "../question-validation.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { managerError, QuestionRequestValidationError } from "./question.errors.js";
 import type { SecretStoreWriteService } from "./secrets.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 15 * 60 * 1_000;
 
-class QuestionRequestValidationError extends Error {}
-
-function managerError(error: unknown, respond: RespondFn): boolean {
-  if (!(error instanceof QuestionManagerError)) {
-    return false;
-  }
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, error.message, { details: { reason: error.code } }),
-  );
-  return true;
-}
-
-function normalizeQuestions(params: QuestionRequestParams): Question[] {
+async function normalizeQuestions(
+  params: QuestionRequestParams,
+  assertCurrent: () => void,
+): Promise<Question[]> {
   const error = questionShapeError(params.questions, {
     allowPlainSecretQuestions: false,
     validateUrls: true,
@@ -72,12 +59,14 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
   if (error) {
     throw new QuestionRequestValidationError(error);
   }
+  const entries = params.questions.some((question) => question.secretStore)
+    ? await listSecretStoreEntries({ scope: { kind: "team" }, assertCurrent })
+    : [];
+  assertCurrent();
   return params.questions.map((question) => {
     const binding = question.secretStore;
     if (binding) {
-      const existing = listSecretStoreEntries({ scope: { kind: "team" } }).find(
-        (entry) => entry.name === binding.name,
-      );
+      const existing = entries.find((entry) => entry.name === binding.name);
       return {
         ...question,
         // Save the policy shown for consent, never inherit unseen hosts at submission.
@@ -209,6 +198,7 @@ export function createQuestionHandlers(
         };
       }
       try {
+        const questions = await normalizeQuestions(request, authority.assertCurrent);
         if (narrow && operatorAuthority) {
           assertAdmittedRunOperatorAuthority(operatorAuthority);
         }
@@ -306,7 +296,7 @@ export function createQuestionHandlers(
           // The manager awaits returned promises while its public callback type stays void.
           const managerRequest = {
             ...(request.id ? { id: request.id } : {}),
-            questions: normalizeQuestions(request),
+            questions,
             ...(requestedSession?.ok
               ? { agentId: requestedSession.agentId }
               : request.agentId
@@ -501,8 +491,9 @@ export function createQuestionHandlers(
         if (!selected) {
           return;
         }
-        const { question, authorize } = selected;
+        const { question, observation, authorize } = selected;
         let reload: { name: string; result: ReturnType<QuestionManager["resolve"]> } | undefined;
+        let save: Promise<void> | undefined;
         await withPreparedQuestionSessions(
           options,
           [authorize.target],
@@ -513,6 +504,7 @@ export function createQuestionHandlers(
               return;
             }
             if ("cancel" in request) {
+              authorize.assertCurrent();
               respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
               return;
             }
@@ -530,6 +522,7 @@ export function createQuestionHandlers(
                 );
                 return;
               }
+              authorize.assertCurrent();
               respond(
                 true,
                 manager.resolve(request.id, request.answers, request.resolvedBy, {
@@ -561,48 +554,63 @@ export function createQuestionHandlers(
             }
             registerSecretValueForRedaction(value);
             const allowedHosts = request.secretStoreAllowedHosts ?? binding.allowedHosts;
-            let saved = false;
-            try {
-              // Only the synthetic marker enters state, fanout, and waiting agents.
-              // The manager validates liveness and settles before refresh can yield.
-              const result = manager.resolve(
-                request.id,
-                { answers: { [secretQuestion.questionId]: ["stored"] } },
-                request.resolvedBy,
-                {
-                  resolutionId: request.resolutionId,
-                  commit: () => {
-                    storeWriteService.write({
-                      name: binding.name,
-                      value,
-                      kind: "secret",
-                      ...(allowedHosts !== undefined ? { allowedHosts } : {}),
-                      updatedBy: storeWriteService.resolveUpdatedBy(client),
-                    });
-                    saved = true;
+            save = (async () => {
+              let saved = false;
+              let authority: Awaited<ReturnType<typeof prepareQuestionCommitAuthority>> | undefined;
+              try {
+                const currentAuthority = await prepareQuestionCommitAuthority(
+                  options,
+                  observation,
+                  request.id,
+                );
+                authority = currentAuthority;
+                // Only the synthetic marker enters state, fanout, and waiting agents.
+                const result = await manager.resolveWithCommit(
+                  request.id,
+                  { answers: { [secretQuestion.questionId]: ["stored"] } },
+                  request.resolvedBy,
+                  {
+                    resolutionId: request.resolutionId,
+                    commit: async (assertQuestionCurrent) => {
+                      await storeWriteService.write({
+                        name: binding.name,
+                        value,
+                        kind: "secret",
+                        ...(allowedHosts !== undefined ? { allowedHosts } : {}),
+                        updatedBy: storeWriteService.resolveUpdatedBy(client),
+                        assertCurrent: () => {
+                          currentAuthority.assertCurrent();
+                          assertQuestionCurrent();
+                        },
+                      });
+                      saved = true;
+                    },
                   },
-                },
-              );
-              reload = { name: binding.name, result };
-            } catch (error) {
-              if (managerError(error, respond)) {
-                return;
+                );
+                currentAuthority.assertCurrent();
+                reload = { name: binding.name, result };
+              } catch (error) {
+                if (!saved && managerError(error, respond)) {
+                  return;
+                }
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    !saved && error instanceof SecretStoreValidationError
+                      ? ErrorCodes.INVALID_REQUEST
+                      : ErrorCodes.UNAVAILABLE,
+                    saved
+                      ? "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer."
+                      : error instanceof SecretStoreValidationError
+                        ? error.message
+                        : "Secret store entry could not be saved.",
+                  ),
+                );
+              } finally {
+                authority?.release();
               }
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  !saved && error instanceof SecretStoreValidationError
-                    ? ErrorCodes.INVALID_REQUEST
-                    : ErrorCodes.UNAVAILABLE,
-                  saved
-                    ? "Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer."
-                    : error instanceof SecretStoreValidationError
-                      ? error.message
-                      : "Secret store entry could not be saved.",
-                ),
-              );
-            }
+            })();
           },
           {
             assertCurrent: authorize.assertCurrent,
@@ -611,6 +619,7 @@ export function createQuestionHandlers(
               hasOperatorBoundary(client, options.context.getRuntimeConfig()),
           },
         );
+        await save;
         if (reload) {
           try {
             await storeWriteService.reloadReference(reload.name);

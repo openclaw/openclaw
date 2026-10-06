@@ -1,9 +1,10 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { resolveTrustedOfficialPrereleaseResolution } from "./install-npm-metadata.js";
 import {
   expectedIntegrityForNpmUpdate,
   isNpmMetadataCompatibleWithCurrentHost,
-  resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate,
   shouldBypassTrustedOfficialUnchangedNpmCheck,
 } from "./update-source.js";
 
@@ -17,10 +18,19 @@ export async function prepareNpmPluginUpdateMetadata(params: {
   timeoutMs?: number;
 }) {
   const bypassUnchanged = shouldBypassTrustedOfficialUnchangedNpmCheck(params);
-  const trustedPrereleaseFallback = params.trustedSourceLinkedOfficialInstall
-    ? await resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(params)
-    : undefined;
-  const expectedIntegrityMetadata = trustedPrereleaseFallback?.metadata ?? params.metadata;
+  const parsedSpec = bypassUnchanged ? parseRegistryNpmSpec(params.spec) : null;
+  const trustedPrereleaseResolution =
+    parsedSpec && params.metadata.version
+      ? await resolveTrustedOfficialPrereleaseResolution({
+          spec: parsedSpec,
+          resolvedPrereleaseVersion: params.metadata.version,
+          timeoutMs: params.timeoutMs,
+        })
+      : null;
+  const expectedIntegrityMetadata =
+    trustedPrereleaseResolution && trustedPrereleaseResolution.kind !== "allow-prerelease-only"
+      ? trustedPrereleaseResolution.resolution
+      : params.metadata;
   let expectedIntegrity =
     params.catalogExpectedIntegrity ??
     expectedIntegrityForNpmUpdate({
@@ -32,12 +42,16 @@ export async function prepareNpmPluginUpdateMetadata(params: {
   if (
     !params.catalogExpectedIntegrity &&
     (!isNpmMetadataCompatibleWithCurrentHost(expectedIntegrityMetadata) ||
-      (bypassUnchanged && !trustedPrereleaseFallback))
+      (bypassUnchanged && !trustedPrereleaseResolution))
   ) {
     expectedIntegrity = undefined;
   }
   return {
-    npmMetadata: { spec: params.spec, metadata: params.metadata },
+    npmMetadata: {
+      spec: params.spec,
+      metadata: params.metadata,
+      ...(trustedPrereleaseResolution ? { trustedPrereleaseResolution } : {}),
+    },
     expectedIntegrity,
     unchangedEligible: !bypassUnchanged && isNpmMetadataCompatibleWithCurrentHost(params.metadata),
   };

@@ -2,6 +2,7 @@ import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
+import type { PreparedTtsPreferences } from "./tts-preferences.js";
 import { resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
 const DEFAULT_OPENAI_TTS_BASE_URL = "https://api.openai.com/v1";
@@ -41,17 +42,16 @@ function sanitizeBaseUrlForStatus(value: unknown): string | undefined {
   if (!raw) {
     return undefined;
   }
-  try {
-    const parsed = new URL(raw);
-    parsed.username = "";
-    parsed.password = "";
-    parsed.search = "";
-    parsed.hash = "";
-    const sanitized = parsed.toString().replace(/\/+$/, "");
-    return normalizeStatusDetail(sanitized, 120);
-  } catch {
+  const parsed = URL.parse(raw);
+  if (!parsed) {
     return "[invalid-url]";
   }
+  parsed.username = "";
+  parsed.password = "";
+  parsed.search = "";
+  parsed.hash = "";
+  const sanitized = parsed.toString().replace(/\/+$/, "");
+  return normalizeStatusDetail(sanitized, 120);
 }
 
 function isCustomOpenAiTtsBaseUrl(baseUrl: string | undefined): boolean {
@@ -128,6 +128,7 @@ function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
 
 export function resolveStatusTtsSnapshot(params: {
   cfg: OpenClawConfig;
+  preparedTtsPreferences?: PreparedTtsPreferences;
   sessionAuto?: string;
   agentId?: string;
   channelId?: string;

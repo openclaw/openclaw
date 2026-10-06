@@ -44,6 +44,7 @@ import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-ow
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { sleep } from "../utils/sleep.js";
 import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
 import {
   preserveGatewayAuthTokenForService,
@@ -69,6 +70,7 @@ import {
   formatServiceConfigIssues,
   hasRepairableServiceDefinitionDrift,
   isOperatorOwnedEnvironmentIssue,
+  isPreservedLaunchdTimeoutWarning,
   isServiceDefinitionOnlyRepair,
   isServiceInstallationOnlyRepair,
   reportServiceDefinitionDrift,
@@ -109,9 +111,7 @@ async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promi
     if (delayMs <= 0) {
       break;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
+    await sleep(delayMs);
   }
   return false;
 }
@@ -476,6 +476,10 @@ export async function maybeRepairGatewayServiceConfig(
   }
   consolidatedLines.push(...formatServiceConfigIssues(audit.issues));
   note(consolidatedLines.join("\n"), "Gateway service config");
+  // A short custom timeout is diagnostic, not permission to overwrite native policy.
+  if (!definitionRepair && !installationDrift && isPreservedLaunchdTimeoutWarning(audit)) {
+    return cfg;
+  }
   if (
     audit.issues.length > 0 &&
     audit.issues.every((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed)
@@ -640,7 +644,14 @@ export async function maybeRepairGatewayServiceConfig(
         ? { kind: "installation", root: expectedRoot }
         : definitionRepair && expectedRoot
           ? { kind: "definition", root: expectedRoot }
-          : { kind: "config" },
+          : {
+              kind: "config",
+              ...(expectedRoot &&
+              !expectedLayout?.entrypointSourceCheckout &&
+              audit.definitionDrift?.some((finding) => finding.kind === "preserved")
+                ? { root: expectedRoot }
+                : {}),
+            },
     args: {
       ...updatedPlan,
       runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },

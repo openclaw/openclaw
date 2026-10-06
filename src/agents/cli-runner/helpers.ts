@@ -7,10 +7,7 @@ import { fileStore } from "@openclaw/fs-safe/store";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -41,11 +38,6 @@ import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
-export {
-  buildCliSupervisorScopeKey,
-  resolveCliNoOutputTimeoutMs,
-  resolveCliRunTimeoutOverrideMs,
-} from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -93,6 +85,7 @@ export function resolveCliRunQueueKey(params: {
 }
 
 export function buildCliAgentSystemPrompt(params: {
+  preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   requesterProfileId?: string;
   workspaceDir: string;
   cwd?: string;
@@ -152,6 +145,7 @@ export function buildCliAgentSystemPrompt(params: {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
     preparedModelRuntime: params.preparedModelRuntime,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     runtimeCwd,
@@ -186,9 +180,7 @@ export function normalizeCliModel(modelId: string, backend: CliBackendConfig): s
     return trimmed;
   }
   return (
-    backend.modelAliases?.[trimmed] ||
-    backend.modelAliases?.[normalizeLowercaseStringOrEmpty(trimmed)] ||
-    trimmed
+    backend.modelAliases?.[trimmed] || backend.modelAliases?.[trimmed.toLowerCase()] || trimmed
   );
 }
 
@@ -272,7 +264,7 @@ async function writeCliImages(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   images: ImageContent[];
-}): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
+}): Promise<string[]> {
   const imageRoot =
     params.backend.imagePathScope === "workspace"
       ? path.join(params.workspaceDir, ".openclaw-cli-images")
@@ -289,7 +281,7 @@ async function writeCliImages(params: {
   }
   // Keep content-addressed image paths stable across Claude CLI runs so prompt
   // text and argv don't churn on every turn with fresh temp-dir suffixes.
-  return { paths, cleanup: async () => {} };
+  return paths;
 }
 
 export async function writeCliSystemPromptFile(params: {
@@ -330,7 +322,6 @@ export async function prepareCliPromptImagePayload(params: {
 }): Promise<{
   prompt: string;
   imagePaths?: string[];
-  cleanupImages?: () => Promise<void>;
 }> {
   let prompt = params.prompt;
   const imagePrompt = params.imagePrompt ?? prompt;
@@ -361,12 +352,11 @@ export async function prepareCliPromptImagePayload(params: {
   if (resolvedImages.length === 0) {
     return { prompt };
   }
-  const imagePayload = await writeCliImages({
+  const imagePaths = await writeCliImages({
     backend: params.backend,
     workspaceDir: params.workspaceDir,
     images: resolvedImages,
   });
-  const imagePaths = imagePayload.paths;
   if (
     !params.backend.imageArg ||
     params.backend.input === "stdin" ||
@@ -384,7 +374,6 @@ export async function prepareCliPromptImagePayload(params: {
   return {
     prompt,
     imagePaths,
-    cleanupImages: imagePayload.cleanup,
   };
 }
 

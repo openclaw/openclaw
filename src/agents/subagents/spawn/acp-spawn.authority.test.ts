@@ -45,7 +45,9 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { listSessionStateEventsSince } from "../../../sessions/session-state-events.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
@@ -120,7 +122,7 @@ beforeEach(async () => {
     artifactBasename: "browser-maintenance.js",
   });
   managerTesting.resetAcpSessionManagerForTests();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
     () => getActivePluginRegistry() ?? createTestRegistry([]),
   );
@@ -132,7 +134,7 @@ afterEach(async () => {
     managerTesting.resetAcpSessionManagerForTests();
     unregisterAcpRuntimeBackend(backendId);
     await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await cleanupSessionStateForTest({ stateDir });
   } finally {
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
@@ -153,7 +155,6 @@ afterEach(async () => {
 it.each([
   ["runtime", "abort"],
   ["row", "admission close"],
-  ["transcript", "admission close"],
   ["thread", "admission close"],
   ["thread", "live"],
   ["actor", "admission close"],
@@ -168,10 +169,15 @@ it.each([
       ...parentScope,
       defaultSessionId: "parent-session",
     });
+    const conversationLink = {
+      url: "https://chat.example.test/thread/123",
+      label: "Source Thread",
+    };
     const live = closure === "live";
     const thread = stage === "thread";
     const readChild = (sessionKey: string) => loadSessionEntry({ sessionKey, agentId: "fixture" });
     if (live) {
+      await sessionAccessor.upsertSessionEntryCore(parentScope, { conversationLink });
       await recordSessionParticipant(parentScope, {
         identity: { type: "profile", id: "human-contributor" },
         promptedAt: 1,
@@ -222,16 +228,7 @@ it.each([
       }
       return entry;
     });
-    if (stage === "transcript") {
-      const resolve = sessionAccessor.resolveSessionTranscriptRuntimeTarget;
-      vi.spyOn(sessionAccessor, "resolveSessionTranscriptRuntimeTarget").mockImplementation(
-        async (...args) => {
-          const target = await resolve(...args);
-          await pause(target.sessionKey);
-          return target;
-        },
-      );
-    } else if (stage === "actor") {
+    if (stage === "actor") {
       const run = vi.spyOn(SessionActorQueue.prototype, "run");
       run.mockImplementationOnce(function (this: SessionActorQueue, key, op) {
         run.mockRestore();
@@ -311,6 +308,7 @@ it.each([
         if (live) {
           const entry = readChild(input.sessionKey);
           expect(entry?.inheritedGitContributorProfileIds).toEqual(["human-contributor"]);
+          expect(entry?.conversationLink).toEqual(conversationLink);
           expect(entry?.participants ?? []).toEqual([]);
         }
         ensuredSessions.push(input.sessionKey);
@@ -359,6 +357,9 @@ it.each([
     const source = createSessionsSpawnTool({
       config: cfg,
       agentSessionKey: parentSessionKey,
+      // Trusted tool construction facts the ACP child records in its lineage receipt.
+      senderIsOwner: true,
+      expectedParentSessionId: "parent-session",
       requesterRunId: parentRunId,
       requesterTurnRunId: parentRunId,
       ...(thread
@@ -451,6 +452,28 @@ it.each([
         .toHaveBeenCalledTimes(thread && live ? 1 : 0);
       if (live) {
         expect(result).toMatchObject({ details: { status: "accepted", childSessionKey } });
+        const events = (await listSessionStateEventsSince(childSessionKey, "fixture", 0)).events;
+        expect(events.map((event) => event.kind)).toEqual(["created", "child_spawned"]);
+        const spawned = events[1]!;
+        expect(spawned).toMatchObject({ actorId: parentSessionKey, runId: acceptedRunId });
+        expect(
+          openOpenClawStateDatabase()
+            .db.prepare(
+              `SELECT last_seen_sequence, notified_sequence, material_sequence
+             FROM session_watch_cursors WHERE watcher_session_key = ? AND target_session_key = ?`,
+            )
+            .get(parentSessionKey, childSessionKey),
+        ).toEqual({
+          last_seen_sequence: spawned.sequence,
+          notified_sequence: spawned.sequence,
+          material_sequence: spawned.sequence,
+        });
+        expect(sourceBoundary.entry).toMatchObject({
+          spawnedBy: parentSessionKey,
+          parentSessionKey,
+          spawnedBySessionId: "parent-session",
+          spawnedBySenderIsOwner: true,
+        });
         expect(dispatch).toHaveBeenCalledOnce();
         expect(subagentRuns.size).toBe(1);
         expect(subagentRuns.get(acceptedRunId!)).toMatchObject({

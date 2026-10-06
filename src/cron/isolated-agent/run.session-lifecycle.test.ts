@@ -1,10 +1,10 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi, assert } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi, assert } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolvePreparedRunAdmission } from "../../agents/admitted-run-context.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { createAttemptNestedToolActivityState } from "../../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import { prepareEmbeddedAttemptStream } from "../../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { clearActiveEmbeddedRun } from "../../agents/embedded-agent-runner/runs.js";
@@ -23,11 +23,11 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "../../gateway/server-chat-state.js";
+import { subscribeAgentEvents } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import {
   createAgentEventHandler,
   type AgentEventHandlerOptions,
 } from "../../gateway/server-chat.js";
-import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import {
   clearAgentRunContext,
   getAgentRunContextOwnership,
@@ -41,7 +41,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   dispatchCronDeliveryMock,
@@ -105,19 +105,14 @@ function seedPersistentSession(sessionKey: string, sessionId: string) {
 }
 
 describe("runCronIsolatedAgentTurn session lifecycle", () => {
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
-      closeOpenClawAgentDatabasesForTest();
-      cleanup();
-    }),
-  );
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cron-prompt-provenance-");
   beforeEach(() => {
     resetRunCronIsolatedAgentTurnHarness();
     mockRunCronFallbackPassthrough();
   });
 
   it("persists current-session CLI prompt provenance in the detached transcript", async () => {
-    const dir = tempDirs.make("openclaw-cron-prompt-provenance-");
+    const dir = sessionDirs.make();
     const sessionId = "cron-provenance-run";
     const jobId = "daily-monitor";
     const sourceSessionKey = "agent:main:main";
@@ -205,7 +200,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
   it.each(["base", "continuation", "interrupted clear"] as const)(
     "seals only accepted CLI continuity at %s settlement",
     async (failurePoint) => {
-      const dir = tempDirs.make("openclaw-cron-binding-settlement-");
+      const dir = sessionDirs.make();
       const target = {
         agentId: "main",
         sessionId: `binding-${failurePoint}`,
@@ -266,17 +261,20 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         };
       });
       const patchWithAbort: typeof accessor.patchSessionEntryCore = (scope, update, options) => {
-        const assertCommitAllowed = options?.assertCommitAllowed;
+        const assertCommitAllowed = options?.workerGuard?.assertCurrent;
         return accessor.patchSessionEntryCore(scope, update, {
           ...options,
           ...(assertCommitAllowed
             ? {
-                assertCommitAllowed: () => {
-                  const isBase = scope.sessionKey === target.sessionKey;
-                  if ((failurePoint !== "continuation") === isBase) {
-                    interrupt();
-                  }
-                  assertCommitAllowed();
+                workerGuard: {
+                  ...options?.workerGuard,
+                  assertCurrent: () => {
+                    const isBase = scope.sessionKey === target.sessionKey;
+                    if ((failurePoint !== "continuation") === isBase) {
+                      interrupt();
+                    }
+                    assertCommitAllowed();
+                  },
                 },
               }
             : {}),
@@ -429,7 +427,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     const run = runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey));
     await runnerStarted.promise;
     let mutationCommitted = false;
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("patch", {
       ...admissionScope,
       prepare: async () => {
         await interruptSessionWorkAdmissions(admissionScope);
@@ -720,7 +718,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         persistGatewaySessionLifecycleEventForEvent: persist,
         clearTrackedActiveRun,
       });
-      const unsubscribe = onAgentRuntimeEvent(handler);
+      const unsubscribe = subscribeAgentEvents(handler);
       const runIds = new Set<string>();
       let attemptIndex = 0;
       runCliAgentMock.mockImplementation(async (runParams: RunCliAgentParams) => {
@@ -812,6 +810,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             coreBuiltinToolNames: new Set(),
             replaySafeToolNames: new Set(),
             codeModeExecToolNames: new Set(),
+            sourceReplyCapableToolNames: new Set(),
             sideEffectToolOwners: new Map(),
             trustedLocalMediaToolNames: new Set(),
           },
@@ -822,7 +821,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             sessionKey,
             runId: runParams.runId,
           }),
-          nestedToolActivities: [],
+          nestedToolActivityState: createAttemptNestedToolActivityState(),
           isReplaySafeTool: () => false,
           runAbortController: new AbortController(),
           abortRun: vi.fn(),
@@ -923,6 +922,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         releaseFirst.resolve();
         await Promise.race([secondPreparing.promise, exited]);
         await vi.advanceTimersByTimeAsync(15_000);
+        await unsubscribe.drain();
         expect(attemptIndex).toBe(2);
         expect(runCliAgentMock).toHaveBeenCalledTimes(cliFallback ? 1 : 0);
         expect(broadcast.mock.calls.filter(([event]) => event === "chat")).toHaveLength(0);
@@ -946,6 +946,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         }
         const succeeded = outcome === "cli-success";
         await expect(run).resolves.toMatchObject({ status: succeeded ? "ok" : "error" });
+        await unsubscribe.drain();
         if (error) {
           await expect(run).resolves.toMatchObject({
             error: retryPreparationFailure ? expect.stringContaining(error) : error,
@@ -1002,8 +1003,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         releaseSecond.resolve();
         releasePostExecutionWrite.resolve();
         await run.catch(() => {});
-        unsubscribe();
-        handler.dispose();
+        await unsubscribe();
+        await handler.dispose();
         vi.useRealTimers();
       }
     },

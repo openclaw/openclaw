@@ -39,21 +39,15 @@ describe("native worker host exchanges", () => {
     20_000,
   );
 
-  it.each(["late-reply", "reply-race"] as const)(
-    "discards only the canceled exchange during %s",
-    async (scenario) => {
-      expect(await runFixture(scenario)).toEqual({ scenario, successorCompleted: true });
+  it.each([
+    { scenario: "late-reply", expected: { successorCompleted: true } },
+    { scenario: "reply-race", expected: { successorCompleted: true } },
+    { scenario: "stale-reply", expected: { unrelatedStaleRejected: true } },
+    { scenario: "reuse", expected: { waiterFreeTasks: 16 } },
+  ] as const)(
+    "preserves host exchange ownership during $scenario",
+    async ({ scenario, expected }) => {
+      expect(await runFixture(scenario)).toEqual({ scenario, ...expected });
     },
   );
-
-  it("still rejects an unrelated stale reply", async () => {
-    expect(await runFixture("stale-reply")).toEqual({
-      scenario: "stale-reply",
-      unrelatedStaleRejected: true,
-    });
-  });
-
-  it("joins cancellation observers before reusing a healthy worker", async () => {
-    expect(await runFixture("reuse")).toEqual({ scenario: "reuse", waiterFreeTasks: 16 });
-  });
 });
