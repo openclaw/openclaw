@@ -143,7 +143,10 @@ export function controlUiLocaleModulesPlugin(): Plugin {
         for (const watchFile of sourceCatalogResult.watchFiles) {
           this.addWatchFile(watchFile);
         }
-        this.addWatchFile(memoryPath);
+        // Source PRs omit generated memory until the post-merge refresh runs.
+        if (existsSync(memoryPath)) {
+          this.addWatchFile(memoryPath);
+        }
         let partitionLoad = activeCache.partitionLoads.get(request.locale);
         if (!partitionLoad) {
           partitionLoad = loadControlUiLocaleCatalogPartition(

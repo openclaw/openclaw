@@ -23,6 +23,7 @@ const LANGUAGE_LABELS = new Map([
   ["nl", "Dutch"],
   ["fa", "Persian"],
   ["ru", "Russian"],
+  ["he", "Hebrew"],
   ["sv", "Swedish"],
   ["de", "German"],
   ["es", "Spanish"],

@@ -4213,6 +4213,7 @@ export const en: TranslationMap & {
     nl: "Nederlands (Dutch)",
     fa: "فارسی (Persian)",
     ru: "Русский (Russian)",
+    he: "עברית (Hebrew)",
   },
   secretsStore: {
     name: "Name",
