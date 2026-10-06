@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-accessor.entry.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as sessionEntryReaders from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
@@ -116,6 +116,68 @@ it.for(["membership", "explicit", "qualified"] as const)(
     });
   },
 );
+
+it("consumes a fresh metadata snapshot before the next queued writer", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const key = "agent:main:concurrent-metadata";
+    const scope = { agentId: "main", sessionKey: key, env };
+    await replaceSessionEntry(scope, {
+      sessionId: "same-session",
+      updatedAt: 1,
+      label: "initial",
+    });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const events: string[] = [];
+    const writes: Promise<void>[] = [];
+    const readEntries = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
+    const read = vi
+      .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
+      .mockImplementation(async (inputs, consume, options) => {
+        await Promise.all(writes);
+        return readEntries(
+          inputs,
+          (prepared) => {
+            const revision = writes.length + 1;
+            const label = `write-${revision}`;
+            // Commit after snapshot capture, or queue behind a reader that owns the FIFO.
+            const write = runOpenClawAgentWriteAdmission(
+              { agentId: "main", path: database.path, env },
+              () => {
+                writeSessionEntry(database, key, {
+                  sessionId: "same-session",
+                  updatedAt: revision + 1,
+                  label,
+                });
+                events.push(label);
+              },
+            );
+            writes.push(write);
+            void write.catch(() => {});
+            return consume(prepared);
+          },
+          options,
+        );
+      });
+    try {
+      const label = await withGatewaySessionStoreTarget(
+        { cfg, key, env },
+        (target, _membership, assertCurrent) => {
+          assertCurrent();
+          events.push("consume");
+          return target.store[key]?.label;
+        },
+      );
+      await Promise.all(writes);
+      expect(label).toBe("write-1");
+      expect(events).toEqual(["write-1", "consume", "write-2"]);
+      expect(loadSessionEntry(scope)?.label).toBe("write-2");
+    } finally {
+      read.mockRestore();
+      await Promise.allSettled(writes);
+    }
+  });
+});
 
 it.each(["during", "repeated", "consume"] as const)(
   "consumes an ordered sharing snapshot with a native write %s admission",

@@ -192,9 +192,10 @@ through the existing session workers. Missing rows retain the selected store's r
 facts without opening a writable database on the Gateway thread. The router
 captures the original caller before session preparation yields, and admission
 rechecks current membership, session identity, and physical source before starting
-work. Read refreshes retain the original discovery owner and never replay a
-consumer that has begun effects. Process-held incognito reads keep their existing
-owner. Configuration, schemas, and stored formats are unchanged.
+work. If a speculative metadata snapshot races a committed write, its one bounded
+reread joins the existing writer FIFO. Read refreshes retain the original discovery
+owner and never replay a consumer that has begun effects. Process-held incognito
+reads keep their existing owner. Configuration, schemas, and stored formats are unchanged.
 
 Session creation rereads full target metadata through that same reader using its
 already-selected store and canonical keys. Lifecycle custody and current caller
