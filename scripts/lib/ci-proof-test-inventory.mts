@@ -5047,7 +5047,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/gateway/server.sessions.inbound-worktree-writer.test.ts",
   "src/gateway/server.sessions.patch-expected-identity.test.ts",
   "src/gateway/server.sessions.plugin-ownership.test.ts",
-  "src/gateway/server.sessions.recover-orphan.test.ts",
   "src/gateway/server.sessions.reset-acp-timeout.test.ts",
   "src/gateway/server.sessions.reset-models.test.ts",
   "src/gateway/server.startup-fixture-lifetime.test.ts",
