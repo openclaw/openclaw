@@ -21,13 +21,6 @@ export type {
   SessionLifecycleArtifactCleanupResult,
 } from "./session-accessor.lifecycle-types.js";
 
-export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
-
-export type SessionEntryStatusSelection = {
-  statuses: readonly SessionEntryStatus[];
-  presenceOnly?: boolean;
-};
-
 export type TranscriptWriteSnapshot<T> = {
   result: T;
   lifecycleRevision?: string;

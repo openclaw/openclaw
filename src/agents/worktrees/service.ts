@@ -1068,12 +1068,12 @@ export class ManagedWorktreeService {
     const now = this.now();
     const prefilter = createWorktreeGcPrefilter();
     const progress = new WorktreeGcProgress();
-    const result = progress.result;
     for (const error of await retryWorktreeCapacityReleases(this.env)) {
       progress.error("limits", error);
     }
     assertCurrent();
     const { records, leases } = await readWorktreeCleanupState(this.env);
+    const classification = { ...params, ...(await params.prepareOwners?.(records)) };
     assertCurrent();
     const liveIds = new Set(
       records.filter((record) => record.removedAt === undefined).map((record) => record.id),
@@ -1102,7 +1102,7 @@ export class ManagedWorktreeService {
           deferrals: this.cleanupDeferrals,
           now,
         },
-        params,
+        classification,
       );
     const { remove, retireMissing, onError } = createWorktreeGcRemoval({
       env: this.env,
@@ -1119,10 +1119,10 @@ export class ManagedWorktreeService {
       hasLiveLease,
       progress,
       guard: params,
-      checkpoint: () => params.checkpoint?.(result) ?? Promise.resolve(),
+      checkpoint: () => params.checkpoint?.(progress.result) ?? Promise.resolve(),
     });
     // Keep cold classification serial: each candidate can request several Git processes.
-    const evictedIds = new Set(result.removed);
+    const evictedIds = new Set(progress.result.removed);
     for (const record of records) {
       assertCurrent();
       if (evictedIds.has(record.id)) {
@@ -1135,7 +1135,7 @@ export class ManagedWorktreeService {
           if (retired.protection) {
             progress.protect("idle", record.id, retired.protection);
           } else if (retired.record?.removedAt === now) {
-            result.orphansRetired += 1;
+            progress.result.orphansRetired += 1;
           }
           continue;
         }
@@ -1146,7 +1146,7 @@ export class ManagedWorktreeService {
         }
         retiredOwner =
           record.ownerId !== undefined &&
-          params.shouldRemoveOwner?.(record.ownerKind, record.ownerId) === true;
+          classification.shouldRemoveOwner?.(record.ownerKind, record.ownerId) === true;
         if (retiredOwner || now - record.lastActiveAt > IDLE_GC_MS) {
           // Capacity eviction and idle cleanup share one decision per record per pass.
           if (!progress.start(record.id)) {
@@ -1158,12 +1158,12 @@ export class ManagedWorktreeService {
             continue;
           }
           await remove(record, retiredOwner ? "owner-gc" : "idle-gc", retiredOwner);
-          result.removed.push(record.id);
+          progress.result.removed.push(record.id);
         }
       } catch (error) {
         await onError(record, error, retiredOwner);
       } finally {
-        await params.checkpoint?.(result);
+        await params.checkpoint?.(progress.result);
       }
     }
     try {
@@ -1200,13 +1200,13 @@ export class ManagedWorktreeService {
     } catch (error) {
       progress.error("idle", error);
     }
-    result.orphansDeleted = orphansDeleted;
-    result.snapshotsPruned = snapshotsPruned;
+    progress.result.orphansDeleted = orphansDeleted;
+    progress.result.snapshotsPruned = snapshotsPruned;
     assertCurrent();
     // Cleanup has released allocation ownership and retired its refs before maintenance.
     await this.maintainGit(params);
     assertCurrent();
-    return result;
+    return progress.result;
   }
 }
 

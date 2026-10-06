@@ -28,7 +28,8 @@ export function isRetiredSubagentSessionOwner(
   session: InternalSessionEntry | undefined,
 ): session is InternalSessionEntry {
   return (
-    session?.status === "running" &&
+    session !== undefined &&
+    (session.status === undefined || session.status === "interrupted") &&
     isRetiredSubagentExecution(entry) &&
     ownsSubagentSessionExecution(entry, session)
   );

@@ -1,16 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
+import { probeTreeClone, readCloneFileMetadata } from "@openclaw/fs-safe/copy";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 
+vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
+}));
+
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.unstubAllGlobals();
   for (const artifact of artifacts.splice(0)) {
     artifact.dispose();
   }
@@ -35,6 +41,33 @@ function fixture(bytes: Buffer, basename = "fixture.bin") {
     },
   };
 }
+
+it.skipIf(process.platform !== "darwin")(
+  "clones ordinary source files and their captured aliases on APFS",
+  async ({ skip }) => {
+    const bytes = Buffer.alloc(128 * 1024 + 1, "Z");
+    const source = fixture(bytes, "fixture.dat");
+    if (probeTreeClone(path.dirname(source.filename)) !== "apfs") {
+      skip();
+      return;
+    }
+    const alias = path.join(path.dirname(source.filename), "alias.dat");
+    fs.symlinkSync("fixture.dat", alias);
+    const artifact = source.capture();
+    const captured = [artifact.resolve(alias), artifact.resolve(source.filename)];
+    const [original, ...copies] = await readCloneFileMetadata([source.filename, ...captured]);
+    expect(original?.cloneId).toBeGreaterThan(0n);
+    for (const copy of copies) {
+      expect(copy?.dev).toBe(original?.dev);
+      expect(copy?.ino).not.toBe(original?.ino);
+      expect(copy?.cloneId).toBe(original?.cloneId);
+    }
+    expect(copies[0]?.ino).not.toBe(copies[1]?.ino);
+    fs.writeFileSync(captured[0]!, "changed capture");
+    expect(fs.readFileSync(source.filename)).toEqual(bytes);
+    expect(fs.readFileSync(captured[1]!)).toEqual(bytes);
+  },
+);
 
 it("captures and verifies a native artifact without whole-file Buffer reads", () => {
   const bytes = Buffer.alloc(2 * 1024 * 1024, "Z");
@@ -135,36 +168,22 @@ it.each(["cold", "warm", "lazy"] as const)(
       source.capture();
     }
     const lazy = phase === "lazy" ? source.capture(entry) : undefined;
-    const openSync = fs.openSync;
-    const closeSync = fs.closeSync;
-    const copyFileSync = fs.copyFileSync;
-    let destination: { path: string; fd: number } | undefined;
+    const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
     let replaced = false;
-    vi.spyOn(fs, "copyFileSync").mockImplementation((from, to, mode) => {
-      if (typeof from === "string" && /^\/(?:proc\/self|dev)\/fd\//.test(from)) {
-        throw Object.assign(new Error("Descriptor paths are unavailable"), { code: "ENOENT" });
+    vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
+      const copied = copyRootFileSync(options);
+      if (options.source.absolutePath !== source.filename) {
+        return copied;
       }
-      return copyFileSync(from, to, mode);
-    });
-    vi.spyOn(fs, "openSync").mockImplementation((filename, flags, mode) => {
-      const fd = openSync(filename, flags, mode);
-      if (
-        typeof filename === "string" &&
-        filename !== source.filename &&
-        path.basename(filename) === "fixture.js" &&
-        (flags === "w" || flags === "w+")
-      ) {
-        destination = { path: filename, fd };
-      }
-      return fd;
-    });
-    vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
-      closeSync(fd);
-      if (!replaced && destination?.fd === fd) {
-        replaced = true;
-        fs.renameSync(destination.path, `${destination.path}.original`);
-        fs.writeFileSync(destination.path, "replaced");
-      }
+      const close = () => {
+        copied.close();
+        if (!replaced) {
+          replaced = true;
+          fs.renameSync(copied.path, `${copied.path}.original`);
+          fs.writeFileSync(copied.path, "replaced");
+        }
+      };
+      return { ...copied, close, [Symbol.dispose]: close };
     });
 
     const capture = () => (lazy ? lazy.captureResolvedModule(source.filename) : source.capture());
@@ -186,106 +205,77 @@ it.each(["cold", "warm", "lazy"] as const)(
   },
 );
 
-const descriptorCopyCases = [
-  {
-    label: "Node on Linux has no descriptor paths",
-    platform: "linux",
-    isBun: false,
-    code: "ENOENT",
-    shouldCapture: true,
-  },
-  {
-    label: "Bun on macOS returns EBADF",
-    platform: "darwin",
-    isBun: true,
-    code: "EBADF",
-    shouldCapture: true,
-  },
-  {
-    label: "Node on macOS returns EBADF",
-    platform: "darwin",
-    isBun: false,
-    code: "EBADF",
-    shouldCapture: false,
-  },
-  {
-    label: "Bun on Linux returns EBADF",
-    platform: "linux",
-    isBun: true,
-    code: "EBADF",
-    shouldCapture: false,
-  },
-  {
-    label: "Bun on macOS returns EIO",
-    platform: "darwin",
-    isBun: true,
-    code: "EIO",
-    shouldCapture: false,
-  },
-] as const;
-
-it.each(descriptorCopyCases)(
-  "handles $label at the generation-capture boundary",
-  ({ platform, isBun, code, shouldCapture }) => {
-    const bytes = code === "ENOENT" ? Buffer.from("captured") : Buffer.alloc(172_832, "B");
-    const source = fixture(bytes, code === "ENOENT" ? "fixture.js" : "fixture.bin");
-    const opens = vi.spyOn(fs, "openSync");
-    const realProcess = process;
-    vi.stubGlobal(
-      "process",
-      new Proxy(realProcess, {
-        get(target, property) {
-          if (property === "platform") {
-            return platform;
-          }
-          if (property === "versions") {
-            const versions = { ...target.versions };
-            if (isBun) {
-              versions.bun = "1.4.2";
-            } else {
-              delete versions.bun;
-            }
-            return versions;
-          }
-          return Reflect.get(target, property, target);
-        },
-      }),
-    );
-
-    const copyFileSync = fs.copyFileSync;
-    let injectedError = false;
-    const descriptorPrefix = platform === "linux" ? "/proc/self/fd/" : "/dev/fd/";
-    vi.spyOn(fs, "copyFileSync").mockImplementation((from, to, mode) => {
-      if (
-        typeof from === "string" &&
-        from.startsWith(descriptorPrefix) &&
-        typeof to === "string" &&
-        to.endsWith(`${path.sep}${path.basename(source.filename)}`)
-      ) {
-        injectedError = true;
-        throw Object.assign(new Error("Simulated descriptor-copy failure"), { code });
-      }
-      return copyFileSync(from, to, mode);
-    });
-
-    if (shouldCapture) {
-      const artifact = source.capture();
-      const captured = artifact.resolve(source.filename);
-      if (code === "ENOENT") {
-        // Receipt admission reopens the private copy once. A separate initial hash
-        // would repeat the expensive Windows open without strengthening that admission.
-        expect(
-          opens.mock.calls.filter(
-            ([filename, flags]) => filename === captured && flags !== "w" && flags !== "w+",
-          ),
-        ).toHaveLength(1);
-        expect(fs.readFileSync(captured, "utf8")).toBe("captured");
-      }
-      expect(fs.readFileSync(captured)).toEqual(bytes);
-      expect(artifact.assertSourceCurrent).not.toThrow();
-    } else {
-      expect(() => source.capture()).toThrow("Simulated descriptor-copy failure");
+it("refuses a source swapped after OpenClaw pins it without leaving a capture", () => {
+  const source = fixture(Buffer.from("pinned source"), "fixture.js");
+  const admitted = fs.statSync(source.filename, { bigint: true });
+  const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
+  let target: string | undefined;
+  let refused: unknown;
+  vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
+    if (options.source.absolutePath !== source.filename) {
+      return copyRootFileSync(options);
     }
-    expect(injectedError).toBe(true);
-  },
-);
+    target = options.destination.absolutePath;
+    expect(options.expectedSourceIdentity).toEqual({ dev: admitted.dev, ino: admitted.ino });
+    fs.renameSync(source.filename, `${source.filename}.retained`);
+    fs.writeFileSync(source.filename, "replacement");
+    try {
+      return copyRootFileSync(options);
+    } catch (error) {
+      refused = error;
+      throw error;
+    }
+  });
+
+  expect(() => source.capture()).toThrow();
+  expect(refused).toMatchObject({ code: "path-mismatch" });
+  expect(target).toBeDefined();
+  expect(fs.existsSync(target!)).toBe(false);
+  expect(fs.readFileSync(`${source.filename}.retained`, "utf8")).toBe("pinned source");
+  expect(fs.readFileSync(source.filename, "utf8")).toBe("replacement");
+});
+
+it("maps growth beyond the pinned size to the reload retry error with its cause", () => {
+  const source = fixture(Buffer.from("bounded"), "fixture.js");
+  const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
+  let target: string | undefined;
+  vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
+    if (options.source.absolutePath === source.filename) {
+      target = options.destination.absolutePath;
+      fs.appendFileSync(source.filename, " growth");
+    }
+    return copyRootFileSync(options);
+  });
+
+  let failure: unknown;
+  try {
+    source.capture();
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toMatchObject({
+    message: "Plugin source changed while preparing its reload; retry after the edit finishes.",
+    cause: { code: "too-large" },
+  });
+  expect(target).toBeDefined();
+  expect(fs.existsSync(target!)).toBe(false);
+});
+
+it.each(["EIO", "EBADF"])("propagates fatal %s copy failures without retry", (code) => {
+  const source = fixture(Buffer.from("captured"), "fixture.js");
+  const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
+  const failure = new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
+    cause: Object.assign(new Error("injected copy failure"), { code }),
+  });
+  const copies = vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
+    if (options.source.absolutePath === source.filename) {
+      throw failure;
+    }
+    return copyRootFileSync(options);
+  });
+
+  expect(() => source.capture()).toThrow(failure);
+  expect(
+    copies.mock.calls.filter(([options]) => options.source.absolutePath === source.filename),
+  ).toHaveLength(1);
+});

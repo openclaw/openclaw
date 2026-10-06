@@ -8,6 +8,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { pendingSessionsYield } from "./chat-sessions-yield.ts";
 import {
+  isSubagentsPanelSession,
   isUnfinishedSubagent,
   spawnedSubagentsRenderKey,
   type SubagentRoster,
@@ -41,11 +42,22 @@ function placedSubagentWait(
  * Everything the working line draws about subagents, so rows without one keep
  * memoizing across roster patches.
  */
-function subagentStatusRenderKey(wait: ChatSubagentWait | null, running: number): string {
+function subagentStatusRenderKey(
+  wait: ChatSubagentWait | null,
+  running: number,
+  listed: boolean,
+): string {
   return JSON.stringify(
     wait
-      ? [wait.startedAt, wait.runningCount, wait.sessionCount, wait.child?.key, wait.child?.label]
-      : [running],
+      ? [
+          wait.startedAt,
+          wait.runningCount,
+          wait.sessionCount,
+          wait.child?.key,
+          wait.child?.label,
+          listed,
+        ]
+      : [running, listed],
   );
 }
 
@@ -150,12 +162,22 @@ export function projectSubagentStatus(
 ) {
   const wait = resolveChatSubagentWait(input);
   const running = countRunningSubagents(input);
+  const session = input.selectedSession;
+  // The line can lead to the Subagents panel only when that panel lists every
+  // subagent it mentions.
+  const listed =
+    session !== undefined &&
+    (wait !== null || running > 0) &&
+    unfinishedChildren(session, input).every(
+      (row) => isDashboardSessionKey(row.key) || isSubagentsPanelSession(row),
+    );
   return {
     wait,
     // Search results omit the live wait line.
     placedWait: searchFiltering ? undefined : placedSubagentWait(wait),
     running,
-    statusKey: subagentStatusRenderKey(wait, running),
+    listed,
+    statusKey: subagentStatusRenderKey(wait, running, listed),
     rowsKey: spawnedSubagentsRenderKey(input.subagentSessions),
   };
 }

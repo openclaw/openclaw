@@ -38,6 +38,7 @@ import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -93,8 +94,7 @@ function captureSessionEntryDatabasePreparation(
       const isCreating = candidate.path === creatingPath || candidate.physicalPath === creatingPath;
       const isPrepared = candidate.path === preparedPath || candidate.physicalPath === preparedPath;
       if (
-        captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
-          candidate.physicalPath ||
+        !isSessionStoreReadCandidateCurrent(candidate) ||
         (!(isCreating && candidate.identity.key.startsWith("path:")) &&
           !isDeepStrictEqual(
             readDatabasePathIdentitySync(candidate.path),

@@ -88,7 +88,8 @@ openclaw dashboard
 ```
 
 Startup does not trigger a report job. The first scheduled run collects yesterday's
-closed report and today's partial report, reusing healthy closed daily reports from
+closed report and today's partial report, plus the day before startup when that run
+falls after the next UTC midnight, reusing healthy closed daily reports from
 the same organization scope. This also recovers partially failed runs without
 recollecting accepted closed days. Manual generation still refreshes the requested
 day. Week and month reports use stored daily activity.

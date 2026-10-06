@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -62,6 +63,17 @@ function observeCallerSchemaInspections(...pathnames: string[]) {
   return { inspections, restore: observer.restore };
 }
 
+function expectAdmittedSchemaObjects(database: DatabaseSync) {
+  const facts = getAdmittedSqliteSchemaFacts(database);
+  expect(facts?.tables.has("session_nodes")).toBe(true);
+  expect(facts?.indexes).toContain("idx_agent_session_nodes_updated_at");
+  expect(facts?.triggers?.get("session_nodes_canonical_pending_after_update")).toEqual({
+    table: "session_nodes",
+    sql: expect.stringContaining("INSERT INTO session_canonical_validation_pending"),
+  });
+  return facts;
+}
+
 it("keeps a worker recreation private until its host creation claim joins native close", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-admit-creation-") };
   const options = { agentId: "recreated", env };
@@ -119,16 +131,16 @@ it("admits cold storage in its worker and lends facts to every later native hand
   const { inspections } = observeCallerSchemaInspections(pathname);
   const read = () =>
     withOpenClawAgentDatabaseWrite(options, (database) => {
-      expect(getAdmittedSqliteSchemaFacts(database.db)?.tables.has("session_nodes")).toBe(true);
+      expectAdmittedSchemaObjects(database.db);
       return database.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count;
     });
   expect(await Promise.all([read(), read()])).toEqual([0, 0]);
   expect(inspections).toEqual([]);
 
   // The next synchronous caller and an idle-reopened handle consume the same worker admission.
-  expect(openOpenClawAgentDatabase(options).db.isOpen).toBe(true);
+  expectAdmittedSchemaObjects(openOpenClawAgentDatabase(options).db);
   await closeOpenClawAgentDatabaseByPathAsync(pathname);
-  expect(openOpenClawAgentDatabase(options).db.isOpen).toBe(true);
+  expectAdmittedSchemaObjects(openOpenClawAgentDatabase(options).db);
   expect(inspections).toEqual([]);
 });
 
@@ -209,10 +221,10 @@ it.each([
       const count = await withOpenClawAgentDatabaseWrite(
         { ...options, path: acquisitionPath },
         (reopened) => {
-          const facts = getAdmittedSqliteSchemaFacts(reopened.db);
+          const facts = expectAdmittedSchemaObjects(reopened.db);
           expect(facts?.tables.has("coldadmit_fixture")).toBe(change.endsWith("additive-table"));
-          expect(facts?.tables.has("session_nodes")).toBe(true);
           expect(facts?.tables.has("session_key_contract")).toBe(true);
+          expect(facts?.indexes).toContain("idx_agent_cache_expiry");
           return reopened.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count;
         },
       );

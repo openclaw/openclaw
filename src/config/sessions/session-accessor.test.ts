@@ -38,13 +38,11 @@ import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   applySessionEntryLifecycleMutation,
-  assignSessionOwner,
   commitReplySessionInitialization,
   createSessionEntryWithTranscript,
   deleteSessionEntryLifecycle,
   findTranscriptEvent,
   listSessionChildEntriesReadOnly,
-  listSessionEntriesByStatus,
   listSessionTranscriptInstances,
   loadReplySessionInitializationSnapshot,
   loadSessionEntry,
@@ -1271,11 +1269,8 @@ describe("session accessor seam", () => {
       storePath,
       upserts: (
         [
-          ["main", "session-1", "running", 10],
-          ["other", "session-2", "running", 20],
-          ["done", "session-done", "done", 25],
-          ["shared-running", "session-shared", "running", 26],
-          ["shared-done", "session-shared", "done", 27],
+          ["main", "session-1", "interrupted", 10],
+          ["other", "session-2", "interrupted", 20],
         ] as const
       ).map(([suffix, sessionId, status, updatedAt]) => ({
         sessionKey: `agent:main:${suffix}`,
@@ -1283,11 +1278,6 @@ describe("session accessor seam", () => {
       })),
       skipMaintenance: true,
     });
-    const doneOwner = { id: "done-owner", type: "human" as const };
-    assignSessionOwner(
-      { sessionKey: "agent:main:done", storePath },
-      { assignedBy: doneOwner, owner: doneOwner },
-    );
     recordSessionParticipant(
       { sessionKey: "agent:main:main", storePath },
       { identity: { type: "profile", id: "replacement-reader" }, promptedAt: 10 },
@@ -1315,11 +1305,8 @@ describe("session accessor seam", () => {
         expect(preparationReads.counts.entries).toBe(0);
         expect(preparationReads.counts.participants).toBe(0);
         expect(entries.map(({ sessionKey }) => sessionKey)).toEqual([
-          "agent:main:done",
           "agent:main:main",
           "agent:main:other",
-          "agent:main:shared-done",
-          "agent:main:shared-running",
         ]);
         const main = entries.find((entry) => entry.sessionKey === "agent:main:main");
         const other = entries.find((entry) => entry.sessionKey === "agent:main:other");
@@ -1354,7 +1341,7 @@ describe("session accessor seam", () => {
     });
     expect(loadSessionEntry({ sessionKey: "agent:main:other", storePath })).toMatchObject({
       sessionId: "session-2",
-      status: "running",
+      status: "interrupted",
       updatedAt: 20,
     });
 
@@ -1364,23 +1351,6 @@ describe("session accessor seam", () => {
       update: (entries) => ({ result: entries.map((entry) => entry.sessionKey) }),
     });
     expect(selectedKeys).toEqual(["agent:main:main"]);
-
-    const runningKeys = await applySessionEntryReplacements({
-      statuses: ["running"],
-      storePath,
-      update: (entries) => ({ result: entries.map((entry) => entry.sessionKey) }),
-    });
-    expect(runningKeys).toEqual([
-      "agent:main:main",
-      "agent:main:other",
-      "agent:main:shared-running",
-    ]);
-    const doneSessions = await listSessionEntriesByStatus({ storePath }, ["done"]);
-    expect(doneSessions.map((entry) => entry.sessionKey)).toEqual([
-      "agent:main:done",
-      "agent:main:shared-done",
-    ]);
-    expect(doneSessions[0]?.entry.owner?.actor).toEqual(doneOwner);
 
     const other = loadSessionEntry({ sessionKey: "agent:main:other", storePath });
     expect(other).toBeDefined();
@@ -1397,7 +1367,7 @@ describe("session accessor seam", () => {
 
     const runtimeAliasMarker = {
       sessionKey: "agent:main:missing",
-      entry: { sessionId: "missing", status: "running" as const, updatedAt: 30 },
+      entry: { sessionId: "missing", status: undefined, updatedAt: 30 },
       previousSessionKeys: [],
     };
     const missingSelectionResult = await applySessionEntryReplacements({
@@ -1410,19 +1380,6 @@ describe("session accessor seam", () => {
     });
     expect(missingSelectionResult).toBe("missing-row-no-op");
     expect(loadSessionEntry({ sessionKey: "agent:main:missing", storePath })).toBeUndefined();
-
-    const done = loadSessionEntry({ sessionKey: "agent:main:done", storePath });
-    expect(done).toBeDefined();
-    await expect(
-      applySessionEntryReplacements({
-        statuses: ["running"],
-        storePath,
-        update: () => ({
-          replacements: [{ sessionKey: "agent:main:done", entry: done! }],
-          result: undefined,
-        }),
-      }),
-    ).rejects.toThrow("outside the selected row set");
   });
 
   it("projects session patches with label ownership and current request authority", async () => {
@@ -1852,16 +1809,16 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry(scope)).toMatchObject({ model: "newer", updatedAt: 20 });
   });
 
-  it("preserves participant changes made while status-selected replacements are planned", async () => {
+  it("preserves participant changes made while key-selected replacements are planned", async () => {
     const scope = { sessionKey: "agent:main:participant-replacement", storePath };
     await upsertSessionEntryCore(scope, {
       sessionId: "participant-replacement",
-      status: "running",
+      status: undefined,
       updatedAt: 10,
     });
     await upsertSessionEntryCore(
       { sessionKey: "agent:main:participant-replacement-peer", storePath },
-      { sessionId: "participant-replacement-peer", status: "running", updatedAt: 10 },
+      { sessionId: "participant-replacement-peer", status: undefined, updatedAt: 10 },
     );
     recordSessionParticipant(scope, {
       identity: {
@@ -1875,7 +1832,7 @@ describe("session accessor seam", () => {
     });
 
     await applySessionEntryReplacements({
-      statuses: ["running"],
+      sessionKeys: [scope.sessionKey, "agent:main:participant-replacement-peer"],
       storePath,
       update: async (entries) => {
         expect(entries).toHaveLength(2);
@@ -2833,7 +2790,7 @@ describe("session accessor seam", () => {
       restartRecoveryDeliveryRunId: "run-1",
       restartRecoveryDeliverySourceRunId: "run-1",
       startedAt: 100,
-      status: "running" as const,
+      status: undefined,
       updatedAt: 100,
     };
 
@@ -2849,10 +2806,10 @@ describe("session accessor seam", () => {
       restartRecoveryDeliveryRunId: "run-1",
       restartRecoveryDeliverySourceRunId: "run-1",
       startedAt: 100,
-      status: "running",
       updatedAt: expect.any(Number),
     });
     expect(loadSessionEntry(scope)?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(loadSessionEntry(scope)?.status).toBeUndefined();
     expect(loadSessionEntry(scope)?.endedAt).toBeUndefined();
 
     const retryable = await updateSessionEntry(scope, () => ({
@@ -2888,10 +2845,10 @@ describe("session accessor seam", () => {
       restartRecoveryDeliveryRequestFingerprint: "fingerprint-1",
       restartRecoveryDeliveryRunId: "run-1",
       restartRecoveryDeliverySourceRunId: "run-1",
-      status: "running",
       startedAt: 300,
       updatedAt: expect.any(Number),
     });
+    expect(loadSessionEntry(scope)?.status).toBeUndefined();
     expect(loadSessionEntry(scope)?.endedAt).toBeUndefined();
 
     await updateSessionEntry(scope, () => ({
@@ -3000,7 +2957,7 @@ describe("session accessor seam", () => {
       abortedLastRun: true,
       restartRecoveryDeliveryRunId: "recovery-run",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
-      status: "running",
+      status: "interrupted",
       updatedAt: 10,
     });
     const stored = loadSessionEntry(scope);
@@ -3033,7 +2990,7 @@ describe("session accessor seam", () => {
       restartRecoveryDeliveryRunId: "new-run",
       restartRecoveryDeliverySourceRunId: "new-run",
       sessionId: scope.sessionId,
-      status: "running",
+      status: undefined,
       updatedAt: 20,
     });
     predicateGate.resolve();

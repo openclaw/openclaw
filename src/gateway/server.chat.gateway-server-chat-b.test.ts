@@ -3243,10 +3243,7 @@ describe("gateway server chat", () => {
         onAdmissionOwned: freshAdmission,
         respond: ((ok, payload) => {
           if (ok && (payload as { status?: unknown } | undefined)?.status === "started") {
-            snapshotAtAck = loadSessionEntry({
-              sessionKey: "agent:main:main",
-              storePath,
-            });
+            snapshotAtAck = loadSessionEntry(makeMainSessionScope(storePath));
           }
         }) as RespondFn,
       });
@@ -3257,8 +3254,9 @@ describe("gateway server chat", () => {
         restartRecoveryDeliveryRunId: nextRunId,
         restartRecoveryDeliverySourceRunId: nextRunId,
         restartRecoveryTerminalRunIds: ["idem-older-terminal-claim", priorRunId],
-        status: "running",
+        lifecycleRunId: nextRunId,
       });
+      expect(snapshotAtAck?.status).toBeUndefined();
 
       const retryResponses: Array<{ ok: boolean; payload?: unknown; meta?: unknown }> = [];
       const replayAdmission = vi.fn(async () => true);
@@ -3548,7 +3546,7 @@ describe("gateway server chat", () => {
         { sessionKey: "main", storePath },
         {
           sessionId: "sess-main",
-          status: "running",
+          status: "interrupted",
           abortedLastRun: true,
           restartRecoveryDeliveryRunId: "recovery-run",
           restartRecoveryDeliverySourceRunId: idempotencyKey,
@@ -3605,7 +3603,7 @@ describe("gateway server chat", () => {
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,
         sessionId: "sess-main",
-        status: "running",
+        status: "interrupted",
       });
     } finally {
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
@@ -3618,7 +3616,7 @@ describe("gateway server chat", () => {
     const idempotencyKey = "idem-restart-safe-recovered-retry";
     try {
       await writeStoredMainSession({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,
@@ -3627,6 +3625,7 @@ describe("gateway server chat", () => {
         async ({ sessionKey, storePath: recoveryStorePath }) => {
           await patchSessionEntryCore({ sessionKey, storePath: recoveryStorePath }, () => ({
             abortedLastRun: false,
+            status: undefined,
             updatedAt: Date.now(),
           }));
           return { started: 1, settled: 0, failed: 0, skipped: 0 };
@@ -3649,12 +3648,13 @@ describe("gateway server chat", () => {
         },
       ]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      const recoveredSession = loadSessionEntry(makeMainSessionScope(storePath));
+      expect(recoveredSession).toMatchObject({
         abortedLastRun: false,
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,
-        status: "running",
       });
+      expect(recoveredSession?.status).toBeUndefined();
     } finally {
       restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
       await resetDirectChatSession();
@@ -3721,7 +3721,7 @@ describe("gateway server chat", () => {
     try {
       await writeStoredMainSession({
         archivedAt: Date.now(),
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,
@@ -3756,7 +3756,7 @@ describe("gateway server chat", () => {
     const idempotencyKey = "idem-restart-safe-replaced-retry";
     try {
       await writeStoredMainSession({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         restartRecoveryDeliveryRunId: "recovery-run",
         restartRecoveryDeliverySourceRunId: idempotencyKey,

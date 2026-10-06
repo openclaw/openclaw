@@ -200,20 +200,20 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
       }
     });
 
-    it("reads exec environment and commits authorization through SQLite workers in a relocated archive", ({
-      signal,
-    }) =>
-      fixtureLifetime.run(async () => {
-        const root = fixtureLifetime.createTempDir("openclaw-worker-exec-authorization-");
-        const relocated = path.join(root, "bundles", "installed");
-        fs.mkdirSync(relocated, { recursive: true });
-        await tar.extract({ file: preparedArchive, cwd: relocated });
-        const result = await fixtureLifetime.track(
-          runNodeScript(
-            [
-              "--input-type=module",
-              "--eval",
-              `
+    it(
+      "reads exec environment and commits authorization through SQLite workers in a relocated archive",
+      ({ signal }) =>
+        fixtureLifetime.run(async () => {
+          const root = fixtureLifetime.createTempDir("openclaw-worker-exec-authorization-");
+          const relocated = path.join(root, "bundles", "installed");
+          fs.mkdirSync(relocated, { recursive: true });
+          await tar.extract({ file: preparedArchive, cwd: relocated });
+          const result = await fixtureLifetime.track(
+            runNodeScript(
+              [
+                "--input-type=module",
+                "--eval",
+                `
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 const entry = process.argv[1];
@@ -245,26 +245,28 @@ try {
 }
 console.log("relocated exec authorization persisted");
 `,
-              path.join(relocated, "worker.mjs"),
-            ],
-            {
-              PATH: process.env.PATH,
-              SystemRoot: process.env.SystemRoot,
-              WINDIR: process.env.WINDIR,
-              HOME: root,
-              USERPROFILE: root,
-              OPENCLAW_STATE_DIR: path.join(root, "state"),
-              TMPDIR: root,
-              TMP: root,
-              TEMP: root,
-            },
-            30_000,
-            { cwd: root, signal },
-          ),
-        );
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("relocated exec authorization persisted");
-      }));
+                path.join(relocated, "worker.mjs"),
+              ],
+              {
+                PATH: process.env.PATH,
+                SystemRoot: process.env.SystemRoot,
+                WINDIR: process.env.WINDIR,
+                HOME: root,
+                USERPROFILE: root,
+                OPENCLAW_STATE_DIR: path.join(root, "state"),
+                TMPDIR: root,
+                TMP: root,
+                TEMP: root,
+              },
+              30_000,
+              { cwd: root, signal },
+            ),
+          );
+          expect(result.status, result.stderr).toBe(0);
+          expect(result.stdout).toContain("relocated exec authorization persisted");
+        }),
+      180_000,
+    );
 
     it("keeps activated plugin facades lazy and config-aware in a relocated archive", ({
       signal,

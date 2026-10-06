@@ -101,7 +101,6 @@ describe("Gateway agent command execution identity", () => {
     const sessionEntry = {
       sessionId: "recovery-session",
       updatedAt: 100,
-      status: "running" as const,
       abortedLastRun: false,
       lifecycleRunId: "recovery-run",
       restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],

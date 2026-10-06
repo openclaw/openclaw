@@ -75,6 +75,49 @@ export function collectSidebarSessionChildKeys(
   return children;
 }
 
+/** Hidden runs keep failures on their own notice path; only plain unread state folds into reads. */
+export function isAcknowledgeableHiddenRun(
+  row: Pick<GatewaySessionRow, "key" | "unread" | "status" | "archived">,
+): boolean {
+  return (
+    isSubagentSessionKey(row.key) &&
+    row.archived !== true &&
+    row.unread === true &&
+    row.status !== "failed" &&
+    row.status !== "timeout"
+  );
+}
+
+/**
+ * Unread hidden runs below a persistent session, following run-only chains.
+ * Persistent descendants own sidebar rows and stay unread until opened.
+ */
+export function collectUnreadHiddenRunRows(
+  rows: readonly GatewaySessionRow[],
+  parentKey: string,
+): GatewaySessionRow[] {
+  const rowsByKey = new Map(rows.map((row) => [row.key, row]));
+  const childKeysByParent = collectSidebarSessionChildKeys(rowsByKey, new Set());
+  const visited = new Set<string>([parentKey]);
+  const unread: GatewaySessionRow[] = [];
+  const visit = (key: string) => {
+    for (const childKey of childKeysByParent.get(normalizeDefaultMainSessionAliasForUi(key)) ??
+      []) {
+      const child = rowsByKey.get(childKey);
+      if (!child || !isSubagentSessionKey(childKey) || visited.has(childKey)) {
+        continue;
+      }
+      visited.add(childKey);
+      if (isAcknowledgeableHiddenRun(child)) {
+        unread.push(child);
+      }
+      visit(childKey);
+    }
+  };
+  visit(parentKey);
+  return unread;
+}
+
 /** Promote the first persistent conversations below Home, honoring the active filters. */
 export function collectPromotedMainChildRows(input: {
   rows: readonly GatewaySessionRow[];
