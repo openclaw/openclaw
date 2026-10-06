@@ -13,6 +13,7 @@ import {
   resolveWorkspaceBootstrapRouting,
 } from "../../bootstrap-routing.js";
 import { buildBootstrapContextForFiles } from "../../embedded-agent-helpers/bootstrap.js";
+import { isUnreadableWorkspaceBootstrapFile } from "../../workspace-bootstrap-read.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -74,6 +75,21 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget);
     return completedBootstrapTurn;
   };
+  const executionAgentsPath = path.join(
+    path.resolve(params.setup.resolvedWorkspace),
+    DEFAULT_AGENTS_FILENAME,
+  );
+  // Only the execution project's AGENTS.md layers onto the prompt; its other workspace
+  // files belong to that project's own run, not to this agent's bootstrap context.
+  const resolveExecutionProjectBootstrapFiles = async () =>
+    bootstrapWorkspaceDir === params.setup.resolvedWorkspace
+      ? []
+      : (await resolveWorkspaceBootstrapFiles(params.setup.resolvedWorkspace)).filter(
+          (file) =>
+            file.name === DEFAULT_AGENTS_FILENAME &&
+            !file.missing &&
+            path.resolve(file.path) === executionAgentsPath,
+        );
   const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
     resolveWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending,
@@ -93,6 +109,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind) &&
     (await hasCompletedBootstrapTurnForAttempt());
   let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
+  let preloadedExecutionProjectFiles: WorkspaceBootstrapFile[] | undefined;
   let bootstrapRouting =
     shouldProbeContinuationSkip || suppressAmbientContext || contextInjectionMode === "never"
       ? await resolveBootstrapRouting()
@@ -103,6 +120,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
   ) {
     preloadedBootstrapFiles = await resolveWorkspaceBootstrapFiles(bootstrapWorkspaceDir);
+    preloadedExecutionProjectFiles = await resolveExecutionProjectBootstrapFiles();
     bootstrapRouting = await resolveBootstrapRouting(preloadedBootstrapFiles);
   }
   bootstrapRouting ??= await resolveBootstrapRouting(preloadedBootstrapFiles);
@@ -118,23 +136,18 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     bootstrapContextMode: attempt.bootstrapContextMode,
     bootstrapContextRunKind: attempt.bootstrapContextRunKind ?? "default",
     bootstrapMode,
+    // The execution project's AGENTS.md is injected beside the bootstrap workspace files, so an
+    // unreadable one withholds context the same way. Undefined only on a turn that skips
+    // injection, which records no marker.
+    deliversCompleteWorkspaceContext:
+      bootstrapRouting.deliversCompleteWorkspaceContext &&
+      !(preloadedExecutionProjectFiles ?? []).some(isUnreadableWorkspaceBootstrapFile),
     hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
     resolveBootstrapContextForRun: async () => {
       const bootstrapFiles =
         preloadedBootstrapFiles ?? (await resolveWorkspaceBootstrapFiles(bootstrapWorkspaceDir));
-      const executionAgentsPath = path.join(
-        path.resolve(params.setup.resolvedWorkspace),
-        DEFAULT_AGENTS_FILENAME,
-      );
       const executionProjectFiles =
-        bootstrapWorkspaceDir === params.setup.resolvedWorkspace
-          ? []
-          : (await resolveWorkspaceBootstrapFiles(params.setup.resolvedWorkspace)).filter(
-              (file) =>
-                file.name === DEFAULT_AGENTS_FILENAME &&
-                !file.missing &&
-                path.resolve(file.path) === executionAgentsPath,
-            );
+        preloadedExecutionProjectFiles ?? (await resolveExecutionProjectBootstrapFiles());
       const layeredBootstrapFiles = [...bootstrapFiles, ...executionProjectFiles];
       return {
         bootstrapFiles: layeredBootstrapFiles,
