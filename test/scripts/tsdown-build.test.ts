@@ -537,7 +537,11 @@ describe("resolveTsdownBuildInvocation", () => {
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
       windowsVerbatimArguments: undefined,
-      env: { NODE_OPTIONS: "--max-old-space-size=8192", npm_execpath: "/unrelated/pnpm.cjs" },
+      env: {
+        NODE_OPTIONS: "--max-old-space-size=8192",
+        npm_execpath: "/unrelated/pnpm.cjs",
+        GOMEMLIMIT: "4915MiB",
+      },
     });
   });
 

@@ -28,6 +28,7 @@ import {
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
+import { resolveNativeDeclarationCompilerEnv } from "./lib/native-declaration-memory.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot, controlUiBuildSiblingPid } from "./lib/output-root-guard.mjs";
 import { readProcessMemoryCapacity, type MemoryLimitParams } from "./lib/process-memory.mts";
@@ -86,6 +87,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/repo-root.mjs",
   "scripts/lib/local-check-runtime.mts",
   "scripts/lib/process-memory.mts",
+  "scripts/lib/native-declaration-memory.mts",
   "scripts/tsx.mjs",
   "scripts/lib/tsx-cli-shim.mjs",
   "scripts/lib/bundled-plugin-build-entries.mjs",
@@ -115,11 +117,16 @@ type OutputRootParams = {
   roots?: string[];
 };
 
-type ResolvedMemoryLimitParams = MemoryLimitParams & { resolvedMaxOldSpaceMb?: number };
+type ResolvedMemoryLimitParams = MemoryLimitParams & {
+  resolvedMaxOldSpaceMb?: number;
+  resolvedMemoryCapacity?: ReturnType<typeof readProcessMemoryCapacity>;
+};
 
 type TsdownBuildParams = ResolvedMemoryLimitParams & {
   args?: string[];
   nodeExecPath?: string;
+  // The staged writer resolves one shared budget after selecting batch concurrency.
+  deferNativeDeclarationMemory?: boolean;
 };
 
 type TsdownBuildResult = ReturnType<ReturnType<typeof createTsdownOutputScanner>["finish"]> & {
@@ -617,7 +624,8 @@ function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
   if (envOverride !== null) {
     return { maxOldSpaceMb: envOverride, unresolvedCgroupMemory: false };
   }
-  const { limitBytes, unresolved } = readProcessMemoryCapacity(params);
+  const { limitBytes, unresolved } =
+    params.resolvedMemoryCapacity ?? readProcessMemoryCapacity(params);
   if (unresolved) {
     return { maxOldSpaceMb: 1, unresolvedCgroupMemory: true };
   }
@@ -666,8 +674,9 @@ export function resolveStagedDeclarationConcurrency(
 }
 
 /**
- * Measured against this repo by running the full eleven-invocation build inside real cgroups.
- * A 5GiB slice resolves this heap, completes, and peaks at 4730MiB. A 4GiB slice (3328MB heap)
+ * Measured against this repo's runtime bundler inside real cgroups, before native TypeScript 7
+ * declaration emission. A 5GiB slice resolves this heap and the runtime phase peaks at 4730MiB.
+ * A 4GiB slice (3328MB heap)
  * and a 2816MiB slice (2048MB heap) are both killed in the third, unified-runtime invocation,
  * which also runs when declarations are disabled. Roughly 380MiB of the peak is rolldown, a
  * native addon which --max-old-space-size does not govern at all.
@@ -719,8 +728,9 @@ export function describeInsufficientTsdownHeap(
       budget.unresolvedCgroupMemory
         ? "[tsdown-build] The process memory limit is not visible through this cgroup mount namespace, so OpenClaw cannot choose a safe default heap."
         : `[tsdown-build] The resolved OpenClaw build heap is ${maxOldSpaceMb}MB, ` +
-          `and a full build needs ${MEASURED_MIN_TSDOWN_HEAP_MB}MB, peaking near 4.7GB once rolldown's ` +
-          `native allocations are counted; those are not covered by --max-old-space-size.`,
+          `and the runtime bundle needs ${MEASURED_MIN_TSDOWN_HEAP_MB}MB, peaking near 4.7GB once rolldown's ` +
+          `native allocations are counted; those are not covered by --max-old-space-size. ` +
+          `Cold native declaration emission needs additional memory and uses GOMEMLIMIT, not the Node heap limit.`,
       ...outcome,
     ].join("\n"),
   };
@@ -880,7 +890,25 @@ export function resolveTsdownBuildInvocation(
       stdio: tsdownStdio(),
       shell: false,
       windowsVerbatimArguments: undefined,
-      env,
+      // The async TS7 API inherits its worker's environment and has no env option.
+      // Watch ignores tsdown config concurrency, so its graphs have no known shared budget.
+      env:
+        !params.deferNativeDeclarationMemory &&
+        !args.some(isWatchArg) &&
+        !runtimeOnly &&
+        tsdownDeclarationsEnabled(args, env) &&
+        env.GOMEMLIMIT === undefined
+          ? resolveNativeDeclarationCompilerEnv({
+              ...params,
+              env,
+              capacity: params.resolvedMemoryCapacity,
+              concurrentCompilers:
+                parsePositiveIntegerEnv(
+                  readForwardedOption(args, ["--concurrency"]),
+                  "--concurrency",
+                ) ?? 1,
+            })
+          : env,
     },
   };
 }
@@ -1021,10 +1049,21 @@ function isFullTsdownBuildPlan(args: string[]) {
 }
 
 export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
-  const budget = resolveTsdownMemoryBudget(params);
+  // Freeze one capacity read for both heap admission and the serial compiler workers.
+  // Staged declarations defer their Go budget until batch concurrency is known.
+  const memoryParams =
+    !params.deferNativeDeclarationMemory &&
+    tsdownDeclarationsEnabled(params.args ?? [], params.env ?? process.env)
+      ? {
+          ...params,
+          resolvedMemoryCapacity:
+            params.resolvedMemoryCapacity ?? readProcessMemoryCapacity(params),
+        }
+      : params;
+  const budget = resolveTsdownMemoryBudget(memoryParams);
   const maxOldSpaceMb = budget.maxOldSpaceMb;
   const preparedParams = {
-    ...params,
+    ...memoryParams,
     resolvedMaxOldSpaceMb: maxOldSpaceMb,
   };
   return {
