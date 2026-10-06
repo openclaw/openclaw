@@ -1434,139 +1434,72 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("clears the in-flight restart token when a file intent handles authorized SIGUSR2", async () => {
-    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({
-      force: true,
-      reason: "file-intent restart",
-    });
-    createGatewayActiveWorkSnapshot.mockReturnValue(
-      createActiveWorkSnapshot({ embeddedRuns: 1 }, [
-        { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
-      ]),
-    );
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { start, exited } = await createSignaledLoopHarness();
-      const restartSignal = captureSignal("SIGUSR2");
-      const sigint = captureSignal("SIGINT");
-
-      restartSignal();
-      await waitForLoopTurn();
-      await waitForLoopTurn();
-
-      expect(consumeGatewayRestartAuthorization).toHaveBeenCalledOnce();
-      expect(markGatewayRestartHandled).toHaveBeenCalledOnce();
-      expect(start).toHaveBeenCalledTimes(2);
-
-      sigint();
-      await expect(exited).resolves.toBe(0);
-    });
-  });
-
-  it("calls abortPendingChannelReloads for file-intent restart even when authorization is false", async () => {
-    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({
-      force: true,
-      reason: "file-intent restart",
-    });
-    consumeGatewayRestartAuthorization.mockReturnValueOnce(false);
-    createGatewayActiveWorkSnapshot.mockReturnValue(
-      createActiveWorkSnapshot({ embeddedRuns: 1 }, [
-        { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
-      ]),
-    );
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { start, exited } = await createSignaledLoopHarness();
-      const restartSignal = captureSignal("SIGUSR2");
-      const sigint = captureSignal("SIGINT");
-
-      restartSignal();
-      await waitForLoopTurn();
-      await waitForLoopTurn();
-
-      // File-intent restart always restarts regardless of authorization.
-      // abortPendingChannelReloads must be called to cancel any stale
-      // deferred channel reload work before the in-process restart.
-      expect(abortPendingChannelReloads).toHaveBeenCalledOnce();
-      // Authorization was consumed but returned false.
-      expect(consumeGatewayRestartAuthorization).toHaveBeenCalledOnce();
-      // markGatewayRestartHandled should NOT be called when auth is false.
-      expect(markGatewayRestartHandled).not.toHaveBeenCalled();
-      // Restart still proceeds for file-intent regardless of auth result.
-      expect(start).toHaveBeenCalledTimes(2);
-
-      sigint();
-      await expect(exited).resolves.toBe(0);
-    });
-  });
-
-  it("releases the lock before exiting on supervised restart", async () => {
-    peekGatewayRestartReason.mockReturnValue(undefined);
-    const originalTraceEnv = process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
-    process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-
-    try {
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const lockRelease = vi.fn(async () => {});
-        acquireGatewayLock.mockResolvedValueOnce({
-          release: lockRelease,
-        });
-
-        restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
-
-        const exitCallOrder: string[] = [];
-        const { runtime, exited } = await createSignaledLoopHarness(exitCallOrder);
-        const restartSignal = captureSignal("SIGUSR2");
-        lockRelease.mockImplementation(async () => {
-          exitCallOrder.push("lockRelease");
-        });
-
-        restartSignal();
-
-        await exited;
-        expect(lockRelease).toHaveBeenCalledTimes(1);
-        expect(runtime.exit).toHaveBeenCalledWith(0);
-        expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
-        const [respawnOpts] = restartGatewayProcessWithFreshPid.mock.calls[0] ?? [];
-        expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS).toMatch(/^\d/u);
-        expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS).toMatch(/^\d/u);
-        expect(writeGatewayRestartHandoffSync).toHaveBeenCalledOnce();
+  it.each([true, false])(
+    "consumes file-intent SIGUSR2 and cancels pending reloads (authorized=%s)",
+    async (authorized) => {
+      consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({
+        force: true,
+        reason: "file-intent restart",
       });
-    } finally {
-      delete process.env.OPENCLAW_SUPERVISOR_MODE;
-      if (originalTraceEnv === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
-      } else {
-        process.env.OPENCLAW_GATEWAY_RESTART_TRACE = originalTraceEnv;
-      }
-    }
-  });
+      consumeGatewayRestartAuthorization.mockReturnValueOnce(authorized);
+      createGatewayActiveWorkSnapshot.mockReturnValue(
+        createActiveWorkSnapshot({ embeddedRuns: 1 }, [
+          { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
+        ]),
+      );
 
-  it("returns the supervisor-owned restart code after releasing the lock", async () => {
-    peekGatewayRestartReason.mockReturnValue(undefined);
-    process.env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Gateway";
-
-    try {
       await withIsolatedSignals(async ({ captureSignal }) => {
-        const lockRelease = vi.fn(async () => {});
-        acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
-        restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-          mode: "supervised",
-          exitCode: 75,
-        });
-
-        const { runtime, exited } = await createSignaledLoopHarness();
+        const { start, exited } = await createSignaledLoopHarness();
         captureSignal("SIGUSR2")();
+        await waitForLoopTurn();
+        await waitForLoopTurn();
 
-        await expect(exited).resolves.toBe(75);
-        expect(lockRelease).toHaveBeenCalledOnce();
-        expect(runtime.exit).toHaveBeenCalledWith(75);
+        expect(abortPendingChannelReloads).toHaveBeenCalledOnce();
+        expect(consumeGatewayRestartAuthorization).toHaveBeenCalledOnce();
+        expect(markGatewayRestartHandled).toHaveBeenCalledTimes(authorized ? 1 : 0);
+        expect(start).toHaveBeenCalledTimes(2);
+
+        captureSignal("SIGINT")();
+        await expect(exited).resolves.toBe(0);
       });
-    } finally {
-      delete process.env.OPENCLAW_WINDOWS_TASK_NAME;
-    }
-  });
+    },
+  );
+
+  it.each([
+    { marker: "OPENCLAW_SUPERVISOR_MODE", value: "external", exitCode: undefined },
+    { marker: "OPENCLAW_WINDOWS_TASK_NAME", value: "OpenClaw Gateway", exitCode: 75 },
+  ])(
+    "releases the lock before supervised restart exit $exitCode",
+    async ({ marker, value, exitCode }) => {
+      peekGatewayRestartReason.mockReturnValue(undefined);
+      const env = captureEnv([marker, "OPENCLAW_GATEWAY_RESTART_TRACE"]);
+      process.env[marker] = value;
+      process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
+      try {
+        await withIsolatedSignals(async ({ captureSignal }) => {
+          const exitCallOrder: string[] = [];
+          const lockRelease = vi.fn(async () => {
+            exitCallOrder.push("lockRelease");
+          });
+          acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
+          restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised", exitCode });
+          const { runtime, exited } = await createSignaledLoopHarness(exitCallOrder);
+          captureSignal("SIGUSR2")();
+
+          await expect(exited).resolves.toBe(exitCode ?? 0);
+          expect(lockRelease).toHaveBeenCalledOnce();
+          expect(runtime.exit).toHaveBeenCalledWith(exitCode ?? 0);
+          expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
+          const [respawnOpts] = restartGatewayProcessWithFreshPid.mock.calls[0] ?? [];
+          expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS).toMatch(/^\d/u);
+          expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS).toMatch(/^\d/u);
+          expect(writeGatewayRestartHandoffSync).toHaveBeenCalledOnce();
+        });
+      } finally {
+        env.restore();
+      }
+    },
+  );
 
   it("falls back in-process when an external restart handoff cannot be persisted", async () => {
     peekGatewayRestartReason.mockReturnValue(undefined);
