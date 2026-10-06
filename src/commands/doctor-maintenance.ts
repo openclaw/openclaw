@@ -31,7 +31,6 @@ import {
   assertDoctorMaintenanceInspection,
   classifyDoctorMaintenanceRefusal,
   readDoctorGatewayOwnerLease,
-  readDoctorMaintenanceRecoveryConfig,
 } from "./doctor-maintenance-inspection.js";
 import {
   assertStaleDoctorGatewayStopped,
@@ -661,22 +660,17 @@ export async function beginDoctorMaintenance(
           await release(assertCustody);
           return;
         }
-        if (classifyDoctorMaintenanceRefusal(failure).kind === "data-at-risk") {
-          retainStoppedInstallation = true;
-          await release(assertCustody);
-          return;
-        }
         if (!cfg) {
           try {
-            cfg = await readDoctorMaintenanceRecoveryConfig(
-              state.resources!,
-              env,
-              params.runtime.log,
-            );
+            // Readiness may be the operation that failed. Reversing Doctor's own
+            // stop must not re-enter that gate; the previous Gateway remains the
+            // recovery owner for the persisted state it was already serving.
+            const { readConfigFileSnapshot } = await import("../config/config.js");
+            cfg = (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false }))
+              .config;
           } catch (error) {
-            retainStoppedInstallation = true;
             throw new DoctorMaintenanceRefusalError(
-              `Doctor left the Gateway stopped because persisted repair state is not ready: ${formatErrorMessage(error)}`,
+              `Doctor could not restore the Gateway because persisted repair state is not ready: ${formatErrorMessage(error)}`,
               { kind: "data-at-risk", reason: "incomplete-migration" },
               { cause: error },
             );
