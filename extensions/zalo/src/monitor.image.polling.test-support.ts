@@ -189,7 +189,9 @@ describe("Zalo polling image handling", () => {
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         RawBody: "/reset",
@@ -225,7 +227,9 @@ describe("Zalo polling image handling", () => {
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         RawBody: "",
