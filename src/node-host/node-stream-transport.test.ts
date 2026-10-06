@@ -1,12 +1,14 @@
 import { createHash, X509Certificate } from "node:crypto";
+import { once } from "node:events";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import net, { type AddressInfo } from "node:net";
 import { Duplex } from "node:stream";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { installGlobalProxy } from "@openclaw/proxyline";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -743,6 +745,98 @@ describe("node stream close acknowledgement", () => {
       controller.abort();
       target.destroy();
       peer?.destroy();
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  });
+
+  it("closes the client when a gateway close withholds TCP FIN", async () => {
+    let peer: net.Socket | undefined;
+    const receivedFin = createDeferred();
+    const gateway = net.createServer({ allowHalfOpen: true }, (socket) => {
+      peer = socket;
+      socket.on("error", () => undefined);
+      socket.once("end", () => receivedFin.resolve());
+      let buffer = Buffer.alloc(0);
+      let upgraded = false;
+      let sentClose = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (!upgraded) {
+          buffer = Buffer.concat([buffer, chunk]);
+          const headerEnd = buffer.indexOf("\r\n\r\n");
+          if (headerEnd === -1) {
+            return;
+          }
+          const header = buffer.subarray(0, headerEnd).toString("latin1");
+          const key = /^Sec-WebSocket-Key: ([^\r\n]+)/m.exec(header)?.[1]?.trim();
+          if (!key) {
+            socket.destroy();
+            return;
+          }
+          const accept = createHash("sha1")
+            .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+            .digest("base64");
+          socket.write(
+            "HTTP/1.1 101 Switching Protocols\r\n" +
+              "Upgrade: websocket\r\n" +
+              "Connection: Upgrade\r\n" +
+              `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+          );
+          upgraded = true;
+          return;
+        }
+        if (!sentClose) {
+          sentClose = true;
+          // Close code 1000. Leave the TCP connection half-open.
+          socket.write(Buffer.from([0x88, 0x02, 0x03, 0xe8]));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const target = new Duplex({
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    const closeSpy = vi.spyOn(WebSocket.prototype, "close");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const controller = new AbortController();
+    let failure: unknown;
+    const running = runNodeStreamTransport({
+      gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+      attachPath: "/node-desktop/attach",
+      expectedAttachPath: "/node-desktop/attach",
+      target: { stream: target },
+      metadata: { ok: true },
+      streamName: "desktop",
+      signal: controller.signal,
+    }).catch((error: unknown) => {
+      failure = error;
+    });
+    try {
+      await receivedFin.promise;
+      expect(target.readableEnded).toBe(false);
+      const client = closeSpy.mock.contexts[0];
+      if (!(client instanceof WebSocket)) {
+        throw new Error("Expected a client WebSocket close handshake");
+      }
+      const closed = once(client, "close");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(client.readyState).toBe(WebSocket.CLOSED);
+      await closed;
+      await running;
+      expect(failure).toBeUndefined();
+    } finally {
+      controller.abort();
+      target.destroy();
+      peer?.destroy();
+      await running;
+      closeSpy.mockRestore();
+      vi.useRealTimers();
       await new Promise<void>((resolve) => {
         gateway.close(() => resolve());
       });
