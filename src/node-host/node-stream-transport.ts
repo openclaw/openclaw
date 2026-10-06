@@ -23,16 +23,15 @@ const WEBSOCKET_CLOSING = 2;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
 const PAUSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 const RESUME_CHECK_MS = 25;
-// ws waits 30s for a close acknowledgement. A silent peer would hold the
-// desktop or portal command that long after the local target has already ended.
+// An empty target close has nothing left to deliver. Bound that handshake so
+// a silent gateway cannot hold the command open.
 const STREAM_CLOSE_ACK_MS = 5_000;
-// ws.close() can return while the last payload and the close frame are still
-// queued. The library allows 30s for that flush. The short acknowledgement
-// budget starts only after those bytes have left the WebSocket buffer.
+// A peer that stops reading leaves the payload queued in this process.
 const STREAM_CLOSE_FLUSH_MS = 30_000;
-// bufferedAmount === 0 means the kernel accepted the bytes, not that the
-// gateway has read them. A short ack after any forward completes the node
-// command, the gateway retires the stream, and a slow proxy drops the tail.
+// ws destroys the socket 30s after close(). The node command must stay open
+// until the gateway acknowledges the close: settling it destroys the receive
+// stream while a proxy can still be holding the tail.
+const STREAM_CLOSE_HANDSHAKE_MS = 2_147_483_647;
 const streamLog = createSubsystemLogger("node-host/stream");
 
 type NodeStreamCloseTrigger =
@@ -75,6 +74,8 @@ function websocketOptions(
     maxPayload: MAX_PAYLOAD_BYTES,
     ...(cloudflareAccess ? { headers: buildCloudflareAccessHeaders(cloudflareAccess) } : {}),
   };
+  // ClientOptions does not declare closeTimeout. The runtime still reads it.
+  Object.assign(options, { closeTimeout: STREAM_CLOSE_HANDSHAKE_MS });
   if (tlsFingerprint?.trim()) {
     applyGatewayWebSocketTlsPin(options, tlsFingerprint);
   }
@@ -185,12 +186,7 @@ function createNodeStreamSplice(params: {
       params.diagnostics.trigger ??= "target-close";
       stopInbound();
       if (params.socket.readableEnded && params.ws.readyState === WEBSOCKET_OPEN) {
-        // close() queues the final frames and returns before they are written.
-        // Wait for that outbound buffer to drain, then apply the short
-        // acknowledgement budget. A stuck flush keeps the library's 30s allowance.
-        params.ws.close();
         const closeAckMs = params.closeAckMs ?? STREAM_CLOSE_ACK_MS;
-        const flushDeadline = Date.now() + STREAM_CLOSE_FLUSH_MS;
         const retireUnacknowledged = () => {
           cancelCloseAck = undefined;
           finish("websocket-close");
@@ -201,20 +197,39 @@ function createNodeStreamSplice(params: {
             params.ws.terminate();
           }
         };
-        const armCloseAck = () => {
-          if (settled) {
+        if (forwardedBytes === 0) {
+          params.ws.close();
+          cancelCloseAck = scheduleCloseAck(retireUnacknowledged, closeAckMs);
+          return;
+        }
+        // bufferedAmount === 0 only means the kernel accepted the bytes.
+        // Finish on the gateway close, not on a timer, or the receive stream
+        // is destroyed while those bytes are still downstream.
+        let observedAmount = params.ws.bufferedAmount;
+        let progressAt = Date.now();
+        const closeAfterDrain = () => {
+          if (settled || params.ws.readyState !== WEBSOCKET_OPEN) {
             return;
           }
           cancelCloseAck?.();
-          if (params.ws.bufferedAmount > 0 && Date.now() < flushDeadline) {
-            cancelCloseAck = scheduleCloseAck(armCloseAck, RESUME_CHECK_MS);
+          cancelCloseAck = undefined;
+          const amount = params.ws.bufferedAmount;
+          const now = Date.now();
+          if (amount < observedAmount) {
+            observedAmount = amount;
+            progressAt = now;
+          }
+          if (amount > 0) {
+            if (now - progressAt < STREAM_CLOSE_FLUSH_MS) {
+              cancelCloseAck = scheduleCloseAck(closeAfterDrain, RESUME_CHECK_MS);
+              return;
+            }
+            retireUnacknowledged();
             return;
           }
-          const ackDelay =
-            forwardedBytes > 0 ? Math.max(closeAckMs, STREAM_CLOSE_FLUSH_MS) : closeAckMs;
-          cancelCloseAck = scheduleCloseAck(retireUnacknowledged, ackDelay);
+          params.ws.close();
         };
-        armCloseAck();
+        closeAfterDrain();
       } else {
         finish("target-close");
       }

@@ -524,7 +524,7 @@ describe("node stream close acknowledgement", () => {
         client.close();
       }
       await expect.poll(() => settled).toBe(true);
-      expect(delays.includes(40)).toBe(false);
+      expect(delays.some((delay) => delay >= 1_000)).toBe(false);
       expect(receivedSevens).toBe(payload.length);
     } finally {
       controller.abort();
