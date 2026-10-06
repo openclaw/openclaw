@@ -207,6 +207,53 @@ describe("applyMemoryWikiMutation", () => {
     ).toHaveLength(2);
   });
 
+  it("rejects a synthesis update that would erase marked Notes inside a managed range", async () => {
+    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-crossing-notes-" });
+    const pagePath = path.join(rootDir, "syntheses", "crossing-notes.md");
+    const original = renderWikiMarkdown({
+      frontmatter: {
+        pageType: "synthesis",
+        id: "synthesis.crossing-notes",
+        title: "Crossing Notes",
+        sourceIds: ["source.original"],
+      },
+      body: [
+        "# Crossing Notes",
+        "",
+        "## Summary",
+        "<!-- openclaw:wiki:generated:start -->",
+        "Old summary",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "Durable earlier annotation",
+        "<!-- openclaw:human:end -->",
+        "Generated tail",
+        "<!-- openclaw:wiki:generated:end -->",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "Durable later annotation",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+    });
+    await fs.mkdir(path.dirname(pagePath), { recursive: true });
+    await fs.writeFile(pagePath, original, "utf8");
+
+    await expect(
+      applyMemoryWikiMutation({
+        config,
+        mutation: {
+          op: "create_synthesis",
+          title: "Crossing Notes",
+          body: "Current summary.",
+          sourceIds: ["source.updated"],
+        },
+      }),
+    ).rejects.toThrow("Updating managed wiki content would replace human Notes");
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(original);
+  });
+
   it("applies a write when an unrelated vault page has malformed frontmatter (#96125)", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-apply-unrelated-invalid-",

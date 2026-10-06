@@ -15,6 +15,7 @@ import {
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import YAML from "yaml";
 import { extractWikiLinks, forEachMarkdownCodeRange } from "./markdown-links.js";
+import { hasMarkedNotesInsideManagedRange } from "./markdown-notes.js";
 
 export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
 
@@ -499,6 +500,11 @@ export function replaceWikiManagedMarkdownBlock(params: ManagedMarkdownBlockPara
     params.startMarker,
     params.endMarker,
   );
+  if (hasMarkedNotesInsideManagedRange(params.original, candidateGeneratedRanges)) {
+    throw new Error(
+      "Updating managed wiki content would replace human Notes; restore human Notes outside managed markers before updating this page",
+    );
+  }
   const notesSection = findNotesSectionRange(params.original, candidateGeneratedRanges);
   const generatedRanges = findBalancedManagedMarkdownRanges(
     params.original,

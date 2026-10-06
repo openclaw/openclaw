@@ -391,6 +391,40 @@ describe("human Notes blocks", () => {
     expect(updated.match(new RegExp(generatedStart, "gu"))).toHaveLength(1);
   });
 
+  it("rejects a managed range that contains marked Notes before another Notes section", () => {
+    const generatedStart = "<!-- openclaw:wiki:generated:start -->";
+    const generatedEnd = "<!-- openclaw:wiki:generated:end -->";
+    const original = [
+      "# Synthesis",
+      "",
+      "## Summary",
+      generatedStart,
+      "Old summary",
+      "## Notes",
+      startMarker,
+      "Durable earlier annotation",
+      endMarker,
+      "Generated tail",
+      generatedEnd,
+      "",
+      "## Notes",
+      startMarker,
+      "Durable later annotation",
+      endMarker,
+      "",
+    ].join("\n");
+
+    expect(() =>
+      replaceWikiManagedMarkdownBlock({
+        original,
+        heading: "## Summary",
+        startMarker: generatedStart,
+        endMarker: generatedEnd,
+        body: "Current summary",
+      }),
+    ).toThrow("Updating managed wiki content would replace human Notes");
+  });
+
   it("ignores a fenced human-end example in generated content when preserving Notes", () => {
     const generatedStart = "<!-- openclaw:wiki:generated:start -->";
     const generatedEnd = "<!-- openclaw:wiki:generated:end -->";
