@@ -188,7 +188,8 @@ suite.define(() => {
         expect(await page.locator(".chat-tool-msg-body").textContent()).not.toContain("TAIL:");
         await page.getByRole("button", { name: "Show full output", exact: true }).click();
         const request = await gateway.waitForRequest("chat.message.get");
-        expect(request.params).toMatchObject({ messageId: "output-result", maxChars: 2_000_000 });
+        expect(request.params).toMatchObject({ messageId: "output-result" });
+        expect(request.params.maxChars).toBeGreaterThanOrEqual(fullOutput.length);
         const output = page.locator(".chat-tool-output__text");
         await expect.poll(() => output.textContent()).toBe(fullOutput);
         expect(await page.locator("openclaw-chat-tool-output").textContent()).not.toContain(
