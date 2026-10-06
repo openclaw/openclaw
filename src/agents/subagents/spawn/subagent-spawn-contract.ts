@@ -22,6 +22,10 @@ export type SpawnSubagentParams = {
   /** Canonical request hash checked before reusing a host-reserved collector. */
   swarmLaunchRequestFingerprint?: string;
   cwd?: string;
+  projectId?: string;
+  worktree?: boolean;
+  worktreeName?: string;
+  worktreeBaseRef?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: SpawnSubagentMode;
@@ -30,6 +34,7 @@ export type SpawnSubagentParams = {
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
+  completionTarget?: "parent";
   attachments?: Array<{
     name: string;
     content: string;
@@ -40,10 +45,17 @@ export type SpawnSubagentParams = {
 };
 
 export type SpawnSubagentContext = SpawnedToolContext & {
+  onSpawnEffectsStart?: () => void;
   agentSessionKey?: string;
+  /** Trusted parent tool construction facts; never read from model arguments. */
+  senderIsOwner?: boolean;
+  expectedParentSessionId?: string;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
+  /** Active requester sandbox classification, preserved separately from the durable lineage key.
+   * Hidden native spawn derives sandbox admission from this when set, mirroring visible/ACP paths. */
+  sandboxed?: boolean;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
@@ -53,6 +65,8 @@ export type SpawnSubagentContext = SpawnedToolContext & {
   currentMessageId?: string | number;
   requesterAgentIdOverride?: string;
   requesterRunId?: string;
+  /** Private invocation fence, consumed only before registration transfers ownership. */
+  assertActive?: () => void;
 };
 
 export type SpawnSubagentResult = {
@@ -61,6 +75,8 @@ export type SpawnSubagentResult = {
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
+  expectsCompletionMessage?: boolean;
+  completionTarget?: "parent";
   note?: string;
   /** Fully resolved model ref applied to the spawned child session. */
   resolvedModel?: string;

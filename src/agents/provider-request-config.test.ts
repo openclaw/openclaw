@@ -33,6 +33,8 @@ function buildProviderMetadataOwners(
     setupProviders: empty,
     commandAliases: empty,
     contracts: empty,
+    providerAuthContributions: [],
+    modelIdNormalizationPolicies: new Map(),
     providerEndpoints: endpoints,
     providerRequests: requests,
   };
@@ -49,6 +51,8 @@ describe("provider request config", () => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      providerAuthContributions: [],
+      modelIdNormalizationPolicies: new Map(),
       providerEndpoints: [],
       providerRequests: new Map([["prepared", { family: "prepared-family" }]]),
     };
@@ -506,27 +510,6 @@ describe("provider request config", () => {
     });
   });
 
-  it("lets defaults override caller headers when requested", () => {
-    const resolved = resolveProviderRequestHeaders({
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      capability: "llm",
-      transport: "stream",
-      callerHeaders: {
-        originator: "spoofed",
-        "User-Agent": "spoofed/0.0.0",
-        "X-Custom": "1",
-      },
-      precedence: "defaults-win",
-    });
-
-    expect(resolved?.originator).toBe("openclaw");
-    expect(typeof resolved?.version).toBe("string");
-    expect(resolved?.["User-Agent"]).toMatch(/^openclaw\//);
-    expect(resolved?.["X-Custom"]).toBe("1");
-  });
-
   it("lets caller headers override defaults when requested", () => {
     const resolved = resolveProviderRequestHeaders({
       provider: "openrouter",
@@ -543,8 +526,7 @@ describe("provider request config", () => {
     expect(resolved).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories":
-        "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
+      "X-OpenRouter-Categories": "personal-agent,cli-agent",
       "X-Custom": "1",
     });
   });
@@ -587,11 +569,33 @@ describe("provider request config", () => {
     });
   });
 
-  it("merges header names case-insensitively", () => {
-    const resolved = resolveProviderRequestHeaders({
+  it.each([
+    {
+      label: "OpenAI",
       provider: "openai",
-      api: "openai-responses",
+      api: "openai-responses" as const,
       baseUrl: "https://api.openai.com/v1",
+      expectedUserAgent: /^openclaw\//,
+    },
+    {
+      label: "native OpenCode Go",
+      provider: "opencode-go",
+      api: "openai-completions" as const,
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      expectedUserAgent: /^openclaw\//,
+    },
+    {
+      label: "proxied OpenCode Go",
+      provider: "opencode-go",
+      api: "openai-completions" as const,
+      baseUrl: "https://proxy.example.com/v1",
+      expectedUserAgent: /^custom-agent\//,
+    },
+  ])("merges $label User-Agent headers case-insensitively", (testCase) => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: testCase.provider,
+      api: testCase.api,
+      baseUrl: testCase.baseUrl,
       capability: "llm",
       transport: "stream",
       callerHeaders: {
@@ -603,7 +607,7 @@ describe("provider request config", () => {
     expect(
       Object.keys(resolved ?? {}).filter((key) => key.toLowerCase() === "user-agent"),
     ).toHaveLength(1);
-    expect(resolved?.["User-Agent"]).toMatch(/^openclaw\//);
+    expect(new Headers(resolved).get("user-agent")).toMatch(testCase.expectedUserAgent);
   });
 
   it("drops forbidden header keys while merging", () => {

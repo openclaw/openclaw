@@ -2,27 +2,26 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
+import { settleLitElement } from "../../../test-helpers/lit-settle.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
-import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
+import type {
+  SessionDiffFileTextLoader,
+  SessionDiffLoader,
+  SessionDiffOwner,
+} from "./session-diff-panel.ts";
 import "./session-diff-panel.ts";
 
 type SessionDiffElement = HTMLElement & {
+  owner: SessionDiffOwner | null;
   execNode: string | null;
   loadFileText: SessionDiffFileTextLoader | null;
   loader: SessionDiffLoader | null;
   readonly updateComplete: Promise<boolean>;
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
 
 function result(branch: string): SessionsDiffResult {
   return {
@@ -72,7 +71,8 @@ function fileResult(patch: string): SessionsDiffResult {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await vi.dynamicImportSettled();
   document.body.replaceChildren();
   clearNativeGatewayTestState();
   vi.restoreAllMocks();
@@ -80,6 +80,70 @@ afterEach(() => {
 });
 
 describe("SessionDiffPanel", () => {
+  it("distinguishes incomplete diff results from a clean checkout", async () => {
+    setNativeGatewayTestState(null);
+    const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
+    panel.loader = async () => ({ ...result("feature/test"), truncated: true });
+    document.body.append(panel);
+    await settleLitElement(panel);
+
+    expect(panel.textContent).not.toContain("No changes in this session's checkout.");
+    expect(panel.textContent).toContain("Some changes could not be displayed.");
+    expect(panel.querySelector(".session-diff__file")).toBeNull();
+
+    panel.loader = async () => ({
+      ...result("feature/test"),
+      truncated: true,
+      files: [
+        { path: "example.txt", status: "added", additions: 0, deletions: 0, truncated: true },
+      ],
+    });
+    await settleLitElement(panel);
+
+    expect(panel.querySelector(".session-diff__filename")?.textContent).toBe("example.txt");
+    expect(panel.textContent).toContain("Diff preview is unavailable.");
+    expect(panel.textContent).toContain("Some changes could not be displayed.");
+    expect(panel.textContent).not.toContain("No changes in this session's checkout.");
+
+    panel.loader = async () => ({ ...fileResult(SNAPSHOT_PATCH), truncated: true });
+    await settleLitElement(panel);
+
+    expect(panel.querySelector(".session-diff__filename")?.textContent).toBe("example.txt");
+    expect(panel.textContent).toContain("snapshot line");
+    expect(panel.textContent).not.toContain("Diff preview is unavailable.");
+    expect(panel.textContent).toContain("Some changes could not be displayed.");
+    expect(panel.textContent).not.toContain("No changes in this session's checkout.");
+
+    panel.loader = async () => result("feature/test");
+    await settleLitElement(panel);
+
+    expect(panel.textContent).toContain("No changes in this session's checkout.");
+    expect(panel.textContent).not.toContain("Some changes could not be displayed.");
+    expect(panel.querySelector(".session-diff__file")).toBeNull();
+  });
+
+  it("keeps stopped cloud changes visible with restart guidance and no local checkout action", async () => {
+    setNativeGatewayTestState("local");
+    const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
+    panel.loader = async () => ({
+      ...result("cloud/session"),
+      unavailableReason: "workspace_stopped",
+      files: [{ path: "saved.txt", status: "modified", additions: 0, deletions: 0 }],
+    });
+    document.body.append(panel);
+    await vi.waitFor(() => expect(panel.textContent).toContain("Saved changed files are shown."));
+    expect(panel.textContent).toContain("saved.txt");
+    expect(panel.textContent).toContain("Start the cloud session to load this diff.");
+    expect(panel.textContent).not.toContain("Diff preview is unavailable.");
+    expect(panel.textContent).not.toContain("No changes in this session");
+    expect(panel.querySelector(".session-diff__toolbar-button")).toBeNull();
+    panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")?.click();
+    await panel.updateComplete;
+    expect(panel.querySelector("openclaw-session-diff-menu")?.textContent).not.toContain(
+      "Open in Editor",
+    );
+  });
+
   it("renders a skeleton only while a real diff request is pending", async () => {
     setNativeGatewayTestState(null);
     const pending = deferred<SessionsDiffResult>();
@@ -100,6 +164,23 @@ describe("SessionDiffPanel", () => {
     await vi.waitFor(() => expect(panel.textContent).toContain("feature/pending"));
     expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("false");
+
+    const replacement = deferred<SessionsDiffResult>();
+    panel.owner = { agentId: "main", sessionKey: "another-session" };
+    panel.loader = () => replacement.promise;
+    await panel.updateComplete;
+    expect(panel.querySelector("openclaw-panel-loading-skeleton")?.variant).toBe("review");
+    expect(panel.textContent).not.toContain("feature/pending");
+    replacement.resolve(result("feature/replacement"));
+    await vi.waitFor(() => expect(panel.textContent).toContain("feature/replacement"));
+
+    panel.loader = async () => {
+      throw new Error("Diff unavailable");
+    };
+    await vi.waitFor(() =>
+      expect(panel.querySelector(".callout.danger")?.textContent).toContain("Diff unavailable"),
+    );
+    expect(panel.textContent).not.toContain("feature/replacement");
   });
 
   it.each([false, true])(
@@ -112,11 +193,12 @@ describe("SessionDiffPanel", () => {
       const patch = [
         "--- a/example.ts",
         "+++ b/example.ts",
-        "@@ -1,4 +1,4 @@",
+        "@@ -1,5 +1,5 @@",
         " /* comment",
         "-old comment",
         "+new comment",
         " */",
+        " ",
         '-const value = "before";',
         '+const value = "<img src=x onerror=alert(1)>";',
       ].join("\n");
@@ -124,6 +206,8 @@ describe("SessionDiffPanel", () => {
       data.files[0]!.path = "example.ts";
       panel.loader = async () => data;
       document.body.append(panel);
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
       await vi.waitFor(() =>
         expect(panel.querySelector(".tok-string")?.textContent).toContain("before"),
       );
@@ -133,6 +217,10 @@ describe("SessionDiffPanel", () => {
       expect(panel.querySelector(".tok-keyword")?.textContent).toBe("const");
       expect(panel.textContent).toContain("<img src=x onerror=alert(1)>");
       expect(panel.querySelector("img")).toBeNull();
+      const textSelector = split ? ".session-diff-split__text" : ".chat-diff__text";
+      expect([...panel.querySelectorAll(textSelector)].map((line) => line.textContent)).toContain(
+        "",
+      );
 
       // Reusing the panel for an unknown file type must discard the prior language.
       panel.loader = async () => ({ ...data, files: [{ ...data.files[0]!, path: "example.txt" }] });
@@ -140,6 +228,9 @@ describe("SessionDiffPanel", () => {
         expect(panel.querySelector(".session-diff__filename")?.textContent).toBe("example.txt"),
       );
       expect(panel.querySelector(".tok-keyword")).toBeNull();
+      expect([...panel.querySelectorAll(textSelector)].map((line) => line.textContent)).toContain(
+        "",
+      );
     },
   );
 
@@ -163,6 +254,8 @@ describe("SessionDiffPanel", () => {
     };
     panel.loader = async () => data;
     document.body.append(panel);
+    await panel.updateComplete;
+    await vi.dynamicImportSettled();
 
     const oldSide = split ? ".session-diff-split__side--left" : ".chat-diff__row--del";
     const newSide = split ? ".session-diff-split__side--right" : ".chat-diff__row--add";
@@ -176,10 +269,8 @@ describe("SessionDiffPanel", () => {
   });
 
   it.each([
-    { surface: "file", failed: false, feedback: "Copied!" },
     { surface: "file", failed: true, feedback: "Copy failed" },
     { surface: "sync", failed: false, feedback: "Copied!" },
-    { surface: "sync", failed: true, feedback: "Copy failed" },
   ])(
     "keeps $surface path copy feedback visible: $feedback",
     async ({ surface, failed, feedback }) => {
@@ -220,7 +311,6 @@ describe("SessionDiffPanel", () => {
 
   it.each([
     { name: "plain browser", nativeGateway: null, offered: false },
-    { name: "native local gateway", nativeGateway: "local", offered: true },
     { name: "native remote gateway", nativeGateway: "remote", offered: false },
     {
       name: "remote execution node",

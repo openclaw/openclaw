@@ -18,12 +18,10 @@ extension GatewayConnection {
             agentID: agentID,
             artifactId: artifactId)
         let responseData = try await self.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
+            request,
             ifCurrentServerLease: lease)
         let response = try JSONDecoder().decode(ArtifactsDownloadResult.self, from: responseData)
-        let maximumBytes = Self.maximumManagedMediaBytes(for: kind)
+        let maximumBytes = kind.maximumDownloadBytes
         let declaredMIME = response.artifact.mimetype?.lowercased()
         if playback != .transcode,
            let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -31,7 +29,7 @@ extension GatewayConnection {
         {
             guard response.encoding == "base64",
                   let declaredMIME,
-                  declaredMIME.hasPrefix(kind.mimeTypePrefix),
+                  kind.acceptsMIMEType(declaredMIME),
                   let data = Data(base64Encoded: encoded),
                   data.count <= maximumBytes
             else { return nil }
@@ -49,8 +47,9 @@ extension GatewayConnection {
 
         let canStreamDirectly = kind == .video &&
             url.scheme?.lowercased() == "https" &&
+            lease.route.browserSession == nil &&
             lease.route.tls == nil &&
-            declaredMIME?.hasPrefix(kind.mimeTypePrefix) == true
+            declaredMIME.map(kind.acceptsMIMEType) == true
         if canStreamDirectly, playback != .transcode, let declaredMIME {
             guard await self.isCurrentServerLease(lease) else {
                 throw OpenClawChatTransportSendError.notDispatched
@@ -63,22 +62,30 @@ extension GatewayConnection {
 
         var urlRequest = URLRequest(url: url)
         urlRequest.timeoutInterval = kind == .video ? 60 : 20
-        urlRequest.setValue("\(kind.rawValue)/*", forHTTPHeaderField: "Accept")
+        urlRequest.setValue(kind.acceptHeader, forHTTPHeaderField: "Accept")
         if canStreamDirectly {
             urlRequest.setValue("bytes=0-0", forHTTPHeaderField: "Range")
         }
-        // Native macOS has no per-Gateway proxy-header configuration surface today. If one is
-        // added, carry its immutable snapshot on Route so the socket and ticket GET cannot diverge.
+        // Artifact tickets do not bypass the ingress issuer. Reuse the socket's
+        // exact session and reject redirects before any credential can leave its authority.
+        for (name, value) in try lease.route.browserSession?.headers(for: url) ?? [:] {
+            urlRequest.setValue(value, forHTTPHeaderField: name)
+        }
         let tls = lease.route.tls?.params ?? GatewayTLSParams(
-            required: false,
+            required: lease.route.browserSession != nil,
             expectedFingerprint: nil,
             allowTOFU: false,
             storeKey: nil)
-        let session = GatewayTLSPinningSession(params: tls)
+        let session = GatewayTLSPinningSession(
+            params: tls,
+            allowsRedirects: lease.route.browserSession == nil,
+            allowsStoredCredentials: lease.route.browserSession == nil)
         defer { session.finishTasksAndInvalidate() }
-        let (data, urlResponse) = try await session.data(
-            for: urlRequest,
-            maximumBytes: maximumBytes)
+        guard await self.isCurrentServerLease(lease) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        let (data, urlResponse) = try await self.transferMedia(
+            request: urlRequest, session: session, maximumBytes: maximumBytes, lease: lease)
         guard await self.isCurrentServerLease(lease) else {
             throw OpenClawChatTransportSendError.notDispatched
         }
@@ -88,7 +95,7 @@ extension GatewayConnection {
         }
         guard (200..<300).contains(http.statusCode),
               let mimeType = http.mimeType?.lowercased(),
-              mimeType.hasPrefix(kind.mimeTypePrefix)
+              kind.acceptsMIMEType(mimeType)
         else { return nil }
         if canStreamDirectly {
             return .stream(OpenClawChatMediaStream(
@@ -99,10 +106,24 @@ extension GatewayConnection {
         return .data(OpenClawChatMediaData(data: data, mimeType: mimeType))
     }
 
-    private static func maximumManagedMediaBytes(for kind: OpenClawChatMediaKind) -> Int {
-        switch kind {
-        case .image: 12 * 1024 * 1024
-        case .audio, .video: 16 * 1024 * 1024
+    func transferMedia(
+        request: URLRequest,
+        session: GatewayTLSPinningSession,
+        maximumBytes: Int,
+        lease: ServerLease) async throws -> (Data, URLResponse)
+    {
+        let transferID = UUID()
+        let transfer = Task {
+            try await session.data(for: request, maximumBytes: maximumBytes) { [weak self] in
+                self?.serverLeaseMatchesCurrentState(lease) == true
+            }
+        }
+        self.managedMediaTransfers[transferID] = transfer
+        defer { self.managedMediaTransfers[transferID] = nil }
+        return try await withTaskCancellationHandler {
+            try await transfer.value
+        } onCancel: {
+            transfer.cancel()
         }
     }
 }

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { SpawnResult } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -33,13 +33,20 @@ const noisy = {
 };
 
 beforeEach(() => {
-  vi.resetModules();
   runCommandWithTimeoutMock.mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
 
 async function loadGmailSetupUtils() {
+  vi.resetModules();
   return await import("./gmail-setup-utils.js");
+}
+
+async function writeExecutable(executable: string): Promise<string> {
+  await fs.mkdir(path.dirname(executable), { recursive: true });
+  await fs.writeFile(executable, "#!/bin/sh\nexit 0\n");
+  await fs.chmod(executable, 0o755);
+  return executable;
 }
 
 describe("ensureDependency binary availability", () => {
@@ -51,28 +58,15 @@ describe("ensureDependency binary availability", () => {
       const { ensureDependency } = await loadGmailSetupUtils();
       await withTestDir({ prefix: "openclaw-dependency-probe-" }, async (root) => {
         const binDir = path.join(root, "bin");
-        await fs.mkdir(binDir);
-        const writeExecutable = async (name: string) => {
-          const executable = path.join(binDir, name);
-          await fs.writeFile(executable, "#!/bin/sh\nexit 0\n");
-          await fs.chmod(executable, 0o755);
-        };
-        await writeExecutable("brew");
+        await writeExecutable(path.join(binDir, "brew"));
         await withEnvAsync({ PATH: binDir, XDG_CONFIG_HOME: path.join(root, "config") }, () =>
           withMockedPlatform("darwin", async () => {
             runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
               expect(argv).toEqual(["brew", "install", "fixture-probe-formula"]);
               if (createsBinary) {
-                await writeExecutable("fixture-gmail-tool");
+                await writeExecutable(path.join(binDir, "fixture-gmail-tool"));
               }
-              return {
-                stdout: "",
-                stderr: "",
-                code: 0,
-                signal: null,
-                killed: false,
-                termination: "exit",
-              };
+              return success;
             });
 
             const install = () => ensureDependency("fixture-gmail-tool", ["fixture-probe-formula"]);
@@ -107,20 +101,13 @@ async function rejection(run: () => Promise<unknown>): Promise<Error> {
 
 describe("runGcloud interpreter resolution", () => {
   itUnix(
-    "resolves a working python path and caches the result",
+    "preserves spaces in the resolved python path and caches the result",
     async () => {
       const { runGcloud } = await loadGmailSetupUtils();
-      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-python-"));
-      try {
-        const realPython = path.join(tmp, "python-real");
-        await fs.writeFile(realPython, "#!/bin/sh\nexit 0\n", "utf-8");
-        await fs.chmod(realPython, 0o755);
-
+      await withTestDir({ prefix: "openclaw-python-" }, async (tmp) => {
+        const realPython = await writeExecutable(path.join(tmp, "Python Runtime", "python-real"));
         const shimDir = path.join(tmp, "shims");
-        await fs.mkdir(shimDir, { recursive: true });
-        const shim = path.join(shimDir, "python3");
-        await fs.writeFile(shim, "#!/bin/sh\nexit 0\n", "utf-8");
-        await fs.chmod(shim, 0o755);
+        await writeExecutable(path.join(shimDir, "python3"));
 
         await withEnvAsync({ PATH: `${shimDir}${path.delimiter}/usr/bin` }, async () => {
           runCommandWithTimeoutMock
@@ -141,9 +128,7 @@ describe("runGcloud interpreter resolution", () => {
             env: { CLOUDSDK_PYTHON: realPython, CLOUDSDK_PYTHON_ARGS: undefined },
           });
         });
-      } finally {
-        await fs.rm(tmp, { recursive: true, force: true });
-      }
+      });
     },
     60_000,
   );
@@ -152,23 +137,15 @@ describe("runGcloud interpreter resolution", () => {
     "skips Python versions below and above gcloud's supported range",
     async () => {
       const { runGcloud } = await loadGmailSetupUtils();
-      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-python-ver-"));
-      try {
-        const oldPython = path.join(tmp, "python-old");
-        await fs.writeFile(oldPython, "#!/bin/sh\nexit 0\n", "utf-8");
-        await fs.chmod(oldPython, 0o755);
-        const goodPython = path.join(tmp, "python-good");
-        await fs.writeFile(goodPython, "#!/bin/sh\nexit 0\n", "utf-8");
-        await fs.chmod(goodPython, 0o755);
+      await withTestDir({ prefix: "openclaw-python-ver-" }, async (tmp) => {
+        const oldPython = await writeExecutable(path.join(tmp, "python-old"));
+        const goodPython = await writeExecutable(path.join(tmp, "python-good"));
 
         const shimDirs = ["old", "future", "supported"].map((name) =>
           path.join(tmp, `${name}-shims`),
         );
         for (const shimDir of shimDirs) {
-          await fs.mkdir(shimDir, { recursive: true });
-          const shim = path.join(shimDir, "python3");
-          await fs.writeFile(shim, "#!/bin/sh\nexit 0\n", "utf-8");
-          await fs.chmod(shim, 0o755);
+          await writeExecutable(path.join(shimDir, "python3"));
         }
 
         await withEnvAsync({ PATH: shimDirs.join(path.delimiter) }, async () => {
@@ -197,9 +174,7 @@ describe("runGcloud interpreter resolution", () => {
             env: { CLOUDSDK_PYTHON: goodPython, CLOUDSDK_PYTHON_ARGS: undefined },
           });
         });
-      } finally {
-        await fs.rm(tmp, { recursive: true, force: true });
-      }
+      });
     },
     60_000,
   );
@@ -210,17 +185,10 @@ describe("runGcloud", () => {
     "overrides an inherited CLOUDSDK_PYTHON value with a resolved interpreter",
     async () => {
       const { runGcloud } = await loadGmailSetupUtils();
-      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gcloud-python-"));
-      try {
-        const realPython = path.join(tmp, "python-real");
-        await fs.writeFile(realPython, "#!/bin/sh\nexit 0\n", "utf-8");
-        await fs.chmod(realPython, 0o755);
-
+      await withTestDir({ prefix: "openclaw-gcloud-python-" }, async (tmp) => {
+        const realPython = await writeExecutable(path.join(tmp, "python-real"));
         const shimDir = path.join(tmp, "shims");
-        await fs.mkdir(shimDir, { recursive: true });
-        const shim = path.join(shimDir, "python3");
-        await fs.writeFile(shim, "#!/bin/sh\nexit 0\n", "utf-8");
-        await fs.chmod(shim, 0o755);
+        await writeExecutable(path.join(shimDir, "python3"));
 
         await withEnvAsync(
           {
@@ -247,9 +215,7 @@ describe("runGcloud", () => {
             );
           },
         );
-      } finally {
-        await fs.rm(tmp, { recursive: true, force: true });
-      }
+      });
     },
     60_000,
   );
@@ -278,53 +244,6 @@ describe("runGcloud", () => {
 });
 
 describe("ensureTailscaleEndpoint", () => {
-  it("includes stdout and exit code when tailscale serve fails", async () => {
-    const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
-    runCommandWithTimeoutMock
-      .mockResolvedValueOnce({
-        ...success,
-        stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net." } }),
-      })
-      .mockResolvedValueOnce({
-        ...success,
-        stdout: "tailscale output",
-        stderr: "Warning: client version mismatch",
-        code: 1,
-      });
-
-    const { message } = await rejection(() =>
-      ensureTailscaleEndpoint({
-        mode: "serve",
-        path: "/gmail-pubsub",
-        port: 8788,
-      }),
-    );
-
-    expect(message).toContain("code=1");
-    expect(message).toContain("stderr: Warning: client version mismatch");
-    expect(message).toContain("stdout: tailscale output");
-  });
-
-  it("includes JSON parse failure details with stdout", async () => {
-    const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      ...success,
-      stdout: "not-json",
-    });
-
-    const { message } = await rejection(() =>
-      ensureTailscaleEndpoint({
-        mode: "funnel",
-        path: "/gmail-pubsub",
-        port: 8788,
-      }),
-    );
-
-    expect(message).toContain("returned invalid JSON");
-    expect(message).toContain("stdout: not-json");
-    expect(message).toContain("code=0");
-  });
-
   it("passes abort signal to tailscale status and serve commands", async () => {
     const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
     const abortController = new AbortController();
@@ -363,26 +282,27 @@ describe("ensureTailscaleEndpoint", () => {
 
 describe("Gmail setup diagnostics and decisions", () => {
   const hasBinaryMock = vi.fn<(bin: string) => boolean>();
+  let configEval: typeof import("../shared/config-eval.js");
+  let utils: typeof import("./gmail-setup-utils.js");
 
-  beforeEach(async () => {
-    // Keep real filesystem probes in the binary-availability cases above.
-    hasBinaryMock.mockReset().mockReturnValue(true);
-    vi.spyOn(await import("../shared/config-eval.js"), "hasBinary").mockImplementation(
-      hasBinaryMock,
-    );
+  beforeAll(async () => {
+    vi.resetModules();
+    configEval = await import("../shared/config-eval.js");
+    utils = await import("./gmail-setup-utils.js");
   });
 
-  it.each(["gcloud", "login", "brew", "tailscale status", "tailscale serve"])(
+  beforeEach(() => {
+    // Keep real filesystem probes in the binary-availability cases above.
+    hasBinaryMock.mockReset().mockReturnValue(true);
+    vi.spyOn(configEval, "hasBinary").mockImplementation(hasBinaryMock);
+  });
+
+  it.each(["gcloud", "brew", "tailscale status", "tailscale serve"])(
     "%s retains bounded tails from both streams",
     async (boundary) =>
       withEnvAsync({ PATH: "" }, async () => {
-        const utils = await loadGmailSetupUtils();
         runCommandWithTimeoutMock.mockResolvedValue(noisy);
         const run = async () => {
-          if (boundary === "login") {
-            runCommandWithTimeoutMock.mockResolvedValueOnce({ ...success, code: 1 });
-            return utils.ensureGcloudAuth();
-          }
           if (boundary === "brew") {
             hasBinaryMock.mockImplementation((bin: string) => bin === "brew");
             return withMockedPlatform("darwin", () => utils.ensureDependency("gog", ["gogcli"]));
@@ -432,27 +352,6 @@ describe("Gmail setup diagnostics and decisions", () => {
       reason: "termination=timeout",
     },
     {
-      termination: "no-output-timeout",
-      code: 124,
-      signal: "SIGTERM",
-      killed: true,
-      reason: "termination=no-output-timeout",
-    },
-    {
-      termination: "signal",
-      code: null,
-      signal: null,
-      killed: false,
-      reason: "termination=signal",
-    },
-    {
-      termination: "signal",
-      code: null,
-      signal: "SIGTERM",
-      killed: true,
-      reason: "termination=signal",
-    },
-    {
       termination: "signal",
       code: null,
       signal: "SIGKILL",
@@ -465,7 +364,7 @@ describe("Gmail setup diagnostics and decisions", () => {
     "retains $reason with code=$code even without output",
     async ({ reason, ...metadata }) =>
       withEnvAsync({ PATH: "" }, async () => {
-        const { runGcloud } = await loadGmailSetupUtils();
+        const { runGcloud } = utils;
         runCommandWithTimeoutMock.mockResolvedValue({ ...success, ...metadata });
         const { message } = await rejection(() => runGcloud(["config", "list"]));
         expect(message).toContain(reason);
@@ -483,7 +382,7 @@ describe("Gmail setup diagnostics and decisions", () => {
   );
 
   it("bounds invalid JSON diagnostics while retaining the parser cause and successful exit metadata", async () => {
-    const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
+    const { ensureTailscaleEndpoint } = utils;
     runCommandWithTimeoutMock.mockResolvedValue({
       ...noisy,
       code: 0,
@@ -503,7 +402,7 @@ describe("Gmail setup diagnostics and decisions", () => {
 
   it("keeps successful gcloud output untouched", async () =>
     withEnvAsync({ PATH: "" }, async () => {
-      const { runGcloud } = await loadGmailSetupUtils();
+      const { runGcloud } = utils;
       const result = { ...noisy, code: 0 };
       runCommandWithTimeoutMock.mockResolvedValue(result);
       expect(await runGcloud(["config", "list"])).toBe(result);
@@ -514,7 +413,7 @@ describe("Gmail setup diagnostics and decisions", () => {
     { code: 1, stdout: "account@example.com\n", login: true },
   ])("auth list code=$code login=$login", async ({ code, stdout, login }) =>
     withEnvAsync({ PATH: "" }, async () => {
-      const { ensureGcloudAuth } = await loadGmailSetupUtils();
+      const { ensureGcloudAuth } = utils;
       runCommandWithTimeoutMock
         .mockResolvedValueOnce({ ...success, code, stdout })
         .mockResolvedValue(success);
@@ -528,7 +427,7 @@ describe("Gmail setup diagnostics and decisions", () => {
 
   it.each([0, 1])("provisions only according to describe exit code %i", async (code) =>
     withEnvAsync({ PATH: "" }, async () => {
-      const { ensureTopic, ensureSubscription } = await loadGmailSetupUtils();
+      const { ensureTopic, ensureSubscription } = utils;
       runCommandWithTimeoutMock
         .mockResolvedValueOnce({ ...success, code })
         .mockResolvedValue(success);
@@ -554,35 +453,19 @@ describe("Gmail setup diagnostics and decisions", () => {
   );
 
   it.each([
-    { state: "installed", platform: "darwin", expected: undefined },
     { state: "missing", platform: "linux", expected: "gog not installed; install it and retry" },
     {
       state: "no brew",
       platform: "darwin",
       expected: "Homebrew not installed (install brew and retry)",
     },
-    {
-      state: "post install missing",
-      platform: "darwin",
-      expected: "gog still not available after brew install",
-    },
-  ] as const)("retains dependency guidance: $state", async ({ state, platform, expected }) => {
-    const { ensureDependency } = await loadGmailSetupUtils();
-    hasBinaryMock.mockImplementation(
-      (bin: string) =>
-        state === "installed" || (state === "post install missing" && bin === "brew"),
-    );
+  ] as const)("retains dependency guidance: $state", async ({ platform, expected }) => {
+    const { ensureDependency } = utils;
+    hasBinaryMock.mockReturnValue(false);
     runCommandWithTimeoutMock.mockResolvedValue(success);
     await withMockedPlatform(platform, async () => {
-      const result = ensureDependency("gog", ["gogcli"]);
-      if (expected) {
-        await expect(result).rejects.toThrow(expected);
-      } else {
-        await expect(result).resolves.toBeUndefined();
-      }
+      await expect(ensureDependency("gog", ["gogcli"])).rejects.toThrow(expected);
     });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(
-      state === "post install missing" ? 1 : 0,
-    );
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 });

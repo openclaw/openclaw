@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   attachPluginInstallOwnerMigrations,
   resolvePluginInstallTransaction,
-  resolvePluginInstallTransactionSink,
+  resolvePluginInstallTransactionRequest,
   settlePluginInstallTransactions,
   type PluginInstallTransaction,
 } from "./install-transaction.js";
@@ -12,7 +12,6 @@ import {
   repairOpenClawPeerLinksForNpmInstalls,
 } from "./update-config.js";
 import type {
-  PluginUpdateChannelFallback,
   PluginUpdateLogger,
   PluginUpdateOutcome,
   PluginUpdateSummary,
@@ -27,7 +26,6 @@ export function recordPluginUpdateFailure(params: {
   pluginId: string;
   message: string;
   options?: {
-    channelFallback?: PluginUpdateChannelFallback;
     code?: string;
     installedPayloadRunnable?: boolean;
   };
@@ -45,7 +43,6 @@ export function recordPluginUpdateFailure(params: {
       pluginId: params.pluginId,
       status: "skipped",
       message,
-      ...(options.channelFallback ? { channelFallback: options.channelFallback } : {}),
     });
     return {
       config: disablePluginAfterUpdateFailure(params.config, params.pluginId),
@@ -56,7 +53,6 @@ export function recordPluginUpdateFailure(params: {
     pluginId: params.pluginId,
     status: "error",
     message: params.message,
-    ...(options.channelFallback ? { channelFallback: options.channelFallback } : {}),
   });
   return { config: params.config, changed: false };
 }
@@ -65,7 +61,7 @@ export function createPluginUpdateTransactionState(params: object) {
   return {
     transactions: [] as PluginInstallTransaction[],
     installOwnerMigrations: {} as Record<string, string>,
-    transactionSink: resolvePluginInstallTransactionSink(params),
+    transactionSink: resolvePluginInstallTransactionRequest(params)?.transactionSink,
   };
 }
 
@@ -92,6 +88,7 @@ export async function finalizePluginUpdateSummary(params: {
   ranNpmInstaller: boolean;
   logger: PluginUpdateLogger;
   transactionState: ReturnType<typeof createPluginUpdateTransactionState>;
+  beforePersistentEffect?: () => void;
 }): Promise<PluginUpdateSummary> {
   let changed = params.changed;
   if (params.ranNpmInstaller) {
@@ -100,9 +97,12 @@ export async function finalizePluginUpdateSummary(params: {
         (await repairOpenClawPeerLinksForNpmInstalls({
           config: params.config,
           logger: params.logger,
+          beforePersistentEffect: params.beforePersistentEffect,
         })) || changed;
     } catch (error) {
-      await settlePluginInstallTransactions(params.transactionState.transactions, "rollback");
+      await settlePluginInstallTransactions(params.transactionState.transactions, "rollback", {
+        error,
+      });
       throw error;
     }
   }

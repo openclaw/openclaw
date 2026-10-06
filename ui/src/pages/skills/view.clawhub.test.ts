@@ -17,6 +17,21 @@ import { renderSkills } from "./view.ts";
 const dialogRestores: Array<() => void> = [];
 const installDialogMethod = createDialogMethodInstaller(dialogRestores);
 
+function createContainer() {
+  const container = document.createElement("div");
+  document.body.append(container);
+  dialogRestores.push(() => container.remove());
+  return container;
+}
+
+function skillReport(skills: SkillStatusReport["skills"]): SkillStatusReport {
+  return { workspaceDir: "/tmp/workspace", managedSkillsDir: "/tmp/skills", skills };
+}
+
+function renderView(container: HTMLElement, overrides: Parameters<typeof createProps>[0] = {}) {
+  render(renderSkills(createProps(overrides)), container);
+}
+
 describe("renderSkills ClawHub", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -27,9 +42,7 @@ describe("renderSkills ClawHub", () => {
   });
 
   it("opens detail dialogs and routes ClawHub actions", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
+    const container = createContainer();
     const onDetailClose = vi.fn();
     const showModal = vi.fn(function (this: HTMLDialogElement) {
       this.setAttribute("open", "");
@@ -43,127 +56,126 @@ describe("renderSkills ClawHub", () => {
       this.dispatchEvent(new Event("close"));
     });
 
-    render(
-      renderSkills(
-        createProps({
-          detailKey: "repo-skill",
-          onDetailClose,
-        }),
-      ),
-      container,
-    );
+    renderView(container, {
+      detailKey: "repo-skill",
+      onDetailClose,
+    });
     const { dialog } = await getRenderedModalDialog(container);
 
     expect(showModal).toHaveBeenCalledTimes(1);
     expect(dialog.open).toBe(true);
 
     const closeButton = container.querySelector<HTMLButtonElement>(
-      ".md-preview-dialog__header .btn",
+      ".skill-reader-dialog .exec-approval-header .btn",
     );
     expect(closeButton).toBeInstanceOf(HTMLButtonElement);
     closeButton!.click();
 
     expect(onDetailClose).toHaveBeenCalledTimes(1);
 
-    render(
-      renderSkills(
-        createProps({
-          clawhubQuery: "git",
-          clawhubResults: [
-            {
-              score: 0.95,
-              slug: "github",
-              displayName: "GitHub",
-              summary: "GitHub integration for OpenClaw",
-              icon: `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
-              version: "1.2.3",
-            },
-          ],
-          onClawHubDetailOpen,
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
+    renderView(container, {
+      surface: "discovery",
+      clawhubQuery: "git",
+      clawhubResults: [
+        {
+          score: 0.95,
+          slug: "github",
+          installRef: "@openclaw/github",
+          registry: "https://clawhub.ai",
+          displayName: "GitHub",
+          summary: "GitHub integration for OpenClaw",
+          icon: `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
+          version: "1.2.3",
+        },
+      ],
+      clawhubIconUrls: {
+        [`https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`]: "blob:clawhub-search-icon",
+      },
+      onClawHubDetailOpen,
+      onClawHubInstall,
+    });
     await Promise.resolve();
 
-    const resultItem = container.querySelector<HTMLElement>(".plugins-item");
-    const detailButton = container.querySelector<HTMLButtonElement>(".plugins-item__detail-button");
-    const installButton = container.querySelector<HTMLButtonElement>(".plugins-item .btn.btn--sm");
+    const resultItem = container.querySelector<HTMLElement>(".plugin-catalog-card");
+    const detailButton = resultItem?.querySelector<HTMLButtonElement>(
+      ".plugin-catalog-card__primary-link",
+    );
+    const installButton = resultItem?.querySelector<HTMLButtonElement>(
+      ".plugin-catalog-card__install",
+    );
     expect(resultItem).toBeInstanceOf(HTMLElement);
     expect(installButton).toBeInstanceOf(HTMLButtonElement);
     expect(detailButton).toBeInstanceOf(HTMLButtonElement);
-    expect(detailButton?.getAttribute("aria-label")).toBe("Open github details");
-    expect(detailButton?.contains(installButton)).toBe(false);
-    expect(resultItem?.querySelector(".settings-row__title")?.textContent?.trim()).toBe("GitHub");
-    expect(resultItem?.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
-      "GitHub integration for OpenClaw · github",
+    expect(detailButton?.getAttribute("aria-label")).toBe("Open GitHub details");
+    expect(detailButton?.contains(installButton!)).toBe(false);
+    expect(resultItem?.querySelector("h2")?.textContent?.trim()).toBe("GitHub");
+    expect(resultItem?.querySelector(".plugin-card-author")?.textContent?.trim()).toBe(
+      "@openclaw/github",
     );
-    expect(resultItem?.querySelector(".settings-row__value")?.textContent?.trim()).toBe("v1.2.3");
-    expect(resultItem?.querySelector<HTMLImageElement>(".clawhub-skill-icon")?.src).toBe(
-      `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
+    expect(resultItem?.textContent).toContain("GitHub integration for OpenClaw");
+    expect(resultItem?.querySelector<HTMLImageElement>("img")?.src).toBe(
+      "blob:clawhub-search-icon",
     );
     expect(installButton?.textContent?.trim()).toBe("Install");
     detailButton!.click();
     installButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubDetailOpen).toHaveBeenCalledTimes(1);
-    expect(onClawHubDetailOpen).toHaveBeenCalledWith("github");
+    expect(onClawHubDetailOpen).toHaveBeenCalledWith("@openclaw/github");
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
-    expect(onClawHubInstall).toHaveBeenCalledWith("github");
+    expect(onClawHubInstall).toHaveBeenCalledWith("@openclaw/github");
 
     onClawHubInstall.mockClear();
     showModal.mockClear();
 
-    render(
-      renderSkills(
-        createProps({
-          clawhubSearchError: "rate limited",
-          clawhubInstallMessage: { kind: "success", text: "Installed github" },
-          clawhubDetailRef: "github",
-          clawhubDetail: {
-            skill: {
-              slug: "github",
-              displayName: "GitHub",
-              summary: "GitHub integration for OpenClaw",
-              icon: `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`,
-              createdAt: 1_700_000_000,
-              updatedAt: 1_700_000_100,
-            },
-            latestVersion: {
-              version: "1.2.3",
-              createdAt: 1_700_000_200,
-              changelog: "Added search support",
-            },
-            metadata: {
-              os: ["macos", "linux"],
-            },
-            owner: {
-              displayName: "OpenClaw",
-              handle: "openclaw",
-            },
-          },
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
+    renderView(container, {
+      surface: "discovery",
+      clawhubSearchError: "rate limited",
+      clawhubInstallMessage: { kind: "success", text: "Installed github" },
+      clawhubDetailRef: "github",
+      clawhubDetail: {
+        skill: {
+          slug: "github",
+          displayName: "GitHub",
+          summary: "GitHub integration for OpenClaw",
+          icon: `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`,
+          createdAt: 1_700_000_000,
+          updatedAt: 1_700_000_100,
+        },
+        latestVersion: {
+          version: "1.2.3",
+          createdAt: 1_700_000_200,
+          changelog: "Added search support",
+        },
+        metadata: {
+          os: ["macos", "linux"],
+        },
+        owner: {
+          displayName: "OpenClaw",
+          handle: "openclaw",
+        },
+      },
+      clawhubIconUrls: {
+        [`https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`]: "blob:clawhub-detail-icon",
+      },
+      onClawHubInstall,
+    });
     await Promise.resolve();
 
     await vi.waitFor(() => expect(showModal).toHaveBeenCalledTimes(1));
     expect(
       Array.from(container.querySelectorAll(".callout")).map((node) => normalizeText(node)),
-    ).toEqual(["rate limited", "Installed github"]);
-    expect(normalizeText(container.querySelector(".md-preview-dialog__body")!)).toBe(
-      "GitHub integration for OpenClaw By OpenClaw (@openclaw) Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
+    ).toEqual(["rate limited Retry", "Installed github"]);
+    expect(normalizeText(container.querySelector(".skill-reader-dialog__body")!)).toBe(
+      "GitHub integration for OpenClaw By OpenClaw (@openclaw) · Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
     );
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
-      `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`,
+      "blob:clawhub-detail-icon",
     );
     expect(container.querySelector(".clawhub-skill-icon--profile")).toBeNull();
 
     const detailInstallButton = container.querySelector<HTMLButtonElement>(
-      ".md-preview-dialog__body .btn.primary",
+      ".skill-reader-dialog__body .btn.primary",
     );
     expect(detailInstallButton).toBeInstanceOf(HTMLButtonElement);
     detailInstallButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -173,44 +185,37 @@ describe("renderSkills ClawHub", () => {
   });
 
   it("routes each same-slug search result to its own publisher", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
+    const container = createContainer();
     const onClawHubDetailOpen = vi.fn();
     const onClawHubInstall = vi.fn();
 
-    render(
-      renderSkills(
-        createProps({
-          clawhubQuery: "imap-smtp-email",
-          clawhubResults: ["gzlicanyi", "wangchenyu8"].map((ownerHandle) => ({
-            score: 1,
-            slug: "imap-smtp-email",
-            installRef: `@${ownerHandle}/imap-smtp-email`,
-            displayName: "imap-smtp-email",
-          })),
-          onClawHubDetailOpen,
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
+    renderView(container, {
+      surface: "discovery",
+      clawhubQuery: "imap-smtp-email",
+      clawhubResults: ["gzlicanyi", "wangchenyu8"].map((ownerHandle) => ({
+        score: 1,
+        slug: "imap-smtp-email",
+        registry: "https://clawhub.ai",
+        installRef: `@${ownerHandle}/imap-smtp-email`,
+        displayName: "imap-smtp-email",
+      })),
+      onClawHubDetailOpen,
+      onClawHubInstall,
+    });
     await Promise.resolve();
 
-    const rows = [...container.querySelectorAll<HTMLElement>(".clawhub-skill-result__button")].map(
-      (button) => button.closest<HTMLElement>(".plugins-item")!,
-    );
+    const rows = [...container.querySelectorAll<HTMLElement>(".plugin-catalog-card")];
     expect(rows).toHaveLength(2);
     // Rows are otherwise identical, so the reference is what the operator reads and what the
     // row actions must send; a bare slug here is the reported 409 AMBIGUOUS_SKILL_SLUG bug.
     expect(
-      rows.map((row) => row.querySelector(".settings-row__desc")?.textContent?.trim()),
+      rows.map((row) => row.querySelector(".plugin-card-author")?.textContent?.trim()),
     ).toEqual(["@gzlicanyi/imap-smtp-email", "@wangchenyu8/imap-smtp-email"]);
 
     for (const row of rows) {
-      row.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
+      row.querySelector<HTMLButtonElement>(".plugin-catalog-card__primary-link")!.click();
       row
-        .querySelector<HTMLButtonElement>(".btn.btn--sm")!
+        .querySelector<HTMLButtonElement>(".plugin-catalog-card__install")!
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
     }
 
@@ -225,56 +230,48 @@ describe("renderSkills ClawHub", () => {
   });
 
   it("offers install without a detail card for an install-only search result", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
+    const container = createContainer();
     const onClawHubDetailOpen = vi.fn();
     const onClawHubInstall = vi.fn();
 
-    render(
-      renderSkills(
-        createProps({
-          clawhubQuery: "pdf",
-          clawhubResults: [
-            {
-              score: 1,
-              slug: "pdf",
-              // The Gateway marks external sources install-only; it serves no card for them.
-              installRef: "skills-sh:openai/skills/pdf",
-              installOnly: true,
-              trustState: "not-scanned-by-clawhub",
-              displayName: "Pdf",
-            },
-            {
-              score: 1,
-              slug: "pdf",
-              installRef: "@awspace/pdf",
-              displayName: "Pdf",
-            },
-          ],
-          onClawHubDetailOpen,
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
+    renderView(container, {
+      surface: "discovery",
+      clawhubQuery: "pdf",
+      clawhubResults: [
+        {
+          score: 1,
+          slug: "pdf",
+          // The Gateway marks external sources install-only; it serves no card for them.
+          registry: "https://clawhub.ai",
+          installRef: "skills-sh:openai/skills/pdf",
+          installOnly: true,
+          trustState: "not-scanned-by-clawhub",
+          displayName: "Pdf",
+        },
+        {
+          score: 1,
+          slug: "pdf",
+          installRef: "@awspace/pdf",
+          registry: "https://clawhub.ai",
+          displayName: "Pdf",
+        },
+      ],
+      onClawHubDetailOpen,
+      onClawHubInstall,
+    });
     await Promise.resolve();
 
-    const rows = [...container.querySelectorAll<HTMLElement>(".clawhub-skill-result__button")].map(
-      (copy) => copy.closest<HTMLElement>(".plugins-item")!,
-    );
+    const rows = [...container.querySelectorAll<HTMLElement>(".plugin-catalog-card")];
     expect(rows).toHaveLength(2);
     // A detail button on the external row would open a dialog the Gateway always refuses.
-    expect(rows[0]!.querySelector(".plugins-item__detail-button")).toBeNull();
-    expect(rows[1]!.querySelector(".plugins-item__detail-button")).not.toBeNull();
+    expect(rows[0]!.querySelector(".plugin-catalog-card__primary-link")).toBeNull();
+    expect(rows[1]!.querySelector(".plugin-catalog-card__primary-link")).not.toBeNull();
     // The row is the only place left to say the source was never scanned.
-    expect(rows[0]!.querySelector(".settings-row__desc")?.textContent).toContain(
-      "Not scanned by ClawHub",
-    );
+    expect(rows[0]!.textContent).toContain("Not scanned by ClawHub");
 
     for (const row of rows) {
       row
-        .querySelector<HTMLButtonElement>(".btn.btn--sm")!
+        .querySelector<HTMLButtonElement>(".plugin-catalog-card__install")!
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
     }
 
@@ -286,57 +283,54 @@ describe("renderSkills ClawHub", () => {
     expect(onClawHubDetailOpen).not.toHaveBeenCalled();
   });
 
-  it("renders an installed external result from its exact recorded reference", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    const onClawHubInstall = vi.fn();
+  it.each([false, true])(
+    "shows one installed external card without another install action (personal=%s)",
+    async (personalImport) => {
+      const container = createContainer();
+      const onClawHubInstall = vi.fn();
 
-    render(
-      renderSkills(
-        createProps({
-          clawhubQuery: "pdf",
-          clawhubResults: [
-            {
-              score: 1,
-              slug: "pdf",
-              installRef: "skills-sh:openai/skills/pdf",
-              installOnly: true,
-              displayName: "Pdf",
-            },
-          ],
-          report: {
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [
-              createSkill({
-                clawhub: {
-                  status: "linked",
-                  valid: true,
-                  registry: "https://clawhub.ai",
-                  slug: "pdf",
-                  requestedReference: "skills-sh:openai/skills/pdf",
-                  installedVersion: "0.0.0",
-                  installedAt: 1,
-                },
-              }),
-            ],
+      renderView(container, {
+        surface: "discovery",
+        showInventory: !personalImport,
+        clawhubQuery: "pdf",
+        clawhubResults: [
+          {
+            score: 1,
+            slug: "pdf",
+            installRef: "skills-sh:openai/skills/pdf",
+            registry: "https://clawhub.ai",
+            installOnly: true,
+            displayName: "Pdf",
           },
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
+        ],
+        report: skillReport([
+          createSkill({
+            clawhub: {
+              status: "linked",
+              valid: true,
+              registry: "https://clawhub.ai",
+              slug: "pdf",
+              requestedReference: "skills-sh:openai/skills/pdf",
+              installedVersion: "0.0.0",
+              installedAt: 1,
+              originPath: "/tmp/.clawhub/origin.json",
+              lockPath: "/tmp/workspace/.clawhub/lock.json",
+            },
+          }),
+        ]),
+        onClawHubInstall,
+      });
+      await Promise.resolve();
 
-    const button = container.querySelector<HTMLButtonElement>(".btn.btn--sm")!;
-    expect(button.textContent?.trim()).toBe("Installed");
-    expect(button.disabled).toBe(true);
-    button.click();
-    expect(onClawHubInstall).not.toHaveBeenCalled();
-  });
+      const cards = container.querySelectorAll(".plugin-catalog-card");
+      expect(cards).toHaveLength(1);
+      expect(cards[0]?.querySelector('[role="img"]')).not.toBeNull();
+      expect(cards[0]?.querySelector(".plugin-catalog-card__install")).toBeNull();
+      expect(onClawHubInstall).not.toHaveBeenCalled();
+    },
+  );
 
-  it("keeps the review flow for results from a gateway that predates the install-only flag", async () => {
+  it("keeps the detail flow for results that are not install-only", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     dialogRestores.push(() => container.remove());
@@ -345,10 +339,16 @@ describe("renderSkills ClawHub", () => {
     render(
       renderSkills(
         createProps({
+          surface: "discovery",
           clawhubQuery: "email",
-          // An older gateway sends installRef with no capability field at all.
           clawhubResults: [
-            { score: 1, slug: "email", installRef: "@alice/email", displayName: "Email" },
+            {
+              score: 1,
+              slug: "email",
+              registry: "https://clawhub.ai",
+              installRef: "@alice/email",
+              displayName: "Email",
+            },
           ],
           onClawHubDetailOpen,
         }),
@@ -357,43 +357,15 @@ describe("renderSkills ClawHub", () => {
     );
     await Promise.resolve();
 
-    const row = container
-      .querySelector<HTMLElement>(".clawhub-skill-result__button")!
-      .closest<HTMLElement>(".plugins-item")!;
-    // Reading omission as install-only would silently drop the reviewed-version step that every
-    // released gateway still expects.
-    const detailButton = row.querySelector<HTMLButtonElement>(".plugins-item__detail-button");
+    const row = container.querySelector<HTMLElement>(".plugin-catalog-card")!;
+    const detailButton = row.querySelector<HTMLButtonElement>(".plugin-catalog-card__primary-link");
     expect(detailButton).not.toBeNull();
     detailButton!.click();
     expect(onClawHubDetailOpen).toHaveBeenCalledWith("@alice/email");
   });
 
-  it("sizes the ClawHub detail dialog to a refusal message instead of a reader", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    render(
-      renderSkills(
-        createProps({
-          clawhubDetailRef: "skills-sh:acme/tools/imap-smtp-email",
-          clawhubDetailError:
-            "ClawHub cannot return details for skills-sh:acme/tools/imap-smtp-email; external skill sources are install-only.",
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    // Without this the panel keeps the tall reader height meant for skill documents, so a
-    // two-line refusal renders in a mostly empty dialog and reads as broken.
-    expect(container.querySelectorAll(".md-preview-dialog__panel--message-only")).toHaveLength(1);
-  });
-
   it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
+    const container = createContainer();
     installDialogMethod("showModal", function (this: HTMLDialogElement) {
       this.setAttribute("open", "");
     });
@@ -409,6 +381,8 @@ describe("renderSkills ClawHub", () => {
         ownerHandle: "openclaw",
         installedVersion: "1.2.3",
         installedAt: 123,
+        originPath: "/tmp/.clawhub/origin.json",
+        lockPath: "/tmp/workspace/.clawhub/lock.json",
       },
       skillCard: {
         present: true,
@@ -416,11 +390,7 @@ describe("renderSkills ClawHub", () => {
         sizeBytes: 30,
       },
     });
-    const report: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [linkedSkill],
-    };
+    const report: SkillStatusReport = skillReport([linkedSkill]);
     const verdictKey = clawhubVerdictKey({
       registry: "https://clawhub.ai",
       slug: "agentreceipt",
@@ -429,33 +399,28 @@ describe("renderSkills ClawHub", () => {
     });
     const onDetailTabChange = vi.fn();
 
-    render(
-      renderSkills(
-        createProps({
-          report,
-          detailKey: "agentreceipt",
-          onDetailTabChange,
-          clawhubVerdicts: {
-            [verdictKey]: {
-              registry: "https://clawhub.ai",
-              ok: false,
-              decision: "fail",
-              reasons: ["security.suspicious"],
-              requestedSlug: "agentreceipt",
-              requestedOwnerHandle: "openclaw",
-              requestedVersion: "1.2.3",
-              slug: "agentreceipt",
-              version: "1.2.3",
-              securityAuditUrl:
-                "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
-              securityStatus: "suspicious",
-              securityPassed: false,
-            },
-          },
-        }),
-      ),
-      container,
-    );
+    renderView(container, {
+      report,
+      detailKey: "agentreceipt",
+      onDetailTabChange,
+      clawhubVerdicts: {
+        [verdictKey]: {
+          registry: "https://clawhub.ai",
+          ok: false,
+          decision: "fail",
+          reasons: ["security.suspicious"],
+          requestedSlug: "agentreceipt",
+          requestedOwnerHandle: "openclaw",
+          requestedVersion: "1.2.3",
+          slug: "agentreceipt",
+          version: "1.2.3",
+          securityAuditUrl:
+            "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
+          securityStatus: "suspicious",
+          securityPassed: false,
+        },
+      },
+    });
     await Promise.resolve();
 
     expect(normalizeText(container)).toContain("Review");
@@ -472,34 +437,29 @@ describe("renderSkills ClawHub", () => {
       ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
     expect(onDetailTabChange).toHaveBeenCalledWith("card");
 
-    render(
-      renderSkills(
-        createProps({
-          report,
-          detailKey: "agentreceipt",
-          detailTab: "card",
-          skillCardContents: {
-            agentreceipt: "# AgentReceipt\n\nLocal **trust** card.",
-          },
-          clawhubVerdicts: {
-            [verdictKey]: {
-              registry: "https://clawhub.ai",
-              ok: false,
-              decision: "fail",
-              reasons: ["security.suspicious"],
-              requestedSlug: "agentreceipt",
-              requestedOwnerHandle: "openclaw",
-              requestedVersion: "1.2.3",
-              securityAuditUrl:
-                "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
-              securityStatus: "suspicious",
-              securityPassed: false,
-            },
-          },
-        }),
-      ),
-      container,
-    );
+    renderView(container, {
+      report,
+      detailKey: "agentreceipt",
+      detailTab: "card",
+      skillCardContents: {
+        agentreceipt: "# AgentReceipt\n\nLocal **trust** card.",
+      },
+      clawhubVerdicts: {
+        [verdictKey]: {
+          registry: "https://clawhub.ai",
+          ok: false,
+          decision: "fail",
+          reasons: ["security.suspicious"],
+          requestedSlug: "agentreceipt",
+          requestedOwnerHandle: "openclaw",
+          requestedVersion: "1.2.3",
+          securityAuditUrl:
+            "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
+          securityStatus: "suspicious",
+          securityPassed: false,
+        },
+      },
+    });
     await Promise.resolve();
 
     expect(container.querySelector("#skill-detail-tab-card")?.hasAttribute("active")).toBe(true);
@@ -513,9 +473,7 @@ describe("renderSkills ClawHub", () => {
   ])(
     "shows $label consistently for a missing ClawHub verdict while loading=$loading",
     async ({ loading, label, warning }) => {
-      const container = document.createElement("div");
-      document.body.append(container);
-      dialogRestores.push(() => container.remove());
+      const container = createContainer();
       installDialogMethod("showModal", function (this: HTMLDialogElement) {
         this.setAttribute("open", "");
       });
@@ -530,22 +488,15 @@ describe("renderSkills ClawHub", () => {
           slug: "agentreceipt",
           installedVersion: "1.2.3",
           installedAt: 123,
+          originPath: "/tmp/.clawhub/origin.json",
+          lockPath: "/tmp/workspace/.clawhub/lock.json",
         },
       });
-      render(
-        renderSkills(
-          createProps({
-            report: {
-              workspaceDir: "/tmp/workspace",
-              managedSkillsDir: "/tmp/skills",
-              skills: [linkedSkill],
-            },
-            detailKey: "agentreceipt",
-            clawhubVerdictsLoading: loading,
-          }),
-        ),
-        container,
-      );
+      renderView(container, {
+        report: skillReport([linkedSkill]),
+        detailKey: "agentreceipt",
+        clawhubVerdictsLoading: loading,
+      });
       await Promise.resolve();
 
       const rowVerdict = Array.from(container.querySelectorAll(".settings-status")).find(
@@ -563,9 +514,7 @@ describe("renderSkills ClawHub", () => {
   );
 
   it("fails closed for inconsistent ClawHub verdict envelopes", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
+    const container = createContainer();
     installDialogMethod("showModal", function (this: HTMLDialogElement) {
       this.setAttribute("open", "");
     });
@@ -580,42 +529,35 @@ describe("renderSkills ClawHub", () => {
         slug: "agentreceipt",
         installedVersion: "1.2.3",
         installedAt: 123,
+        originPath: "/tmp/.clawhub/origin.json",
+        lockPath: "/tmp/workspace/.clawhub/lock.json",
       },
     });
-    const report: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [linkedSkill],
-    };
+    const report: SkillStatusReport = skillReport([linkedSkill]);
     const verdictKey = clawhubVerdictKey({
       registry: "https://clawhub.ai",
       slug: "agentreceipt",
       version: "1.2.3",
     });
 
-    render(
-      renderSkills(
-        createProps({
-          report,
-          detailKey: "agentreceipt",
-          clawhubVerdicts: {
-            [verdictKey]: {
-              registry: "https://clawhub.ai",
-              ok: false,
-              decision: "pass",
-              reasons: [],
-              requestedSlug: "agentreceipt",
-              requestedVersion: "1.2.3",
-              slug: "agentreceipt",
-              version: "1.2.3",
-              securityStatus: "clean",
-              securityPassed: true,
-            },
-          },
-        }),
-      ),
-      container,
-    );
+    renderView(container, {
+      report,
+      detailKey: "agentreceipt",
+      clawhubVerdicts: {
+        [verdictKey]: {
+          registry: "https://clawhub.ai",
+          ok: false,
+          decision: "pass",
+          reasons: [],
+          requestedSlug: "agentreceipt",
+          requestedVersion: "1.2.3",
+          slug: "agentreceipt",
+          version: "1.2.3",
+          securityStatus: "clean",
+          securityPassed: true,
+        },
+      },
+    });
     await Promise.resolve();
 
     const chips = Array.from(container.querySelectorAll(".chip"));

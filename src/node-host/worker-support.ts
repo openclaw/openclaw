@@ -19,6 +19,7 @@ type NodeHostWorkerInput =
   | { type: "invoke"; generation: number; request: NodeInvokeRequestPayload }
   | { type: "invoke-input"; generation: number; invokeId: string; seq: number; payloadJSON: string }
   | { type: "invoke-cancel"; generation: number; invokeId: string }
+  | { type: "runner-inventory-refresh"; generation: number }
   | NodeHostWorkerGatewayResponse
   | { type: "stop" };
 
@@ -45,6 +46,9 @@ export function parseNodeHostWorkerInput(line: string): NodeHostWorkerInput | nu
       const connection =
         parsed?.connection === null ? null : connectionSchema.parse(parsed?.connection);
       return { type, generation, connection };
+    }
+    if (type === "runner-inventory-refresh") {
+      return { type, generation };
     }
     if (type === "invoke") {
       const request = asRecord(parsed?.request);

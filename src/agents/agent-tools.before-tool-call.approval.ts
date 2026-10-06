@@ -4,6 +4,7 @@
  * timeout classification, and owner-provided approval outcomes.
  */
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
+import { getRuntimeConfig } from "../config/config.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { sanitizeApprovalScope } from "../infra/approval-scope.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
@@ -39,6 +40,22 @@ import { callGatewayTool } from "./tools/gateway.js";
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
 const log = createSubsystemLogger("agents/tools");
 
+function pluginApprovalDeniedOutcome(baseParams: unknown): HookOutcome {
+  return {
+    blocked: true,
+    kind: "failure",
+    disposition: "blocked",
+    deniedReason: "plugin-approval",
+    reason: [
+      "Denied by user. The tool call did not run.",
+      "This denial is final: the approval request is closed. Do not mention /approve or any other approval command to the user.",
+      "Do not run the tool call again or ask the user to approve it again.",
+      "If the user still wants the action, explain that a new tool call will trigger a fresh approval request.",
+    ].join("\n"),
+    params: baseParams,
+  };
+}
+
 function resolvePluginToolApprovalTimeoutMs(approval: PluginApprovalRequest): number {
   if (
     typeof approval.timeoutMs !== "number" ||
@@ -50,37 +67,15 @@ function resolvePluginToolApprovalTimeoutMs(approval: PluginApprovalRequest): nu
   return Math.min(Math.floor(approval.timeoutMs), MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
 }
 
-function resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs: number): number {
-  return addTimerTimeoutGraceMs(timeoutMs, 10_000) ?? DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000;
-}
-
 export function mergeParamsWithApprovalOverrides(
   originalParams: unknown,
   approvalParams?: unknown,
 ): unknown {
-  if (approvalParams && isPlainObject(approvalParams)) {
-    if (isPlainObject(originalParams)) {
-      return { ...originalParams, ...approvalParams };
-    }
-    return approvalParams;
-  }
-  return originalParams;
-}
-
-const warnedDeprecatedTimeoutBehaviorPluginIds = new Set<string>();
-
-function warnDeprecatedApprovalTimeoutBehavior(approval: PluginApprovalRequest): void {
-  if (approval.timeoutBehavior !== "allow") {
-    return;
-  }
-  const pluginId = approval.pluginId ?? "unknown-plugin";
-  if (warnedDeprecatedTimeoutBehaviorPluginIds.has(pluginId)) {
-    return;
-  }
-  warnedDeprecatedTimeoutBehaviorPluginIds.add(pluginId);
-  log.warn(
-    `plugin '${pluginId}' sets deprecated requireApproval.timeoutBehavior:"allow"; the field is ignored and approvals fail closed on timeout (see docs/plugins/plugin-permission-requests.md)`,
-  );
+  return isPlainObject(approvalParams)
+    ? isPlainObject(originalParams)
+      ? { ...originalParams, ...approvalParams }
+      : approvalParams
+    : originalParams;
 }
 
 function notifyPluginApprovalResolution(
@@ -118,6 +113,7 @@ function resolvePermittedPluginApprovalResolution(
 function buildPluginApprovalFailureReason(params: {
   fallbackReason: string;
   ctx?: HookContext;
+  noRoute?: boolean;
 }): string {
   const turnSourceChannel = params.ctx?.turnSourceChannel;
   if (!turnSourceChannel?.trim()) {
@@ -136,6 +132,9 @@ function buildPluginApprovalFailureReason(params: {
   });
   if (!setupText) {
     return params.fallbackReason;
+  }
+  if (params.noRoute) {
+    return `${params.fallbackReason}\n\n${setupText}`;
   }
   const nativeDeliverySurface =
     nativePluginSurface.kind === "disabled"
@@ -190,11 +189,43 @@ async function requestPluginToolApproval(params: {
   overrideParams?: unknown;
 }): Promise<HookOutcome> {
   const approval = params.approval;
+  const policySubject = params.ctx?.toolOwnerPluginId
+    ? { pluginKey: params.ctx.toolOwnerPluginId, tool: params.toolName }
+    : undefined;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
-  const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
+  const gatewayTimeoutMs =
+    addTimerTimeoutGraceMs(timeoutMs, 10_000) ?? DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000;
   const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
+  const resolveDecision = (decision: unknown): HookOutcome | undefined => {
+    const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
+    notifyPluginApprovalResolution(approval, resolution);
+    if (
+      resolution === PluginApprovalResolutions.ALLOW_ONCE ||
+      resolution === PluginApprovalResolutions.ALLOW_ALWAYS
+    ) {
+      return {
+        blocked: false,
+        params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
+        approvalResolution: resolution,
+      };
+    }
+    return resolution === PluginApprovalResolutions.DENY
+      ? pluginApprovalDeniedOutcome(params.baseParams)
+      : undefined;
+  };
   let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   try {
+    const requestIdentity = {
+      toolName: params.toolName,
+      toolCallId: params.toolCallId,
+      ...(policySubject ? { policySubject } : {}),
+      agentId: params.ctx?.agentId,
+      sessionKey: params.ctx?.sessionKey,
+      turnSourceChannel: params.ctx?.turnSourceChannel,
+      turnSourceTo: params.ctx?.turnSourceTo,
+      turnSourceAccountId: params.ctx?.turnSourceAccountId,
+      turnSourceThreadId: params.ctx?.turnSourceThreadId,
+    };
     const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
     if (embeddedApprovalBroker) {
       const result = await embeddedApprovalBroker.request({
@@ -205,40 +236,14 @@ async function requestPluginToolApproval(params: {
           ...(approval.scope ? { scope: sanitizeApprovalScope(approval.scope) } : {}),
           severity: approval.severity,
           allowedDecisions: approval.allowedDecisions,
-          toolName: params.toolName,
-          toolCallId: params.toolCallId,
-          agentId: params.ctx?.agentId,
-          sessionKey: params.ctx?.sessionKey,
-          turnSourceChannel: params.ctx?.turnSourceChannel,
-          turnSourceTo: params.ctx?.turnSourceTo,
-          turnSourceAccountId: params.ctx?.turnSourceAccountId,
-          turnSourceThreadId: params.ctx?.turnSourceThreadId,
+          ...requestIdentity,
         },
         timeoutMs,
         signal: params.signal,
       });
-      const decision = result.decision;
-      const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
-      notifyPluginApprovalResolution(approval, resolution);
-      if (
-        resolution === PluginApprovalResolutions.ALLOW_ONCE ||
-        resolution === PluginApprovalResolutions.ALLOW_ALWAYS
-      ) {
-        return {
-          blocked: false,
-          params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
-          approvalResolution: resolution,
-        };
-      }
-      if (resolution === PluginApprovalResolutions.DENY) {
-        return {
-          blocked: true,
-          kind: "failure",
-          disposition: "blocked",
-          deniedReason: "plugin-approval",
-          reason: "Denied by user",
-          params: params.baseParams,
-        };
+      const outcome = resolveDecision(result.decision);
+      if (outcome) {
+        return outcome;
       }
       // Veto carries the plugin-supplied reason; plain timeouts record a
       // timed_out failure disposition for the audit ledger.
@@ -276,7 +281,6 @@ async function requestPluginToolApproval(params: {
     gatewayApprovalPhase = "request";
     const requestResult: {
       id?: string;
-      status?: string;
       decision?: unknown;
       deliveryRoute?: string;
     } = await withGatewayToolApprovalOwner(
@@ -293,21 +297,14 @@ async function requestPluginToolApproval(params: {
             ...(approval.scope ? { scope: approval.scope } : {}),
             severity: approval.severity,
             allowedDecisions: approval.allowedDecisions,
-            toolName: params.toolName,
-            toolCallId: params.toolCallId,
-            agentId: params.ctx?.agentId,
-            sessionKey: params.ctx?.sessionKey,
+            ...requestIdentity,
             ...(params.ctx?.approvalReviewerDeviceId
               ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
               : {}),
-            turnSourceChannel: params.ctx?.turnSourceChannel,
-            turnSourceTo: params.ctx?.turnSourceTo,
-            turnSourceAccountId: params.ctx?.turnSourceAccountId,
-            turnSourceThreadId: params.ctx?.turnSourceThreadId,
             timeoutMs,
             twoPhase: true,
           },
-          { expectFinal: false },
+          { expectFinal: false, signal: params.signal },
         ),
     );
     gatewayApprovalPhase = "none";
@@ -337,6 +334,7 @@ async function requestPluginToolApproval(params: {
           reason: buildPluginApprovalFailureReason({
             fallbackReason: "Plugin approval unavailable (no approval route)",
             ctx: params.ctx,
+            noRoute: true,
           }),
           params: params.baseParams,
         };
@@ -345,63 +343,24 @@ async function requestPluginToolApproval(params: {
       // Wait for the decision, but abort early if the agent run is cancelled
       // so the user isn't blocked for the full approval timeout.
       gatewayApprovalPhase = "wait";
-      const waitPromise: Promise<{
+      const waitResult: {
         id?: string;
         decision?: unknown;
-      }> = callGatewayTool(
+      } = await callGatewayTool(
         "plugin.approval.waitDecision",
         // Buffer beyond the approval timeout so the gateway can clean up
         // and respond before the client-side RPC timeout fires.
         { timeoutMs: gatewayTimeoutMs },
         { id },
+        { signal: params.signal },
       );
-      let waitResult: { id?: string; decision?: unknown } | undefined;
-      if (params.signal) {
-        let onAbort: (() => void) | undefined;
-        const abortPromise = new Promise<never>((_, reject) => {
-          if (params.signal!.aborted) {
-            reject(toApprovalErrorObject(params.signal!.reason, "Non-Error rejection"));
-            return;
-          }
-          onAbort = () =>
-            reject(toApprovalErrorObject(params.signal!.reason, "Non-Error rejection"));
-          params.signal!.addEventListener("abort", onAbort, { once: true });
-        });
-        try {
-          waitResult = await Promise.race([waitPromise, abortPromise]);
-        } finally {
-          if (onAbort) {
-            params.signal.removeEventListener("abort", onAbort);
-          }
-        }
-      } else {
-        waitResult = await waitPromise;
-      }
       // Bind the verdict to the request that parked this call. A stale or
       // misrouted reply must never release a different tool gate.
       decision = waitResult?.id === id ? waitResult.decision : undefined;
     }
-    const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
-    notifyPluginApprovalResolution(approval, resolution);
-    if (
-      resolution === PluginApprovalResolutions.ALLOW_ONCE ||
-      resolution === PluginApprovalResolutions.ALLOW_ALWAYS
-    ) {
-      return {
-        blocked: false,
-        params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
-        approvalResolution: resolution,
-      };
-    }
-    if (resolution === PluginApprovalResolutions.DENY) {
-      return {
-        blocked: true,
-        kind: "failure",
-        disposition: "blocked",
-        deniedReason: "plugin-approval",
-        reason: "Denied by user",
-        params: params.baseParams,
-      };
+    const outcome = resolveDecision(decision);
+    if (outcome) {
+      return outcome;
     }
     const fallbackTimeoutReason = approval.timeoutReason ?? "Approval timed out";
     const timeoutReason =
@@ -476,7 +435,6 @@ export async function requestDeferredPluginToolApproval(params: {
   });
 }
 
-/** Notify plugin approval callbacks that a deferred approval was cancelled. */
 export function cancelDeferredPluginToolApproval(
   deferredApproval: DeferredPluginToolApproval,
 ): void {
@@ -503,7 +461,6 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     params.result?.params === undefined
       ? undefined
       : cloneHookIsolationValue("before_tool_call", params.result.params);
-  warnDeprecatedApprovalTimeoutBehavior(approval);
   if (params.approvalMode === "defer") {
     return {
       blocked: false,
@@ -558,10 +515,14 @@ export async function resolveSkillWorkshopApprovalForFinalParams(params: {
   ctx?: HookContext;
   signal?: AbortSignal;
 }): Promise<HookOutcome | undefined> {
+  if (params.toolName !== "skill_workshop") {
+    return undefined;
+  }
   const result = await resolveSkillWorkshopToolApproval({
     toolName: params.toolName,
     toolParams: isPlainObject(params.params) ? params.params : {},
-    ...(params.ctx?.config ? { config: params.ctx.config } : {}),
+    config: params.ctx?.config ?? getRuntimeConfig(),
+    ...(params.ctx?.agentId ? { agentId: params.ctx.agentId } : {}),
     ...(params.ctx?.workspaceDir ? { workspaceDir: params.ctx.workspaceDir } : {}),
   });
   return await resolveBeforeToolCallApprovalOutcome({
@@ -573,21 +534,4 @@ export async function resolveSkillWorkshopApprovalForFinalParams(params: {
     signal: params.signal,
     baseParams: params.params,
   });
-}
-
-// Success output schemas do not describe policy-layer terminal results. Track
-// identity so catalog boundaries can reject them without trusting spoofable status fields.
-
-function toApprovalErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value, { cause: value });
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

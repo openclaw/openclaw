@@ -1,7 +1,6 @@
 // Openshell tests cover backend plugin behavior.
 import fs from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import {
   createSandboxTestContext,
@@ -182,7 +181,7 @@ function trimTrailingNewline(value: string): string {
   return value.replace(/\r?\n$/, "");
 }
 
-async function startHostPolicyServer(): Promise<HostPolicyServer> {
+async function startHostPolicyServer(gatewayName: string): Promise<HostPolicyServer> {
   const port = await allocatePort();
   const responseBody = JSON.stringify({ ok: true, message: "hello-from-host" });
   const serverScript = `from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -219,6 +218,8 @@ HTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
       "run",
       "--detach",
       "--rm",
+      "--label",
+      `openclaw.ai/openshell-e2e-gateway=${gatewayName}`,
       "-e",
       `RESPONSE_BODY=${responseBody}`,
       "-p",
@@ -339,7 +340,9 @@ describe("openshell sandbox backend e2e", () => {
         throw new Error("OpenShell E2E requires an active local registered gateway");
       }
 
-      const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-openshell-e2e-"));
+      // macOS sockaddr_un cannot hold the test runner's nested temporary path, and the
+      // mirror socket under this root would exceed it.
+      const rootDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "oc-osh-e2e-"));
       const env = openshellEnv(rootDir);
       const previousHome = process.env.HOME;
       const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
@@ -451,7 +454,7 @@ describe("openshell sandbox backend e2e", () => {
         process.env.HOME = env.HOME;
         process.env.XDG_CONFIG_HOME = env.XDG_CONFIG_HOME;
         process.env.XDG_CACHE_HOME = env.XDG_CACHE_HOME;
-        hostPolicyServer = await startHostPolicyServer();
+        hostPolicyServer = await startHostPolicyServer(gatewayName);
         if (!hostPolicyServer) {
           throw new Error("failed to start host policy server");
         }
@@ -792,7 +795,7 @@ describe("openshell sandbox backend e2e", () => {
               env: { "INVALID-NAME": "fixture" },
               usePty: false,
             }),
-          ).rejects.toThrow("Invalid SSH sandbox environment variable name");
+          ).rejects.toThrow("Invalid sandbox environment variable name");
           await expect(
             candidate.validateWorkdir?.(`${candidate.workdir}/missing-directory`),
           ).resolves.toBeNull();

@@ -1,15 +1,20 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { watch } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import type { McpServerConfig } from "../../../../src/config/types.mcp.js";
+import { hasErrnoCode } from "../../../../src/infra/errno.js";
 import { signalProcessTree } from "../../../../src/process/kill-tree.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../helpers/promise.js";
 
 export const TEST_TIMEOUT_MS = 180_000;
 const WAIT_TIMEOUT_MS = 30_000;
@@ -58,6 +63,66 @@ export type ToolsEffectiveResult = {
 };
 
 const CHILD_ENV_KEYS = ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec"] as const;
+
+export async function waitForMcpFixtureGate(filePath: string, signal: AbortSignal): Promise<void> {
+  try {
+    await fs.access(filePath);
+    return;
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+  }
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      signal.removeEventListener("abort", aborted);
+      clearInterval(poll);
+      watcher.close();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const inspect = () => {
+      void fs.access(filePath).then(
+        () => finish(),
+        (error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            finish(toErrorObject(error, "Fixture gate inspection failed"));
+          }
+        },
+      );
+    };
+    const watcher = watch(path.dirname(filePath), (_event, filename) => {
+      if (!filename || filename === path.basename(filePath)) {
+        inspect();
+      }
+    });
+    const aborted = () =>
+      finish(
+        new Error(`timed out waiting for fixture gate: ${path.basename(filePath)}`, {
+          cause: signal.reason,
+        }),
+      );
+    // oxlint-disable-next-line no-warning-comments -- remove after the upstream Bun fs.watch fix ships.
+    // TODO(bun): remove polling when Bun's fs.watch reliably reports file creation.
+    const poll = setInterval(inspect, 50);
+    poll.unref();
+    watcher.once("error", finish);
+    signal.addEventListener("abort", aborted, { once: true });
+    if (signal.aborted) {
+      aborted();
+    } else {
+      inspect();
+    }
+  });
+}
 
 function captureChild(child: ChildProcess): CapturedChild {
   let stdout = "";
@@ -136,6 +201,7 @@ export async function startHttpFixture(params: {
   fixturePath: string;
   labelPrefix: "session" | "node";
   env: NodeJS.ProcessEnv;
+  signal: AbortSignal;
 }): Promise<HttpFixture> {
   const captured = captureChild(
     spawn(process.execPath, [params.fixturePath, "http", "--label-prefix", params.labelPrefix], {
@@ -156,17 +222,18 @@ export async function startHttpFixture(params: {
       throw new Error("HTTP MCP fixture stdout was not piped");
     }
     lines = createInterface({ input: captured.child.stdout });
-    const line = await Promise.race([
-      new Promise<string>((resolve) => {
-        lines?.once("line", resolve);
-      }),
-      captured.exited.then(() => {
-        throw new Error(`HTTP MCP fixture exited before readiness:\n${captured.logs()}`);
-      }),
-      delay(WAIT_TIMEOUT_MS, undefined, { ref: false }).then(() => {
-        throw new Error(`HTTP MCP fixture readiness timed out:\n${captured.logs()}`);
-      }),
-    ]);
+    const line = await withinTest(
+      awaitGateBeforeSettlement(
+        new Promise<string>((resolve) => {
+          lines?.once("line", resolve);
+        }),
+        captured.exited.then(() => {
+          throw new Error(`HTTP MCP fixture exited before readiness:\n${captured.logs()}`);
+        }),
+        "HTTP MCP fixture exited before readiness",
+      ),
+      params.signal,
+    );
     const value: unknown = JSON.parse(line);
     if (
       !isRecord(value) ||

@@ -1,11 +1,17 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { listSessionEntries, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  createCapturedPluginRegistration,
+  createEmptyPluginRegistry,
+  createPluginRecord,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
+import { createCodexAppServerAgentHarness } from "../../harness.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
 } from "../session-catalog-types.js";
 import type { CodexThreadForkParams, CodexTurn } from "./protocol.js";
+import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 
 export function codexForkTurn(id: string, text: string): CodexTurn {
   return {
@@ -61,6 +67,7 @@ export function forkResponse(threadId = "thread-forked") {
 export function forkParams() {
   return {
     targetKey: "agent:main:dashboard:forked",
+    assertCurrent: () => {},
     source: {
       agentId: "main",
       sessionId: "session-source",
@@ -82,9 +89,14 @@ type ForkThreadStub = (params: CodexThreadForkParams) => Promise<unknown>;
 
 function factoryForControl(control: CodexSessionCatalogControl): CodexSessionCatalogControlFactory {
   return {
+    hasActiveWork: () => false,
+    disconnect: async () => {},
     forRequest: () => control,
-    homesForAgent: () => [],
-    forUpstream: (_agentId, fingerprint) =>
+    forNode: async () => {
+      throw new Error("Node source is outside this local fork fixture");
+    },
+    homesForAgent: async () => [],
+    forUpstream: async (_agentId, fingerprint) =>
       fingerprint === control.connectionFingerprint ? control : undefined,
   };
 }
@@ -94,45 +106,41 @@ export function forkControl(
   connectionFingerprint = "fingerprint",
 ) {
   const archiveThread = vi.fn(async () => undefined);
+  const retireConnection = vi.fn();
   const control = {
     archiveThread,
+    retireConnection,
     clientId: "client-pinned",
     connectionFingerprint,
     forkThread,
   } as unknown as CodexSessionCatalogControl;
   control.withPinnedConnection = async (run) => await run(control);
-  return { archiveThread, control, controlFactory: factoryForControl(control), forkThread };
+  return {
+    archiveThread,
+    control,
+    controlFactory: factoryForControl(control),
+    forkThread,
+    retireConnection,
+  };
 }
 
-export function createForkTestRuntime(storePath: string) {
-  const runtime = createPluginRuntimeMock();
-  const createSession = vi.mocked(runtime.agent.session.createSessionEntry);
-  const initialize = createSession.getMockImplementation()!;
-  createSession.mockImplementation(async (params) => {
-    if (params.recoverMatchingInitialEntry) {
-      throw new Error("Message forks must initialize a fresh child, not recover an existing one");
-    }
-    // The generic runtime mock omits the Gateway's per-agent label uniqueness contract.
-    const label = params.label?.trim();
-    if (
-      label &&
-      listSessionEntries({ storePath, agentId: params.agentId }).some(
-        (stored) => stored.sessionKey !== params.key && stored.entry.label === label,
-      )
-    ) {
-      throw new Error(`label already in use: ${label}`);
-    }
-    return await initialize({
-      ...params,
-      afterCreate: async (entry) => {
-        await upsertSessionEntry({
-          sessionKey: entry.key,
-          storePath,
-          entry: entry.entry,
-        });
-        return await params.afterCreate?.(entry);
-      },
-    });
+export function createForkTestRuntime(
+  storePath?: string,
+  bindingStore = createCodexTestBindingStore(),
+  id = "codex",
+) {
+  const { api } = createCapturedPluginRegistration({
+    id: "codex",
+    config: storePath ? { session: { store: storePath } } : {},
   });
-  return runtime;
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push(createPluginRecord({ id: "codex" }));
+  registry.agentHarnesses.push({
+    pluginId: "codex",
+    source: "runtime",
+    harness: createCodexAppServerAgentHarness({ id, bindingStore, runtime: api.runtime }),
+  });
+  setActivePluginRegistry(registry);
+  vi.spyOn(api.runtime.agent.session, "createSessionEntry");
+  return api.runtime;
 }

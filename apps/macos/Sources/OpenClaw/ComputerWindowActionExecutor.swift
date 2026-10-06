@@ -22,6 +22,14 @@ extension OpenClawComputerActParams {
 }
 
 extension OpenClawComputerAction {
+    var peekabooClickType: ClickType {
+        switch self {
+        case .rightClick: .right
+        case .doubleClick: .double
+        default: .single
+        }
+    }
+
     /// True for actions that cannot be expressed as screen-coordinate input and
     /// therefore always need a window/element target.
     var isWindowScopedOnly: Bool {
@@ -139,10 +147,8 @@ final class ComputerWindowActionExecutor {
                 return try await self.invokeMenu(params)
             case .leftClick, .rightClick, .middleClick, .doubleClick, .tripleClick:
                 return try await self.click(params)
-            case .type:
-                return try await self.type(params)
-            case .key:
-                return try await self.key(params)
+            case .type, .key:
+                return try await self.keyboardInput(params)
             case .scroll:
                 return try await self.scroll(params)
             case .mouseMove, .leftClickDrag, .leftMouseDown, .leftMouseUp, .holdKey:
@@ -246,7 +252,7 @@ final class ComputerWindowActionExecutor {
         let projected = Self.projectElements(
             result.elements.all,
             query: params.query,
-            limit: limits.maxElements)
+            limit: limits.maxElementCount)
         var details: [String: AnyCodable] = [
             "elements": AnyCodable(projected.elements),
             "totalElementCount": AnyCodable(result.elements.all.count),
@@ -271,6 +277,10 @@ final class ComputerWindowActionExecutor {
     private func getWindowState(
         _ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult
     {
+        guard params.includeScreenshot != false else {
+            throw ComputerActionService.ComputerActionError.invalidRequest(
+                "includeScreenshot:false is unsupported by Peekaboo; use CUA for capture-free window observations")
+        }
         let windowRef = try Self.require(params.windowRef, field: "windowRef")
         let target = try self.resolveWindow(windowRef)
         let limits = try Self.observationLimits(params)
@@ -282,10 +292,7 @@ final class ComputerWindowActionExecutor {
             capture: DesktopCaptureOptions(focus: .background),
             detection: DesktopDetectionOptions(
                 mode: .accessibility,
-                traversalBudget: AXTraversalBudget(
-                    maxDepth: limits.depth,
-                    maxElementCount: limits.maxElements,
-                    maxChildrenPerNode: AXTraversalBudget.defaultMaxChildrenPerNode)))
+                traversalBudget: limits))
         let result = try await self.withExecutionAuthority {
             try await self.observationService.observe(request)
         }
@@ -303,7 +310,7 @@ final class ComputerWindowActionExecutor {
         self.windowRefs[windowRef] = WindowTarget(app: target.app, window: observedWindow)
         let detected = result.elements?.elements.all ?? []
         let filtered = Self.filterElements(detected, query: params.query)
-        let bounded = Array(filtered.prefix(limits.maxElements))
+        let bounded = Array(filtered.prefix(limits.maxElementCount))
         let snapshotID = result.elements?.snapshotId ?? ""
         guard !snapshotID.isEmpty else {
             throw ComputerActionService.ComputerActionError.refused(
@@ -432,16 +439,11 @@ final class ComputerWindowActionExecutor {
         guard let identity = target.window.mutationIdentity else {
             throw ComputerActionService.ComputerActionError.staleObservation
         }
-        let clickType: ClickType = switch params.action {
-        case .rightClick: .right
-        case .doubleClick: .double
-        default: .single
-        }
         do {
             let result = try await self.withExecutionAuthority {
                 try await self.automation.clickWithOutcome(
                     target: resolved.target,
-                    clickType: clickType,
+                    clickType: params.action.peekabooClickType,
                     snapshotId: resolved.snapshotId,
                     expectedWindowIdentity: identity,
                     expectedWindowBounds: target.window.bounds)
@@ -452,8 +454,10 @@ final class ComputerWindowActionExecutor {
         }
     }
 
-    private func type(_ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult {
-        let text = try Self.require(params.text, field: "text", allowEmpty: false)
+    private func keyboardInput(_ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult {
+        let value = try params.action == .type
+            ? Self.require(params.text, field: "text")
+            : Self.require(params.keys, field: "keys")
         let target = try self.requiredWindow(params)
         let mode = params.deliveryMode ?? .background
         if let elementRef = params.elementRef {
@@ -465,64 +469,37 @@ final class ComputerWindowActionExecutor {
             if !focusResult.ok { return focusResult }
         }
         do {
-            let result: UIAutomationActionResult<TypeResult>
+            let outcome: DesktopActionOutcome?
             if mode == .foreground {
                 try await self.focus(target)
-                result = try await self.withExecutionAuthority {
-                    try await self.automation.typeActionsWithOutcome(
-                        [.text(text)], cadence: .fixed(milliseconds: 0), snapshotId: nil)
+                outcome = try await self.withExecutionAuthority {
+                    if params.action == .type {
+                        return try await self.automation.typeActionsWithOutcome(
+                            [.text(value)], cadence: .fixed(milliseconds: 0), snapshotId: nil).outcome
+                    }
+                    return try await self.automation.hotkeyWithOutcome(keys: value, holdDuration: 0).outcome
                 }
             } else {
                 guard let identity = target.window.mutationIdentity else {
                     throw ComputerActionService.ComputerActionError.staleObservation
                 }
-                result = try await self.withExecutionAuthority {
-                    try await self.automation.typeActionsWithOutcome(
-                        [.text(text)],
-                        cadence: .fixed(milliseconds: 0),
-                        snapshotId: params.elementRef == nil ? nil : self.observation?.snapshotId,
-                        expectedWindowIdentity: identity,
-                        expectedWindowBounds: target.window.bounds)
-                }
-            }
-            return Self.result(from: result.outcome, background: mode == .background)
-        } catch let failure as DesktopActionFailure {
-            return Self.failureResult(failure, background: mode == .background)
-        }
-    }
-
-    private func key(_ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult {
-        let keys = try Self.require(params.keys, field: "keys", allowEmpty: false)
-        let target = try self.requiredWindow(params)
-        let mode = params.deliveryMode ?? .background
-        if let elementRef = params.elementRef {
-            let focusResult = try await self.focusElement(
-                elementRef,
-                params: params,
-                target: target,
-                foreground: mode == .foreground)
-            if !focusResult.ok { return focusResult }
-        }
-        do {
-            let result: UIAutomationActionResult<Void>
-            if mode == .foreground {
-                try await self.focus(target)
-                result = try await self.withExecutionAuthority {
-                    try await self.automation.hotkeyWithOutcome(keys: keys, holdDuration: 0)
-                }
-            } else {
-                guard let identity = target.window.mutationIdentity else {
-                    throw ComputerActionService.ComputerActionError.staleObservation
-                }
-                result = try await self.withExecutionAuthority {
-                    try await self.automation.hotkeyWithOutcome(
-                        keys: keys,
+                outcome = try await self.withExecutionAuthority {
+                    if params.action == .type {
+                        return try await self.automation.typeActionsWithOutcome(
+                            [.text(value)],
+                            cadence: .fixed(milliseconds: 0),
+                            snapshotId: params.elementRef == nil ? nil : self.observation?.snapshotId,
+                            expectedWindowIdentity: identity,
+                            expectedWindowBounds: target.window.bounds).outcome
+                    }
+                    return try await self.automation.hotkeyWithOutcome(
+                        keys: value,
                         holdDuration: 0,
                         expectedWindowIdentity: identity,
-                        expectedWindowBounds: target.window.bounds)
+                        expectedWindowBounds: target.window.bounds).outcome
                 }
             }
-            return Self.result(from: result.outcome, background: mode == .background)
+            return Self.result(from: outcome, background: mode == .background)
         } catch let failure as DesktopActionFailure {
             return Self.failureResult(failure, background: mode == .background)
         }
@@ -593,7 +570,7 @@ final class ComputerWindowActionExecutor {
         }
         let result = try await self.withExecutionAuthority {
             try await self.automation.scrollWithOutcome(ScrollRequest(
-                direction: Self.scrollDirection(direction),
+                direction: direction.peekabooDirection,
                 amount: min(100, max(1, params.scrollAmount ?? 3)),
                 target: element?.id,
                 snapshotId: element == nil ? nil : self.observation?.snapshotId,
@@ -873,7 +850,7 @@ extension ComputerWindowActionExecutor {
 
     private static func windowContext(
         _ target: WindowTarget,
-        limits: (depth: Int, maxElements: Int)) -> WindowContext
+        limits: AXTraversalBudget) -> WindowContext
     {
         WindowContext(
             applicationName: target.app.name,
@@ -883,15 +860,12 @@ extension ComputerWindowActionExecutor {
             windowID: target.window.windowID,
             windowBounds: target.window.bounds,
             windowMutationIdentity: target.window.mutationIdentity,
-            traversalBudget: AXTraversalBudget(
-                maxDepth: limits.depth,
-                maxElementCount: limits.maxElements,
-                maxChildrenPerNode: AXTraversalBudget.defaultMaxChildrenPerNode),
+            traversalBudget: limits,
             requiresFreshAccessibilityTree: true)
     }
 
     private static func observationLimits(
-        _ params: OpenClawComputerActParams) throws -> (depth: Int, maxElements: Int)
+        _ params: OpenClawComputerActParams) throws -> AXTraversalBudget
     {
         let depth = params.depth ?? AXTraversalBudget.defaultMaxDepth
         let maxElements = params.maxElements ?? AXTraversalBudget.defaultMaxElementCount
@@ -899,7 +873,10 @@ extension ComputerWindowActionExecutor {
             throw ComputerActionService.ComputerActionError.invalidRequest(
                 "depth must be 0...64 and maxElements must be 1...2000")
         }
-        return (depth, maxElements)
+        return AXTraversalBudget(
+            maxDepth: depth,
+            maxElementCount: maxElements,
+            maxChildrenPerNode: AXTraversalBudget.defaultMaxChildrenPerNode)
     }
 
     private static func require(
@@ -929,17 +906,6 @@ extension ComputerWindowActionExecutor {
             "width": max(0, Double(rect.width)),
             "height": max(0, Double(rect.height)),
         ]
-    }
-
-    private static func scrollDirection(
-        _ direction: OpenClawComputerScrollDirection) -> PeekabooFoundation.ScrollDirection
-    {
-        switch direction {
-        case .up: .up
-        case .down: .down
-        case .left: .left
-        case .right: .right
-        }
     }
 
     private static func postForegroundClick(

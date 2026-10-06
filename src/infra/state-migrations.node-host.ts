@@ -1,6 +1,6 @@
 // Doctor-only import for the retired node-host JSON config.
 import path from "node:path";
-import { root, type Root } from "@openclaw/fs-safe";
+import { root } from "@openclaw/fs-safe";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX,
@@ -17,6 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   LegacyMigrationSourceClaim,
@@ -52,17 +53,6 @@ export function detectLegacyNodeHostConfig(params: {
   };
 }
 
-function assertOnlyKeys(
-  value: Record<string, unknown>,
-  allowed: ReadonlySet<string>,
-  label: string,
-): void {
-  const unexpected = Object.keys(value).find((key) => !allowed.has(key));
-  if (unexpected) {
-    throw new Error(`${label} has unexpected field ${unexpected}`);
-  }
-}
-
 function optionalLegacyString(value: unknown, label: string): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -90,7 +80,7 @@ function parseLegacyGateway(value: unknown): NodeHostGatewayConfig | undefined {
   if (!isRecord(value)) {
     throw new Error("legacy node-host gateway must be an object");
   }
-  assertOnlyKeys(value, GATEWAY_KEYS, "legacy node-host gateway");
+  assertAllowedJsonFields(value, GATEWAY_KEYS, "legacy node-host gateway");
   const port = value.port;
   if (
     port !== undefined &&
@@ -103,8 +93,8 @@ function parseLegacyGateway(value: unknown): NodeHostGatewayConfig | undefined {
   }
   const gateway: NodeHostGatewayConfig = {
     host: optionalLegacyString(value.host, "legacy node-host gateway host"),
-    port: port as number | undefined,
-    tls: value.tls as boolean | undefined,
+    port,
+    tls: value.tls,
     tlsFingerprint: optionalLegacyString(
       value.tlsFingerprint,
       "legacy node-host gateway tlsFingerprint",
@@ -120,7 +110,7 @@ function parseLegacyNodeHostConfig(snapshot: LegacySourceSnapshot): CanonicalNod
   if (!isRecord(parsed)) {
     throw new Error("legacy node-host config must be an object");
   }
-  assertOnlyKeys(parsed, CONFIG_KEYS, "legacy node-host config");
+  assertAllowedJsonFields(parsed, CONFIG_KEYS, "legacy node-host config");
   if (parsed.version !== 1) {
     throw new Error("legacy node-host config version must be 1");
   }
@@ -191,8 +181,8 @@ function rowToCanonicalState(row: {
   const cloudflareAccess = normalizeNodeHostCloudflareAccessConfig(storedGateway?.cloudflareAccess);
   const gateway: NodeHostGatewayConfig = {
     host: nullableNonEmptyString(storedGateway?.host, "gateway_host"),
-    port: typeof gatewayPort === "number" ? gatewayPort : undefined,
-    tls: typeof gatewayTls === "boolean" ? gatewayTls : undefined,
+    port: gatewayPort,
+    tls: gatewayTls,
     tlsFingerprint: nullableNonEmptyString(
       storedGateway?.tlsFingerprint,
       "gateway_tls_fingerprint",
@@ -223,28 +213,6 @@ function configsEqual(left: NodeHostConfig, right: NodeHostConfig): boolean {
     left.gateway?.contextPath === right.gateway?.contextPath &&
     JSON.stringify(left.gateway?.cloudflareAccess) ===
       JSON.stringify(right.gateway?.cloudflareAccess)
-  );
-}
-
-function writeCanonicalState(
-  db: Parameters<typeof getNodeSqliteKysely>[0],
-  state: CanonicalNodeHostState,
-): void {
-  const row = {
-    state_key: NODE_HOST_CONFIG_KEY,
-    value_json: JSON.stringify({
-      ...state.config,
-      installedAppsSharing: state.config.installedAppsSharing ?? false,
-    }),
-    updated_at_ms: state.updatedAtMs,
-  };
-  const { state_key: _stateKey, ...updates } = row;
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<NodeHostConfigDatabase>(db)
-      .insertInto("config_machine_state")
-      .values(row)
-      .onConflict((conflict) => conflict.column("state_key").doUpdateSet(updates)),
   );
 }
 
@@ -291,7 +259,22 @@ function migrateIntoDatabase(params: { env: NodeJS.ProcessEnv; legacy: Canonical
             config: { ...expected.config, installedAppsSharing: true },
           };
         }
-        writeCanonicalState(db, expected);
+        const storedRow = {
+          state_key: NODE_HOST_CONFIG_KEY,
+          value_json: JSON.stringify({
+            ...expected.config,
+            installedAppsSharing: expected.config.installedAppsSharing ?? false,
+          }),
+          updated_at_ms: expected.updatedAtMs,
+        };
+        const { state_key: _stateKey, ...updates } = storedRow;
+        executeSqliteQuerySync(
+          db,
+          stateDb
+            .insertInto("config_machine_state")
+            .values(storedRow)
+            .onConflict((conflict) => conflict.column("state_key").doUpdateSet(updates)),
+        );
         imported = expected.updatedAtMs === params.legacy.updatedAtMs;
       }
 
@@ -316,104 +299,6 @@ function migrateIntoDatabase(params: { env: NodeJS.ProcessEnv; legacy: Canonical
     { env: params.env },
   );
   return { imported, preservedCanonical };
-}
-
-async function migrateWithExclusiveStateOwnership(params: {
-  stateRoot: Root;
-  detected: LegacyStateDetection["nodeHost"];
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-  beforeClaim?: () => void;
-  beforeVerify?: () => void;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<MigrationMessages> {
-  if (!params.detected.hasLegacy) {
-    return { changes: [], warnings: [] };
-  }
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const notices: string[] = [];
-  const sourcePath = params.detected.sourcePath;
-  const source = new LegacyMigrationSourceClaim({
-    stateRoot: params.stateRoot,
-    stateDir: params.stateDir,
-    sourcePath,
-    label: "node-host",
-    claimSuffix: LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX,
-    readSnapshot: (snapshotPath) =>
-      readLegacyMigrationSourceSnapshot({
-        stateRoot: params.stateRoot,
-        stateDir: params.stateDir,
-        sourcePath: snapshotPath,
-        maxBytes: LEGACY_NODE_HOST_MAX_BYTES,
-        label: "node-host",
-        hashDecodedText: true,
-      }),
-  });
-
-  let snapshot: LegacySourceSnapshot;
-  let legacy: CanonicalNodeHostState;
-  try {
-    await source.recover("interrupted node-host Doctor claim conflicts with its source");
-    if (!(await source.exists())) {
-      return { changes, warnings };
-    }
-    snapshot = await source.read();
-    legacy = parseLegacyNodeHostConfig(snapshot);
-    params.beforeVerify?.();
-    if (!sourceSnapshotsMatch(await source.read(), snapshot)) {
-      throw new Error("legacy node-host source changed after Doctor loaded it");
-    }
-  } catch (error) {
-    warnings.push(`Failed reading legacy node-host state: ${String(error)}`);
-    return { changes, warnings };
-  }
-
-  try {
-    await source.claim({
-      snapshot,
-      mismatchMessage: "legacy node-host source changed before Doctor could claim it",
-      beforeClaim: params.beforeClaim,
-    });
-  } catch (error) {
-    const restoreError = await source.restore();
-    warnings.push(
-      `Failed migrating legacy node-host state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-    );
-    return { changes, warnings };
-  }
-
-  let result: ReturnType<typeof migrateIntoDatabase>;
-  try {
-    result = migrateIntoDatabase({ env: params.env, legacy });
-  } catch (error) {
-    const restoreError = await source.restore();
-    warnings.push(
-      `Failed migrating legacy node-host state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-    );
-    return { changes, warnings };
-  }
-
-  try {
-    await source.remove({
-      removeSource: params.removeSource,
-      sourceReappearedMessage: `legacy node-host source reappeared during import: ${sourcePath}`,
-      remainingMessage: "legacy node-host source or Doctor claim remains after cleanup",
-    });
-  } catch (error) {
-    warnings.push(`Node-host state is in SQLite, but legacy cleanup failed: ${String(error)}`);
-    return { changes, warnings };
-  }
-
-  changes.push(
-    result.preservedCanonical
-      ? "Kept newer canonical node-host SQLite state."
-      : result.imported
-        ? "Migrated node-host config to shared SQLite state."
-        : "Verified node-host config in shared SQLite state.",
-  );
-  notices.push("Removed retired node.json after verified SQLite import.");
-  return { changes, warnings, notices };
 }
 
 /** Import retired node-host state while excluding active Gateway/state maintenance owners. */
@@ -441,11 +326,74 @@ export async function migrateLegacyNodeHostConfig(params: {
         maxBytes: LEGACY_NODE_HOST_MAX_BYTES,
         symlinks: "reject",
       });
-      return await migrateWithExclusiveStateOwnership({
-        ...params,
-        env,
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const notices: string[] = [];
+      const sourcePath = params.detected.sourcePath;
+      const source = new LegacyMigrationSourceClaim({
         stateRoot,
+        stateDir: params.stateDir,
+        sourcePath,
+        label: "node-host",
+        claimSuffix: LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX,
+        readSnapshot: (snapshotPath) =>
+          readLegacyMigrationSourceSnapshot({
+            stateRoot,
+            stateDir: params.stateDir,
+            sourcePath: snapshotPath,
+            maxBytes: LEGACY_NODE_HOST_MAX_BYTES,
+            label: "node-host",
+            hashDecodedText: true,
+          }),
       });
+
+      await source.recover("interrupted node-host Doctor claim conflicts with its source");
+      if (!(await source.exists())) {
+        return { changes, warnings };
+      }
+      const snapshot = await source.read();
+      const legacy = parseLegacyNodeHostConfig(snapshot);
+      params.beforeVerify?.();
+      if (!sourceSnapshotsMatch(await source.read(), snapshot)) {
+        throw new Error("legacy node-host source changed after Doctor loaded it");
+      }
+
+      let result: ReturnType<typeof migrateIntoDatabase>;
+      try {
+        await source.claim({
+          snapshot,
+          mismatchMessage: "legacy node-host source changed before Doctor could claim it",
+          beforeClaim: params.beforeClaim,
+        });
+        result = migrateIntoDatabase({ env, legacy });
+      } catch (error) {
+        const restoreError = await source.restore();
+        warnings.push(
+          `Failed migrating legacy node-host state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+        );
+        return { changes, warnings };
+      }
+
+      try {
+        await source.remove({
+          removeSource: params.removeSource,
+          sourceReappearedMessage: `legacy node-host source reappeared during import: ${sourcePath}`,
+          remainingMessage: "legacy node-host source or Doctor claim remains after cleanup",
+        });
+      } catch (error) {
+        warnings.push(`Node-host state is in SQLite, but legacy cleanup failed: ${String(error)}`);
+        return { changes, warnings };
+      }
+
+      changes.push(
+        result.preservedCanonical
+          ? "Kept newer canonical node-host SQLite state."
+          : result.imported
+            ? "Migrated node-host config to shared SQLite state."
+            : "Verified node-host config in shared SQLite state.",
+      );
+      notices.push("Removed retired node.json after verified SQLite import.");
+      return { changes, warnings, notices };
     },
   });
 }

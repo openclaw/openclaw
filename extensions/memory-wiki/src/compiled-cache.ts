@@ -1,22 +1,20 @@
-// Memory Wiki compiled cache ownership and persistence.
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import type { PluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenBlobStoreOptions,
+  PluginBlobStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { WikiFreshnessLevel } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import type { WikiPageKind, WikiPageSummary, WikiRelationship } from "./markdown.js";
-
-export const LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS = [
-  ".openclaw-wiki/cache/agent-digest.json",
-  ".openclaw-wiki/cache/claims.jsonl",
-] as const;
 
 const COMPILED_CACHE_NAMESPACE = "compiled-cache";
 const COMPILED_CACHE_MAX_ENTRIES = 256;
 const COMPILED_CACHE_MAX_BYTES_PER_ENTRY = 100 * 1024 * 1024;
 const COMPILED_CACHE_MAX_BYTES = 512 * 1024 * 1024;
-const COMPILED_CACHE_VERSION = 2;
+const COMPILED_CACHE_VERSION = 3;
+export const MEMORY_WIKI_DASHBOARD_ITEM_LIMIT = 2_500;
 
 export type MemoryWikiCompiledDigestClaim = {
   id?: string;
@@ -68,6 +66,21 @@ export type MemoryWikiCompiledClaim = {
   lastTouchedAt?: string;
 };
 
+export type MemoryWikiImportInsightItem = NonNullable<
+  ReturnType<typeof import("./import-insights.js").projectMemoryWikiImportInsight>
+>;
+type MemoryWikiImportInsightsStatus = ReturnType<
+  typeof import("./import-insights.js").buildMemoryWikiImportInsights
+>;
+
+export type MemoryWikiOverviewItem = ReturnType<
+  typeof import("./wiki-overview.js").projectMemoryWikiOverviewItem
+>;
+type MemoryWikiOverviewStatus = ReturnType<
+  typeof import("./wiki-overview.js").buildMemoryWikiOverview
+>;
+export type MemoryWikiOverviewPageCounts = Record<WikiPageKind, number>;
+
 export type MemoryWikiCompiledCacheSnapshot = {
   digest: {
     claimCount: number;
@@ -75,7 +88,37 @@ export type MemoryWikiCompiledCacheSnapshot = {
     pages: MemoryWikiCompiledDigestPage[];
   };
   claims: MemoryWikiCompiledClaim[];
+  dashboards: {
+    importInsights: MemoryWikiImportInsightsStatus;
+    overview: MemoryWikiOverviewStatus;
+  };
 };
+
+type MemoryWikiCompiledDashboards = MemoryWikiCompiledCacheSnapshot["dashboards"];
+
+export type MemoryWikiDashboardState =
+  | { state: "ready"; dashboards: MemoryWikiCompiledDashboards }
+  | { state: "rebuilding" }
+  | { state: "compile-required" }
+  | { state: "failed" };
+
+type MemoryWikiDashboardPendingState = Exclude<MemoryWikiDashboardState, { state: "ready" }>;
+const DASHBOARD_UNAVAILABLE_MESSAGES: Record<MemoryWikiDashboardPendingState["state"], string> = {
+  rebuilding: "Memory Wiki dashboards are rebuilding. Retry shortly.",
+  "compile-required":
+    'Memory Wiki dashboards need a compiled snapshot. Run "openclaw wiki compile", then reload.',
+  failed: 'Memory Wiki dashboard rebuild failed. Run "openclaw wiki compile", then reload.',
+};
+
+export class MemoryWikiDashboardUnavailableError extends Error {
+  constructor(
+    readonly state: MemoryWikiDashboardPendingState["state"],
+    message: string,
+  ) {
+    super(message);
+    this.name = "MemoryWikiDashboardUnavailableError";
+  }
+}
 
 type CompiledCacheMetadata = {
   version: typeof COMPILED_CACHE_VERSION;
@@ -92,30 +135,22 @@ type ActiveVault = {
   vaultGeneration: string;
   compiledCachePublicationId?: string;
   reconciled: boolean;
+  snapshot?: MemoryWikiCompiledCacheSnapshot;
 };
 
-type MemoryWikiCompiledCacheStore = {
-  read(config: ResolvedMemoryWikiConfig): Promise<MemoryWikiCompiledCacheSnapshot | null>;
-  write(
-    config: ResolvedMemoryWikiConfig,
-    snapshot: MemoryWikiCompiledCacheSnapshot,
-    generation: string,
-    publicationId: string,
-  ): Promise<ActiveVault>;
-  reconcile(
-    config: ResolvedMemoryWikiConfig,
-    loadDurableIdentity: () => Promise<{
-      vaultGeneration: string | null;
-      compiledCachePublicationId: string | null;
-    }>,
-  ): Promise<void>;
-  delete(config: ResolvedMemoryWikiConfig): Promise<void>;
-  deletePublication(config: ResolvedMemoryWikiConfig, publicationId: string): Promise<void>;
-  deleteOwnersExcept(ownerIds: ReadonlySet<string>): Promise<number>;
+type DurableVaultIdentity = {
+  vaultGeneration: string | null;
+  compiledCachePublicationId: string | null;
 };
+
+type MemoryWikiCompiledCacheStore = ReturnType<typeof createMemoryWikiCompiledCacheStore>;
 
 let configuredStore: MemoryWikiCompiledCacheStore | undefined;
 const activeVaults = new Map<string, ActiveVault>();
+const dashboardStates = new Map<
+  string,
+  { ownerId: string; state: MemoryWikiDashboardPendingState }
+>();
 
 export function resolveMemoryWikiCompiledCacheOwnerId(config: ResolvedMemoryWikiConfig): string {
   if (config.vault.scope === "global") {
@@ -136,6 +171,10 @@ function publicationKey(ownerId: string, publicationId: string): string {
   return `${ownerKeyPrefix(ownerId)}${createHash("sha256").update(publicationId).digest("hex")}`;
 }
 
+function dashboardStateKey(config: ResolvedMemoryWikiConfig): string {
+  return `${resolveMemoryWikiCompiledCacheOwnerId(config)}\0${path.resolve(config.vault.path)}`;
+}
+
 function isMetadata(value: CompiledCacheMetadata | undefined): value is CompiledCacheMetadata {
   return (
     value?.version === COMPILED_CACHE_VERSION &&
@@ -152,17 +191,30 @@ export function activateMemoryWikiCompiledCacheOwner(
   config: ResolvedMemoryWikiConfig,
   vaultGeneration: string,
   compiledCachePublicationId?: string | null,
-): void {
+): boolean {
   const normalizedVaultGeneration = vaultGeneration.trim();
   if (!normalizedVaultGeneration) {
     throw new Error("Memory Wiki vault generation must not be empty.");
   }
-  activeVaults.set(resolveMemoryWikiCompiledCacheOwnerId(config), {
-    path: path.resolve(config.vault.path),
+  const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
+  const vaultPath = path.resolve(config.vault.path);
+  const publicationId = compiledCachePublicationId?.trim() || undefined;
+  const active = activeVaults.get(ownerId);
+  if (
+    active?.reconciled &&
+    active.path === vaultPath &&
+    active.vaultGeneration === normalizedVaultGeneration &&
+    active.compiledCachePublicationId === publicationId
+  ) {
+    return false;
+  }
+  activeVaults.set(ownerId, {
+    path: vaultPath,
     vaultGeneration: normalizedVaultGeneration,
-    compiledCachePublicationId: compiledCachePublicationId?.trim() || undefined,
+    compiledCachePublicationId: publicationId,
     reconciled: false,
   });
+  return true;
 }
 
 export function deactivateMemoryWikiCompiledCacheOwnersExcept(ownerIds: ReadonlySet<string>): void {
@@ -171,6 +223,21 @@ export function deactivateMemoryWikiCompiledCacheOwnersExcept(ownerIds: Readonly
       activeVaults.delete(ownerId);
     }
   }
+  for (const [key, entry] of dashboardStates) {
+    if (!ownerIds.has(entry.ownerId)) {
+      dashboardStates.delete(key);
+    }
+  }
+}
+
+export function setMemoryWikiDashboardState(
+  config: ResolvedMemoryWikiConfig,
+  state: MemoryWikiDashboardPendingState,
+): void {
+  dashboardStates.set(dashboardStateKey(config), {
+    ownerId: resolveMemoryWikiCompiledCacheOwnerId(config),
+    state,
+  });
 }
 
 function resolveActiveVault(config: ResolvedMemoryWikiConfig): ActiveVault | null {
@@ -179,6 +246,14 @@ function resolveActiveVault(config: ResolvedMemoryWikiConfig): ActiveVault | nul
     return null;
   }
   return active;
+}
+
+export function isMemoryWikiCompiledCacheOwnerActive(
+  config: ResolvedMemoryWikiConfig,
+  vaultGeneration: string,
+): boolean {
+  const active = resolveActiveVault(config);
+  return active?.reconciled === true && active.vaultGeneration === vaultGeneration;
 }
 
 function parseSnapshot(
@@ -197,7 +272,17 @@ function parseSnapshot(
       !parsed.digest ||
       typeof parsed.digest !== "object" ||
       !Array.isArray(parsed.digest.pages) ||
-      !Array.isArray(parsed.claims)
+      !Array.isArray(parsed.claims) ||
+      !parsed.dashboards ||
+      typeof parsed.dashboards !== "object" ||
+      !parsed.dashboards.importInsights ||
+      typeof parsed.dashboards.importInsights !== "object" ||
+      typeof parsed.dashboards.importInsights.truncated !== "boolean" ||
+      !Array.isArray(parsed.dashboards.importInsights.clusters) ||
+      !parsed.dashboards.overview ||
+      typeof parsed.dashboards.overview !== "object" ||
+      typeof parsed.dashboards.overview.truncated !== "boolean" ||
+      !Array.isArray(parsed.dashboards.overview.clusters)
     ) {
       return null;
     }
@@ -213,20 +298,10 @@ export function resolveMemoryWikiCompiledCacheGeneration(
   return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
 }
 
-export function createMemoryWikiCompiledCachePublicationId(): string {
-  return randomUUID();
-}
-
 export function createMemoryWikiCompiledCacheStore(
-  openBlobStore: <TMetadata>(options: {
-    namespace: string;
-    maxEntries: number;
-    maxBytesPerEntry: number;
-    maxBytesPerNamespace: number;
-    overflowPolicy: "evict-oldest";
-  }) => PluginBlobStore<TMetadata>,
+  openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) => PluginBlobStore<TMetadata>,
   options: { onReadError?: (error: unknown) => void } = {},
-): MemoryWikiCompiledCacheStore {
+) {
   const store = openBlobStore<CompiledCacheMetadata>({
     namespace: COMPILED_CACHE_NAMESPACE,
     maxEntries: COMPILED_CACHE_MAX_ENTRIES,
@@ -234,21 +309,20 @@ export function createMemoryWikiCompiledCacheStore(
     maxBytesPerNamespace: COMPILED_CACHE_MAX_BYTES,
     overflowPolicy: "evict-oldest",
   });
-  async function deleteKey(key: string): Promise<void> {
-    await store.delete(key);
-  }
-
   return {
-    async read(config) {
+    async read(this: void, config: ResolvedMemoryWikiConfig) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const activeVault = resolveActiveVault(config);
       if (!activeVault?.reconciled || !activeVault.compiledCachePublicationId) {
         return null;
       }
+      if (activeVault.snapshot) {
+        return activeVault.snapshot;
+      }
       const key = publicationKey(ownerId, activeVault.compiledCachePublicationId);
       const entry = await store.lookup(key).catch((error: unknown) => {
         options.onReadError?.(error);
-        return undefined;
+        throw error;
       });
       if (!entry) {
         return null;
@@ -276,10 +350,17 @@ export function createMemoryWikiCompiledCacheStore(
       if (resolveActiveVault(config) !== activeVault) {
         return null;
       }
+      activeVault.snapshot = snapshot;
       return snapshot;
     },
 
-    async write(config, snapshot, generation, publicationId) {
+    async write(
+      this: void,
+      config: ResolvedMemoryWikiConfig,
+      snapshot: MemoryWikiCompiledCacheSnapshot,
+      generation: string,
+      publicationId: string,
+    ) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const vaultPath = path.resolve(config.vault.path);
       const activeVault = resolveActiveVault(config);
@@ -300,10 +381,14 @@ export function createMemoryWikiCompiledCacheStore(
         encoding: "gzip-json",
       };
       await store.register(publicationKey(ownerId, publicationId), gzipSync(serialized), metadata);
-      return activeVault;
+      return { activeVault, serializedSnapshot: serialized };
     },
 
-    async reconcile(config, loadDurableIdentity) {
+    async reconcile(
+      this: void,
+      config: ResolvedMemoryWikiConfig,
+      loadDurableIdentity: () => Promise<DurableVaultIdentity>,
+    ) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const activeVault = resolveActiveVault(config);
       if (!activeVault) {
@@ -340,27 +425,29 @@ export function createMemoryWikiCompiledCacheStore(
       });
     },
 
-    async delete(config) {
+    async delete(this: void, config: ResolvedMemoryWikiConfig) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       for (const entry of await store.entries()) {
         if (isMetadata(entry.metadata) && entry.metadata.ownerId === ownerId) {
-          await deleteKey(entry.key);
+          await store.delete(entry.key);
         }
       }
     },
 
-    async deletePublication(config, publicationId) {
-      await deleteKey(publicationKey(resolveMemoryWikiCompiledCacheOwnerId(config), publicationId));
+    async deletePublication(this: void, config: ResolvedMemoryWikiConfig, publicationId: string) {
+      await store.delete(
+        publicationKey(resolveMemoryWikiCompiledCacheOwnerId(config), publicationId),
+      );
     },
 
-    async deleteOwnersExcept(ownerIds) {
+    async deleteOwnersExcept(this: void, ownerIds: ReadonlySet<string>) {
       let deleted = 0;
       for (const entry of await store.entries()) {
         const metadata = entry.metadata;
         if (isMetadata(metadata) && ownerIds.has(metadata.ownerId)) {
           continue;
         }
-        await deleteKey(entry.key);
+        await store.delete(entry.key);
         deleted += 1;
       }
       return deleted;
@@ -374,6 +461,7 @@ export function configureMemoryWikiCompiledCacheStore(
   configuredStore = store;
   if (!store) {
     activeVaults.clear();
+    dashboardStates.clear();
   }
 }
 
@@ -390,18 +478,48 @@ export async function loadMemoryWikiCompiledCache(
   return await requireConfiguredStore().read(config);
 }
 
+export async function readMemoryWikiDashboardState(
+  config: ResolvedMemoryWikiConfig,
+): Promise<MemoryWikiDashboardState> {
+  const pending = dashboardStates.get(dashboardStateKey(config));
+  if (pending) {
+    return pending.state;
+  }
+  try {
+    const snapshot = await loadMemoryWikiCompiledCache(config);
+    if (snapshot) {
+      return { state: "ready", dashboards: snapshot.dashboards };
+    }
+  } catch {
+    return { state: "failed" };
+  }
+  return config.ingest.autoCompile ? { state: "rebuilding" } : { state: "compile-required" };
+}
+
+export async function loadMemoryWikiCompiledDashboards(
+  config: ResolvedMemoryWikiConfig,
+): Promise<MemoryWikiCompiledDashboards> {
+  const status = await readMemoryWikiDashboardState(config);
+  if (status.state === "ready") {
+    return status.dashboards;
+  }
+  throw new MemoryWikiDashboardUnavailableError(
+    status.state,
+    DASHBOARD_UNAVAILABLE_MESSAGES[status.state],
+  );
+}
+
 export async function invalidateMemoryWikiCompiledCache(
   config: ResolvedMemoryWikiConfig,
 ): Promise<void> {
   await requireConfiguredStore().delete(config);
+  activeVaults.delete(resolveMemoryWikiCompiledCacheOwnerId(config));
+  dashboardStates.delete(dashboardStateKey(config));
 }
 
 export async function reconcileMemoryWikiCompiledCacheOwner(
   config: ResolvedMemoryWikiConfig,
-  loadDurableIdentity: () => Promise<{
-    vaultGeneration: string | null;
-    compiledCachePublicationId: string | null;
-  }>,
+  loadDurableIdentity: () => Promise<DurableVaultIdentity>,
 ): Promise<void> {
   await requireConfiguredStore().reconcile(config, loadDurableIdentity);
 }
@@ -414,18 +532,24 @@ export async function writeMemoryWikiCompiledCache(
   parentPublicationId: string | null,
   validatePublication: () => Promise<void>,
   commitPublication: () => Promise<void>,
-  loadDurableIdentity: () => Promise<{
-    vaultGeneration: string | null;
-    compiledCachePublicationId: string | null;
-  }>,
+  loadDurableIdentity: () => Promise<DurableVaultIdentity>,
 ): Promise<void> {
   const store = requireConfiguredStore();
-  const activeVault = await store.write(config, snapshot, generation, publicationId);
+  const { activeVault, serializedSnapshot } = await store.write(
+    config,
+    snapshot,
+    generation,
+    publicationId,
+  );
   try {
     await validatePublication();
   } catch (error) {
     await store.deletePublication(config, publicationId);
     throw error;
+  }
+  if (resolveActiveVault(config) !== activeVault) {
+    await store.deletePublication(config, publicationId);
+    throw new Error("Memory Wiki cache owner retired before publication.");
   }
   try {
     await commitPublication();
@@ -449,17 +573,26 @@ export async function writeMemoryWikiCompiledCache(
     }
     throw new Error("Memory Wiki vault changed while its compiled cache was being published.");
   }
+  if (resolveActiveVault(config) !== activeVault) {
+    await store.deletePublication(config, publicationId);
+    throw new Error("Memory Wiki cache owner retired during publication.");
+  }
   if (parentPublicationId) {
     await store.deletePublication(config, parentPublicationId);
   }
-  // The publication is durable. A concurrent lifecycle refresh owns in-memory
-  // activation; retaining this row lets its next refresh reconcile safely.
   if (resolveActiveVault(config) !== activeVault) {
-    return;
+    await store.deletePublication(config, publicationId);
+    throw new Error("Memory Wiki cache owner retired while replacing its predecessor.");
   }
   activeVaults.set(resolveMemoryWikiCompiledCacheOwnerId(config), {
     ...activeVault,
     compiledCachePublicationId: publicationId,
     reconciled: true,
+    // Own the persisted payload, not compiler strings whose slices can retain entire
+    // source pages. Reuse the serialized snapshot to detach every nested string
+    // without changing its JSON representation (including lone surrogates).
+    // SAFETY: The store serialized this typed snapshot and verified its generation before writing.
+    snapshot: JSON.parse(serializedSnapshot) as MemoryWikiCompiledCacheSnapshot,
   });
+  dashboardStates.delete(dashboardStateKey(config));
 }

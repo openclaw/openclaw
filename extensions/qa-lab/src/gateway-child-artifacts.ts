@@ -1,7 +1,7 @@
-// Qa Lab plugin module owns sanitized gateway debug artifacts and temp cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ensureRepoBoundDirectory } from "./cli-paths.js";
 import { redactQaGatewayDebugText } from "./gateway-log-redaction.js";
@@ -25,6 +25,7 @@ async function clearQaGatewayArtifactDir(dir: string) {
 export async function cleanupQaGatewayTempRoots(params: {
   tempRoot: string;
   stagedBundledPluginsRoot?: string | null;
+  cleanupTempRoot?: () => Promise<unknown>;
 }) {
   const errors: Error[] = [];
   for (const [label, root] of [
@@ -35,7 +36,14 @@ export async function cleanupQaGatewayTempRoots(params: {
       continue;
     }
     try {
-      await fs.rm(root, { recursive: true, force: true });
+      if (label === "tempRoot") {
+        await closeQaRuntimeStores(root);
+      }
+      if (label === "tempRoot" && params.cleanupTempRoot) {
+        await params.cleanupTempRoot();
+      } else {
+        await fs.rm(root, { recursive: true, force: true });
+      }
     } catch (error) {
       // Attempt both roots. Read only the top-level message before redaction;
       // cause-aware formatting can expose arbitrary nested credentials.

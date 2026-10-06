@@ -1,4 +1,3 @@
-// Telegram plugin module implements session conversation behavior.
 import { normalizeTelegramChatId, normalizeTelegramLookupTarget } from "./targets.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
 

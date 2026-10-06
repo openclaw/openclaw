@@ -85,12 +85,13 @@ export function prepareCopilotAttemptContext(
     runId: input.runId,
     jobId: input.jobId,
     agentId: sessionAgentId,
-    sessionKey: sandboxSessionKey,
+    sessionKey: readNonEmptyString(input.sessionKey) ?? sandboxSessionKey,
     sessionId: input.sessionId,
     workspaceDir: resolvedWorkspaceForSandbox,
     modelProviderId: modelRef.provider,
     modelId: modelRef.id,
     trigger: input.trigger,
+    inputProvenance: input.inputProvenance,
     foregroundPromptContext: buildEmbeddedForegroundPromptContext(
       { ...input, agentId: sessionAgentId },
       input.agentDir ?? resolveAgentDir(input.config ?? {}, sessionAgentId),
@@ -125,6 +126,7 @@ export async function resolveCopilotAttemptSandbox(params: {
       ? params.input.sandbox
       : await resolveSandbox({
           config: params.input.config,
+          agentId: params.input.sandboxAgentId,
           sessionKey: params.sandboxSessionKey,
           workspaceDir: params.resolvedWorkspaceForSandbox,
         });

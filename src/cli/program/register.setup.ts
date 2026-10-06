@@ -3,11 +3,10 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { rejectOnboardingOption } from "../../commands/onboard-options.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions, listExplicitOptionFlagsExcept } from "../command-options.js";
-import { isUnconfiguredConfigSource } from "../fresh-install-config.js";
+import { shouldStartLocalOnboarding } from "../fresh-install-config.js";
 import {
   registerOnboardAuthOptions,
   registerOnboardGatewayOptions,
@@ -17,56 +16,7 @@ import {
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
-const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "json"]);
-
-type SetupRoute = "onboarding" | "system-agent";
-
-export function resolveSetupCommandRoute(input: {
-  hasOnboardingFlag: boolean;
-  hasSystemAgentRequest: boolean;
-  configured: boolean;
-  interactive: boolean;
-  json: boolean;
-}): SetupRoute {
-  if (input.hasOnboardingFlag) {
-    return "onboarding";
-  }
-  if (input.hasSystemAgentRequest) {
-    return "system-agent";
-  }
-  if (input.configured && (input.interactive || input.json)) {
-    return "system-agent";
-  }
-  return "onboarding";
-}
-
-function hasExplicitOnboardingOption(command: Command): boolean {
-  return command.options.some((option) => {
-    const name = option.attributeName();
-    return !SYSTEM_AGENT_OPTION_NAMES.has(name) && command.getOptionValueSource(name) === "cli";
-  });
-}
-
-async function isConfiguredInstance(): Promise<boolean> {
-  const { readConfigFileSnapshot } = await import("../../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.exists) {
-    return false;
-  }
-  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
-    return true;
-  }
-  if (isUnconfiguredConfigSource(snapshot.sourceConfig)) {
-    return false;
-  }
-  // Inference commits before installation finishes; pending local setup must
-  // resume onboarding instead of opening a chat against an unfinished Gateway.
-  const { readLocalOnboardingStateForConfig } =
-    await import("../../state/local-onboarding-state.js");
-  return (
-    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status !== "pending"
-  );
-}
+const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "skipBootstrap", "json"]);
 
 async function runSystemAgentEntry(
   options: Record<string, unknown>,
@@ -92,18 +42,23 @@ async function runOnboardingEntry(
   if (options.baseline) {
     const unsupportedOptions = listExplicitOptionFlagsExcept(commandRuntime, BASELINE_OPTION_NAMES);
     if (unsupportedOptions.length > 0) {
+      const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
       const message = `--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`;
       rejectOnboardingOption({ json: options.json === true }, runtime, message);
       return;
     }
     const { setupCommand } = await import("../../commands/setup.js");
     await setupCommand(
-      { workspace: readStringValue(options.workspace), json: Boolean(options.json) },
+      {
+        workspace: readStringValue(options.workspace),
+        skipBootstrap: options.skipBootstrap === true,
+        json: Boolean(options.json),
+      },
       runtime,
     );
     return;
   }
-  const onboardingOptions = resolveOnboardCommandOptions(options, commandRuntime, runtime);
+  const onboardingOptions = await resolveOnboardCommandOptions(options, commandRuntime, runtime);
   if (!onboardingOptions) {
     return;
   }
@@ -139,7 +94,8 @@ export function registerSetupCommand(program: Command): void {
       "--workspace <dir>",
       "Workspace proposal for guided setup; persisted by baseline/classic/non-interactive setup",
     )
-    .option("--agent-name <name>", "Name for the first agent (default: main)")
+    .option("--agent-name <name>", "Name for the first agent (or team coordinator)")
+    .option("--team", "Create a coordinator with researcher, writer, and reviewer specialists")
     .option("--wizard", "Run interactive onboarding", false)
     .option(
       "--baseline",
@@ -171,18 +127,19 @@ export function registerSetupCommand(program: Command): void {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       const options = rawOptions as Record<string, unknown>;
-      const hasOnboardingFlag = hasExplicitOnboardingOption(commandRuntime);
+      const hasOnboardingFlag =
+        listExplicitOptionFlagsExcept(commandRuntime, SYSTEM_AGENT_OPTION_NAMES).length > 0;
       const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);
-      const configured =
-        hasOnboardingFlag || hasSystemAgentRequest ? false : await isConfiguredInstance();
-      const route = resolveSetupCommandRoute({
-        hasOnboardingFlag,
-        hasSystemAgentRequest,
-        configured,
-        interactive: process.stdin.isTTY && process.stdout.isTTY,
-        json: Boolean(options.json),
-      });
-      if (route === "system-agent") {
+      let configured = false;
+      if (!hasOnboardingFlag && !hasSystemAgentRequest) {
+        const { readConfigFileSnapshot } = await import("../../config/config.js");
+        configured = !(await shouldStartLocalOnboarding(await readConfigFileSnapshot()));
+      }
+      if (
+        !hasOnboardingFlag &&
+        (hasSystemAgentRequest ||
+          (configured && ((process.stdin.isTTY && process.stdout.isTTY) || Boolean(options.json))))
+      ) {
         await runSystemAgentEntry(options, defaultRuntime);
         return;
       }

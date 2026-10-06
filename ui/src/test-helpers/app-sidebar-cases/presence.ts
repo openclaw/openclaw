@@ -1,18 +1,176 @@
 import type { LitElement } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import * as presenceUsers from "../../lib/presence-users.ts";
+import { selectSessionMenuValue } from "../app-sidebar-menu.ts";
+import { focusSidebarPersonWithKeyboard } from "../app-sidebar-setup.ts";
 import {
   createGatewayHarness,
   createSessions,
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
 
 describe("AppSidebar viewer presence", () => {
-  it("shows only other online identities with active-first ordering and idle dimming", async () => {
+  it.each([
+    ["profile-bob", "bob"],
+    ["gateway-owner", "Shared owner"],
+  ])("shows presence and offline owner %s while excluding self", async (ownerId, ownerName) => {
+    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
+    const gateway = createGatewayHarness(client);
+    const owners = ["self", "ada", "bob"].map((name) => ({
+      type: "human" as const,
+      id: name === "bob" ? ownerId : `profile-${name}`,
+      identity: { type: "profile" as const, id: name === "bob" ? ownerId : `profile-${name}` },
+      label: name,
+    }));
+    const sessions = createSessionsHarness(
+      "main",
+      owners.map((owner) => `agent:main:${owner.id}`),
+    );
+    const observeList = sessions.sessions.observeList;
+    let activityReady = Promise.resolve();
+    vi.spyOn(sessions.sessions, "observeList").mockImplementation((query, listener) => {
+      const observation = observeList(query, listener);
+      return query.source === "activity"
+        ? { ...observation, refresh: () => (activityReady = observation.refresh()) }
+        : observation;
+    });
+    const result = sessions.sessions.state.result!;
+    result.owners = owners;
+    result.sessions.forEach((row, index) => {
+      row.owner = { actor: owners[index]! };
+    });
+    sessions.publishList({ result });
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.connected = true;
+    await selectSessionMenuValue(sidebar, "grouping:person");
+    const section = (id: string) =>
+      sidebar.querySelector(
+        `[data-session-section="person:profile:${id === "bob" ? ownerId : `profile-${id}`}"]`,
+      )!;
+    for (const id of ["self", "ada", "bob"]) {
+      expect(section(id)).not.toBeNull();
+    }
+    expect(section("bob").querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
+      ownerName,
+    );
+    expect(section("bob").querySelector("[data-person-card]")?.getAttribute("aria-label")).toBe(
+      `Details for ${ownerName}`,
+    );
+    const self = {
+      instanceId: client.instanceId,
+      user: { id: "profile-self", identity: owners[0]!.identity, name: "Self" },
+      lastActivityAt: Date.now(),
+    };
+    const ada = {
+      instanceId: "ada-instance",
+      user: { id: "profile-ada", identity: owners[1]!.identity, name: "Ada" },
+      lastActivityAt: Date.now() - 5000,
+    };
+    gateway.publishEvent("presence", { presence: [self, ada] });
+    await sidebar.updateComplete;
+    const dot = () => section("ada").querySelector(".sidebar-session-group-presence");
+    const personButton = section("ada").querySelector<HTMLButtonElement>("[data-person-card]")!;
+    expect(dot()?.getAttribute("aria-label")).toBe("Online · Active");
+    expect(dot()?.classList.contains("sidebar-session-group-presence--idle")).toBe(false);
+    expect(dot()!.id).toBeTruthy();
+    expect(personButton.getAttribute("aria-describedby")).toBe(dot()!.id);
+    expect(section("bob").querySelector(".sidebar-session-group-presence")).toBeNull();
+    expect(section("self").querySelector(".sidebar-session-group-presence")).toBeNull();
+    expect(section("self").querySelector("[data-person-card]")).toBeNull();
+    expect(
+      section("self").querySelector(
+        ".sidebar-session-group-toggle .sidebar-recent-sessions__label-text",
+      )?.textContent,
+    ).toBe("self");
+
+    const toggle = section("ada").querySelector<HTMLButtonElement>(
+      ".sidebar-session-group-toggle",
+    )!;
+    expect(personButton?.tagName).toBe("BUTTON");
+    expect(personButton.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(personButton.getAttribute("aria-label")).toBe("Details for ada");
+    expect(personButton.previousElementSibling).toBe(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    personButton.click();
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe("Ada"),
+    );
+    const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
+    expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe(
+      "Online · Active",
+    );
+    expect(personButton.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    card.querySelector<HTMLAnchorElement>("a")!.focus();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
+    expect(document.activeElement).toBe(personButton);
+    expect(personButton.getAttribute("aria-expanded")).toBe("false");
+    // A real chevron press lands outside the person button: it collapses the
+    // section and dismisses an open card through the outside-pointer handling.
+    personButton.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
+    );
+    toggle.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    toggle.click();
+    await sidebar.updateComplete;
+    expect(section("ada").querySelector("[data-session-key]")).toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
+
+    const bobButton = section("bob").querySelector<HTMLButtonElement>("[data-person-card]")!;
+    bobButton.click();
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe(ownerName),
+    );
+    await activityReady;
+    await settleLitElement(sidebar);
+    const offlineCard = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
+    expect(
+      offlineCard.querySelector(".person-activity-card__status--offline")?.textContent?.trim(),
+    ).toBe("Offline");
+    expect(offlineCard.querySelector("dl")).toBeNull();
+    const recent = offlineCard.querySelector("section")!;
+    expect(recent.querySelector("h3")?.textContent).toBe("Recent sessions");
+    expect(recent.querySelector("a")?.getAttribute("href")).toBe(`/chat/main/${ownerId}`);
+    expect(offlineCard.querySelector("footer a")?.getAttribute("href")).toBe(
+      `/activity/${ownerId}`,
+    );
+    bobButton.click();
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
+    bobButton.focus();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe(ownerName),
+    );
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    gateway.publishEvent("presence", {
+      presence: [self, { ...ada, lastActivityAt: Date.now() - 600000 }],
+    });
+    await sidebar.updateComplete;
+    expect(dot()?.classList.contains("sidebar-session-group-presence--idle")).toBe(true);
+    expect(dot()?.getAttribute("aria-label")).toBe("Online · Idle");
+    expect(personButton.getAttribute("aria-describedby")).toBe(dot()!.id);
+
+    gateway.publishEvent("presence", { presence: [self, { ...ada, reason: "disconnect" }] });
+    await sidebar.updateComplete;
+    expect(dot()).toBeNull();
+    expect(personButton.hasAttribute("aria-describedby")).toBe(false);
+    expect(
+      section("ada").querySelector(".sidebar-session-group-toggle__person")?.hasAttribute("title"),
+    ).toBe(false);
+  });
+
+  it("shows all online identities with active-first ordering and idle dimming", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -29,32 +187,33 @@ describe("AppSidebar viewer presence", () => {
         {
           instanceId: "self-instance",
           user: { id: "self", name: "Self" },
-          lastInputSeconds: 0,
+          lastActivityAt: Date.now(),
           ts: 1,
         },
       ],
     });
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(1);
+    expect(sidebar.querySelector('[data-online-user-id="self"]')).not.toBeNull();
 
     gatewayHarness.publishEvent("presence", {
       presence: [
         {
           instanceId: "self-instance",
           user: { id: "self", name: "Self" },
-          lastInputSeconds: 0,
+          lastActivityAt: Date.now(),
           ts: 1,
         },
         {
           instanceId: "zed-instance",
           user: { id: "zed", name: "Zed" },
-          lastInputSeconds: 20,
+          lastActivityAt: Date.now() - 20000,
           ts: 1,
         },
         {
           instanceId: "alice-instance",
           user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
-          lastInputSeconds: 600,
+          lastActivityAt: Date.now() - 600000,
           ts: 1,
         },
         {
@@ -69,14 +228,15 @@ describe("AppSidebar viewer presence", () => {
       const rows = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-online__person")];
       expect(
         rows.map((row) => row.querySelector(".sidebar-online__person-name")?.textContent?.trim()),
-      ).toEqual(["Bob", "Zed", "Alice"]);
-      expect(rows.map((row) => row.classList.contains("sidebar-online__person--away"))).toEqual([
-        false,
-        false,
-        true,
+      ).toEqual(["Self", "Zed", "Alice", "Bob"]);
+      expect(rows.map((row) => row.dataset.presenceActivity)).toEqual([
+        "active",
+        "active",
+        "idle",
+        "unknown",
       ]);
     });
-    expect(sidebar.querySelector('[data-online-user-id="self"]')).toBeNull();
+    expect(sidebar.querySelector('[data-online-user-id="self"]')).not.toBeNull();
 
     const onlineToggle = sidebar.querySelector<HTMLButtonElement>(
       '.sidebar-online button[aria-label="Online"]',
@@ -92,131 +252,50 @@ describe("AppSidebar viewer presence", () => {
 
     onlineToggle?.click();
     await sidebar.updateComplete;
-    expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(3);
+    expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(4);
 
-    const aliceRow = sidebar.querySelector<HTMLButtonElement>('[data-online-user-id="alice"]')!;
-    expect(aliceRow.tagName).toBe("BUTTON");
-    expect(aliceRow.closest(".sidebar-online__row")?.querySelectorAll("a, button")).toHaveLength(1);
+    const aliceRow = sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')!;
     aliceRow.click();
     await vi.dynamicImportSettled();
-    await vi.waitFor(() =>
-      expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
-    );
-    expect(onNavigate).not.toHaveBeenCalled();
-    document
-      .querySelector<HTMLAnchorElement>(".person-activity-card footer a")!
-      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(onNavigate).toHaveBeenCalledWith("activity", {
-      href: "/activity?person=alice",
-      pathname: "/activity",
-      search: "?person=alice",
+      href: "/activity/alice",
+      pathname: "/activity/alice",
+      search: "",
     });
-  });
+    expect(aliceRow.tagName).toBe("A");
+    expect(aliceRow.getAttribute("href")).toBe("/activity/alice");
+    expect(aliceRow.closest(".sidebar-online__row")?.querySelectorAll("a, button")).toHaveLength(1);
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
 
-  it("projects only visible sessions and reported facts without guessing timing or devices", async () => {
-    const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
-    const sessions = createSessionsHarness("research", [
-      "watched",
-      "global",
-      "agent:research:ambiguous",
-      "agent:research:robot",
-      ...[1, 2, 3, 4].map((n) => `agent:research:recent-${n}`),
-    ]);
-    const result = sessions.sessions.state.result!;
-    result.sessions.forEach((row, index) => {
-      row.label = row.key === "global" ? "Research global" : `Visible ${index}`;
-      row.updatedAt = Date.now() - index * 60_000;
-      if (index === 2) {
-        row.participants = [{ identity: { type: "profile", id: "alice" }, label: "Alice" }];
-      }
-      if (index === 3) {
-        row.createdActor = { type: "agent", id: "alice" };
-      }
-      if (index >= 4) {
-        row.owner = {
-          actor: { type: "human", id: "alice", identity: { type: "profile", id: "alice" } },
-        };
-      }
-    });
-    sessions.publishList({ result });
-    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-    sidebar.connected = true;
-    gateway.publishEvent("presence", {
-      presence: [1, 2, 3].map((tab) => ({
-        ts: Date.now() - 500_000,
-        lastInputSeconds: 3,
-        instanceId: `private-tab-${tab}`,
-        ip: "192.0.2.12",
-        host: "internal-host",
-        deviceFamily: tab === 3 ? "iPhone" : "Mac",
-        platform: tab === 3 ? "iOS" : "macOS",
-        mode: "webchat",
-        timeZone: "Europe/Paris",
-        user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
-        watchedSessions: [
-          "AGENT:research:watched",
-          "agent:research:watched",
-          "agent:private:secret-title",
-          "global",
-        ],
-      })),
-    });
-    await sidebar.updateComplete;
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-online__person")!.click();
-    // The click loads its interaction owner before the card can render.
+    focusSidebarPersonWithKeyboard(aliceRow);
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
     );
-    const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
-    expect(card.querySelectorAll("dt")).toHaveLength(2);
-    expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe("Online");
-    const facts = card.querySelectorAll("dd");
-    expect([...facts[0]!.querySelectorAll("span")].map((node) => node.textContent)).toEqual([
-      "Mac · macOS · Control UI",
-      "iPhone · iOS · Control UI",
-    ]);
-    expect(facts[0]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
-    expect(facts[1]?.textContent?.trim()).toBe("Not observed yet");
-    const sections = card.querySelectorAll("section");
-    expect(sections[0]?.querySelectorAll("a")).toHaveLength(1);
-    expect(sections[0]?.textContent).toContain("Visible 0");
-    expect(sections[0]?.querySelector("a")?.getAttribute("href")).toBe("/chat/research/watched");
-    expect(sections[1]?.querySelectorAll("a")).toHaveLength(3);
-    expect(sections[1]?.textContent).not.toContain("Session updated");
-    expect(sections[1]?.querySelectorAll(".person-activity-card__session-age")).toHaveLength(3);
-    for (const hidden of [
-      "secret-title",
-      "private-tab",
-      "internal-host",
-      "192.0.2.12",
-      "Research global",
-      "Visible 2",
-      "Visible 3",
-      "Visible 7",
-    ]) {
-      expect(card.outerHTML).not.toContain(hidden);
-    }
-    expect(card.querySelectorAll("[data-viewer-id]")).toHaveLength(0);
+    aliceRow.querySelector<HTMLElement>(".sidebar-online__person-name")!.click();
+    await vi.dynamicImportSettled();
+    expect(onNavigate).toHaveBeenCalledTimes(2);
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
+
+    const bobRow = sidebar.querySelector<HTMLButtonElement>('[data-online-user-id="bob"]')!;
+    expect(bobRow.tagName).toBe("BUTTON");
+    bobRow.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe("Bob"),
+    );
+    expect(onNavigate).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the active identity and focused session link across presence reordering", async () => {
     const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", ["agent:main:work"]);
     const result = sessions.sessions.state.result!;
-    sessions.publishList({
-      result: {
-        ...result,
-        sessions: result.sessions.map((row) => ({
-          ...row,
-          createdActor: {
-            type: "human" as const,
-            id: "alice",
-            identity: { type: "profile" as const, id: "alice" },
-          },
-        })),
-      },
-    });
+    result.sessions[0]!.createdActor = {
+      type: "human",
+      id: "alice",
+      identity: { type: "profile", id: "alice" },
+    };
+    sessions.publishList({ result });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.connected = true;
     const now = Date.now();
@@ -226,13 +305,12 @@ describe("AppSidebar viewer presence", () => {
       watchedSessions: ["agent:main:work"],
       onlineSince: now - 60_000,
       lastActivityAt: now - 10_000,
-      lastInputSeconds: 0,
     };
-    const bob = { ts: now, user: { id: "bob", name: "Bob" }, lastInputSeconds: 0 };
+    const bob = { ts: now, user: { id: "bob", name: "Bob" }, lastActivityAt: Date.now() };
     gateway.publishEvent("presence", { presence: [alice, bob] });
     await sidebar.updateComplete;
-    const button = sidebar.querySelector<HTMLButtonElement>('[data-online-user-id="alice"]')!;
-    button.click();
+    const button = sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')!;
+    focusSidebarPersonWithKeyboard(button);
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
@@ -240,13 +318,13 @@ describe("AppSidebar viewer presence", () => {
     const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
     await vi.waitFor(() =>
       expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe(
-        "Online for 1m",
+        "Online for 1m · Active",
       ),
     );
     const sessionLink = card.querySelector<HTMLAnchorElement>(".person-activity-card__session")!;
     sessionLink.focus();
     gateway.publishEvent("presence", {
-      presence: [{ ...alice, lastInputSeconds: 600, lastActivityAt: now }, bob],
+      presence: [{ ...alice, lastActivityAt: now - 600_000 }, bob],
     });
     await sidebar.updateComplete;
     expect(sidebar.querySelector('[data-online-user-id="alice"]')).toBe(button);
@@ -263,17 +341,75 @@ describe("AppSidebar viewer presence", () => {
     expect([...card.querySelectorAll("h3")].map((heading) => heading.textContent)).toEqual([
       "Recent sessions",
     ]);
-    expect(document.activeElement?.getAttribute("href")).toBe(sessionLink.getAttribute("href"));
-    expect(document.activeElement?.closest("section")?.querySelector("h3")?.textContent).toBe(
-      "Recent sessions",
-    );
-    sessions.publishList({ result: { ...result, sessions: [], count: 0 } });
-    await sidebar.updateComplete;
+    // The initially empty recent selection cannot admit a new link mid-open,
+    // even when it leaves Viewing now. Reopening takes a fresh selection.
+    expect(card.querySelector(".person-activity-card__session")).toBeNull();
     expect(document.activeElement).toBe(button);
     button.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
-    expect(document.activeElement).toBe(button);
-    expect(button.getAttribute("aria-expanded")).toBe("false");
+    button.blur();
+    button.focus();
+    await settleLitElement(sidebar);
+    const recentLink = document.querySelector<HTMLAnchorElement>(".person-activity-card__session")!;
+    expect(recentLink.getAttribute("href")).toBe(sessionLink.getAttribute("href"));
+    expect(recentLink.closest("section")?.querySelector("h3")?.textContent).toBe("Recent sessions");
+  });
+
+  it("expires activity when the deadline passes during rendering", async () => {
+    const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway.gateway,
+      createSessions("main", ["agent:main:work"]),
+    );
+    sidebar.connected = true;
+    vi.useFakeTimers();
+    const now = Date.now();
+    const project = presenceUsers.presenceViewerActivity;
+    vi.spyOn(presenceUsers, "presenceViewerActivity").mockImplementationOnce((user) => {
+      const state = project(user);
+      vi.setSystemTime(now + 2);
+      return state;
+    });
+    gateway.publishEvent("presence", {
+      presence: [{ user: { id: "alice", name: "Alice" }, ts: now, lastActivityAt: now - 119_999 }],
+    });
+    await sidebar.updateComplete;
+    const row = sidebar.querySelector<HTMLElement>('[data-online-user-id="alice"]')!;
+    expect(row.dataset.presenceActivity).toBe("active");
+    await vi.advanceTimersByTimeAsync(2);
+    await sidebar.updateComplete;
+    expect(row.dataset.presenceActivity).toBe("idle");
+  });
+
+  it("ages rows and an open card into idle without another presence event", async () => {
+    const gateway = createGatewayHarness({ instanceId: "self" } as GatewayBrowserClient);
+    const { sidebar, provider } = await mountSidebar(
+      gateway.gateway,
+      createSessions("main", ["agent:main:work"]),
+    );
+    sidebar.connected = true;
+    vi.useFakeTimers();
+    const person = {
+      user: { id: "alice", name: "Alice" },
+      onlineSince: Date.now() - 300_000,
+      lastActivityAt: Date.now() - 119_000,
+    };
+    gateway.publishEvent("presence", { presence: [person] });
+    await sidebar.updateComplete;
+    const row = sidebar.querySelector<HTMLElement>('[data-online-user-id="alice"]')!;
+    row.click();
+    await vi.dynamicImportSettled();
+    const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
+    expect(row.dataset.presenceActivity).toBe("active");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await sidebar.updateComplete;
+    expect(row.dataset.presenceActivity).toBe("idle");
+    expect(card.querySelector(".person-activity-card__status")?.textContent).toContain("Idle");
+    expect(card.textContent).toContain("Online for");
+    gateway.publishEvent("presence", { presence: [{ ...person, lastActivityAt: Date.now() }] });
+    await sidebar.updateComplete;
+    expect(row.dataset.presenceActivity).toBe("active");
+    provider.remove();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["disconnect", "switch", "route", "collapse", "shell", "remove", "teardown"] as const)(
@@ -295,7 +431,9 @@ describe("AppSidebar viewer presence", () => {
       });
       await sidebar.updateComplete;
       vi.useFakeTimers();
-      sidebar.querySelector<HTMLButtonElement>(".sidebar-online__person")!.click();
+      focusSidebarPersonWithKeyboard(
+        sidebar.querySelector<HTMLElement>(".sidebar-online__person")!,
+      );
       await vi.dynamicImportSettled();
       await vi.waitFor(() =>
         expect(document.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy(),
@@ -340,7 +478,9 @@ describe("AppSidebar viewer presence", () => {
           presence: [{ ...person, reason: "disconnect" }, returned],
         });
         await sidebar.updateComplete;
-        sidebar.querySelector<HTMLButtonElement>(".sidebar-online__person")!.click();
+        focusSidebarPersonWithKeyboard(
+          sidebar.querySelector<HTMLElement>(".sidebar-online__person")!,
+        );
         await vi.waitFor(() =>
           expect(
             document.querySelector(".person-activity-hovercard time")?.getAttribute("datetime"),
@@ -386,41 +526,10 @@ describe("AppSidebar viewer presence", () => {
     const facepile = sidebar.querySelector<HTMLElement>(".sidebar-online openclaw-viewer-facepile");
     await (facepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete;
     expect(facepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count")).toBe(
-      "4",
+      "5",
     );
     expect(facepile?.querySelectorAll("[data-viewer-id]")).toHaveLength(2);
-    expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+2");
-  });
-
-  it("renders the self user's avatar route in the footer identity chip", async () => {
-    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-    );
-    sidebar.connected = true;
-
-    gatewayHarness.publishEvent("presence", {
-      presence: [
-        {
-          instanceId: "self-instance",
-          user: {
-            id: "00-self",
-            email: "test@example.com",
-            name: "Self User",
-            avatarUrl: "/api/users/00-self/avatar?v=7",
-          },
-        },
-      ],
-    });
-
-    await vi.waitFor(() => {
-      const avatar = sidebar.querySelector<HTMLImageElement>(
-        ".sidebar-identity-card openclaw-viewer-avatar img",
-      );
-      expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=7");
-    });
+    expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+3");
   });
 
   it("groups identified viewers for session rows and keeps the footer identity-only", async () => {
@@ -539,7 +648,10 @@ describe("AppSidebar viewer presence", () => {
     );
   });
 
-  it("renders an Account fallback for an unidentified connection", async () => {
+  it.each([
+    undefined,
+    { id: "owner-profile", identity: { type: "profile" as const, id: "owner-profile" } },
+  ])("renders an Owner fallback without a name or email (%j)", async (user) => {
     const client = { instanceId: "anonymous-self" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -547,9 +659,10 @@ describe("AppSidebar viewer presence", () => {
       createSessions("main", ["agent:main:main"]),
     );
 
+    gatewayHarness.publish({ selfUser: user ?? null });
     gatewayHarness.publishEvent("presence", {
       presence: [
-        { instanceId: "anonymous-self", watchedSessions: ["agent:main:main"] },
+        { instanceId: "anonymous-self", user, watchedSessions: ["agent:main:main"] },
         {
           instanceId: "alice",
           user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
@@ -560,8 +673,10 @@ describe("AppSidebar viewer presence", () => {
 
     const identityCard = sidebar.querySelector(".sidebar-identity-card");
     expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
-      "Account",
+      "Owner",
     );
-    expect(identityCard?.querySelector('[data-viewer-id="account"]')?.textContent).toContain("A");
+    expect(
+      identityCard?.querySelector(`[data-viewer-id="${user?.id ?? "owner"}"]`)?.textContent,
+    ).toContain("O");
   });
 });

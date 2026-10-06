@@ -2,7 +2,6 @@ import {
   attachChannelToResult,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-// Discord plugin module implements outbound payload behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   getReplyPayloadTtsSupplement,
@@ -57,6 +56,7 @@ function resolveDiscordDeliveryOptions(
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
     onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
   };
 }
 

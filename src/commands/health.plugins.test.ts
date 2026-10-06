@@ -1,21 +1,29 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { SnapshotSchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { createSessionStoreSummaryReaderStub } from "../config/sessions/session-store-summary.test-support.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { formatHealthChannelLines } from "./health-format.js";
 
-const testConfig = { session: { store: "/tmp/x" } };
-const tempPaths: string[] = [];
+const testConfig: OpenClawConfig = { session: { store: "/tmp/x" } };
+const tempDirs = createTempDirTracker();
+let sessionStorePath: string;
 
 let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
 let setActiveDegradedPlugins: typeof import("../plugins/runtime-degraded-state.js").setActiveDegradedPlugins;
 let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
 let collectGatewayHealthSnapshot: typeof import("../gateway/health/collector.js").collectGatewayHealthSnapshot;
-let startPluginServices: typeof import("../plugins/services.js").startPluginServices;
+let startPluginServices: typeof import("../plugins/services.test-support.js").startPluginServices;
 let pluginServicesHandle: PluginServicesHandle | undefined;
+let inventoryPlugins: ChannelPlugin[] = [];
 
 describe("collectGatewayHealthSnapshot plugin state", () => {
   beforeAll(async () => {
@@ -24,14 +32,13 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       loadConfig: () => testConfig,
     }));
     vi.doMock("../config/sessions/paths.js", () => ({
-      resolveSessionStorePathCore: () => "/tmp/sessions.json",
+      resolveSessionStorePathCore: () => sessionStorePath,
     }));
-    vi.doMock("../config/sessions/session-accessor.js", () => ({
-      listSessionEntriesCore: () => [],
-      listSessionEntriesReadOnly: () => [],
+    vi.doMock("../config/sessions/session-entry-read-runtime.js", () => ({
+      withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(),
     }));
     vi.doMock("../channels/plugins/read-only.js", () => ({
-      listReadOnlyChannelPluginsForConfig: () => [],
+      listReadOnlyChannelPluginsForConfig: () => inventoryPlugins,
     }));
 
     const [pluginsRuntime, degradedState, channelTestUtils, health, pluginServices] =
@@ -40,7 +47,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         import("../plugins/runtime-degraded-state.js"),
         import("../test-utils/channel-plugins.js"),
         import("../gateway/health/collector.js"),
-        import("../plugins/services.js"),
+        import("../plugins/services.test-support.js"),
       ]);
     setActivePluginRegistry = pluginsRuntime.setActivePluginRegistry;
     setActiveDegradedPlugins = degradedState.setActiveDegradedPlugins;
@@ -49,21 +56,29 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
     startPluginServices = pluginServices.startPluginServices;
   });
 
+  beforeEach(() => {
+    sessionStorePath = path.join(
+      tempDirs.make("openclaw-health-plugin-sessions-"),
+      "sessions.json",
+    );
+  });
+
   afterEach(async () => {
     await pluginServicesHandle?.stop();
     pluginServicesHandle = undefined;
     setActiveDegradedPlugins([]);
+    inventoryPlugins = [];
+    delete testConfig.channels;
     setActivePluginRegistry(createTestRegistry([]));
-    for (const tempPath of tempPaths.splice(0)) {
-      fs.rmSync(tempPath, { recursive: true, force: true });
-    }
+    tempDirs.cleanup();
   });
 
   it("deduplicates canonical-root quarantine while retaining unrelated same-id errors", async () => {
-    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-plugin-"));
-    const pluginRootAlias = `${pluginRoot}-alias`;
+    const fixtureDir = tempDirs.make("openclaw-health-plugin-");
+    const pluginRoot = path.join(fixtureDir, "plugin");
+    const pluginRootAlias = path.join(fixtureDir, "alias");
+    fs.mkdirSync(pluginRoot);
     fs.symlinkSync(pluginRoot, pluginRootAlias, "dir");
-    tempPaths.push(pluginRootAlias, pluginRoot);
     setActivePluginRegistry({
       ...createTestRegistry([]),
       plugins: [
@@ -108,6 +123,9 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
     });
 
     expect(Value.Check(SnapshotSchema.properties.health, snap)).toBe(true);
+    expect(snap.sessions.path).toBe(
+      path.join(path.dirname(sessionStorePath), "openclaw-agent.sqlite"),
+    );
     expect(snap.plugins?.unavailable).toEqual([
       {
         id: "discord",
@@ -130,10 +148,105 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         error: "healthy override has an unrelated import error",
       },
     ]);
+    expect(formatHealthChannelLines(snap)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^Plugin discord: failed - .*unrelated import error/u),
+        expect.stringMatching(
+          /^Plugin discord: unavailable - unreadable-package-json: .*permission denied/u,
+        ),
+      ]),
+    );
+  });
+
+  it("projects the recorded channel load failure instead of stale successful probes", async () => {
+    const credential = "synthetic-health-loader-credential";
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    const base = createChannelTestPluginBase({ id: "broken-channel" });
+    inventoryPlugins = [
+      {
+        ...base,
+        config: { ...base.config, listAccountIds: () => ["default", "disabled"] },
+        status: { probeAccount },
+      },
+    ];
+    testConfig.channels = { "broken-channel": { accounts: { Disabled: { enabled: false } } } };
+    const registry = {
+      ...createTestRegistry([]),
+      plugins: [
+        createPluginRecord({
+          id: "broken-owner",
+          enabled: true,
+          activated: true,
+          status: "error",
+          failurePhase: "load",
+          channelIds: ["broken-channel"],
+          error: `missing SDK export; password=${credential}\n${"context ".repeat(300)}`,
+        }),
+      ],
+    };
+    setActivePluginRegistry(registry);
+    const snap = await collectGatewayHealthSnapshot({
+      audience: "admin",
+      timeoutMs: 1000,
+      probe: true,
+      runtimeSnapshot: {
+        channels: {},
+        channelAccounts: {
+          "broken-channel": {
+            default: {
+              accountId: "default",
+              running: true,
+              connected: true,
+              probe: { ok: true },
+            },
+          },
+        },
+      },
+    });
+    expect(snap.channels["broken-channel"]).toMatchObject({
+      configured: true,
+      running: false,
+      lifecycle: "blocked",
+      lastError: expect.stringContaining("missing SDK export"),
+    });
+    expect(snap.channels["broken-channel"]?.accounts?.disabled).toMatchObject({
+      enabled: false,
+      running: false,
+      lastError: expect.stringContaining("missing SDK export"),
+    });
+    expect(snap.channels["broken-channel"]).not.toHaveProperty("probe");
+    expect(JSON.stringify(snap)).not.toContain(credential);
+    expect(snap.plugins?.errors[0]?.error.length).toBeLessThanOrEqual(1000);
+    expect(probeAccount).not.toHaveBeenCalled();
+
+    // A different live owner wins over a failed plugin declaring the same channel.
+    setActivePluginRegistry({
+      ...registry,
+      ...createTestRegistry([
+        {
+          pluginId: "healthy-owner",
+          plugin: inventoryPlugins[0],
+          source: "test",
+        },
+      ]),
+      plugins: registry.plugins,
+    });
+    const { resolveUnavailableChannelAccountSnapshot } =
+      await import("../channels/status/account-state.js");
+    expect(
+      resolveUnavailableChannelAccountSnapshot(testConfig, {
+        channelId: "broken-channel",
+        accountId: "default",
+      }),
+    ).toBeUndefined();
   });
 
   it("surfaces a failed service while continuing healthy siblings", async () => {
+    const credential = "synthetic-service-credential";
     const siblingStart = vi.fn();
+    const brokenStart = vi.fn().mockImplementationOnce(() => {
+      throw new Error(`listen EADDRINUSE: address already in use; password=${credential}`);
+    });
     const registry = {
       ...createTestRegistry([]),
       plugins: [
@@ -148,11 +261,10 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         {
           pluginId: "service-plugin",
           pluginName: "Service Plugin",
+          id: "broken",
           service: {
-            id: "broken",
-            start: () => {
-              throw new Error("listen EADDRINUSE: address already in use");
-            },
+            id: " broken ",
+            start: brokenStart,
           },
           source: "test",
           origin: "workspace" as const,
@@ -160,6 +272,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         {
           pluginId: "service-plugin",
           pluginName: "Service Plugin",
+          id: "healthy-sibling",
           service: { id: "healthy-sibling", start: siblingStart },
           source: "test",
           origin: "workspace" as const,
@@ -184,8 +297,9 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       activated: true,
       activationSource: "explicit",
       failurePhase: "service",
-      error: "service broken: listen EADDRINUSE: address already in use",
+      error: expect.stringContaining("service broken: listen EADDRINUSE: address already in use"),
     });
+    expect(JSON.stringify(failed)).not.toContain(credential);
 
     await pluginServicesHandle.stop();
     pluginServicesHandle = undefined;
@@ -194,6 +308,16 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       timeoutMs: 10,
       probe: false,
     });
-    expect(stopped.plugins?.errors).toEqual([]);
+    expect(stopped.plugins?.errors).toEqual(failed.plugins?.errors);
+
+    pluginServicesHandle = await startPluginServices({ registry, config: {} });
+    const recovered = await collectGatewayHealthSnapshot({
+      audience: "admin",
+      timeoutMs: 10,
+      probe: false,
+    });
+    expect(brokenStart).toHaveBeenCalledTimes(2);
+    expect(siblingStart).toHaveBeenCalledTimes(2);
+    expect(recovered.plugins?.errors).toEqual([]);
   });
 });

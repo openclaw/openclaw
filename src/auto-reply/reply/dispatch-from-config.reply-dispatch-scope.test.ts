@@ -31,32 +31,9 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     targetKey: string;
     expectedKind: "agent" | "acp";
     sourceKey?: string;
-    metadata?: boolean;
-    missing?: boolean;
     bound?: boolean;
     tail?: boolean;
   }>([
-    { name: "local session", targetKey: "agent:test:session", expectedKind: "agent" },
-    { name: "new session", targetKey: "agent:test:session", missing: true, expectedKind: "agent" },
-    {
-      name: "stale ACP key",
-      targetKey: "agent:test:acp:missing",
-      missing: true,
-      expectedKind: "acp",
-    },
-    {
-      name: "stored ACP session",
-      targetKey: "agent:test:session",
-      metadata: true,
-      expectedKind: "acp",
-    },
-    {
-      name: "ACP command target",
-      sourceKey: "agent:test:source",
-      targetKey: "agent:test:target",
-      metadata: true,
-      expectedKind: "acp",
-    },
     {
       name: "local command target from ACP source",
       sourceKey: "agent:test:acp:source",
@@ -83,19 +60,11 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     });
     const sourceKey = scenario.sourceKey ?? scenario.targetKey;
     const sourceEntry = { sessionId: "source-session", updatedAt: Date.now() };
-    const targetEntry = scenario.missing
-      ? undefined
-      : {
-          sessionId: "target-session",
-          updatedAt: Date.now(),
-          ...(scenario.metadata ? { acp: { backend: "acpx" } } : {}),
-        };
+    const targetEntry = { sessionId: "target-session", updatedAt: Date.now() };
     if (sourceKey !== scenario.targetKey) {
       sessionStoreMocks.entriesBySessionKey.set(sourceKey, sourceEntry);
     }
-    if (targetEntry) {
-      sessionStoreMocks.entriesBySessionKey.set(scenario.targetKey, targetEntry);
-    }
+    sessionStoreMocks.entriesBySessionKey.set(scenario.targetKey, targetEntry);
     const readEntry = (...args: unknown[]) => {
       const { sessionKey } = args[0] as { sessionKey: string };
       return sessionStoreMocks.entriesBySessionKey.get(sessionKey);
@@ -181,5 +150,57 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     expect(userTurnTranscriptRecorder.message?.content).toBe(
       scenario.expectedKind === "acp" ? "accepted user turn" : "source user turn",
     );
+  });
+
+  it("refuses restricted ACP takeover before invoking reply hooks", async () => {
+    const sessionKey = "agent:test:restricted-acp";
+    const entry = {
+      sessionId: "restricted-acp-session",
+      updatedAt: Date.now(),
+      acp: { backend: "acpx" },
+    };
+    sessionStoreMocks.entriesBySessionKey.set(sessionKey, entry);
+    const readEntry = () => entry;
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(readEntry);
+    sessionStoreMocks.loadSessionEntry.mockImplementation(readEntry);
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runReplyDispatch.mockResolvedValue({
+      handled: true,
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn<InternalGetReplyFromConfig>();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Body: "hello",
+        BodyForAgent: "hello",
+        SessionKey: sessionKey,
+        Provider: "discord",
+        Surface: "discord",
+        To: "C1",
+        AccountId: "default",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        admittedSessionSettings: {
+          permissionMode: "guarded",
+          toolOverrides: { webSearch: false },
+        },
+      },
+    });
+
+    expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("cannot enforce its permission or tool policy"),
+      }),
+    );
+    expect(result.queuedFinal).toBe(true);
   });
 });

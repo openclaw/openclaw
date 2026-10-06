@@ -1,5 +1,8 @@
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
-import type { ProviderUsageSnapshot } from "openclaw/plugin-sdk/provider-usage";
+import {
+  buildUsageErrorSnapshot,
+  type ProviderUsageSnapshot,
+} from "openclaw/plugin-sdk/provider-usage";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
@@ -91,6 +94,7 @@ export async function fetchClawRouterUsage(params: {
   token: string;
   baseUrl?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   /** Test-only seam; production keeps the shared SSRF guard owning transport. */
   fetchGuard?: ClawRouterUsageFetchGuard;
 }): Promise<ProviderUsageSnapshot> {
@@ -109,23 +113,21 @@ export async function fetchClawRouterUsage(params: {
         },
       },
       timeoutMs: params.timeoutMs,
+      signal: params.signal,
       policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(rootUrl),
       auditContext: "clawrouter.usage",
     }),
   );
   try {
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      // A capture clone can keep cancellation pending. Let finally release the
+      // owned request before waiting on that diagnostic reader.
+      void response.body?.cancel().catch(() => undefined);
       throw new Error(`ClawRouter usage request failed (HTTP ${response.status})`);
     }
     const payload = await readClawRouterUsagePayload(response, params.timeoutMs);
     if (!payload) {
-      return {
-        provider: "clawrouter",
-        displayName: "ClawRouter",
-        windows: [],
-        error: "Malformed usage response",
-      };
+      return buildUsageErrorSnapshot("clawrouter", "Malformed usage response");
     }
     const budget = payload.budget;
     const limitMicros = asFiniteNumberInRange(budget?.limitMicros, { min: 0 });

@@ -28,9 +28,12 @@ export function refreshModelRuntimeAfterHotReload(params: {
   config: OpenClawConfig;
   agentIds: ReadonlySet<string> | undefined;
   pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+  isPublicationCurrent?: () => boolean;
 }): Promise<void> {
   return refreshPreparedModelRuntimeSnapshots(params.config, {
     catalogMode: "static",
+    joinSupersedingPublication: true,
+    ...(params.isPublicationCurrent ? { isPublicationCurrent: params.isPublicationCurrent } : {}),
     allowGatewaySubagentBinding: true,
     ...(params.agentIds ? { agentIds: params.agentIds } : {}),
     ...(params.pluginMetadataSnapshot

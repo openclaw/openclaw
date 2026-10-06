@@ -1,9 +1,94 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
+import groovy.json.JsonSlurper
 import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.process.ExecOperations
+import java.io.File
+import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Properties
+import java.util.zip.ZipFile
+import javax.inject.Inject
+
+@CacheableTask
+abstract class GenerateNativeI18n
+  @Inject
+  constructor(
+    private val execOperations: ExecOperations,
+  ) : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sourceFiles: ConfigurableFileCollection
+
+    @get:Internal
+    abstract val repositoryDirectory: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val kotlinDirectory: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val resourceDirectory: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+      execOperations.exec {
+        workingDir(repositoryDirectory.get().asFile)
+        commandLine("node", "scripts/android-app-i18n.ts", "generate")
+      }
+    }
+  }
+
+abstract class ExtractCloudflareSodium : DefaultTask() {
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.NONE)
+  abstract val archive: RegularFileProperty
+
+  @get:Input
+  abstract val entries: MapProperty<String, String>
+
+  @get:OutputDirectory
+  abstract val outputDirectory: DirectoryProperty
+
+  @TaskAction
+  fun extract() {
+    val source = archive.get().asFile
+    val digest = MessageDigest.getInstance("SHA-256")
+    source.inputStream().use { input ->
+      val buffer = ByteArray(8192)
+      while (true) {
+        val size = input.read(buffer)
+        if (size == -1) break
+        digest.update(buffer, 0, size)
+      }
+    }
+    val checksum = digest.digest().joinToString("") { "%02x".format(it) }
+    check(checksum == "f66eac31ea413c1d5d068b46ade11d3295c86ec9d6cd29ff158ba58ef51db51a") {
+      "The pinned libsodium 1.0.22 archive checksum does not match."
+    }
+    ZipFile(source).use { zip ->
+      val files =
+        entries.get().map { (entry, destination) ->
+          (zip.getEntry(entry)?.takeUnless { it.isDirectory } ?: error("Missing libsodium native entry: $entry")) to destination
+        }
+      val output = outputDirectory.get().asFile
+      // Only this task's generated output is replaced, after every required ABI is validated.
+      if (output.exists()) check(output.deleteRecursively())
+      check(output.mkdirs())
+      files.forEach { (entry, destination) ->
+        val target = output.resolve(destination)
+        check(target.parentFile.isDirectory || target.parentFile.mkdirs())
+        zip.getInputStream(entry).use { input -> target.outputStream().use(input::copyTo) }
+      }
+    }
+  }
+}
+
+abstract class GenerateGatewayProtocol : Exec() {
+  @get:OutputDirectory
+  abstract val outputDirectory: DirectoryProperty
+}
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidApplicationId = "ai.openclaw.app"
@@ -18,7 +103,7 @@ val openClawAndroidVersionProperties =
   }
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
-  openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
+  (providers.gradleProperty(name).orNull ?: openClawAndroidVersionProperties.getProperty(name))?.trim()?.takeIf { it.isNotEmpty() }
     ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
 
 val openClawAndroidVersionName = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_NAME")
@@ -97,28 +182,159 @@ val resolvedAndroidStoreFile =
 val hasAndroidReleaseSigning =
   listOf(resolvedAndroidStoreFile, androidStorePassword, androidKeyAlias, androidKeyPassword).all { it != null }
 
-val wantsAndroidReleaseBuild =
-  gradle.startParameter.taskNames.any { taskName ->
-    taskName.contains("Release", ignoreCase = true) ||
-      Regex("""(^|:)(bundle|assemble)$""").containsMatchIn(taskName)
-  }
-val missingAndroidBuildMetadata =
-  explicitOpenClawBuildCommit == null || explicitOpenClawBuildTimestamp == null
-
-if (wantsAndroidReleaseBuild && !hasAndroidReleaseSigning) {
-  error(
-    "Missing Android release signing properties. Set OPENCLAW_ANDROID_STORE_FILE, " +
-      "OPENCLAW_ANDROID_STORE_PASSWORD, OPENCLAW_ANDROID_KEY_ALIAS, and " +
-      "OPENCLAW_ANDROID_KEY_PASSWORD in ~/.gradle/gradle.properties.",
-  )
-}
-
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.ktlint)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.ksp)
+}
+
+val generateGatewayProtocol =
+  tasks.register<GenerateGatewayProtocol>("generateGatewayProtocol") {
+    val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
+    val manifest = repositoryRoot.resolve("scripts/native-protocol-inputs.json")
+    val protocolInputs = JsonSlurper().parse(manifest) as Map<*, *>
+    val directories = protocolInputs["directories"] as List<*>
+    val files = protocolInputs["files"] as List<*>
+    inputs
+      .files(
+        directories.map { directory ->
+          fileTree(repositoryRoot.resolve(directory as String)) {
+            include("**/*.ts", "**/*.mts", "**/*.mjs", "**/*.json")
+            exclude("**/node_modules/**", "**/*.test.*", "**/*.spec.*", "**/.*", "**/.*/**")
+          }
+        },
+        files.map { file -> repositoryRoot.resolve(file as String) },
+      ).withPathSensitivity(PathSensitivity.RELATIVE)
+    outputDirectory.set(layout.buildDirectory.dir("generated/openclaw-protocol"))
+    val nodeName = if (System.getProperty("os.name").startsWith("Windows")) "node.exe" else "node"
+    val nodeCandidates =
+      providers
+        .environmentVariable("PATH")
+        .orNull
+        .orEmpty()
+        .split(File.pathSeparator)
+        .map { directory -> File(directory, nodeName) } +
+        listOf(File("/opt/homebrew/bin/node"), File("/usr/local/bin/node"))
+    val node =
+      nodeCandidates.firstOrNull { it.isFile && it.canExecute() }
+        ?: error("Node.js is required to build the Gateway protocol models.")
+    workingDir(repositoryRoot)
+    commandLine(
+      node.absolutePath,
+      repositoryRoot.resolve("scripts/prepare-native-protocol.mjs").path,
+      "--language",
+      "kotlin",
+      "--out",
+      outputDirectory.get().asFile.absolutePath,
+    )
+  }
+
+androidComponents.onVariants { variant ->
+  variant.sources.kotlin?.addGeneratedSourceDirectory(generateGatewayProtocol, GenerateGatewayProtocol::outputDirectory)
+}
+
+// NuGet is used only as an upstream native artifact container, never as a managed/runtime dependency.
+val cloudflareSodiumArchive =
+  configurations.create("cloudflareSodiumArchive") {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+  }
+dependencies { add(cloudflareSodiumArchive.name, "nuget:libsodium:1.0.22@nupkg") }
+val extractCloudflareSodium =
+  tasks.register<ExtractCloudflareSodium>("extractCloudflareSodium") {
+    archive.set(layout.file(cloudflareSodiumArchive.elements.map { it.single().asFile }))
+    entries.set(
+      mapOf(
+        "runtimes/android-arm/native/libsodium.so" to "armeabi-v7a/libsodium.so",
+        "runtimes/android-arm64/native/libsodium.so" to "arm64-v8a/libsodium.so",
+        "runtimes/android-x86/native/libsodium.so" to "x86/libsodium.so",
+        "runtimes/android-x64/native/libsodium.so" to "x86_64/libsodium.so",
+      ),
+    )
+    outputDirectory.set(layout.buildDirectory.dir("generated/cloudflare-sodium/jniLibs"))
+  }
+// Select the JVM architecture, including translated JVMs. These files never enter APK sources.
+val sodiumTestHost =
+  when (System.getProperty("os.name") to System.getProperty("os.arch")) {
+    "Linux" to "amd64", "Linux" to "x86_64" -> {
+      "linux-x64" to "libsodium.so"
+    }
+
+    "Mac OS X" to "aarch64", "Mac OS X" to "arm64" -> {
+      "osx-arm64" to "libsodium.dylib"
+    }
+
+    "Mac OS X" to "amd64", "Mac OS X" to "x86_64" -> {
+      "osx-x64" to "libsodium.dylib"
+    }
+
+    else -> {
+      if (System.getProperty("os.name").startsWith("Windows")) {
+        when (System.getProperty("os.arch")) {
+          "amd64", "x86_64" -> "win-x64" to "sodium.dll"
+          "aarch64", "arm64" -> "win-arm64" to "sodium.dll"
+          "x86", "i386" -> "win-x86" to "sodium.dll"
+          else -> null
+        }
+      } else {
+        null
+      }
+    }
+  }
+val extractCloudflareSodiumTest =
+  tasks.register<ExtractCloudflareSodium>("extractCloudflareSodiumTest") {
+    archive.set(layout.file(cloudflareSodiumArchive.elements.map { it.single().asFile }))
+    val (runtime, filename) = checkNotNull(sodiumTestHost) { "No pinned libsodium test library for this JVM host." }
+    val upstreamFilename = if (filename == "sodium.dll") "libsodium.dll" else filename
+    entries.set(mapOf("runtimes/$runtime/native/$upstreamFilename" to filename))
+    outputDirectory.set(layout.buildDirectory.dir("generated/cloudflare-sodium/test-$runtime"))
+  }
+val generateNativeI18n =
+  tasks.register<GenerateNativeI18n>("generateNativeI18n") {
+    val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
+    repositoryDirectory.set(repositoryRoot)
+    sourceFiles.from(
+      listOf(
+        "scripts/android-app-i18n.ts",
+        "scripts/native-i18n-inventory.ts",
+        "scripts/native-i18n-locales.ts",
+        "scripts/lib/canonical-json.mjs",
+        "scripts/lib/direct-run.mjs",
+        "packages/normalization-core/src/expect.ts",
+        "apps/.i18n/native-source.json",
+        "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+      ).map(repositoryRoot::resolve),
+      fileTree(repositoryRoot.resolve("apps/android")) {
+        include(
+          "app/src/main/res/values/strings.xml",
+          "app/src/main/res/values/assistant.xml",
+          "app/src/thirdParty/res/values/accessibility_strings.xml",
+          "wear/src/main/res/values/strings.xml",
+        )
+      },
+      fileTree(repositoryRoot.resolve("apps/.i18n/native")) { include("*.json") },
+      listOf(
+        "apps/android/app/src/main/java",
+        "apps/android/app/src/play/java",
+        "apps/android/app/src/thirdParty/java",
+        "apps/android/wear/src/main/java",
+      ).map { relativePath ->
+        fileTree(repositoryRoot.resolve(relativePath)) {
+          include("**/*.kt")
+          exclude("**/NativeStringResources.kt")
+        }
+      },
+    )
+    kotlinDirectory.set(layout.projectDirectory.dir("build/generated/native-i18n/kotlin"))
+    resourceDirectory.set(layout.projectDirectory.dir("build/generated/native-i18n/res"))
+  }
+androidComponents.onVariants { variant ->
+  variant.sources.jniLibs?.addGeneratedSourceDirectory(extractCloudflareSodium, ExtractCloudflareSodium::outputDirectory)
+  variant.sources.kotlin?.addGeneratedSourceDirectory(generateNativeI18n, GenerateNativeI18n::kotlinDirectory)
+  variant.sources.res?.addGeneratedSourceDirectory(generateNativeI18n, GenerateNativeI18n::resourceDirectory)
 }
 
 ksp {
@@ -146,13 +362,14 @@ android {
   sourceSets {
     getByName("main") {
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
+      assets.directories.add(rootProject.file("../../ui/public/provider-icons").path)
+      assets.directories.add("../../shared/mermaid/assets")
       assets.directories.add(thirdPartyLicensesDir.path)
     }
   }
 
   defaultConfig {
     applicationId = openClawAndroidApplicationId
-    resValue("string", "application_id", openClawAndroidApplicationId)
     minSdk = 31
     targetSdk = 36
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -194,7 +411,6 @@ android {
     debug {
       applicationIdSuffix = ".debug"
       versionNameSuffix = "-debug"
-      resValue("string", "application_id", "$openClawAndroidApplicationId.debug")
       isMinifyEnabled = false
     }
   }
@@ -210,7 +426,6 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
-    resValues = true
   }
 
   androidResources {
@@ -256,9 +471,9 @@ android {
           "/META-INF/LICENSE*.txt",
           "DebugProbesKt.bin",
           "kotlin-tooling-metadata.json",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL1.bin.properties",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL3.bin.properties",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL5.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL1.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL3.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL5.bin.properties",
           "org/bouncycastle/x509/CertPathReviewerMessages*.properties",
         )
     }
@@ -319,6 +534,7 @@ kotlin {
 }
 
 ktlint {
+  version.set(libs.versions.ktlint.cli)
   android.set(true)
   ignoreFailures.set(false)
   filter {
@@ -340,11 +556,11 @@ dependencies {
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.webkit)
+  implementation(libs.androidx.window)
 
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.compose.material3)
-  implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
   // material-icons-extended pulled in full icon set (~20 MB DEX). Only ~18 icons used.
   // R8 will tree-shake unused icons when minify is enabled on release builds.
   implementation(libs.androidx.compose.material.icons.extended)
@@ -368,6 +584,7 @@ dependencies {
   implementation(libs.media3.session)
   implementation(libs.media3.ui)
   implementation(libs.bcprov)
+  implementation("${libs.jna.get()}@aar")
   implementation(libs.coil.compose)
   implementation(libs.coil.svg)
   implementation(libs.commonmark)
@@ -389,12 +606,13 @@ dependencies {
 
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
-  testImplementation(libs.kotest.runner.junit5)
-  testImplementation(libs.kotest.assertions.core)
   testImplementation(libs.mockwebserver)
   testImplementation(libs.robolectric)
   testImplementation(libs.androidx.compose.ui.test.junit4)
+  testRuntimeOnly(libs.junit.platform.launcher)
   testRuntimeOnly(libs.junit.vintage.engine)
+  // The Android AAR has bionic dispatch; JVM vectors need the same-version host dispatch JAR.
+  testRuntimeOnly("${libs.jna.get()}@jar")
 
   androidTestImplementation(libs.androidx.test.ext.junit)
   androidTestImplementation(libs.androidx.test.runner)
@@ -403,36 +621,65 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
   useJUnitPlatform()
+  // This platform fixture is loaded by Robolectric, not by JUnit's unsandboxed test discovery.
+  exclude("**/ControlUiAuthWebViewShadow.class")
+  if (sodiumTestHost != null) {
+    dependsOn(extractCloudflareSodiumTest)
+    val nativeDirectory = extractCloudflareSodiumTest.flatMap { it.outputDirectory }
+    inputs.dir(nativeDirectory)
+    systemProperty("jna.library.path", nativeDirectory.get().asFile.absolutePath)
+    systemProperty(
+      "openclaw.sodium.test.library",
+      nativeDirectory
+        .get()
+        .file(sodiumTestHost.second)
+        .asFile.absolutePath,
+    )
+  }
   testLogging {
     events("failed")
     exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
   }
 }
 
+val validateOpenClawReleaseSigning =
+  tasks.register("validateOpenClawReleaseSigning") {
+    val signingConfigured = hasAndroidReleaseSigning
+    doLast {
+      check(signingConfigured) {
+        "Missing Android release signing properties. Set OPENCLAW_ANDROID_STORE_FILE, " +
+          "OPENCLAW_ANDROID_STORE_PASSWORD, OPENCLAW_ANDROID_KEY_ALIAS, and " +
+          "OPENCLAW_ANDROID_KEY_PASSWORD in ~/.gradle/gradle.properties."
+      }
+    }
+  }
+
 val validateOpenClawReleaseBuildMetadata =
   tasks.register("validateOpenClawReleaseBuildMetadata") {
+    val metadataProvided =
+      explicitOpenClawBuildCommit != null && explicitOpenClawBuildTimestamp != null
     doLast {
-      if (missingAndroidBuildMetadata) {
-        error(
-          "Android release builds require -PopenclawBuildCommit and -PopenclawBuildTimestamp. " +
-            "Use the repository Android release helper.",
-        )
+      check(metadataProvided) {
+        "Android release builds require -PopenclawBuildCommit and -PopenclawBuildTimestamp. " +
+          "Use the repository Android release helper."
       }
     }
   }
 
 val validateThirdPartyLicenseAssets =
   tasks.register("validateThirdPartyLicenseAssets") {
-    inputs.dir(thirdPartyLicensesDir)
+    val licensesDir = thirdPartyLicensesDir
+    val licensesPath = licensesDir.relativeTo(rootProject.projectDir).path
+    inputs.dir(licensesDir)
     doLast {
-      if (!thirdPartyLicensesDir.isDirectory) {
-        error("Missing Android third-party license directory: ${thirdPartyLicensesDir.relativeTo(rootProject.projectDir)}")
+      if (!licensesDir.isDirectory) {
+        error("Missing Android third-party license directory: $licensesPath")
       }
       val invalidFiles =
-        thirdPartyLicensesDir
+        licensesDir
           .walkTopDown()
           .filter { file -> file.isFile && file.extension.lowercase() != "txt" }
-          .map { file -> file.relativeTo(thirdPartyLicensesDir).path }
+          .map { file -> file.relativeTo(licensesDir).path }
           .toList()
 
       if (invalidFiles.isNotEmpty()) {
@@ -444,15 +691,39 @@ val validateThirdPartyLicenseAssets =
     }
   }
 
+val generateMermaidAssets =
+  tasks.register<Exec>("generateMermaidAssets") {
+    val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
+    workingDir(repositoryRoot)
+    commandLine("pnpm", "--dir", "packages/mermaid-renderer", "build")
+    inputs
+      .files(
+        fileTree(repositoryRoot.resolve("packages/mermaid-renderer")) {
+          exclude("node_modules/**", "dist/**")
+        },
+        fileTree(repositoryRoot.resolve("packages/normalization-core")) {
+          include("src/**", "package.json")
+        },
+        repositoryRoot.resolve("tsconfig.json"),
+      ).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(repositoryRoot.resolve("pnpm-lock.yaml"))
+    outputs.dir(repositoryRoot.resolve("apps/shared/mermaid/assets/mermaid"))
+  }
+
 tasks.matching { task -> task.name == "preBuild" }.configureEach {
-  dependsOn(validateThirdPartyLicenseAssets)
+  dependsOn(validateThirdPartyLicenseAssets, generateMermaidAssets)
+}
+
+tasks.matching { task -> task.name.startsWith("merge") && task.name.endsWith("Assets") }.configureEach {
+  dependsOn(generateMermaidAssets)
 }
 
 androidComponents {
   onVariants(selector().withBuildType("release")) { variant ->
+    // Validate the selected variant graph, not task arguments that can also contain "Release".
+    variant.lifecycleTasks.registerPreBuild(validateOpenClawReleaseSigning, validateOpenClawReleaseBuildMetadata)
     val variantName = variant.name
     val variantNameCapitalized = variantName.replaceFirstChar(Char::titlecase)
-    val preBuildTaskName = "pre${variantNameCapitalized}Build"
     val stripTaskName = "strip${variantNameCapitalized}DnsjavaServiceDescriptor"
     val mergeTaskName = "merge${variantNameCapitalized}JavaResource"
     val minifyTaskName = "minify${variantNameCapitalized}WithR8"
@@ -460,10 +731,6 @@ androidComponents {
       layout.buildDirectory.file(
         "intermediates/merged_java_res/$variantName/$mergeTaskName/base.jar",
       )
-
-    tasks.matching { task -> task.name == preBuildTaskName }.configureEach {
-      dependsOn(validateOpenClawReleaseBuildMetadata)
-    }
 
     val stripTask =
       tasks.register(stripTaskName) {

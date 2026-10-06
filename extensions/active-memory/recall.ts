@@ -40,6 +40,23 @@ import type {
   TerminalMemorySearchWatch,
 } from "./types.js";
 
+function buildRecallDoneLogLine(logPrefix: string, result: ActiveRecallResult): string {
+  const reason =
+    result.status === "unavailable"
+      ? result.searchDebug?.error
+        ? "search-error"
+        : "search-unavailable"
+      : undefined;
+  return [
+    logPrefix,
+    "done",
+    `status=${result.status}`,
+    ...(reason ? [`reason=${reason}`] : []),
+    `elapsedMs=${String(result.elapsedMs)}`,
+    `summaryChars=${String(result.summary?.length ?? 0)}`,
+  ].join(" ");
+}
+
 function formatActiveMemoryFastMode(fastMode: ActiveMemoryFastMode | undefined): string {
   return fastMode === undefined
     ? "inherit"
@@ -102,6 +119,8 @@ type ActiveRecallParams = {
   messageProvider?: string;
   channelId?: string;
   query: string;
+  /** Undefined uses legacy query identity; null disables request-local reuse. */
+  requestKey?: string | null;
   searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
@@ -111,7 +130,38 @@ type ActiveRecallParams = {
   authorityFingerprint: string;
   memorySlot?: string;
   activeProjectKeys?: string[];
+  memoryAudience?: Parameters<
+    OpenClawPluginApi["runtime"]["agent"]["runEmbeddedAgent"]
+  >[0]["memoryAudience"];
+  /** Host check for the parent turn's audience; recall state is never retained once it lapses. */
+  assertMemoryAudienceCurrent?: () => void;
 };
+
+async function recordRecallResult(
+  params: Pick<
+    ActiveRecallParams,
+    "abortSignal" | "agentId" | "api" | "assertMemoryAudienceCurrent" | "config" | "sessionKey"
+  > & {
+    logPrefix: string;
+    result: ActiveRecallResult;
+  },
+): Promise<void> {
+  if (params.config.logging) {
+    params.api.logger.info?.(buildRecallDoneLogLine(params.logPrefix, params.result));
+  }
+  params.abortSignal?.throwIfAborted();
+  params.assertMemoryAudienceCurrent?.();
+  await persistPluginStatusLines({
+    api: params.api,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    statusLine: buildPluginStatusLine({ result: params.result, config: params.config }),
+    debugSummary: buildPersistedDebugSummary(params.result),
+    searchDebug: params.result.searchDebug,
+  });
+  params.abortSignal?.throwIfAborted();
+  params.assertMemoryAudienceCurrent?.();
+}
 
 async function resolveActiveRecall(
   params: Omit<ActiveRecallParams, "runId"> & {
@@ -134,6 +184,7 @@ async function resolveActiveRecall(
         sessionId: params.sessionId,
         query: params.query,
         authorityFingerprint: params.authorityFingerprint,
+        memoryAudience: params.memoryAudience,
         memorySlot: params.memorySlot,
         activeProjectKeys: params.activeProjectKeys,
         modelProviderId: resolvedModelRef?.provider,
@@ -157,6 +208,7 @@ async function resolveActiveRecall(
   let logPrefix = buildLogPrefix(params.config.fastMode);
   if (cached) {
     params.abortSignal?.throwIfAborted();
+    params.assertMemoryAudienceCurrent?.();
     await persistPluginStatusLines({
       api: params.api,
       agentId: params.agentId,
@@ -331,21 +383,7 @@ async function resolveActiveRecall(
         searchDebug: fallbackSearchDebug,
         toolsAllow: params.config.toolsAllow,
       });
-      if (params.config.logging) {
-        params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-        );
-      }
-      params.abortSignal?.throwIfAborted();
-      await persistPluginStatusLines({
-        api: params.api,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        statusLine: buildPluginStatusLine({ result, config: params.config }),
-        debugSummary: buildPersistedDebugSummary(result),
-        searchDebug: result.searchDebug,
-      });
-      params.abortSignal?.throwIfAborted();
+      await recordRecallResult({ ...params, logPrefix, result });
       return result;
     }
 
@@ -357,24 +395,8 @@ async function resolveActiveRecall(
         summary: null,
         searchDebug: raceResult.searchDebug,
       };
-      if (params.config.logging) {
-        params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-        );
-      }
       resetCircuitBreaker(cbKey);
-      params.abortSignal?.throwIfAborted();
-      await persistPluginStatusLines({
-        api: params.api,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        statusLine: buildPluginStatusLine({ result, config: params.config }),
-        searchDebug: result.searchDebug,
-      });
-      params.abortSignal?.throwIfAborted();
-      if (cacheKey && shouldCacheResult(result)) {
-        setCachedResult(cacheKey, result, params.config.cacheTtlMs);
-      }
+      await recordRecallResult({ ...params, logPrefix, result });
       return result;
     }
 
@@ -389,23 +411,10 @@ async function resolveActiveRecall(
       elapsedMs: Date.now() - startedAt,
       maxSummaryChars: params.config.maxSummaryChars,
     });
-    if (params.config.logging) {
-      params.api.logger.info?.(
-        `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-      );
-    }
     resetCircuitBreaker(cbKey);
-    params.abortSignal?.throwIfAborted();
-    await persistPluginStatusLines({
-      api: params.api,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      statusLine: buildPluginStatusLine({ result, config: params.config }),
-      debugSummary: buildPersistedDebugSummary(result),
-      searchDebug: result.searchDebug,
-    });
-    params.abortSignal?.throwIfAborted();
+    await recordRecallResult({ ...params, logPrefix, result });
     if (cacheKey && shouldCacheResult(result)) {
+      params.assertMemoryAudienceCurrent?.();
       setCachedResult(cacheKey, result, params.config.cacheTtlMs);
     }
     return result;
@@ -430,21 +439,7 @@ async function resolveActiveRecall(
         ...partialTimeoutData,
         toolsAllow: params.config.toolsAllow,
       });
-      if (params.config.logging) {
-        params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
-        );
-      }
-      params.abortSignal?.throwIfAborted();
-      await persistPluginStatusLines({
-        api: params.api,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        statusLine: buildPluginStatusLine({ result, config: params.config }),
-        debugSummary: buildPersistedDebugSummary(result),
-        searchDebug: result.searchDebug,
-      });
-      params.abortSignal?.throwIfAborted();
+      await recordRecallResult({ ...params, logPrefix, result });
       return result;
     }
     const message = toSingleLineErrorMessage(error);
@@ -456,14 +451,7 @@ async function resolveActiveRecall(
       elapsedMs: Date.now() - startedAt,
       summary: null,
     };
-    params.abortSignal?.throwIfAborted();
-    await persistPluginStatusLines({
-      api: params.api,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      statusLine: buildPluginStatusLine({ result, config: params.config }),
-      searchDebug: result.searchDebug,
-    });
+    await recordRecallResult({ ...params, logPrefix, result });
     return result;
   } finally {
     params.abortSignal?.removeEventListener("abort", abortFromParent);
@@ -472,9 +460,11 @@ async function resolveActiveRecall(
   }
 }
 
-async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<ActiveRecallResult> {
+export async function maybeResolveActiveRecall(
+  params: ActiveRecallParams,
+): Promise<ActiveRecallResult> {
   const { runId, ...recallParams } = params;
-  if (!runId) {
+  if (!runId || params.requestKey === null) {
     return await resolveActiveRecall(recallParams);
   }
   const model = getModelRef(params.runtimeConfig, params.agentId, params.config, {
@@ -485,8 +475,10 @@ async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<Act
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    query: params.query,
+    // Run-local reuse follows request identity; the cross-turn content cache stays query-based.
+    query: params.requestKey ?? params.query,
     authorityFingerprint: params.authorityFingerprint,
+    memoryAudience: params.memoryAudience,
     memorySlot: params.memorySlot,
     activeProjectKeys: params.activeProjectKeys,
     modelProviderId: model?.provider,
@@ -498,5 +490,3 @@ async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<Act
     resolveActiveRecall({ ...recallParams, onTimeoutCleanup }),
   );
 }
-
-export { maybeResolveActiveRecall };

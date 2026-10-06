@@ -1,27 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import {
-  extractQueryTerms,
-  filterSessionsByQuery,
-  parseToolSummary,
-  toUsageErrorMessage,
-} from "./helpers.ts";
-
-function requireFirstTool(tools: Array<[string, number]>): [string, number] {
-  const tool = tools[0];
-  if (!tool) {
-    throw new Error("expected parsed tool summary entry");
-  }
-  return tool;
-}
+import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./helpers.ts";
 
 describe("usage-helpers", () => {
-  it("redacts secrets in displayed usage failures", () => {
-    expect(toUsageErrorMessage(new Error("OPENAI_API_KEY=sk-1234567890abcdef"))).toBe(
-      "OPENAI_API_KEY=sk-123...cdef",
-    );
-  });
-
   it("tokenizes query terms including quoted strings", () => {
     const terms = extractQueryTerms(
       'agent:main "model:gpt-5.2" label:"Team Planning" "free phrase" has:errors',
@@ -110,7 +91,7 @@ describe("usage-helpers", () => {
   it("supports numeric filters like minTokens/maxTokens", () => {
     const a = {
       key: "a",
-      usage: { totalTokens: 100, totalCost: 20, messageCounts: { total: 30 } },
+      usage: { totalTokens: 1_000, totalCost: 20, messageCounts: { total: 30 } },
     };
     const b = {
       key: "b",
@@ -118,6 +99,7 @@ describe("usage-helpers", () => {
     };
     const filters = [
       "minTokens:10",
+      "minTokens:1k",
       "minCost:10",
       "minMessages:10",
       "maxTokens:10",
@@ -125,12 +107,12 @@ describe("usage-helpers", () => {
       "maxMessages:10",
     ];
 
-    for (const filter of filters.slice(0, 3)) {
+    for (const filter of filters.slice(0, 4)) {
       const result = filterSessionsByQuery([a, b], filter);
       expect(result.sessions).toEqual([a]);
       expect(result.warnings).toEqual([]);
     }
-    for (const filter of filters.slice(3)) {
+    for (const filter of filters.slice(4)) {
       const result = filterSessionsByQuery([a, b], filter);
       expect(result.sessions).toEqual([b]);
       expect(result.warnings).toEqual([]);
@@ -164,7 +146,6 @@ describe("usage-helpers", () => {
   it("rejects non-decimal numeric filter values", () => {
     const session = { key: "a", usage: { totalTokens: 10_000, totalCost: 0 } };
 
-    expect(filterSessionsByQuery([session], "minTokens:1k").sessions).toEqual([session]);
     expect(filterSessionsByQuery([session], "minTokens:1e3").warnings).toEqual([
       "Invalid number for minTokens",
     ]);
@@ -188,8 +169,6 @@ describe("usage-helpers", () => {
     );
     expect(res.summary).toBe("Tools: read×2, exec×1 (3 calls)");
     expect(res.cleanContent).toBe("");
-    const firstTool = requireFirstTool(res.tools);
-    expect(firstTool[0]).toBe("read");
-    expect(firstTool[1]).toBe(2);
+    expect(res.tools[0]).toEqual(["read", 2]);
   });
 });

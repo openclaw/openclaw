@@ -1,3 +1,4 @@
+import type { PluginHookReplyDispatchEvent } from "openclaw/plugin-sdk/core";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   createReplyDispatcher,
@@ -22,6 +23,54 @@ type ProgressBoundaryCallback = GetReplyOptions[
   | "onCompactionEnd"];
 
 describe("reply runtime public progress contracts", () => {
+  it("retains released run-start callback arguments and synchronous completion acknowledgment", () => {
+    type AgentRunStart = NonNullable<GetReplyOptions["onAgentRunStart"]>;
+    type LegacyAgentRunStart = (
+      runId: string,
+      executionIdentityToken?: Parameters<AgentRunStart>[1],
+      options?: Parameters<AgentRunStart>[2],
+    ) => unknown;
+
+    expectTypeOf<[string]>().toExtend<Parameters<AgentRunStart>>();
+    expectTypeOf<Parameters<LegacyAgentRunStart>>().toExtend<Parameters<AgentRunStart>>();
+    expectTypeOf<LegacyAgentRunStart>().toExtend<AgentRunStart>();
+    expectTypeOf<AgentRunStart>().toExtend<LegacyAgentRunStart>();
+    expectTypeOf<AgentRunStart>().returns.toEqualTypeOf<unknown>();
+  });
+
+  it("retains released synchronous visibility contracts beside awaited companions", () => {
+    expectTypeOf<GetReplyOptions["onVerboseProgressVisibility"]>().toEqualTypeOf<
+      ((isActive: () => boolean) => void) | undefined
+    >();
+    expectTypeOf<GetReplyOptions["onVerboseProgressVisibilityAsync"]>().toEqualTypeOf<
+      ((isActive: () => Promise<boolean>) => Promise<void> | void) | undefined
+    >();
+    expectTypeOf<
+      PluginHookReplyDispatchEvent["shouldSendToolSummaries"]
+    >().toEqualTypeOf<boolean>();
+    expectTypeOf<
+      PluginHookReplyDispatchEvent["shouldSendFullToolDetails"]
+    >().toEqualTypeOf<boolean>();
+    expectTypeOf<PluginHookReplyDispatchEvent["shouldSendToolSummariesAsync"]>().toEqualTypeOf<
+      (() => Promise<boolean>) | undefined
+    >();
+    expectTypeOf<PluginHookReplyDispatchEvent["shouldSendFullToolDetailsAsync"]>().toEqualTypeOf<
+      (() => Promise<boolean>) | undefined
+    >();
+    expectTypeOf<
+      Omit<
+        PluginHookReplyDispatchEvent,
+        "shouldSendToolSummariesAsync" | "shouldSendFullToolDetailsAsync"
+      >
+    >().toExtend<PluginHookReplyDispatchEvent>();
+  });
+  it("still accepts the deprecated suppressToolErrorWarnings option as a no-op", () => {
+    // Removal window: first stable release after 2026.10 (see GetReplyOptions).
+    expectTypeOf<GetReplyOptions["suppressToolErrorWarnings"]>().toEqualTypeOf<
+      boolean | undefined
+    >();
+  });
+
   it("exports acceptance-aware progress callback results", () => {
     expectTypeOf<Exclude<ProgressCallback, undefined>>().returns.toEqualTypeOf<
       Promise<ProgressResult> | ProgressResult

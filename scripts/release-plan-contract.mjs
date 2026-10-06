@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { canonicalAsciiJson, canonicalizeJsonValue } from "./lib/canonical-json.mjs";
+import { canonicalAsciiJson, canonicalizeJsonValue, compareAscii } from "./lib/canonical-json.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import {
@@ -18,8 +18,6 @@ const ASCII_PATTERN = /^[\x20-\x7e]+$/u;
 const REPOSITORY = "openclaw/openclaw";
 const WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const PACKAGE_TARGETS = new Set(["clawhub", "npm"]);
-const compareAscii = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
-
 function fail(message) {
   throw new Error(message);
 }
@@ -174,8 +172,11 @@ function validatePurposeMatrix({ candidateSha, purpose, tag, targetContextRef, v
   if (parsedVersion === null || parsedVersion.version !== version) {
     fail("release plan version must use a supported release version");
   }
-  if (purpose === "beta-publish" && parsedVersion.channel === "stable") {
-    fail("beta-publish release plan version must be alpha or beta");
+  if (parsedVersion.channel === "alpha" && purpose !== "diagnostic") {
+    fail("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  if (purpose === "beta-publish" && parsedVersion.channel !== "beta") {
+    fail("beta-publish release plan version must be beta");
   }
   if (purpose === "stable-publish" && parsedVersion.channel !== "stable") {
     fail("stable-publish release plan version must be stable");

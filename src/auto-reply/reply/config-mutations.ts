@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /** Config mutation helpers used by chat commands that edit OpenClaw config. */
+import type { ChannelAllowlistAdapter } from "../../channels/plugins/types.adapters.js";
 import { setConfigValueAtPath, unsetConfigValueAtPath } from "../../config/config-paths.js";
 import {
+  mutateConfigFileWithRetry,
   transformConfigFileWithRetry,
   validateConfigObjectWithPlugins,
 } from "../../config/config.js";
@@ -16,15 +18,7 @@ export class AutoReplyConfigMutationError extends Error {}
 
 class AutoReplyConfigNoopMutation extends Error {}
 
-/** Extracts user-facing mutation error text from config command failures. */
-export function formatAutoReplyConfigMutationError(error: unknown): string | null {
-  return error instanceof AutoReplyConfigMutationError ? error.message : null;
-}
-
-function assertValidConfig(
-  next: Record<string, unknown>,
-  action: string,
-): { config: OpenClawConfig } {
+function assertValidConfig(next: Record<string, unknown>, action: string): OpenClawConfig {
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
     const issue = expectDefined(validated.issues[0], "issues entry at 0");
@@ -32,24 +26,26 @@ function assertValidConfig(
       `Config invalid after ${action} (${issue.path}: ${issue.message}).`,
     );
   }
-  return { config: validated.config };
+  // Validation materializes runtime defaults; the mutation must retain source shape.
+  return next;
 }
 
 /** Removes a config path and returns whether anything changed. */
-export async function unsetConfigPath(path: string[]): Promise<boolean> {
+export async function unsetConfigPath(
+  path: string[],
+  assertCurrent?: () => void,
+): Promise<boolean> {
   try {
-    await transformConfigFileWithRetry({
+    await mutateConfigFileWithRetry({
       base: "source",
       afterWrite: { mode: "auto" },
-      transform: (currentConfig) => {
-        const next = structuredClone(currentConfig) as Record<string, unknown>;
+      writeOptions: { assertCurrent },
+      mutate: (next) => {
         const removed = unsetConfigValueAtPath(next, path);
         if (!removed) {
           throw new AutoReplyConfigNoopMutation();
         }
-        return {
-          nextConfig: assertValidConfig(next, "unset").config,
-        };
+        assertValidConfig(next, "unset");
       },
     });
     return true;
@@ -62,33 +58,40 @@ export async function unsetConfigPath(path: string[]): Promise<boolean> {
 }
 
 /** Sets and validates a config path in the source config file. */
-export async function setConfigPath(path: string[], value: unknown): Promise<void> {
-  await transformConfigFileWithRetry({
+export async function setConfigPath(
+  path: string[],
+  value: unknown,
+  assertCurrent?: () => void,
+): Promise<void> {
+  await mutateConfigFileWithRetry({
     base: "source",
     afterWrite: { mode: "auto" },
-    transform: (currentConfig) => {
-      const next = structuredClone(currentConfig) as Record<string, unknown>;
+    writeOptions: { assertCurrent },
+    mutate: (next) => {
       setConfigValueAtPath(next, path, value);
-      return { nextConfig: assertValidConfig(next, "set").config };
+      assertValidConfig(next, "set");
     },
   });
 }
 
-/** Toggles plugin enablement from a chat command and returns the committed config. */
+/** Toggles plugin enablement from a chat command. */
 export async function setPluginEnabledFromCommand(params: {
   pluginId: string;
   enabled: boolean;
   action: "enable" | "disable";
   onCapabilityConsent?: PluginCapabilityConsentHandler;
-}): Promise<OpenClawConfig> {
-  const committed = await transformConfigFileWithRetry({
+  assertCurrent?: () => void;
+}): Promise<void> {
+  await transformConfigFileWithRetry({
     afterWrite: { mode: "auto" },
+    writeOptions: { assertCurrent: params.assertCurrent },
     transform: async (currentConfig) => {
       if (params.enabled) {
         await resolvePluginCapabilityConsent({
           config: currentConfig,
           pluginId: params.pluginId,
           onCapabilityConsent: params.onCapabilityConsent,
+          beforePersistentApply: params.assertCurrent,
         });
       }
       const next = setPluginEnabledInConfig(
@@ -96,30 +99,10 @@ export async function setPluginEnabledFromCommand(params: {
         params.pluginId,
         params.enabled,
       );
-      return { nextConfig: assertValidConfig(next, `/plugins ${params.action}`).config };
+      return { nextConfig: assertValidConfig(next, `/plugins ${params.action}`) };
     },
   });
-  return committed.nextConfig;
 }
-
-type AllowlistConfigEditResult =
-  | {
-      kind?: "ok" | "invalid-entry";
-      changed?: boolean;
-    }
-  | null
-  | undefined;
-
-type MaybePromise<T> = T | Promise<T>;
-
-type ApplyAllowlistConfigEdit = (params: {
-  cfg: OpenClawConfig;
-  parsedConfig: Record<string, unknown>;
-  accountId?: string | null;
-  scope: "dm" | "group";
-  action: "add" | "remove";
-  entry: string;
-}) => MaybePromise<AllowlistConfigEditResult>;
 
 /** Applies a channel allowlist edit through a plugin-provided config mutation hook. */
 export async function applyAllowlistConfigMutation(params: {
@@ -128,11 +111,13 @@ export async function applyAllowlistConfigMutation(params: {
   scope: "dm" | "group";
   action: "add" | "remove";
   entry: string;
-  applyConfigEdit: ApplyAllowlistConfigEdit;
+  applyConfigEdit: NonNullable<ChannelAllowlistAdapter["applyConfigEdit"]>;
+  assertCurrent?: () => void;
 }): Promise<void> {
   await transformConfigFileWithRetry({
     base: "source",
     afterWrite: { mode: "auto" },
+    writeOptions: { assertCurrent: params.assertCurrent },
     transform: async (currentConfig) => {
       const latestParsedConfig = structuredClone(currentConfig) as Record<string, unknown>;
       const latestEditResult = await params.applyConfigEdit({
@@ -150,7 +135,7 @@ export async function applyAllowlistConfigMutation(params: {
         return { nextConfig: currentConfig };
       }
       return {
-        nextConfig: assertValidConfig(latestParsedConfig, "update").config,
+        nextConfig: assertValidConfig(latestParsedConfig, "update"),
       };
     },
   });

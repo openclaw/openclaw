@@ -4,8 +4,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
-import { extractAgentRunText } from "../agents/agent-run-result.js";
+import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/agent-run-result.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { CommandLane } from "../process/lanes.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
   SYSTEM_AGENT_GREETING_SYSTEM_PROMPT,
@@ -41,17 +42,6 @@ export type SystemAgentAssistantPlanner = (params: {
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 }) => Promise<SystemAgentAssistantPlan | null>;
 
-type RunCliAgentFn = typeof import("../agents/cli-runner.js").runCliAgent;
-type RunEmbeddedAgentFn = typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
-
-export type SystemAgentConfiguredModelPlannerDeps = SystemAgentVerifiedInferenceDeps & {
-  runCliAgent?: RunCliAgentFn;
-  runEmbeddedAgent?: RunEmbeddedAgentFn;
-  createTempDir?: () => Promise<string>;
-  removeTempDir?: (dir: string) => Promise<void>;
-  resolveAssistantTimeoutMs?: typeof resolveSystemAgentAssistantTimeoutMs;
-};
-
 const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
   type: "object",
   properties: {
@@ -62,25 +52,14 @@ const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+/** Plan only through the configured default agent's verified route. */
 export async function planSystemAgentCommand(params: {
   input: string;
   overview: SystemAgentOverview;
   history?: SystemAgentAssistantTurn[];
   pendingOperation?: string;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  deps?: SystemAgentConfiguredModelPlannerDeps;
-}): Promise<SystemAgentAssistantPlan | null> {
-  return await planSystemAgentCommandWithConfiguredModel(params);
-}
-
-/** Plan only through the configured default agent's verified route. */
-export async function planSystemAgentCommandWithConfiguredModel(params: {
-  input: string;
-  overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  deps?: SystemAgentConfiguredModelPlannerDeps;
+  deps?: SystemAgentVerifiedInferenceDeps;
 }): Promise<SystemAgentAssistantPlan | null> {
   const input = params.input.trim();
   if (!input) {
@@ -109,7 +88,7 @@ export async function planSystemAgentGreetingWithConfiguredModel(params: {
   overview: SystemAgentOverview;
   facts: SystemAgentGreetingFacts;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  deps?: SystemAgentConfiguredModelPlannerDeps;
+  deps?: SystemAgentVerifiedInferenceDeps;
   timeoutMs: number;
 }): Promise<SystemAgentGreetingPlan | null> {
   const result = await runConfiguredSystemAgentText({
@@ -128,7 +107,7 @@ async function runConfiguredSystemAgentText(params: {
   systemPrompt: string;
   runIdPrefix: string;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  deps?: SystemAgentConfiguredModelPlannerDeps;
+  deps?: SystemAgentVerifiedInferenceDeps;
   timeoutMs?: number;
   responseFormat?: Record<string, unknown>;
 }): Promise<{ text: string; modelLabel: string } | null> {
@@ -143,14 +122,15 @@ async function runConfiguredSystemAgentText(params: {
   } catch (error) {
     throw new SystemAgentInferenceUnavailableError("planner", [error]);
   }
-  const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
+  // Provider transport options can select a different runtime. Plugin-owned
+  // inference keeps its verified runtime and uses the JSON prompt/parser contract.
+  const responseFormat = expectedAgentHarnessRuntimeArtifact ? undefined : params.responseFormat;
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-planner-"));
   let text: string | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   try {
     const runId = `${params.runIdPrefix}-${randomUUID()}`;
-    const timeoutMs =
-      params.timeoutMs ??
-      (params.deps?.resolveAssistantTimeoutMs ?? resolveSystemAgentAssistantTimeoutMs)(route);
+    const timeoutMs = params.timeoutMs ?? resolveSystemAgentAssistantTimeoutMs(route);
     preparedRunAdmission = prepareSystemAgentRunAdmission(
       route.runConfig,
       runId,
@@ -180,24 +160,24 @@ async function runConfiguredSystemAgentText(params: {
       messageProvider: "openclaw",
       disableTools: true,
       disableTrajectory: true,
-      ...(params.responseFormat ? { streamParams: { responseFormat: params.responseFormat } } : {}),
+      ...(responseFormat ? { streamParams: { responseFormat } } : {}),
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };
     const result =
       route.runner === "cli"
-        ? await (params.deps?.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent)(
-            {
-              ...shared,
-              preparedRunAdmission,
-              executionMode: "side-question",
-              cleanupCliLiveSessionOnRunEnd: true,
-            },
-          )
-        : await (
-            params.deps?.runEmbeddedAgent ??
-            (await import("../agents/embedded-agent.js")).runEmbeddedAgent
-          )({
+        ? await (
+            await import("../agents/cli-runner.js")
+          ).runCliAgent({
             ...shared,
+            preparedRunAdmission,
+            executionMode: "side-question",
+            cleanupCliLiveSessionOnRunEnd: true,
+          })
+        : await (
+            await import("../agents/embedded-agent.js")
+          ).runEmbeddedAgent({
+            ...shared,
+            lane: CommandLane.SystemAgentInference,
             preparedRunAdmission,
             toolsAllow: [],
             agentHarnessRuntimeOverride: route.agentHarnessRuntimeOverride,
@@ -205,7 +185,11 @@ async function runConfiguredSystemAgentText(params: {
             cleanupBundleMcpOnRunEnd: true,
             ...(route.authProfileId ? { authProfileIdSource: "user" as const } : {}),
           });
-    text = extractAgentRunText(result)?.trim();
+    const terminalError = extractAgentRunTerminalError(result);
+    if (terminalError) {
+      throw new SystemAgentInferenceUnavailableError("planner", [new Error(terminalError)]);
+    }
+    text = extractAgentRunText(result);
   } catch (error) {
     if (error instanceof SystemAgentInferenceUnavailableError) {
       throw error;
@@ -213,7 +197,7 @@ async function runConfiguredSystemAgentText(params: {
     text = undefined;
   } finally {
     preparedRunAdmission?.close();
-    await (params.deps?.removeTempDir ?? removeTempPlannerDir)(tempDir);
+    await fs.rm(tempDir, { recursive: true, force: true });
   }
   if (!text) {
     return null;
@@ -226,7 +210,7 @@ async function runConfiguredSystemAgentText(params: {
 
 async function requireVerifiedPlannerRoute(
   binding: SystemAgentVerifiedInferenceBinding | undefined,
-  deps: SystemAgentConfiguredModelPlannerDeps | undefined,
+  deps: SystemAgentVerifiedInferenceDeps | undefined,
 ) {
   if (!binding) {
     throw new SystemAgentInferenceUnavailableError("planner");
@@ -240,12 +224,4 @@ async function requireVerifiedPlannerRoute(
     throw new SystemAgentInferenceUnavailableError("planner", [error]);
   }
   throw new SystemAgentInferenceUnavailableError("planner");
-}
-
-async function createTempPlannerDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-planner-"));
-}
-
-async function removeTempPlannerDir(dir: string): Promise<void> {
-  await fs.rm(dir, { recursive: true, force: true });
 }

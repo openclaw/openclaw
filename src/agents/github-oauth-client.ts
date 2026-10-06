@@ -1,14 +1,20 @@
+import { createHash } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { resolveConfiguredGitHubApiBaseUrl } from "./github-host.js";
+import { clearNativeGitHubTokenCache } from "./github-read-identity.js";
+import type { GitHubToolAccount } from "./github-tool-account.js";
 
 const GITHUB_OAUTH_CLIENT_ID = "Ov23liUjOXHi28w2fDlH";
 const GITHUB_OAUTH_DEVICE_CODE_URL = "https://github.com/login/device/code";
 const GITHUB_OAUTH_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_OAUTH_VERIFICATION_URL = "https://github.com/login/device";
 
-// gh auth login --with-token requires repo, read:org, and gist. workflow is
-// additionally required to publish branches that modify workflow files.
+// Request repository/workflow publication and the existing device-flow scopes.
 const GITHUB_OAUTH_SCOPE = "repo workflow read:org gist offline_access";
 const GITHUB_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 const GITHUB_OAUTH_RESPONSE_MAX_BYTES = 16 * 1024;
@@ -20,9 +26,33 @@ const GITHUB_OAUTH_ERROR_TEXT_MAX_CHARS = 2 * 1024;
 const GITHUB_OAUTH_MAX_DURATION_SECONDS = 366 * 24 * 60 * 60;
 const GITHUB_OAUTH_MAX_INTERVAL_SECONDS = 60 * 60;
 
+// TTL bounds only remote revocation staleness. Rotation changes the token key;
+// disconnected or retired profiles provide no token before any cache lookup.
+const GITHUB_CREDENTIAL_VERIFICATION_TTL_MS = 60_000;
+const GITHUB_CREDENTIAL_VERIFICATION_MAX_ENTRIES = 32;
+type GitHubCredentialVerificationResult =
+  | { status: "available"; account: GitHubToolAccount; scopes: string[] }
+  | { status: "unavailable" | "rate_limited" | "unverified" };
+let verifiedCredentials = new Map<
+  string,
+  {
+    result: Extract<GitHubCredentialVerificationResult, { status: "available" }>;
+    expiresAt: number;
+  }
+>();
+const pending = new Map<string, Promise<GitHubCredentialVerificationResult>>();
+
+export function clearGitHubCredentialVerificationCache(): void {
+  clearNativeGitHubTokenCache();
+  // Pending probes retain the old map, so clearing cannot be undone by their completion.
+  verifiedCredentials = new Map();
+  pending.clear();
+}
+
 type GitHubOAuthRequestOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
+  apiBaseUrl?: string;
 };
 
 type GitHubOAuthDeviceAuthorization = {
@@ -42,18 +72,21 @@ export type GitHubOAuthTokenPair = {
   refreshTokenExpiresInSeconds: number;
 };
 
-type GitHubOAuthErrorCode =
-  | "authorization_pending"
-  | "slow_down"
-  | "expired_token"
-  | "unsupported_grant_type"
-  | "incorrect_client_credentials"
-  | "incorrect_device_code"
-  | "bad_verification_code"
-  | "access_denied"
-  | "device_flow_disabled"
-  | "unverified_user_email"
-  | "bad_refresh_token";
+const GITHUB_OAUTH_ERROR_CODES = [
+  "authorization_pending",
+  "slow_down",
+  "expired_token",
+  "unsupported_grant_type",
+  "incorrect_client_credentials",
+  "incorrect_device_code",
+  "bad_verification_code",
+  "access_denied",
+  "device_flow_disabled",
+  "unverified_user_email",
+  "bad_refresh_token",
+] as const;
+type GitHubOAuthErrorCode = (typeof GITHUB_OAUTH_ERROR_CODES)[number];
+const GITHUB_OAUTH_ERROR_CODE_SET: ReadonlySet<string> = new Set(GITHUB_OAUTH_ERROR_CODES);
 
 type GitHubOAuthErrorDetails = {
   errorDescription?: string;
@@ -121,13 +154,8 @@ function readOptionalErrorUri(value: unknown, surface: string): string | undefin
   if (raw === undefined) {
     return undefined;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw githubOAuthProtocolError(surface);
-  }
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+  const parsed = URL.parse(raw);
+  if (!parsed || parsed.protocol !== "https:" || parsed.username || parsed.password) {
     throw githubOAuthProtocolError(surface);
   }
   return raw;
@@ -169,8 +197,12 @@ function parseGitHubOAuthTokenPair(
   ) {
     throw githubOAuthProtocolError(surface);
   }
+  const accessToken = readBoundedString(record.access_token, surface);
+  const refreshToken = readBoundedString(record.refresh_token, surface);
+  registerSecretValueForRedaction(accessToken);
+  registerSecretValueForRedaction(refreshToken);
   return {
-    accessToken: readBoundedString(record.access_token, surface),
+    accessToken,
     tokenType: "bearer",
     scopes,
     expiresInSeconds: readPositiveInteger(
@@ -178,7 +210,7 @@ function parseGitHubOAuthTokenPair(
       surface,
       GITHUB_OAUTH_MAX_DURATION_SECONDS,
     ),
-    refreshToken: readBoundedString(record.refresh_token, surface),
+    refreshToken,
     refreshTokenExpiresInSeconds: readPositiveInteger(
       record.refresh_token_expires_in,
       surface,
@@ -187,22 +219,8 @@ function parseGitHubOAuthTokenPair(
   };
 }
 
-const GITHUB_OAUTH_ERROR_CODES = new Set<string>([
-  "authorization_pending",
-  "slow_down",
-  "expired_token",
-  "unsupported_grant_type",
-  "incorrect_client_credentials",
-  "incorrect_device_code",
-  "bad_verification_code",
-  "access_denied",
-  "device_flow_disabled",
-  "unverified_user_email",
-  "bad_refresh_token",
-]);
-
 function isGitHubOAuthErrorCode(value: unknown): value is GitHubOAuthErrorCode {
-  return typeof value === "string" && GITHUB_OAUTH_ERROR_CODES.has(value);
+  return typeof value === "string" && GITHUB_OAUTH_ERROR_CODE_SET.has(value);
 }
 
 function parseGitHubOAuthError(
@@ -264,6 +282,10 @@ async function postGitHubOAuthForm(
     body: form,
     signal,
   });
+  return { response, body: await readGitHubResponse(response, surface, timeoutMs) };
+}
+
+async function readGitHubResponse(response: Response, surface: string, timeoutMs: number) {
   const bytes = await readResponseWithLimit(response, GITHUB_OAUTH_RESPONSE_MAX_BYTES, {
     chunkTimeoutMs: timeoutMs,
     timeoutMs,
@@ -271,7 +293,78 @@ async function postGitHubOAuthForm(
     onIdleTimeout: () => githubOAuthProtocolError(surface),
     onTimeout: () => githubOAuthProtocolError(surface),
   });
-  return { response, body: parseJsonObject(bytes, surface) };
+  return parseJsonObject(bytes, surface);
+}
+
+/** Public credentials use their fixed issuer; other issuers require an explicit endpoint. */
+export async function verifyGitHubCredential(
+  token: string,
+  options: GitHubOAuthRequestOptions = {},
+): Promise<GitHubCredentialVerificationResult> {
+  registerSecretValueForRedaction(token);
+  try {
+    readBoundedString(token, "account");
+    if (/\s/u.test(token)) {
+      return { status: "unavailable" };
+    }
+    const apiBaseUrl = options.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl();
+    const key = createHash("sha256").update(`${apiBaseUrl}\0${token}`).digest("hex");
+    const cache = verifiedCredentials;
+    const cached = cache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.result;
+    }
+    cache.delete(key);
+    const create = async (): Promise<GitHubCredentialVerificationResult> => {
+      const timeoutMs = resolveTimerTimeoutMs(
+        options.timeoutMs,
+        GITHUB_OAUTH_REQUEST_TIMEOUT_MS,
+        1,
+      );
+      const timeout = AbortSignal.timeout(timeoutMs);
+      const response = await fetch(`${apiBaseUrl}/user`, {
+        method: "GET",
+        redirect: "error",
+        headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
+        signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
+      });
+      if (response.status !== 200) {
+        void response.body?.cancel().catch(() => undefined);
+        const rateLimited =
+          response.status === 429 ||
+          (response.status === 403 &&
+            (response.headers.get("x-ratelimit-remaining") === "0" ||
+              response.headers.has("retry-after")));
+        return {
+          status:
+            response.status === 401 ? "unavailable" : rateLimited ? "rate_limited" : "unverified",
+        };
+      }
+      const body = await readGitHubResponse(response, "account", timeoutMs);
+      const accountId = readPositiveInteger(body.id, "account", Number.MAX_SAFE_INTEGER);
+      const login = readBoundedString(body.login, "account", 100);
+      const avatarUrl =
+        body.avatar_url == null ? null : readBoundedString(body.avatar_url, "account");
+      const scopes = normalizeGitHubScopes(response.headers.get("x-oauth-scopes") ?? "", "account");
+      const result = {
+        status: "available" as const,
+        account: { accountId, login, avatarUrl },
+        scopes,
+      };
+      Object.freeze(result.account);
+      Object.freeze(result.scopes);
+      Object.freeze(result);
+      cache.set(key, { result, expiresAt: Date.now() + GITHUB_CREDENTIAL_VERIFICATION_TTL_MS });
+      pruneMapToMaxSize(cache, GITHUB_CREDENTIAL_VERIFICATION_MAX_ENTRIES);
+      return result;
+    };
+    return await (options.signal || options.timeoutMs !== undefined
+      ? create()
+      : getOrCreatePromise(pending, key, create, { evictOnSettled: true }));
+  } catch {
+    // Network errors, response bodies, and abort reasons can contain credentials.
+    return { status: "unverified" };
+  }
 }
 
 function throwGitHubOAuthHttpError(response: Response, surface: string): never {
@@ -344,6 +437,8 @@ export async function pollGitHubOAuthDeviceToken(
     const { code, intervalSeconds, ...details } = parseGitHubOAuthError(body, "device token");
     switch (code) {
       case "authorization_pending":
+      case "expired_token":
+      case "access_denied":
         return { status: code, ...details };
       case "slow_down":
         return {
@@ -351,9 +446,6 @@ export async function pollGitHubOAuthDeviceToken(
           ...details,
           ...(intervalSeconds !== undefined ? { intervalSeconds } : {}),
         };
-      case "expired_token":
-      case "access_denied":
-        return { status: code, ...details };
       default:
         return { status: "error", code, ...details };
     }

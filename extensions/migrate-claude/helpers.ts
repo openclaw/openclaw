@@ -1,4 +1,3 @@
-// Migrate Claude helper module supports helpers behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,9 +22,7 @@ export function resolveHomePath(input: string): string {
   return path.resolve(trimmed.replace(/^~(?=$|[\\/])/u, () => os.homedir()));
 }
 
-export async function exists(filePath: string): Promise<boolean> {
-  return await pathExists(filePath);
-}
+export { pathExists as exists };
 
 export async function isDirectory(dirPath: string): Promise<boolean> {
   try {
@@ -43,38 +40,18 @@ export function sanitizeName(name: string): string {
     .replaceAll(/^-+|-+$/g, "");
 }
 
-export async function readText(filePath: string | undefined): Promise<string | undefined> {
-  if (!filePath) {
-    return undefined;
-  }
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
 export async function readJsonObject(
   filePath: string | undefined,
 ): Promise<Record<string, unknown>> {
-  const content = await readText(filePath);
-  if (!content) {
+  if (!filePath) {
     return {};
   }
   try {
-    const parsed = JSON.parse(content) as unknown;
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
     return isRecord(parsed) ? parsed : {};
   } catch {
     return {};
   }
-}
-
-export function childRecord(
-  root: Record<string, unknown> | undefined,
-  key: string,
-): Record<string, unknown> {
-  const value = root?.[key];
-  return isRecord(value) ? value : {};
 }
 
 export async function appendItem(item: MigrationItem): Promise<MigrationItem> {

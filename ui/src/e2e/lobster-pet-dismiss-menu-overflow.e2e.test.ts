@@ -1,12 +1,10 @@
-// Measures the lobster dismiss menu's internal overflow in the real sidebar
-// footer context, with classic (space-taking) scrollbars forced on so the
+// Measures the lobster dismiss menu's internal overflow in the real New Session
+// composer context, with classic (space-taking) scrollbars forced on so the
 // Linux run matches what a macOS "Always show scrollbars" operator sees.
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installMockGateway } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI lobster dismiss menu overflow",
@@ -25,19 +23,16 @@ type BrowserLobsterPet = HTMLElement & {
   updateComplete: Promise<unknown>;
 };
 
-const artifactDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/lobster-dismiss-menu-overflow",
-);
-
 /** Shared setup for a fresh page: mock gateway, load, and park the clock so
  *  the pet's own timers don't fire mid-assertion. Reused across the default
  *  1280x900 context and the per-test contexts below (compact/edge/theme). */
 async function loadControlUiPage(currentPage: Page) {
   await currentPage.clock.install({ time: new Date("2026-07-09T12:00:00") });
   await installMockGateway(currentPage);
-  await currentPage.goto(suite.server.baseUrl);
+  await currentPage.goto(`${suite.server.baseUrl}new`);
   await currentPage.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
+  await currentPage.locator("openclaw-app-sidebar").waitFor();
+  await currentPage.locator(".new-session-page__message").waitFor();
   const loadedAt = await currentPage.evaluate(() => Date.now());
   await currentPage.clock.pauseAt(loadedAt + 1_000);
 }
@@ -48,26 +43,22 @@ async function withDismissMenuPage(
 ) {
   await suite.withPage({ viewport: { width: 1280, height: 900 }, ...options }, async ({ page }) => {
     await loadControlUiPage(page);
-    await mkdir(artifactDir, { recursive: true });
     await run(page);
   });
 }
 
-/** Mounts the pet inside the real sidebar footer ledge so production CSS
- *  (`openclaw-lobster-pet { height: 52px; overflow: hidden }`) applies. */
-async function mountPetInRealFooter(currentPage: Page, seed: number) {
+/** Configures the pet already mounted on the real composer so production
+ *  positioning and hit testing remain part of the assertion. */
+async function configureRealComposerPet(currentPage: Page, seed: number) {
   await currentPage.evaluate(async (petSeed) => {
-    const footer = document.querySelector(".sidebar-shell__footer");
-    if (!footer) {
-      throw new Error("sidebar footer ledge not found");
+    const pet = document.querySelector("openclaw-lobster-pet") as BrowserLobsterPet | null;
+    if (!pet) {
+      throw new Error("composer lobster pet not found");
     }
-    footer.querySelector("openclaw-lobster-pet")?.remove();
-    const pet = document.createElement("openclaw-lobster-pet") as BrowserLobsterPet;
     pet.seed = petSeed;
     pet.mode = "offline";
     pet.runOutcome = "ok";
     pet.visitsEnabled = true;
-    footer.append(pet);
     await pet.updateComplete;
   }, seed);
 }
@@ -90,6 +81,7 @@ async function measureDismissMenu(currentPage: Page) {
     const menuRect = menu.getBoundingClientRect();
     const host = document.querySelector<HTMLElement>("openclaw-lobster-pet");
     const hostStyle = host ? getComputedStyle(host) : null;
+    const hostRect = host?.getBoundingClientRect() ?? null;
     const firstItem = dropdown.querySelector("wa-dropdown-item");
     const firstItemLabel = firstItem?.shadowRoot?.querySelector<HTMLElement>("#label") ?? null;
     return {
@@ -131,6 +123,8 @@ async function measureDismissMenu(currentPage: Page) {
       hasOuterMenuSurface: dropdown.closest("openclaw-menu-surface") !== null,
       hostHeight: hostStyle?.height ?? null,
       hostOverflow: hostStyle?.overflow ?? null,
+      hostParentClass: host?.parentElement?.className ?? null,
+      hostBottom: hostRect?.bottom ?? null,
       itemHeights: [...dropdown.querySelectorAll("wa-dropdown-item")].map(
         (item) => (item as HTMLElement).offsetHeight,
       ),
@@ -171,54 +165,31 @@ async function useOversizedDismissLabels(currentPage: Page) {
 }
 
 suite.define(() => {
-  it("does not scroll its two dismissal items in the real sidebar footer", () =>
+  it("keeps the composer critter clickable and its dismissal menu inside the viewport", () =>
     withDismissMenuPage({}, async (page) => {
-      await mountPetInRealFooter(page, 42);
+      await configureRealComposerPet(page, 42);
       const sprite = page.locator(".lobster-pet");
       await sprite.waitFor();
-
       await sprite.click({ button: "right" });
-      await page.locator("wa-dropdown.lobster-pet-dismiss-menu").waitFor();
       await page.getByText("Dismiss and don't show again", { exact: true }).waitFor();
-
       const measurement = await measureDismissMenu(page);
-      await page.screenshot({ path: path.join(artifactDir, "real-footer-context.png") });
-
-      // Asserting on the whole measurement so a regression prints the anchor
-      // position and resolved max-height that explain it.
       expect(measurement).toMatchObject({
         overflowPx: 0,
         popupIsTopLayer: true,
         hasOuterMenuSurface: false,
       });
-    }));
-
-  // Control: the identical menu content, anchored away from the bottom edge.
-  // Isolates the anchor position as the cause rather than the menu's content.
-  it("has room for the same two items when the ledge is not at the viewport edge", () =>
-    withDismissMenuPage({}, async (page) => {
-      await mountPetInRealFooter(page, 42);
-      await page.evaluate(() => {
-        const footer = document.querySelector<HTMLElement>(".sidebar-shell__footer");
-        if (footer) {
-          footer.style.transform = "translateY(-400px)";
-        }
-      });
-      const sprite = page.locator(".lobster-pet");
-      await sprite.waitFor();
-
-      await sprite.click({ button: "right" });
-      await page.locator("wa-dropdown.lobster-pet-dismiss-menu").waitFor();
-
-      const measurement = await measureDismissMenu(page);
-      await page.screenshot({ path: path.join(artifactDir, "control-away-from-edge.png") });
-
-      expect(measurement).toMatchObject({ overflowPx: 0 });
+      expect(measurement.hostParentClass).toContain("agent-chat__input");
+      expect(measurement.menuTop).toBeGreaterThanOrEqual(0);
+      expect(measurement.menuBottom).toBeLessThanOrEqual(measurement.viewportHeight);
+      expect(await page.locator("openclaw-app-sidebar openclaw-lobster-pet").count()).toBe(0);
+      await page.getByText("Dismiss", { exact: true }).click();
+      await page.clock.runFor(350);
+      await expect.poll(() => sprite.count()).toBe(0);
     }));
 
   it("keeps both items fully visible under long labels and an enlarged type scale", () =>
     withDismissMenuPage({}, async (page) => {
-      await mountPetInRealFooter(page, 42);
+      await configureRealComposerPet(page, 42);
       const sprite = page.locator(".lobster-pet");
       await sprite.waitFor();
 
@@ -239,7 +210,6 @@ suite.define(() => {
         })
         .toBe(0);
       const measurement = await measureDismissMenu(page);
-      await page.screenshot({ path: path.join(artifactDir, "long-labels-enlarged-scale.png") });
 
       // Guards against --control-ui-text-scale/the label injection silently
       // no-opping: the rendered label font-size and its unclamped box height
@@ -254,9 +224,9 @@ suite.define(() => {
       );
     }));
 
-  it("keeps the popup within the viewport at a compact footer-edge viewport height", async () => {
+  it("keeps the popup within the viewport at a compact composer height", async () => {
     await withDismissMenuPage({ viewport: { width: 1280, height: 420 } }, async (shortPage) => {
-      await mountPetInRealFooter(shortPage, 42);
+      await configureRealComposerPet(shortPage, 42);
       const sprite = shortPage.locator(".lobster-pet");
       await sprite.waitFor();
 
@@ -265,7 +235,6 @@ suite.define(() => {
       await shortPage.getByText("Dismiss and don't show again", { exact: true }).waitFor();
 
       const measurement = await measureDismissMenu(shortPage);
-      await shortPage.screenshot({ path: path.join(artifactDir, "compact-viewport-height.png") });
 
       // At this height even the "top" placement may run short, so Web
       // Awesome's own vertical auto-size may still shrink the menu in place
@@ -277,31 +246,24 @@ suite.define(() => {
   });
 
   for (const edge of ["left", "right"] as const) {
-    it(`keeps the popup within the viewport when the footer sits near the ${edge} edge`, () =>
+    it(`keeps the popup within the viewport for pointer coordinates near the ${edge} edge`, () =>
       withDismissMenuPage({}, async (page) => {
-        await mountPetInRealFooter(page, 42);
-        // Slide the footer so the sprite's click point lands 12px from the
-        // named edge, computed from its live layout rather than a guessed
-        // translate distance, so the sprite stays actionable for Playwright.
-        await page.evaluate((direction) => {
-          const footer = document.querySelector<HTMLElement>(".sidebar-shell__footer");
-          const sprite = document.querySelector<HTMLElement>(".lobster-pet");
-          if (!footer || !sprite) {
-            throw new Error("footer or sprite not found");
-          }
-          const rect = sprite.getBoundingClientRect();
-          const targetCenterX = direction === "left" ? 12 : window.innerWidth - 12;
-          const dx = targetCenterX - (rect.left + rect.width / 2);
-          footer.style.transform = `translateX(${dx}px)`;
-        }, edge);
+        await configureRealComposerPet(page, 42);
+        // Exercise the popup's raw pointer-coordinate boundary without moving
+        // the composer outside its scroll container and invalidating its lanes.
         const sprite = page.locator(".lobster-pet");
         await sprite.waitFor();
-
-        await sprite.click({ button: "right" });
+        const point = await sprite.evaluate(
+          (element, direction) => ({
+            clientX: direction === "left" ? 12 : innerWidth - 12,
+            clientY: element.getBoundingClientRect().top + 12,
+          }),
+          edge,
+        );
+        await sprite.dispatchEvent("contextmenu", point);
         await page.locator("wa-dropdown.lobster-pet-dismiss-menu").waitFor();
 
         const measurement = await measureDismissMenu(page);
-        await page.screenshot({ path: path.join(artifactDir, `edge-${edge}.png`) });
 
         expect(measurement.menuLeft).toBeGreaterThanOrEqual(0);
         expect(measurement.menuRight).toBeLessThanOrEqual(measurement.viewportWidth);
@@ -312,7 +274,7 @@ suite.define(() => {
     await withDismissMenuPage(
       { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
       async (darkPage) => {
-        await mountPetInRealFooter(darkPage, 42);
+        await configureRealComposerPet(darkPage, 42);
         const sprite = darkPage.locator(".lobster-pet");
         await sprite.waitFor();
 
@@ -321,7 +283,6 @@ suite.define(() => {
         await darkPage.getByText("Dismiss and don't show again", { exact: true }).waitFor();
 
         const measurement = await measureDismissMenu(darkPage);
-        await darkPage.screenshot({ path: path.join(artifactDir, "dark-theme.png") });
 
         expect(measurement).toMatchObject({ overflowPx: 0 });
       },

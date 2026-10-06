@@ -1,4 +1,3 @@
-// Synology Chat plugin module implements gateway runtime behavior.
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { listAccountIds, resolveAccount } from "./accounts.js";
@@ -27,11 +26,7 @@ type SynologyGatewayStartupIssueCode =
   | "inherited-shared-webhook-path"
   | "duplicate-webhook-path"
   | "duplicate-webhook-url";
-type SynologyGatewayStartupIssue = {
-  code: SynologyGatewayStartupIssueCode;
-  logLevel: "info" | "warn";
-  message: string;
-};
+type SynologyGatewayStartupIssue = ReturnType<typeof buildStartupIssue>;
 
 const activeRouteCleanups = new Map<string, () => Promise<void>>();
 
@@ -39,26 +34,8 @@ function buildStartupIssue(
   code: SynologyGatewayStartupIssueCode,
   message: string,
   logLevel: "info" | "warn" = "warn",
-): SynologyGatewayStartupIssue {
-  return { code, logLevel, message };
-}
-
-function logStartupIssues(
-  log: SynologyGatewayLog | undefined,
-  issues: SynologyGatewayStartupIssue[],
 ) {
-  for (const issue of issues) {
-    const message = `Synology Chat ${issue.message}`;
-    if (issue.logLevel === "info") {
-      log?.info?.(message);
-      continue;
-    }
-    log?.warn?.(message);
-  }
-}
-
-function getRouteKey(account: ResolvedSynologyChatAccount): string {
-  return `${account.accountId}:${account.webhookPath}`;
+  return { code, logLevel, message };
 }
 
 function createUnknownArgsLogAdapter(
@@ -204,7 +181,9 @@ export function validateSynologyGatewayAccountStartup(params: {
 }): { ok: true } | { ok: false } {
   const issues = collectSynologyGatewayStartupIssues(params);
   if (issues.length > 0) {
-    logStartupIssues(params.log, issues);
+    for (const issue of issues) {
+      params.log?.[issue.logLevel]?.(`Synology Chat ${issue.message}`);
+    }
     return { ok: false };
   }
   return { ok: true };
@@ -213,12 +192,11 @@ export function validateSynologyGatewayAccountStartup(params: {
 export async function registerSynologyWebhookRoute(params: {
   cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
-  accountId: string;
   log?: SynologyGatewayLog;
   abortSignal?: AbortSignal;
 }): Promise<() => Promise<void>> {
   const { cfg, account, log } = params;
-  const routeKey = getRouteKey(account);
+  const routeKey = `${account.accountId}:${account.webhookPath}`;
   const previousCleanup = activeRouteCleanups.get(routeKey);
   if (previousCleanup) {
     log?.info?.(`Deregistering stale route before re-registering: ${account.webhookPath}`);

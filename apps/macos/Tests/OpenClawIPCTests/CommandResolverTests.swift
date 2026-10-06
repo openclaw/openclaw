@@ -10,12 +10,6 @@ import Testing
         return (suiteName, UserDefaults(suiteName: suiteName)!)
     }
 
-    private func makeLocalDefaults() -> (suiteName: String, defaults: UserDefaults) {
-        let fixture = self.makeDefaults()
-        fixture.defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
-        return fixture
-    }
-
     private func makePnpm(in root: URL) throws -> URL {
         let pnpmPath = root.appendingPathComponent("node_modules/.bin/pnpm")
         try makeExecutableForTests(at: pnpmPath)
@@ -49,9 +43,6 @@ import Testing
     }
 
     @Test func `prefers open claw binary`() async throws {
-        let (suiteName, defaults) = self.makeLocalDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
         let tmp = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -59,10 +50,8 @@ import Testing
         try makeExecutableForTests(at: openclawPath)
 
         let searchPaths = [tmp.appendingPathComponent("node_modules/.bin").path]
-        let cmd = await CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.localOpenclawCommand(
             subcommand: "gateway",
-            defaults: defaults,
-            configRoot: [:],
             searchPaths: searchPaths,
             projectRoot: tmp)
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
@@ -85,7 +74,7 @@ import Testing
         try makeExecutableForTests(at: distEntrypoint)
         try makeExecutableForTests(at: projectExecutable)
         try makeExecutableForTests(at: node)
-        try "#!/bin/sh\necho v22.22.3\n".write(to: node, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v24.16.0\n".write(to: node, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
 
         let launch = try await CommandResolver.nodeHostWorkerLaunch(
@@ -100,23 +89,18 @@ import Testing
     }
 
     @Test func `falls back to node and script`() async throws {
-        let (suiteName, defaults) = self.makeLocalDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
         let tmp = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
         let scriptPath = tmp.appendingPathComponent("bin/openclaw.js")
         try makeExecutableForTests(at: nodePath)
-        try "#!/bin/sh\necho v22.22.3\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v24.16.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
         try makeExecutableForTests(at: scriptPath)
 
-        let cmd = await CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.localOpenclawCommand(
             subcommand: "rpc",
-            defaults: defaults,
-            configRoot: [:],
             searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path],
             projectRoot: tmp)
 
@@ -129,9 +113,6 @@ import Testing
     }
 
     @Test func `prefers open claw binary over pnpm`() async throws {
-        let (suiteName, defaults) = self.makeLocalDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
         let tmp = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -141,10 +122,8 @@ import Testing
         try makeExecutableForTests(at: openclawPath)
         try makeExecutableForTests(at: pnpmPath)
 
-        let cmd = await CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.localOpenclawCommand(
             subcommand: "rpc",
-            defaults: defaults,
-            configRoot: [:],
             searchPaths: [binDir.path],
             projectRoot: tmp)
 
@@ -152,9 +131,6 @@ import Testing
     }
 
     @Test func `uses open claw binary without node runtime`() async throws {
-        let (suiteName, defaults) = self.makeLocalDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
         let tmp = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -162,10 +138,8 @@ import Testing
         let openclawPath = binDir.appendingPathComponent("openclaw")
         try makeExecutableForTests(at: openclawPath)
 
-        let cmd = await CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.localOpenclawCommand(
             subcommand: "gateway",
-            defaults: defaults,
-            configRoot: [:],
             searchPaths: [binDir.path],
             projectRoot: tmp)
 
@@ -173,16 +147,12 @@ import Testing
     }
 
     @Test func `falls back to pnpm`() async throws {
-        let (suiteName, defaults) = self.makeLocalDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
         let tmp = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let pnpmPath = try self.makePnpm(in: tmp)
 
-        let cmd = await CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.localOpenclawCommand(
             subcommand: "rpc",
-            defaults: defaults,
-            configRoot: [:],
             searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path],
             projectRoot: tmp)
 
@@ -190,17 +160,13 @@ import Testing
     }
 
     @Test func `pnpm keeps extra args after subcommand`() async throws {
-        let (suiteName, defaults) = self.makeLocalDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
         let tmp = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let pnpmPath = try self.makePnpm(in: tmp)
 
-        let cmd = await CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.localOpenclawCommand(
             subcommand: "health",
             extraArgs: ["--json", "--timeout", "5"],
-            defaults: defaults,
-            configRoot: [:],
             searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path],
             projectRoot: tmp)
 
@@ -209,20 +175,16 @@ import Testing
     }
 
     @Test func `missing CLI explains install and source checkout paths`() async throws {
-        let (suiteName, defaults) = self.makeLocalDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
         let tmp = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: tmp) }
         let binDir = tmp.appendingPathComponent("bin")
         let nodePath = binDir.appendingPathComponent("node")
         try makeExecutableForTests(at: nodePath)
-        try "#!/bin/sh\necho v22.22.3\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v24.16.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
 
-        let cmd = await CommandResolver.openclawCommand(
+        let cmd = await CommandResolver.localOpenclawCommand(
             subcommand: "status",
-            defaults: defaults,
-            configRoot: [:],
             searchPaths: [binDir.path],
             projectRoot: tmp)
 
@@ -334,7 +296,7 @@ import Testing
     @Test func `node manager runtimes precede system runtimes`() throws {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
-        let nodeManagerBin = home.appendingPathComponent(".nvm/versions/node/v22.22.3/bin")
+        let nodeManagerBin = home.appendingPathComponent(".nvm/versions/node/v24.16.0/bin")
         try makeExecutableForTests(at: nodeManagerBin.appendingPathComponent("node"))
 
         let paths = CommandResolver.preferredPaths(
@@ -409,50 +371,13 @@ import Testing
             requiredVersion: "2026.7.3-beta.1") == nil)
     }
 
-    @Test func `builds SSH command for remote mode`() async {
-        let (suiteName, defaults) = self.makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
-        defaults.set("openclaw@example.com:2222", forKey: remoteTargetKey)
-        defaults.set("/tmp/id_ed25519", forKey: remoteIdentityKey)
-        defaults.set("/srv/openclaw", forKey: remoteProjectRootKey)
-
-        let cmd = await CommandResolver.openclawCommand(
-            subcommand: "status",
-            extraArgs: ["--json"],
-            defaults: defaults,
-            configRoot: [:])
-
-        #expect(cmd.first == "/usr/bin/ssh")
-        if let marker = cmd.firstIndex(of: "--") {
-            #expect(cmd[marker + 1] == "openclaw@example.com")
-        } else {
-            #expect(Bool(false))
-        }
-        #expect(cmd.contains("StrictHostKeyChecking=yes"))
-        #expect(!cmd.contains("StrictHostKeyChecking=accept-new"))
-        #expect(cmd.contains("UpdateHostKeys=yes"))
-        #expect(cmd.contains("ControlPath=none"))
-        #expect(cmd.contains("-i"))
-        #expect(cmd.contains("/tmp/id_ed25519"))
-        if let script = cmd.last {
-            #expect(script.contains("PRJ='/srv/openclaw'"))
-            #expect(script.contains("cd \"$PRJ\""))
-            #expect(script.contains("openclaw"))
-            #expect(script.contains("status"))
-            #expect(script.contains("--json"))
-            #expect(script.contains("CLI="))
-        }
-    }
-
-    @Test func `explicit SSH config host key policy omits strict override`() async {
+    @Test func `explicit SSH config selects OpenSSH host key policy`() {
         let (suiteName, defaults) = self.makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("gateway-alias", forKey: remoteTargetKey)
 
-        let cmd = await CommandResolver.openclawCommand(
-            subcommand: "status",
+        let settings = CommandResolver.connectionSettings(
             defaults: defaults,
             configRoot: [
                 "gateway": [
@@ -464,12 +389,10 @@ import Testing
                 ],
             ])
 
-        #expect(cmd.first == "/usr/bin/ssh")
-        #expect(!cmd.contains { $0.hasPrefix("StrictHostKeyChecking=") })
-        #expect(cmd.contains("ControlPath=none"))
+        #expect(settings.sshHostKeyPolicy == .openssh)
     }
 
-    @Test func `explicit SSH config replaces stale defaults with its host key policy`() async {
+    @Test func `explicit SSH config replaces stale defaults with its host key policy`() {
         let (suiteName, defaults) = self.makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
@@ -487,10 +410,6 @@ import Testing
             ],
         ]
 
-        let cmd = await CommandResolver.openclawCommand(
-            subcommand: "status",
-            defaults: defaults,
-            configRoot: configRoot)
         let settings = CommandResolver.connectionSettings(
             defaults: defaults,
             configRoot: configRoot)
@@ -498,9 +417,6 @@ import Testing
         #expect(settings.target == "old-gateway-alias")
         #expect(settings.identity == "/tmp/config-id")
         #expect(settings.sshHostKeyPolicy == .openssh)
-        #expect(!cmd.contains { $0.hasPrefix("StrictHostKeyChecking=") })
-        #expect(cmd.contains("/tmp/config-id"))
-        #expect(!cmd.contains("/tmp/stale-id"))
     }
 
     @Test func `explicit blank SSH config clears stale defaults`() {
@@ -527,64 +443,6 @@ import Testing
         #expect(settings.sshHostKeyPolicy == .strict)
     }
 
-    @Test func `remote SSH with explicit blank target fails closed`() async throws {
-        let (suiteName, defaults) = self.makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
-        defaults.set("stale-gateway-alias", forKey: remoteTargetKey)
-        let tmp = try makeTempDirForTests()
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        let localOpenClaw = tmp.appendingPathComponent("node_modules/.bin/openclaw")
-        try makeExecutableForTests(at: localOpenClaw)
-
-        let command = await CommandResolver.openclawCommand(
-            subcommand: "status",
-            defaults: defaults,
-            configRoot: [
-                "gateway": [
-                    "mode": "remote",
-                    "remote": [
-                        "transport": "ssh",
-                        "sshTarget": "   ",
-                    ],
-                ],
-            ],
-            searchPaths: [localOpenClaw.deletingLastPathComponent().path],
-            projectRoot: tmp)
-
-        #expect(command.first == "/bin/sh")
-        #expect(command.last?.contains("Remote SSH gateway target is missing or invalid.") == true)
-        #expect(!command.contains(localOpenClaw.path))
-    }
-
-    @Test func `direct remote route uses local CLI despite stale SSH defaults`() async throws {
-        let (suiteName, defaults) = self.makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
-        defaults.set("stale-gateway-alias", forKey: remoteTargetKey)
-        let tmp = try makeTempDirForTests()
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        let localOpenClaw = tmp.appendingPathComponent("node_modules/.bin/openclaw")
-        try makeExecutableForTests(at: localOpenClaw)
-
-        let command = await CommandResolver.openclawCommand(
-            subcommand: "status",
-            defaults: defaults,
-            configRoot: [
-                "gateway": [
-                    "mode": "remote",
-                    "remote": [
-                        "transport": "direct",
-                        "url": "wss://gateway.example.test",
-                    ],
-                ],
-            ],
-            searchPaths: [localOpenClaw.deletingLastPathComponent().path],
-            projectRoot: tmp)
-
-        #expect(command == [localOpenClaw.path, "status"])
-    }
-
     @Test func `invalid SSH host key policy fails closed`() {
         let settings = CommandResolver.connectionSettings(configRoot: [
             "gateway": [
@@ -597,11 +455,13 @@ import Testing
     }
 
     @Test func `remote gateway probe applies SSH host key policy`() throws {
-        let strict = try #require(RemoteGatewayProbe._testSSHCheckCommand(
+        let strict = try #require(RemoteGatewayProbe.sshCheckCommand(
             target: "gateway-alias",
+            identity: "",
             hostKeyPolicy: .strict))
-        let openssh = try #require(RemoteGatewayProbe._testSSHCheckCommand(
+        let openssh = try #require(RemoteGatewayProbe.sshCheckCommand(
             target: "gateway-alias",
+            identity: "",
             hostKeyPolicy: .openssh))
 
         #expect(strict.contains("StrictHostKeyChecking=yes"))
@@ -641,30 +501,17 @@ import Testing
         #expect(CommandResolver.parseSSHTarget("user@host:2222")?.port == 2222)
     }
 
-    @Test func `config root local overrides remote defaults`() async throws {
+    @Test func `config root local overrides remote defaults`() {
         let (suiteName, defaults) = self.makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
         defaults.set("openclaw@example.com:2222", forKey: remoteTargetKey)
 
-        let tmp = try makeTempDirForTests()
-        defer { try? FileManager.default.removeItem(at: tmp) }
-
-        let openclawPath = tmp.appendingPathComponent("node_modules/.bin/openclaw")
-        try makeExecutableForTests(at: openclawPath)
-
-        let cmd = await CommandResolver.openclawCommand(
-            subcommand: "daemon",
+        let settings = CommandResolver.connectionSettings(
             defaults: defaults,
-            configRoot: ["gateway": ["mode": "local"]],
-            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path],
-            projectRoot: tmp)
+            configRoot: ["gateway": ["mode": "local"]])
 
-        #expect(cmd.first == openclawPath.path)
-        #expect(cmd.count >= 2)
-        if cmd.count >= 2 {
-            #expect(cmd[1] == "daemon")
-        }
+        #expect(settings.mode == .local)
     }
 
     @Test func `remote settings fall back to config ssh target`() {
@@ -685,5 +532,32 @@ import Testing
         #expect(settings.mode == .remote)
         #expect(settings.target == "alice@gateway.example:2222")
         #expect(settings.identity == "/tmp/id_ed25519")
+    }
+}
+
+struct CommandResolverLocalRoutingTests {
+    @Test(arguments: [
+        ["/fixture/managed/openclaw"],
+        ["/fixture/node", "/fixture/project/openclaw.mjs"],
+        ["/fixture/pnpm", "--silent", "openclaw"],
+    ])
+    func `local service resolution selects the profile at the CLI root`(
+        prefix: [String]) async
+    {
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "routing-proof"])
+        let local = await CommandResolver.localOpenclawCommand(
+            subcommand: "gateway", extraArgs: ["install", "--allow-unconfigured"], profile: profile,
+            resolveCLI: { _, _ in .executable(prefix) })
+        #expect(local == prefix + [
+            "--profile", "routing-proof", "gateway", "install", "--allow-unconfigured",
+        ])
+    }
+
+    @Test func `a missing local CLI fails locally instead of falling back to the primary`() async {
+        let command = await CommandResolver.localOpenclawCommand(
+            subcommand: "gateway", profile: AppProfile(environment: [:]),
+            resolveCLI: { _, _ in .unavailable("fixture CLI unavailable") })
+        #expect(command.prefix(2) == ["/bin/sh", "-c"])
+        #expect(command.last?.contains("fixture CLI unavailable") == true)
     }
 }

@@ -2,6 +2,7 @@ import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tu
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 
 type TestSelector = Component & {
@@ -31,14 +32,6 @@ function approvalPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 function createHarness() {
   const selectors: TestSelector[] = [];
   const addSystem = vi.fn();
@@ -52,6 +45,7 @@ function createHarness() {
       focus: vi.fn(),
       unfocus: vi.fn(),
       isFocused: vi.fn(() => true),
+      getBounds: () => undefined,
     } satisfies OverlayHandle;
     overlayHandles.push(handle);
     return handle;
@@ -535,5 +529,57 @@ describe("TUI plugin approvals", () => {
     expect(harness.clearTimeoutFn).toHaveBeenCalledTimes(1);
     expect(harness.clearTimeoutFn).toHaveBeenCalledWith(harness.timers[0]);
     expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["success", "stale", "failure"])(
+    "ignores an in-flight resolution's %s after disposal",
+    async (outcome) => {
+      const harness = createHarness();
+      const pending = deferred<{ ok: boolean }>();
+      harness.resolvePluginApproval.mockReturnValueOnce(pending.promise);
+      harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
+      harness.selectors[0]?.onSelect?.({ value: "deny", label: "Deny" });
+      expect(harness.resolvePluginApproval).toHaveBeenCalledExactlyOnceWith(
+        "plugin:skill-1",
+        "deny",
+      );
+      harness.controller.dispose();
+      harness.requestRender.mockClear();
+
+      if (outcome === "failure") {
+        pending.reject(new Error("gateway unavailable"));
+      } else {
+        pending.resolve({ ok: outcome === "success" });
+      }
+      await pending.promise.catch(() => undefined);
+
+      expect(harness.addSystem).not.toHaveBeenCalled();
+      expect(harness.listPluginApprovals).not.toHaveBeenCalled();
+      expect(harness.requestRender).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ignores a stale approval's refresh failure after disposal", async () => {
+    const harness = createHarness();
+    const pending = deferred<unknown[]>();
+    const started = deferred();
+    harness.resolvePluginApproval.mockResolvedValueOnce({ ok: false });
+    harness.listPluginApprovals.mockImplementationOnce(() => {
+      started.resolve();
+      return pending.promise;
+    });
+    harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
+    harness.selectors[0]?.onSelect?.({ value: "deny", label: "Deny" });
+    await started.promise;
+    const refresh = harness.controller.refresh();
+    harness.controller.dispose();
+    harness.addSystem.mockClear();
+    harness.requestRender.mockClear();
+
+    pending.reject(new Error("refresh unavailable"));
+    await refresh.catch(() => undefined);
+
+    expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.requestRender).not.toHaveBeenCalled();
   });
 });

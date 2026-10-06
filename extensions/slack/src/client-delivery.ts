@@ -1,6 +1,7 @@
 // Slack plugin module owns WebClient-scoped message and file delivery primitives.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, ChatPostMessageResponse, KnownBlock, WebClient } from "@slack/web-api";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import {
   extractErrorCode,
   PlatformMessageNotDispatchedError,
@@ -70,13 +71,6 @@ function readSlackRequestErrorCode(value: unknown): string | undefined {
   return typeof code === "string" ? code.toUpperCase() : undefined;
 }
 
-function readSlackRequestErrorMessage(value: unknown): string {
-  if (value instanceof Error) {
-    return value.message;
-  }
-  return typeof value === "string" ? value : "";
-}
-
 function hasSlackDnsRequestSignal(err: unknown): boolean {
   let current: unknown = err;
   const seen = new Set<unknown>();
@@ -89,7 +83,7 @@ function hasSlackDnsRequestSignal(err: unknown): boolean {
     if (code && SLACK_DNS_RETRY_CODES.has(code)) {
       return true;
     }
-    const message = readSlackRequestErrorMessage(current);
+    const message = current instanceof Error ? current.message : "";
     if (/\b(EAI_AGAIN|ENOTFOUND|UND_ERR_DNS_RESOLVE_FAILED)\b/i.test(message)) {
       return true;
     }
@@ -103,11 +97,7 @@ function hasSlackDnsRequestSignal(err: unknown): boolean {
 function resolveSlackUploadTimeoutLogUrl(url: string): string | undefined {
   // Slack puts the upload capability in the URL path. Timeout diagnostics may
   // name the origin, but must not retain that capability-bearing path.
-  try {
-    return new URL(url).origin;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(url)?.origin;
 }
 
 function buildSlackUploadFailureCause(error: unknown): Error {
@@ -129,13 +119,9 @@ function buildSlackUploadFailureCause(error: unknown): Error {
 }
 
 function parseSlackUploadHttpUrl(value: string, label: string): URL {
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-      return parsed;
-    }
-  } catch {
-    // Fall through to the same capability-safe error below.
+  const parsed = URL.parse(value);
+  if (parsed && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
+    return parsed;
   }
   throw new Error(`${label} must use a valid HTTP or HTTPS URL`);
 }
@@ -292,6 +278,7 @@ export async function uploadSlackFile(params: {
   threadTs?: string;
   maxBytes?: number;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
   auditContext?: string;
 }): Promise<string> {
   const { buffer, contentType, fileName } = await loadOutboundMediaFromUrl(params.mediaUrl, {
@@ -333,12 +320,13 @@ export async function uploadSlackFile(params: {
         init: {
           method: "POST",
           ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
-          body: new Uint8Array(buffer) as BodyInit,
+          body: new Blob([bufferToBlobPart(buffer)]),
         },
         // The signal bounds the whole transfer; the guarded timeout also applies
         // the same budget to Undici's connect, header, and body phases.
         timeoutMs: SLACK_UPLOAD_POST_TIMEOUT_MS,
         signal: uploadTimeoutSignal,
+        beforeRequest: params.assertDirectAdapterHandoff,
         requireHttps: uploadTransport.requireHttps,
         policy: uploadTransport.policy,
         capture: false,
@@ -370,8 +358,8 @@ export async function uploadSlackFile(params: {
   }
 
   await params.onPlatformSendDispatch?.();
-  // Slack allows this finalize call only once. Keep only the pre-connect DNS
-  // retry; a timeout or broader retry would create an unknown-send state.
+  // Completion is single-use after acceptance. Slack's method contract permits
+  // the write client's explicit-429 retries; this owner retries pre-connect DNS only.
   // Dispatch is already recorded above, so this call is the ambiguous send:
   // no rejection here may claim non-dispatch, however definitive its code reads.
   const completionClient = params.completionClient ?? params.client;

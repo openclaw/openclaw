@@ -2,17 +2,28 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { build, type Plugin, type ResolvedConfig } from "vite";
+import { resolvedLocaleConfigHintsModulePrefix } from "./control-ui-locales.ts";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(configDir, "../..");
-// Measured module set the default boot flow (app shell + sidebar + chat route)
-// loads through dynamic imports. `pnpm ui:boot-manifest:gen` measures a fresh
-// build without this group so stale entries cannot feed back into the capture.
-const controlUiBootModules: ReadonlySet<string> = new Set(
-  JSON.parse(
-    fs.readFileSync(path.join(configDir, "control-ui-boot-modules.json"), "utf8"),
-  ) as string[],
+// Fresh /new and /chat captures separate shared boot work from route-only work.
+// The generator disables these groups so stale entries cannot feed back into it.
+const controlUiBootModules = JSON.parse(
+  fs.readFileSync(path.join(configDir, "control-ui-boot-modules.json"), "utf8"),
+) as Record<"shared" | "new" | "chat", string[]> & {
+  entries: Record<"shared" | "new" | "chat", string[]>;
+};
+
+const bootEntryRoutes = new Map(
+  (["shared", "new", "chat"] as const).flatMap((route) =>
+    controlUiBootModules.entries[route].map((id) => [id, route] as const),
+  ),
 );
+
+export function controlUiBootEntryRoute(id: string) {
+  return bootEntryRoutes.get(controlUiBootManifestKey(id));
+}
 
 function normalizeModuleId(id: string): string {
   return id.replace(/\\/g, "/");
@@ -39,11 +50,44 @@ function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   );
 }
 
+export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
+
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
+  switch (controlUiBootManifestKey(id)) {
+    case "packages/gateway-protocol/src/capability-consent-error-details.ts":
+    case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
+    case "packages/gateway-protocol/src/schema/plugin-install-progress.ts":
+      // Shared protocol readers must not pull the lazy Plugins page into chat.
+      return "plugin-contracts-runtime";
+    case "ui/src/components/login-gate.ts":
+    case "ui/src/components/login-gate-feedback.ts":
+    case "ui/src/i18n/locales/en-login.ts":
+    case "ui/src/lib/gateway-secret-shape.ts":
+      return "login-runtime";
+    case "ui/src/components/sidebar-update-card.ts":
+    case "ui/src/styles/sidebar-update-card.css":
+      return "sidebar-update-runtime";
+    case "ui/src/pages/chat/session-snapshot-database.ts":
+      // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
+      return "session-snapshot-database";
+  }
+
+  if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
+    return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
+  }
+
   if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {
     return "gateway-runtime";
+  }
+
+  if (
+    normalized.endsWith("/ui/src/styles/chat/grouped.css") ||
+    normalized.endsWith("/ui/src/styles/chat/message-layout.css")
+  ) {
+    // Both routes load transcript styles; keep them outside the larger shared boot stylesheet.
+    return "chat-transcript-styles";
   }
 
   if (
@@ -51,13 +95,16 @@ export function controlUiStableChunkName(id: string): string | undefined {
     moduleIdIncludesPackage(id, "lit-html") ||
     moduleIdIncludesPackage(id, "@lit/reactive-element")
   ) {
-    return "lit-runtime";
+    // Cache and async content directives have only deferred consumers. Keep
+    // their implementation and helpers with those consumers, outside startup.
+    return /\/directives\/(?:cache|until|private-async-helpers)\.js$/u.test(normalized)
+      ? undefined
+      : "lit-runtime";
   }
 
   if (
     moduleIdIncludesPackage(id, "highlight.js") ||
     moduleIdIncludesPackage(id, "markdown-it") ||
-    moduleIdIncludesPackage(id, "markdown-it-task-lists") ||
     moduleIdIncludesPackage(id, "dompurify") ||
     moduleIdIncludesPackage(id, "entities") ||
     moduleIdIncludesPackage(id, "linkify-it") ||
@@ -68,12 +115,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-runtime";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "zod") ||
-    moduleIdIncludesPackage(id, "json5") ||
-    moduleIdIncludesPackage(id, "libphonenumber-js")
-  ) {
+  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
     return "config-runtime";
+  }
+
+  if (moduleIdIncludesPackage(id, "libphonenumber-js")) {
+    return "phone-runtime";
   }
 
   // @noble/hashes stays out of this startup chunk deliberately: it is only
@@ -85,40 +132,132 @@ export function controlUiStableChunkName(id: string): string | undefined {
   return undefined;
 }
 
-export const controlUiCodeSplitting = {
-  includeDependenciesRecursively: false,
-  groups: [
-    {
-      name: (id: string) => controlUiStableChunkName(id) ?? null,
-      test: (id: string) => controlUiStableChunkName(id) !== undefined,
-      priority: 20,
+export function createControlUiCodeSplitting(options: { includeBootGroups?: boolean } = {}) {
+  return {
+    includeDependenciesRecursively: false,
+    groups: [
+      {
+        name: (id: string) => controlUiStableChunkName(id) ?? null,
+        test: (id: string) => controlUiStableChunkName(id) !== undefined,
+        priority: 20,
+      },
+      {
+        name: (id: string) =>
+          normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
+        tags: ["$initial"] as ["$initial"],
+        priority: 10,
+        // Keep the boot graph in fewer partitions; the performance checker owns
+        // the compressed-size and request budgets for the emitted chunks.
+        maxSize: 1024 * 1024,
+      },
+      ...(options.includeBootGroups === false
+        ? []
+        : [
+            ...(["shared", "new", "chat"] as const).map((route, index) => {
+              const modules = new Set(controlUiBootModules[route]);
+              return {
+                name: `control-ui-boot-${route}`,
+                test: (id: string) => modules.has(controlUiBootManifestKey(id)),
+                // Shared dependencies must be assigned first, or a route group pulls
+                // them (and therefore other routes) into its eagerly imported chunk.
+                priority: 8 - index,
+                includeDependenciesRecursively: true,
+                // Shared boot needs a smaller partition cap because its dense chat
+                // modules can exceed the compressed-size budget after regrouping.
+                minSize: 16 * 1024,
+                maxSize: (route === "shared" ? 1344 : 1408) * 1024,
+              };
+            }),
+            ...(["shared", "new", "chat"] as const).map((route) => {
+              const styles = new Set(
+                controlUiBootModules[route].filter((id) => id.endsWith(".css")),
+              );
+              return {
+                name: `control-ui-boot-${route}-styles`,
+                test: (id: string) => styles.has(controlUiBootManifestKey(id)),
+                // One stylesheet per measured route set, without per-page JS facades.
+                // Keep it separate from core CSS to preserve its existing size ceiling.
+                priority: 9,
+              };
+            }),
+          ]),
+    ],
+  };
+}
+
+export const controlUiCodeSplitting = createControlUiCodeSplitting();
+
+export function controlUiIsolatedDesktopRuntimePlugin(): Plugin {
+  let config: ResolvedConfig;
+  let runtime: Promise<string> | undefined;
+  return {
+    name: "control-ui-isolated-desktop-runtime",
+    apply: "build",
+    enforce: "pre",
+    configResolved(resolved) {
+      config = resolved;
     },
-    {
-      name: (id: string) =>
-        normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
-      tags: ["$initial"] as ["$initial"],
-      priority: 10,
-      // 640 KiB keeps the startup graph together; the previous 576 KiB boundary
-      // split it into two extra requests and added roughly 1 KiB of gzip.
-      maxSize: 640 * 1024,
+    buildStart() {
+      runtime = undefined;
     },
-    {
-      // Boot-path consolidation: the lazily-loaded modules the default boot
-      // flow always fetches (~124 automatic chunks without this group) merge
-      // into a handful of chunks so the gateway's HTTP/1.1 6-connection
-      // transport pays ~7 instead of ~24 serialized round-trips on high-latency
-      // links. Byte cost is ~zero: every captured module is fetched during boot
-      // either way. Recursive dependency inclusion is required for correctness
-      // here — merging without it emitted chunks whose execution order broke at
-      // startup ("TypeError: X is not a function" during application start).
-      name: "control-ui-boot",
-      test: (id: string) => controlUiBootModules.has(controlUiBootManifestKey(id)),
-      priority: 8,
-      includeDependenciesRecursively: true,
-      // Larger ceiling than the startup groups: this sizes pre-minification
-      // module bytes, and ~1.5 MiB keeps the largest emitted chunk near
-      // ~190 KiB gzip, inside the 215 KiB largest-JS budget.
-      maxSize: 1536 * 1024,
+    async resolveDynamicImport(source, importer) {
+      if (source !== "@novnc/novnc") {
+        return null;
+      }
+      // noVNC awaits browser codec detection at module scope. In the main graph,
+      // that disables Rolldown's facade optimization even for unrelated boot entries.
+      // Bundle it unchanged and retain the desktop owner's dynamic import/await.
+      runtime ??= (async () => {
+        const resolved = await this.resolve(source, importer);
+        if (!resolved) {
+          return this.error("Cannot resolve the Control UI desktop runtime");
+        }
+        const result = await build({
+          configFile: false,
+          root: config.root,
+          publicDir: false,
+          logLevel: "silent",
+          build: {
+            write: false,
+            outDir: config.build.outDir,
+            minify: config.build.minify,
+            target: config.build.target,
+            sourcemap: config.build.sourcemap,
+            rolldownOptions: {
+              input: resolved.id,
+              preserveEntrySignatures: "strict",
+              output: {
+                entryFileNames: `${config.build.assetsDir}/novnc-[hash].js`,
+                strictExecutionOrder: true,
+                codeSplitting: false,
+              },
+            },
+          },
+        });
+        if (Array.isArray(result) || !("output" in result)) {
+          return this.error("Expected one Control UI desktop runtime build");
+        }
+        const entry = result.output.find((output) => output.type === "chunk" && output.isEntry);
+        if (!entry) {
+          return this.error("Control UI desktop runtime build has no entry");
+        }
+        for (const output of result.output) {
+          this.emitFile(
+            output.type === "chunk"
+              ? {
+                  type: "prebuilt-chunk",
+                  fileName: output.fileName,
+                  code: output.code,
+                  exports: output.exports,
+                  map: output.map ?? undefined,
+                }
+              : { type: "asset", fileName: output.fileName, source: output.source },
+          );
+        }
+        // Vite emits the desktop importer and this runtime in the same assets directory.
+        return `./${path.posix.basename(entry.fileName)}`;
+      })();
+      return { id: await runtime, external: true };
     },
-  ],
-};
+  };
+}

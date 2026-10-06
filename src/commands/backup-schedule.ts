@@ -1,4 +1,5 @@
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { listCronJobsFromGateway } from "../cli/cron-cli/list-jobs.js";
 import {
   callGatewayFromCli,
   isImplicitLocalGatewayTargetFromCli,
@@ -6,7 +7,16 @@ import {
 } from "../cli/gateway-rpc.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { getRuntimeConfig } from "../config/config.js";
-import type { CronJob } from "../cron/types.js";
+import {
+  backupScheduleModeForDeclaration,
+  buildBackupScheduleJob,
+  type BackupScheduleSpec,
+} from "../cron/backup-command.js";
+import {
+  normalizeBackupRetention,
+  resolveBackupNamespace,
+  type BackupRetentionOptions,
+} from "../infra/backup-retention.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -14,19 +24,25 @@ import { shortenHomePath } from "../utils.js";
 import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
 import { resolveRequiredBackupPath } from "./backup-shared.js";
 
-const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
 const LOCAL_GATEWAY_REQUIRED_ERROR =
   "backup enable manages backups on the Gateway host and currently requires a local Gateway. Create the cron job manually with openclaw cron add for remote Gateways.";
 
-type BackupScheduleOptions = GatewayRpcOpts & {
-  repository?: string;
-  every?: string;
-  push?: boolean;
-  excludeSecrets?: boolean;
-  includeSecrets?: boolean;
-  globalOnly?: boolean;
-  agent?: string;
-};
+export type BackupScheduleOptions = GatewayRpcOpts &
+  BackupRetentionOptions & {
+    repository?: string;
+    every?: string;
+    push?: boolean;
+    excludeSecrets?: boolean;
+    includeSecrets?: boolean;
+    globalOnly?: boolean;
+    agent?: string;
+    to?: string;
+    namespace?: string;
+    claimNamespace?: boolean;
+    includeWorkspace?: boolean;
+  };
+
+export type BackupDisableOptions = GatewayRpcOpts & { git?: boolean; offsite?: boolean };
 
 /**
  * Unattended pushed schedules make credential retention durable in remote
@@ -44,11 +60,52 @@ function resolveScheduledRedaction(options: BackupScheduleOptions): boolean {
   return options.includeSecrets !== true;
 }
 
-function buildScheduledArgv(
-  options: BackupScheduleOptions,
-  repositoryPath: string,
-  redactSecrets: boolean,
-): string[] {
+function resolveScheduleSpec(options: BackupScheduleOptions, everyMs: number): BackupScheduleSpec {
+  if (options.to !== undefined) {
+    if (
+      options.repository !== undefined ||
+      options.push ||
+      options.excludeSecrets ||
+      options.includeSecrets ||
+      options.globalOnly ||
+      options.agent !== undefined
+    ) {
+      throw new Error(
+        "--to cannot be combined with Git backup options (--repository, --push, --exclude-secrets, --include-secrets, --global-only, --agent).",
+      );
+    }
+    const location = options.to.trim();
+    if (!location) {
+      throw new Error("--to must name a configured storage location.");
+    }
+    if (!getRuntimeConfig({ skipPluginValidation: true }).storage?.locations?.[location]) {
+      throw new Error(
+        `Storage location "${location}" is not configured. Run openclaw storage list.`,
+      );
+    }
+    return {
+      mode: "offsite",
+      everyMs,
+      location,
+      namespace: resolveBackupNamespace(options.namespace),
+      claimNamespace: options.claimNamespace === true,
+      includeWorkspace: options.includeWorkspace !== false,
+      ...normalizeBackupRetention(options),
+    };
+  }
+  if (
+    options.namespace !== undefined ||
+    options.claimNamespace ||
+    options.includeWorkspace === false ||
+    options.keepDaily !== undefined ||
+    options.keepWeekly !== undefined ||
+    options.keepMonthly !== undefined
+  ) {
+    throw new Error(
+      "--namespace, --claim-namespace, --no-include-workspace, and --keep-* require --to <location>.",
+    );
+  }
+  const repository = resolveRequiredBackupPath(options.repository, "--repository");
   const agent = options.agent?.trim();
   if (options.agent !== undefined && !agent) {
     throw new Error("--agent must not be blank");
@@ -62,27 +119,18 @@ function buildScheduledArgv(
         normalizeAgentId(agent),
       )
     : undefined;
-  return [
-    "openclaw",
-    "backup",
-    "git",
-    "create",
-    "--repository",
-    repositoryPath,
-    ...(options.globalOnly ? ["--global"] : agentId ? ["--agent", agentId] : ["--all"]),
-    ...(options.push ? ["--push"] : []),
-    ...(redactSecrets ? ["--exclude-secrets"] : []),
-  ];
-}
-
-async function findScheduledBackup(options: GatewayRpcOpts): Promise<CronJob | undefined> {
-  const response = (await callGatewayFromCli("cron.list", options, {
-    includeDisabled: true,
-    query: BACKUP_CRON_JOB_NAME,
-    limit: 200,
-    offset: 0,
-  })) as { jobs?: CronJob[] };
-  return response.jobs?.find((job) => job.declarationKey === BACKUP_CRON_JOB_NAME);
+  return {
+    mode: "git",
+    everyMs,
+    repository,
+    scope: options.globalOnly
+      ? { kind: "global" }
+      : agentId
+        ? { kind: "agent", agentId }
+        : { kind: "all" },
+    push: options.push === true,
+    excludeSecrets: resolveScheduledRedaction(options),
+  };
 }
 
 async function assertLocalGatewayScheduleTarget(options: GatewayRpcOpts): Promise<void> {
@@ -98,40 +146,27 @@ export async function backupEnableCommand(
   options: BackupScheduleOptions,
 ): Promise<{ id: string; updated: boolean }> {
   await assertLocalGatewayScheduleTarget(options);
-  const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
-  const every = options.every?.trim() || "24h";
+  // Explicit blanks must reach duration validation instead of creating a default schedule.
+  const every = options.every?.trim() ?? "24h";
   const everyMs = parseDurationMs(every, { defaultUnit: "ms" });
   if (!Number.isSafeInteger(everyMs) || everyMs <= 0) {
     throw new Error("--every must be a positive duration such as 6h or 24h.");
   }
-  const redactSecrets = resolveScheduledRedaction(options);
-  const spec = {
-    declarationKey: BACKUP_CRON_JOB_NAME,
-    name: BACKUP_CRON_JOB_NAME,
-    enabled: true,
-    schedule: { kind: "every" as const, everyMs },
-    sessionTarget: "isolated" as const,
-    wakeMode: "now" as const,
-    payload: {
-      kind: "command" as const,
-      argv: buildScheduledArgv(options, repositoryPath, redactSecrets),
-    },
-    delivery: { mode: "none" as const },
-  };
-  if (options.push) {
+  const spec = resolveScheduleSpec(options, everyMs);
+  if (spec.mode === "git" && spec.push) {
     // The unattended job cannot configure a remote; without this preflight the
     // first scheduled run records a degraded push-failed backup instead.
-    const origin = await executeGitCommand(repositoryPath, ["remote", "get-url", "origin"]);
+    const origin = await executeGitCommand(spec.repository, ["remote", "get-url", "origin"]);
     if (origin.code !== 0) {
       throw new Error(
-        `--push requires an origin remote. Run: openclaw backup git init --repository ${shortenHomePath(repositoryPath)} --remote <url>`,
+        `--push requires an origin remote. Run: openclaw backup git init --repository ${shortenHomePath(spec.repository)} --remote <url>`,
       );
     }
-    if (!redactSecrets) {
+    if (!spec.excludeSecrets) {
       runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
     }
   }
-  const result = (await callGatewayFromCli("cron.add", options, spec)) as {
+  const result = (await callGatewayFromCli("cron.add", options, buildBackupScheduleJob(spec))) as {
     created?: boolean;
     updated?: boolean;
     job?: { id?: string };
@@ -142,22 +177,38 @@ export async function backupEnableCommand(
   }
   const updated = result.created === false;
   runtime.log(
-    `Scheduled Git backups ${updated ? "updated" : "enabled"}: every ${every} to ${shortenHomePath(repositoryPath)}`,
+    `Scheduled ${spec.mode === "git" ? "Git" : "offsite"} backups ${updated ? "updated" : "enabled"}: every ${every} to ${spec.mode === "git" ? shortenHomePath(spec.repository) : spec.location}`,
   );
   return { id, updated };
 }
 
 export async function backupDisableCommand(
   runtime: RuntimeEnv,
-  options: GatewayRpcOpts,
+  options: BackupDisableOptions,
 ): Promise<{ removed: boolean }> {
   await assertLocalGatewayScheduleTarget(options);
-  const existing = await findScheduledBackup(options);
-  if (!existing) {
-    runtime.log("Scheduled Git backups are already disabled.");
+  if (options.git && options.offsite) {
+    throw new Error("Use either --git or --offsite, or omit both to disable all backup schedules.");
+  }
+  const { jobs } = await listCronJobsFromGateway(options, { includeDisabled: true });
+  const selectedMode = options.git ? "git" : options.offsite ? "offsite" : undefined;
+  const existing = jobs.filter((job) => {
+    const mode = backupScheduleModeForDeclaration(job.declarationKey);
+    return mode !== undefined && (selectedMode === undefined || mode === selectedMode);
+  });
+  const label =
+    selectedMode === "git"
+      ? "Scheduled Git backups"
+      : selectedMode === "offsite"
+        ? "Scheduled offsite backups"
+        : "Scheduled backups";
+  if (existing.length === 0) {
+    runtime.log(`${label} are already disabled.`);
     return { removed: false };
   }
-  await callGatewayFromCli("cron.remove", options, { id: existing.id });
-  runtime.log("Scheduled Git backups disabled.");
+  for (const job of existing) {
+    await callGatewayFromCli("cron.remove", options, { id: job.id });
+  }
+  runtime.log(`${label} disabled.`);
   return { removed: true };
 }

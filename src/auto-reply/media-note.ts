@@ -121,45 +121,26 @@ function collectTranscribedAudioAttachmentIndices(
   return transcribedAudioIndices;
 }
 
-function collectDescribedImageAttachmentIndices(ctx: MsgContext): Set<number> {
-  return new Set(
-    ctx.MediaUnderstanding?.flatMap((output) =>
-      output.kind === "image.description" ? [output.attachmentIndex] : [],
-    ) ?? [],
-  );
-}
-
 type InboundMediaNoteProjection = {
   text?: string;
   media: MediaFact[];
   /** Original ctx.media fact positions aligned with `media`, for index-based identity. */
-  mediaIndexes?: number[];
+  mediaIndexes: number[];
 };
 
 /** Formats prompt-visible attachment text and retains facts that still need native hydration. */
 export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNoteProjection {
   const facts = normalizeMediaFacts(ctx.media);
-  const entries = facts.flatMap((fact, index) => {
-    const mediaPath = fact.path?.trim() ?? "";
-    return mediaPath || fact.url?.trim()
-      ? [
-          {
-            fact,
-            path: mediaPath,
-            index,
-          },
-        ]
-      : [];
-  });
+  const entries = facts.flatMap((fact, index) => (fact.path || fact.url ? [{ fact, index }] : []));
   if (entries.length === 0) {
     return { media: [], mediaIndexes: [] };
   }
 
   const transcribedAudioIndices = collectTranscribedAudioAttachmentIndices(ctx, facts.length);
-  const hasTranscript = Boolean(ctx.Transcript?.trim());
   // Transcript alone does not identify an attachment index; only use it as a fallback
   // when there is a single attachment to avoid stripping unrelated audio files.
-  const canStripSingleAttachmentByTranscript = hasTranscript && facts.length === 1;
+  const canStripSingleAttachmentByTranscript =
+    Boolean(ctx.Transcript?.trim()) && facts.length === 1;
 
   const visibleEntries = entries.filter((entry) => {
     // Strip audio attachments when transcription succeeded - the transcript is already
@@ -168,47 +149,39 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
       entry.fact.contentType ?? entry.fact.kind,
     );
     const isAudioByMime = normalizedType === "audio" || normalizedType.startsWith("audio/");
-    const isAudioEntry = entry.fact.kind === "audio" || isAudioPath(entry.path) || isAudioByMime;
-    if (!isAudioEntry) {
-      return true;
-    }
-    if (
-      entry.fact.transcribed === true ||
-      transcribedAudioIndices.has(entry.index) ||
-      (canStripSingleAttachmentByTranscript && entry.index === 0)
-    ) {
-      return false;
-    }
-    return true;
+    const isAudioEntry =
+      entry.fact.kind === "audio" || isAudioPath(entry.fact.path) || isAudioByMime;
+    return (
+      !isAudioEntry ||
+      !(
+        entry.fact.transcribed === true ||
+        transcribedAudioIndices.has(entry.index) ||
+        (canStripSingleAttachmentByTranscript && entry.index === 0)
+      )
+    );
   });
   if (visibleEntries.length === 0) {
     return { media: [], mediaIndexes: [] };
   }
-  const describedImageIndices = collectDescribedImageAttachmentIndices(ctx);
+  const describedImageIndices = new Set(
+    ctx.MediaUnderstanding?.flatMap((output) =>
+      output.kind === "image.description" ? [output.attachmentIndex] : [],
+    ) ?? [],
+  );
   const media = visibleEntries.map((entry) => ({
     ...entry.fact,
     ...(describedImageIndices.has(entry.index) ? { hydrationSuppressed: true } : {}),
   }));
   const mediaIndexes = visibleEntries.map((entry) => entry.index);
-  const firstVisibleEntry = visibleEntries[0];
-  if (visibleEntries.length === 1 && firstVisibleEntry) {
-    return {
-      text: formatMediaAttachedLine({ fact: firstVisibleEntry.fact }),
-      media,
-      mediaIndexes,
-    };
-  }
-
   const count = visibleEntries.length;
-  const lines: string[] = [`[media attached: ${count} files]`];
-  for (const [idx, entry] of visibleEntries.entries()) {
-    lines.push(
-      formatMediaAttachedLine({
-        fact: entry.fact,
-        index: idx + 1,
-        total: count,
-      }),
-    );
+  const lines = visibleEntries.map((entry, index) =>
+    formatMediaAttachedLine({
+      fact: entry.fact,
+      ...(count > 1 ? { index: index + 1, total: count } : {}),
+    }),
+  );
+  if (count > 1) {
+    lines.unshift(`[media attached: ${count} files]`);
   }
   return { text: lines.join("\n"), media, mediaIndexes };
 }

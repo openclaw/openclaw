@@ -10,17 +10,14 @@ import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
+import { assert } from "../fixtures/common.mjs";
 import {
   applyMockOpenAiModelConfig,
   parseMockOpenAiPort,
 } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
-import {
-  ERROR_DETAIL_TAIL_BYTES,
-  fileContainsText,
-  readJson,
-} from "../release-assertion-files.mjs";
-import { readTextFileTail } from "../text-file-utils.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
+import { assertFileContainsText, readJson } from "../release-assertion-files.mjs";
 
 function clickClackHttpTimeoutMs() {
   return readPositiveInt(
@@ -126,12 +123,6 @@ function configPath() {
   );
 }
 
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
 function writeConfig(cfg) {
   fs.writeFileSync(configPath(), `${JSON.stringify(cfg, null, 2)}\n`);
 }
@@ -172,10 +163,7 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  assert(
-    fileContainsText(file, needle),
-    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
-  );
+  assertFileContainsText(file, needle, assert);
 }
 
 function rememberPluginInstallPath() {
@@ -216,7 +204,10 @@ function assertPluginUninstalled() {
   const cfg = readJson(configPath());
   const records = installRecords();
   assert(!records[pluginId], `install record still present for ${pluginId}`);
-  assert(!cfg.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);
+  assert(
+    hasExpectedPluginUninstallConfigState(cfg, pluginId),
+    `exact disabled uninstall marker missing for ${pluginId}`,
+  );
   assert(!(cfg.plugins?.allow ?? []).includes(pluginId), `allowlist still contains ${pluginId}`);
   assert(!(cfg.plugins?.deny ?? []).includes(pluginId), `denylist still contains ${pluginId}`);
   if (!installPathFile) {

@@ -4,13 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { cliProcessTestFiles } from "./vitest/vitest.cli-process-paths.mjs";
-import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createContractsPluginVitestConfig } from "./vitest/vitest.contracts-plugin.config.ts";
 import { pluginContractPatterns } from "./vitest/vitest.contracts-shared.ts";
-import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
 import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-isolated.config.ts";
 import {
@@ -33,6 +32,7 @@ import {
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
 const ENV_ISOLATION_SETUP_PATH = /[\\/]test[\\/]setup\.env\.ts$/u;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
   if (!config.test) {
@@ -85,6 +85,14 @@ describe("unit-fast vitest lane", () => {
       import childProcess from "node:child_process";
       import fs from "node:fs";
       import { syncBuiltinESMExports } from "node:module";
+      import os from "node:os";
+      import path from "node:path";
+      const selectedTests = [
+        "src/agents/agent-tools.deferred-followup-guidance.test.ts",
+        "src/test-utils/openclaw-test-state.test.ts",
+        "src/utils.test.ts",
+        "src/media-generation/runtime-shared.test.ts",
+      ];
       let gitLsFilesCalls = 0;
       const originalSpawnSync = childProcess.spawnSync;
       childProcess.spawnSync = function patchedSpawnSync(...args) {
@@ -94,6 +102,7 @@ describe("unit-fast vitest lane", () => {
           const stdout = [
             "src/agents/agent-tools.deferred-followup-guidance.test.ts",
             "src/hooks/frontmatter.test.ts",
+            "src/media-generation/runtime-shared.test.ts",
           ].join("\\0") + "\\0";
           return {
             pid: 0,
@@ -110,6 +119,7 @@ describe("unit-fast vitest lane", () => {
       let readdirSyncCalls = 0;
       let hookFileReads = 0;
       let outsideFileReads = 0;
+      let unselectedFileReads = 0;
       const originalReaddirSync = fs.readdirSync;
       const originalReadFileSync = fs.readFileSync;
       fs.readdirSync = function patchedReaddirSync(...args) {
@@ -123,19 +133,75 @@ describe("unit-fast vitest lane", () => {
         } else if (file.endsWith("/src/agents/agent-tools.deferred-followup-guidance.test.ts")) {
           outsideFileReads += 1;
         }
+        if (file.endsWith(".test.ts") && !selectedTests.some((selected) => file.endsWith("/" + selected))) {
+          unselectedFileReads += 1;
+        }
         return originalReadFileSync.apply(this, args);
       };
+      const paths = await import("./test/vitest/vitest.unit-fast-paths.mjs");
+      const membership = selectedTests.map((file) => [
+        paths.isUnitFastTestFile(file),
+        paths.isUnitFastIsolatedTestFile(file),
+        paths.isUnitFastTimerTestFile(file),
+      ]);
+      console.log("UNIT_FAST_MEMBERSHIP_PROBE", JSON.stringify({ membership, unselectedFileReads }));
+      const { resolveCiTestRuntimeSelections } = await import("./scripts/lib/ci-test-runtime.mts");
+      const runtimeSelections = ["unit-fast", "unit-fast-isolated"].map((name, index) => ({
+        target: resolveCiTestRuntimeSelections({ targets: [selectedTests[index]] }, "bun-compatible"),
+        group: resolveCiTestRuntimeSelections({
+          configs: ["test/vitest/vitest." + name + ".config.ts"],
+          includePatterns: selectedTests,
+        }, "bun-compatible"),
+      }));
+      console.log("UNIT_FAST_RUNTIME_PROBE", JSON.stringify({ runtimeSelections, unselectedFileReads }));
+      hookFileReads = 0;
+      outsideFileReads = 0;
+      unselectedFileReads = 0;
       await import("./test/vitest/vitest.hooks.config.ts?scope-probe=" + Date.now());
       const scopedHookFileReads = hookFileReads;
       const scopedOutsideFileReads = outsideFileReads;
-      await import("./test/vitest/vitest.unit-fast.config.ts?io-probe=" + Date.now());
-      console.log(
-        "UNIT_FAST_IO_PROBE",
-        gitLsFilesCalls,
-        readdirSyncCalls,
-        scopedHookFileReads,
-        scopedOutsideFileReads,
-      );
+      unselectedFileReads = 0;
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fast-selection-"));
+      try {
+        const includeFile = path.join(directory, "include.json");
+        fs.writeFileSync(includeFile, JSON.stringify(selectedTests));
+        const selections = {};
+        for (const mode of ["cli", "env"]) {
+          if (mode === "cli") {
+            delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+            process.argv = ["node", "vitest", "run", ...selectedTests];
+          } else {
+            process.env.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+            process.argv = ["node", "vitest", "run"];
+          }
+          selections[mode] = [];
+          for (const name of ["unit-fast", "unit-fast-isolated", "unit-fast-fake-timers"]) {
+            const { default: config } = await import("./test/vitest/vitest." + name + ".config.ts?io-probe=" + mode);
+            selections[mode].push(config.test.include);
+          }
+        }
+        console.log("UNIT_FAST_SELECTION_PROBE", JSON.stringify(selections));
+        const { default: unitConfig, createUnitVitestConfigWithOptions } = await import("./test/vitest/vitest.unit.config.ts?io-probe=" + Date.now());
+        const cliUnitConfig = createUnitVitestConfigWithOptions({}, {
+          argv: ["node", "vitest", "run", ...selectedTests],
+        });
+        console.log("UNIT_SELECTION_PROBE", JSON.stringify([unitConfig, cliUnitConfig].map(({ test }) => ({
+          include: test.include,
+          excluded: test.exclude.filter((file) => selectedTests.includes(file)),
+        }))));
+        console.log(
+          "UNIT_FAST_IO_PROBE",
+          gitLsFilesCalls,
+          readdirSyncCalls,
+          scopedHookFileReads,
+          scopedOutsideFileReads,
+          unselectedFileReads,
+        );
+        const fullUnitConfig = createUnitVitestConfigWithOptions({}, { argv: ["node", "vitest", "run"] });
+        console.log("UNIT_FULL_EXCLUSION_PROBE", fullUnitConfig.test.exclude.includes("src/hooks/frontmatter.test.ts"));
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
     `;
     configProbeResult = spawnNodeEvalSync(script, {
       env: {
@@ -157,23 +223,80 @@ describe("unit-fast vitest lane", () => {
     broadAnalysis = collectUnitFastTestFileAnalysis(process.cwd(), { scope: "broad" });
   });
 
-  it("loads the config without recursively walking repo roots", () => {
+  it("classifies only selected config sources without truncating later full ownership", () => {
     expect(configProbeResult.status, configProbeResult.stderr).toBe(0);
+    const membership = configProbeResult.stdout.match(/UNIT_FAST_MEMBERSHIP_PROBE (.+)/u);
+    expect(membership, configProbeResult.stdout).not.toBeNull();
+    expect(JSON.parse(membership?.[1] ?? "null")).toEqual({
+      membership: [
+        [true, false, false],
+        [true, true, false],
+        [true, false, true],
+        [false, false, false],
+      ],
+      unselectedFileReads: 0,
+    });
+    const runtime = configProbeResult.stdout.match(/UNIT_FAST_RUNTIME_PROBE (.+)/u);
+    expect(runtime, configProbeResult.stdout).not.toBeNull();
+    expect(JSON.parse(runtime?.[1] ?? "null")).toEqual({
+      runtimeSelections: [
+        {
+          target: [{ runtime: "bun" }],
+          group: [
+            {
+              runtime: "bun",
+              includePatterns: ["src/agents/agent-tools.deferred-followup-guidance.test.ts"],
+            },
+          ],
+        },
+        {
+          target: [{ runtime: "bun" }],
+          group: [{ runtime: "bun" }],
+        },
+      ],
+      unselectedFileReads: 0,
+    });
     const probeMatch = configProbeResult.stdout.match(
-      /UNIT_FAST_IO_PROBE (\d+) (\d+) (\d+) (\d+)/u,
+      /UNIT_FAST_IO_PROBE (\d+) (\d+) (\d+) (\d+) (\d+)/u,
     );
     expect(probeMatch, configProbeResult.stdout).not.toBeNull();
     expect(Number(probeMatch?.[1])).toBe(1);
     expect(Number(probeMatch?.[2])).toBeLessThan(20);
     expect(Number(probeMatch?.[3])).toBe(1);
     expect(Number(probeMatch?.[4])).toBe(0);
+    expect(Number(probeMatch?.[5])).toBe(0);
+    const selection = configProbeResult.stdout.match(/UNIT_FAST_SELECTION_PROBE (.+)/u);
+    expect(selection, configProbeResult.stdout).not.toBeNull();
+    const selectedFastIncludes = [
+      ["src/agents/agent-tools.deferred-followup-guidance.test.ts"],
+      ["src/test-utils/openclaw-test-state.test.ts"],
+      ["src/utils.test.ts"],
+    ];
+    expect(JSON.parse(selection?.[1] ?? "null")).toEqual({
+      cli: selectedFastIncludes,
+      env: selectedFastIncludes,
+    });
+    const unitSelection = configProbeResult.stdout.match(/UNIT_SELECTION_PROBE (.+)/u);
+    expect(unitSelection, configProbeResult.stdout).not.toBeNull();
+    const excluded = [
+      "src/agents/agent-tools.deferred-followup-guidance.test.ts",
+      "src/test-utils/openclaw-test-state.test.ts",
+      "src/utils.test.ts",
+    ];
+    const include = [...excluded, "src/media-generation/runtime-shared.test.ts"];
+    expect(JSON.parse(unitSelection?.[1] ?? "null")).toEqual([
+      { include, excluded },
+      { include, excluded },
+    ]);
+    expect(configProbeResult.stdout).toContain("UNIT_FULL_EXCLUSION_PROBE true");
   });
 
   it("keeps untracked tests in their planned fast lane and execution include list", () => {
     const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-untracked-")));
+    const mockHelper = "src/hooks/mock-helper.test.ts";
     const pure = "src/hooks/pure.test.ts";
     const stateful = "src/hooks/stateful.test.ts";
-    const quoted = "src/hooks/quoted-é.test.ts";
+    const quoted = "src/hooks/quoted-[é].test.ts";
     const ignored = "src/hooks/ignored.test.ts";
     const moduleUrl = (file: string) => JSON.stringify(pathToFileURL(path.resolve(file)).href);
     try {
@@ -193,9 +316,19 @@ describe("unit-fast vitest lane", () => {
         path.join(cwd, "src/hooks/stateful.test-support.ts"),
         'import { vi } from "vitest"; export const check = vi.fn();',
       );
+      fs.writeFileSync(
+        path.join(cwd, mockHelper),
+        'import { it } from "vitest"; import { check } from "./mock-helper.test-mocks.js"; it("helper", check);',
+      );
+      fs.writeFileSync(
+        path.join(cwd, "src/hooks/mock-helper.test-mocks.ts"),
+        'import { vi } from "vitest"; export const check = vi.fn();',
+      );
       expect(spawnSync("git", ["init"], { cwd }).status).toBe(0);
       expect(
-        spawnSync("git", ["ls-files", "--error-unmatch", "--", pure, stateful], { cwd }).status,
+        spawnSync("git", ["ls-files", "--error-unmatch", "--", mockHelper, pure, stateful], {
+          cwd,
+        }).status,
       ).toBe(1);
       // Fresh process: discovery snapshots must be taken after the fixture exists.
       const result = spawnNodeEvalSync(
@@ -207,7 +340,7 @@ describe("unit-fast vitest lane", () => {
         const { createUnitFastIsolatedVitestConfig } = await import(${moduleUrl("test/vitest/vitest.unit-fast-isolated.config.ts")});
         const { createScopedVitestConfig } = await import(${moduleUrl("test/vitest/vitest.scoped-config.ts")});
         const fs = await import("node:fs");
-        const specs = createVitestRunSpecs(${JSON.stringify([pure, stateful])}, { baseEnv: {} });
+        const specs = createVitestRunSpecs(${JSON.stringify([mockHelper, pure, stateful])}, { baseEnv: {} });
         const factories = {
           "test/vitest/vitest.unit-fast.config.ts": createUnitFastVitestConfig,
           "test/vitest/vitest.unit-fast-isolated.config.ts": createUnitFastIsolatedVitestConfig,
@@ -224,6 +357,7 @@ describe("unit-fast vitest lane", () => {
             excluded: createScopedVitestConfig(["src/hooks/**/*.test.ts"], { env: {} }).test.exclude
               .filter((file) => file.startsWith("src/hooks/")),
             ignored: paths.resolveUnitFastTestIncludePattern(${JSON.stringify(ignored)}),
+            literalMembership: paths.isUnitFastTestFile(${JSON.stringify(quoted)}),
           }));
         } finally {
           for (const spec of specs) fs.rmSync(spec.includeFilePath, { force: true });
@@ -233,19 +367,81 @@ describe("unit-fast vitest lane", () => {
       );
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({
-        inventory: [pure, quoted, stateful],
-        isolated: [stateful],
+        inventory: [mockHelper, pure, quoted, stateful],
+        isolated: [mockHelper, stateful],
         runs: [
           { config: "test/vitest/vitest.unit-fast.config.ts", include: [pure] },
-          { config: "test/vitest/vitest.unit-fast-isolated.config.ts", include: [stateful] },
+          {
+            config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+            include: [mockHelper, stateful],
+          },
         ],
-        excluded: [pure, quoted, stateful],
+        excluded: [mockHelper, pure, quoted, stateful],
         ignored: null,
+        literalMembership: true,
       });
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
     }
   });
+
+  it.each(["large", "incomplete", "unavailable"] as const)(
+    "keeps complete test inventory when Git output is %s",
+    (mode) => {
+      const cwd = tempDirs.make("openclaw-git-inventory-");
+      const files = ["src/hooks/first.test.ts", "src/hooks/last.test.ts"];
+      fs.mkdirSync(path.join(cwd, "src/hooks"), { recursive: true });
+      for (const file of files) {
+        fs.writeFileSync(
+          path.join(cwd, file),
+          'import { it } from "vitest"; it("pure", () => {});',
+        );
+      }
+      const moduleUrl = pathToFileURL(path.resolve("test/vitest/vitest.unit-fast-paths.mjs")).href;
+      const result = spawnNodeEvalSync(`
+        import childProcess from "node:child_process";
+        import fs from "node:fs";
+        import path from "node:path";
+        import { syncBuiltinESMExports } from "node:module";
+        process.chdir(${JSON.stringify(cwd)});
+        const mode = ${JSON.stringify(mode)};
+        const files = ${JSON.stringify(files)};
+        const spawn = childProcess.spawnSync;
+        childProcess.spawnSync = function(command, args, options) {
+          if (command !== "git" || args[0] !== "ls-files") {
+            return spawn.call(this, command, args, options);
+          }
+          if (mode === "incomplete") {
+            return { status: 0, stdout: files[0] + "\\0",
+              error: Object.assign(new Error("incomplete output"), { code: "ENOBUFS" }) };
+          }
+          if (mode === "unavailable") {
+            return spawn(path.join(process.cwd(), "missing-git"), args, options);
+          }
+          const script = "process.stdout.write(" + JSON.stringify("src/filler.ts\\0") +
+            ".repeat(90_000) + " + JSON.stringify(files.join("\\0") + "\\0") + ")";
+          return spawn(process.execPath, ["-e", script], options);
+        };
+        syncBuiltinESMExports();
+        let walks = 0;
+        const readdir = fs.readdirSync;
+        fs.readdirSync = function(...args) {
+          walks++;
+          return readdir.apply(this, args);
+        };
+        const paths = await import(${JSON.stringify(moduleUrl)});
+        console.log(JSON.stringify({ files: paths.getUnitFastTestFiles(), walks }));
+      `);
+      expect(result.status, result.stderr).toBe(0);
+      const inventory = JSON.parse(result.stdout);
+      expect(inventory.files).toEqual(files);
+      if (mode === "large") {
+        expect(inventory.walks).toBe(0);
+      } else {
+        expect(inventory.walks).toBeGreaterThan(0);
+      }
+    },
+  );
 
   it("runs cache-friendly tests without the reset-heavy runner or runtime setup", () => {
     const testConfig = requireTestConfig(unitFastConfig);
@@ -259,10 +455,10 @@ describe("unit-fast vitest lane", () => {
       "src/agents/agent-tools.deferred-followup-guidance.test.ts",
     );
     expect(testConfig.include).toContain("src/acp/runtime/registry.test.ts");
-    expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
+    expect(testConfig.include).toContain("src/commands/text-format.test.ts");
     expect(testConfig.include).toContain("src/plugins/config-policy.test.ts");
     expect(testConfig.include).toContain("src/sessions/session-lifecycle-events.test.ts");
-    expect(testConfig.include).toContain("src/plugin-sdk/provider-entry.test.ts");
+    expect(testConfig.include).toContain("src/plugin-sdk/text-chunking.test.ts");
     expect(testConfig.include).not.toEqual(expect.arrayContaining(unitFastIsolatedTestFiles));
   });
 
@@ -275,8 +471,8 @@ describe("unit-fast vitest lane", () => {
     );
 
     const testConfig = requireTestConfig(config);
-    expect(testConfig.include).toContain("src/plugin-sdk/provider-entry.test.ts");
-    expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
+    expect(testConfig.include).toContain("src/plugin-sdk/text-chunking.test.ts");
+    expect(testConfig.include).toContain("src/commands/text-format.test.ts");
   });
 
   it("keeps excluded stateful files out of directory-scoped CLI runs", () => {
@@ -321,6 +517,11 @@ describe("unit-fast vitest lane", () => {
     for (const file of [
       "src/agents/agent-command.compaction-rotation.test.ts",
       "src/agents/agent-command.embedded-maintenance.test.ts",
+      "src/agents/code-mode-quickjs.integration.test.ts",
+      "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
+      "src/agents/provider-transport-fetch.headers.test.ts",
+      "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
+      "src/commands/status-overview-values.test.ts",
     ]) {
       expect(isUnitFastTestFile(file), file).toBe(false);
       expect(resolveUnitFastTestIncludePattern(file), file).toBeNull();
@@ -355,11 +556,11 @@ describe("unit-fast vitest lane", () => {
   });
 
   it("routes unit-fast source files to their unit-fast sibling tests", () => {
-    expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/provider-entry.ts")).toBe(
-      "src/plugin-sdk/provider-entry.test.ts",
+    expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/text-chunking.ts")).toBe(
+      "src/plugin-sdk/text-chunking.test.ts",
     );
-    expect(resolveUnitFastTestIncludePattern("src/commands/status-overview-values.ts")).toBe(
-      "src/commands/status-overview-values.test.ts",
+    expect(resolveUnitFastTestIncludePattern("src/commands/text-format.ts")).toBe(
+      "src/commands/text-format.test.ts",
     );
   });
 
@@ -401,11 +602,8 @@ describe("unit-fast vitest lane", () => {
       "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
-      "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
-      "src/agents/tools/computer-tool.context.test.ts",
       "src/agents/tools/computer-tool.schema.test.ts",
-      "src/agents/tools/computer-tool.v2.test.ts",
-      "src/auto-reply/reply/agent-runner-execution-runtime.test.ts",
+      "src/infra/provider-usage.test.ts",
     ];
     for (const file of files) {
       const analysis = unitFastAnalysis.find((entry) => entry.file === file);
@@ -467,6 +665,15 @@ describe("unit-fast vitest lane", () => {
         return patterns.some((pattern) => path.matchesGlob(file, pattern));
       });
       expect(getUnitFastTestFilesForIncludePatterns(patterns, { dir })).toEqual(expected);
+      for (const files of [
+        getUnitFastTestFiles,
+        getUnitFastTimerTestFiles,
+        getUnitFastIsolatedTestFiles,
+      ]) {
+        expect(files(patterns)).toEqual(
+          files().filter((file) => patterns.some((pattern) => path.matchesGlob(file, pattern))),
+        );
+      }
     }
 
     const extensionUnitFastFiles = getUnitFastTestFilesForIncludePatterns(
@@ -479,16 +686,5 @@ describe("unit-fast vitest lane", () => {
     expect(getUnitFastTestFilesForIncludePatterns(["!src/**/*.test.ts"])).toEqual(
       unitFastTestFiles,
     );
-  });
-
-  it("excludes unit-fast files from the older light lanes so full runs do not duplicate them", () => {
-    const pluginSdkLight = createPluginSdkLightVitestConfig({});
-    const commandsLight = createCommandsLightVitestConfig({});
-
-    expect(unitFastTestFiles).toContain("src/plugin-sdk/provider-entry.test.ts");
-    expect(requireTestConfig(pluginSdkLight).exclude).toContain(
-      "plugin-sdk/provider-entry.test.ts",
-    );
-    expect(requireTestConfig(commandsLight).exclude).toContain("status-overview-values.test.ts");
   });
 });

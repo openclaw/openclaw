@@ -10,7 +10,7 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
-import { listManagedPluginNpmRootsSync } from "./npm-project-roots.js";
+import { listPluginNpmProjectCandidatesSync } from "./npm-project-roots.js";
 
 const RETAINED_MANAGED_NPM_INSTALL_MARKER_DIR = ".openclaw-retained-npm-installs";
 
@@ -66,22 +66,29 @@ export function hasRetainedManagedNpmInstallMarker(packageDir: string): boolean 
   return info ? fs.existsSync(info.markerPath) : false;
 }
 
-export async function clearRetainedManagedNpmInstallMarker(packageDir: string): Promise<boolean> {
+export async function clearRetainedManagedNpmInstallMarker(
+  packageDir: string,
+  assertCurrent?: () => void | Promise<void>,
+): Promise<boolean> {
   const info = resolveRetainedManagedNpmInstallPackageInfo(packageDir);
   if (!info) {
     return false;
   }
+  await assertCurrent?.();
   try {
     await fs.promises.rm(info.markerPath, { force: true });
   } catch (error) {
+    await assertCurrent?.();
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return false;
     }
     throw error;
   }
+  await assertCurrent?.();
   try {
     await fs.promises.rmdir(path.dirname(info.markerPath));
   } catch {
+    await assertCurrent?.();
     // Best effort: keep the OpenClaw-owned marker directory if it is not empty.
   }
   return true;
@@ -92,6 +99,7 @@ export async function markRetainedManagedNpmInstall(params: {
   pluginId: string;
   retainedAt?: string;
   reason: string;
+  assertCurrent?: () => void;
 }): Promise<boolean> {
   const info = resolveRetainedManagedNpmInstallPackageInfo(params.packageDir);
   if (!info) {
@@ -109,7 +117,9 @@ export async function markRetainedManagedNpmInstall(params: {
   if (!stat.isDirectory()) {
     return false;
   }
+  params.assertCurrent?.();
   await fs.promises.mkdir(path.dirname(info.markerPath), { recursive: true });
+  params.assertCurrent?.();
   await fs.promises.writeFile(
     info.markerPath,
     `${JSON.stringify(
@@ -125,6 +135,24 @@ export async function markRetainedManagedNpmInstall(params: {
     "utf8",
   );
   return true;
+}
+
+/** Restore markers only while the same index transaction still owns compensation. */
+export async function restoreRetainedManagedNpmInstallMarkers(params: {
+  clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }>;
+  createdMarkerPaths: string[];
+  assertCurrent: () => void;
+}): Promise<void> {
+  for (const snapshot of params.clearedMarkerSnapshots) {
+    params.assertCurrent();
+    await fs.promises.mkdir(path.dirname(snapshot.markerPath), { recursive: true });
+    params.assertCurrent();
+    await fs.promises.writeFile(snapshot.markerPath, snapshot.contents, "utf8");
+  }
+  for (const markerPath of params.createdMarkerPaths) {
+    params.assertCurrent();
+    await fs.promises.rm(markerPath, { force: true });
+  }
 }
 
 function listManagedNpmPackageDirs(npmRoot: string): string[] {
@@ -174,6 +202,7 @@ function isOwnedManagedNpmProject(params: {
 async function cleanupRetainedLegacyNpmPackages(params: {
   npmRoot: string;
   activeInstallPaths: string[];
+  assertCurrent?: () => void | Promise<void>;
   onError?: (error: unknown, projectRoot: string) => void;
 }): Promise<number> {
   let removed = 0;
@@ -186,8 +215,9 @@ async function cleanupRetainedLegacyNpmPackages(params: {
       continue;
     }
     try {
+      await params.assertCurrent?.();
       await fs.promises.rm(packageDir, { recursive: true, force: true });
-      await clearRetainedManagedNpmInstallMarker(packageDir);
+      await clearRetainedManagedNpmInstallMarker(packageDir, params.assertCurrent);
       removed += 1;
     } catch (error) {
       params.onError?.(error, packageDir);
@@ -202,6 +232,7 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
     env?: NodeJS.ProcessEnv;
     npmDir?: string;
     onError?: (error: unknown, projectRoot: string) => void;
+    assertCurrent?: () => void | Promise<void>;
   } = {},
 ): Promise<number> {
   // Callers run this only after the previous gateway server has closed and preserve
@@ -212,11 +243,14 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
     path.resolve(installPath),
   );
   let removed = 0;
-  for (const projectRoot of listManagedPluginNpmRootsSync(npmDir)) {
+  // Retention markers own cleanup even when a retired project's manifest is gone.
+  // Publication admission is stricter and must not hide these cleanup candidates.
+  for (const projectRoot of [npmDir, ...listPluginNpmProjectCandidatesSync(npmDir)]) {
     if (path.resolve(projectRoot) === path.resolve(npmDir)) {
       removed += await cleanupRetainedLegacyNpmPackages({
         npmRoot: projectRoot,
         activeInstallPaths,
+        assertCurrent: params.assertCurrent,
         onError: params.onError,
       });
       continue;
@@ -250,6 +284,7 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
       continue;
     }
     try {
+      await params.assertCurrent?.();
       await fs.promises.rm(projectRoot, { recursive: true, force: true });
       removed += 1;
     } catch (error) {

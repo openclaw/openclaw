@@ -1,31 +1,7 @@
 // Config-tranche migrations move legacy aliases before canonical validation.
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/account-id.js";
-import { deleteRetiredPath } from "./legacy-config-record-shared.js";
-
-function visitAgentEntries(
-  raw: Record<string, unknown>,
-  visitor: (entry: Record<string, unknown>, path: string) => void,
-): void {
-  const agents = getRecord(raw.agents);
-  const entries = getRecord(agents?.entries);
-  if (entries) {
-    for (const [agentId, value] of Object.entries(entries)) {
-      const entry = getRecord(value);
-      if (entry) {
-        visitor(entry, `agents.entries.${agentId}`);
-      }
-    }
-  }
-  if (Array.isArray(agents?.list)) {
-    agents.list.forEach((value, index) => {
-      const entry = getRecord(value);
-      if (entry) {
-        visitor(entry, `agents.list[${index}]`);
-      }
-    });
-  }
-}
+import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
 
 function stripRetiredPresentationPrefs(raw: Record<string, unknown>, changes: string[]): void {
   const prefs = getRecord(getRecord(raw.ui)?.prefs);
@@ -37,13 +13,7 @@ function stripRetiredPresentationPrefs(raw: Record<string, unknown>, changes: st
     "textScale",
     "sidebarLiveActivity",
     "showAdvancedSettings",
-  ].filter((key) => {
-    if (!Object.hasOwn(prefs, key)) {
-      return false;
-    }
-    delete prefs[key];
-    return true;
-  });
+  ].filter((key) => deleteRetiredPath(prefs, [key]));
   if (removed.length > 0) {
     changes.push(
       `Removed browser-local ui.prefs keys: ${removed.map((key) => `ui.prefs.${key}`).join(", ")}.`,
@@ -59,25 +29,17 @@ function stripRetiredPresentationPrefs(raw: Record<string, unknown>, changes: st
 }
 
 function stripRetiredAgentConfig(raw: Record<string, unknown>, changes: string[]): void {
-  const agents = getRecord(raw.agents);
-  const defaults = getRecord(agents?.defaults);
   let removedContextLimits = false;
-  const stripContextLimits = (owner: Record<string, unknown>) => {
+  let removedTypingOverride = false;
+  visitAgentConfigScopes(raw, (owner, path) => {
     for (const key of ["memoryGetDefaultLines", "toolResultMaxChars"]) {
       removedContextLimits =
         deleteRetiredPath(owner, ["contextLimits", key]) || removedContextLimits;
     }
-  };
-  if (defaults) {
-    stripContextLimits(defaults);
-  }
-  let removedTypingOverride = false;
-  visitAgentEntries(raw, (entry) => {
-    if (Object.hasOwn(entry, "typingIntervalSeconds")) {
-      delete entry.typingIntervalSeconds;
-      removedTypingOverride = true;
+    if (path !== "agents.defaults") {
+      removedTypingOverride =
+        deleteRetiredPath(owner, ["typingIntervalSeconds"]) || removedTypingOverride;
     }
-    stripContextLimits(entry);
   });
   if (removedTypingOverride) {
     changes.push(
@@ -94,49 +56,33 @@ function stripRetiredAgentConfig(raw: Record<string, unknown>, changes: string[]
 type LegacyWhatsAppDebounce = { path: string; value?: number; accountId?: string };
 type LegacyWhatsAppDebounceWithValue = LegacyWhatsAppDebounce & { value: number };
 
-function readLegacyDebounce(
-  path: string,
-  owner: Record<string, unknown>,
-  accountId?: string,
-): LegacyWhatsAppDebounce | null {
-  if (!Object.hasOwn(owner, "debounceMs")) {
-    return null;
-  }
-  const raw = owner.debounceMs;
-  delete owner.debounceMs;
-  return {
-    path,
-    ...(accountId ? { accountId } : {}),
-    ...(typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? { value: raw } : {}),
-  };
-}
-
 function migrateWhatsAppDebounce(raw: Record<string, unknown>, changes: string[]): void {
   const whatsapp = getRecord(getRecord(raw.channels)?.whatsapp);
   if (!whatsapp) {
     return;
   }
   const sources: LegacyWhatsAppDebounce[] = [];
-  const rootSource = readLegacyDebounce("channels.whatsapp.debounceMs", whatsapp);
-  if (rootSource) {
-    sources.push(rootSource);
-  }
-  const accounts = getRecord(whatsapp.accounts);
-  if (accounts) {
-    for (const accountId of Object.keys(accounts).toSorted()) {
-      const account = getRecord(accounts[accountId]);
-      if (!account) {
-        continue;
-      }
-      const source = readLegacyDebounce(
-        `channels.whatsapp.accounts.${accountId}.debounceMs`,
-        account,
-        normalizeAccountId(accountId),
-      );
-      if (source) {
-        sources.push(source);
-      }
+  const accounts = getRecord(whatsapp.accounts) ?? {};
+  for (const [accountId, value] of [
+    [undefined, whatsapp] as const,
+    ...Object.keys(accounts)
+      .toSorted()
+      .map((id) => [id, accounts[id]] as const),
+  ]) {
+    const owner = getRecord(value);
+    if (!owner || !Object.hasOwn(owner, "debounceMs")) {
+      continue;
     }
+    const debounce = owner.debounceMs;
+    delete owner.debounceMs;
+    sources.push({
+      path: `channels.whatsapp${accountId === undefined ? "" : `.accounts.${accountId}`}.debounceMs`,
+      accountId: accountId === undefined ? undefined : normalizeAccountId(accountId),
+      value:
+        typeof debounce === "number" && Number.isInteger(debounce) && debounce >= 0
+          ? debounce
+          : undefined,
+    });
   }
   if (sources.length === 0) {
     return;

@@ -1,6 +1,7 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveMatrixAccount } from "./accounts.js";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { findMatrixAccountEntry, hasImplicitMatrixAccountConfig } from "../account-selection.js";
 import { resolveMatrixInboundRoute } from "./monitor/route.js";
 
 export function resolveMatrixConversationRouteOwner(params: {
@@ -13,7 +14,16 @@ export function resolveMatrixConversationRouteOwner(params: {
     nativeChannelId?: string;
   };
 }) {
-  const { cfg, accountId, conversation } = params;
+  const { cfg, conversation } = params;
+  const accountId = normalizeAccountId(params.accountId);
+  const accountConfig = findMatrixAccountEntry(cfg, accountId);
+  if (
+    cfg.channels?.matrix?.enabled === false ||
+    accountConfig?.enabled === false ||
+    (!accountConfig && !hasImplicitMatrixAccountConfig(cfg, accountId))
+  ) {
+    return null;
+  }
   const roomId =
     conversation.nativeChannelId?.trim() ||
     (conversation.kind === "direct" ? "" : conversation.peerId.trim());
@@ -27,17 +37,18 @@ export function resolveMatrixConversationRouteOwner(params: {
     roomId,
     senderId: conversation.peerId,
     isDirectMessage,
-    dmSessionScope: resolveMatrixAccount({ cfg, accountId }).config.dm?.sessionScope,
     threadId: conversation.threadId,
     resolveAgentRoute,
   });
   if (!result.bindingOwnerAvailable) {
     return { kind: "unavailable" as const };
   }
-  if (result.runtimeBindingId && !parseAgentSessionKey(result.route.sessionKey)?.agentId) {
-    // Matrix's store cannot project plugin metadata. A non-agent runtime target therefore
-    // cannot authorize detached delivery through an inferred fallback owner.
-    return null;
+  if (result.pluginId) {
+    return {
+      kind: "plugin" as const,
+      pluginId: result.pluginId,
+      fallbackAgentId: result.route.agentId,
+    };
   }
   return { kind: "agent" as const, agentId: result.route.agentId };
 }

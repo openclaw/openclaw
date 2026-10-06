@@ -33,6 +33,31 @@ turns into the same environment while background processes remain. Each turn
 still receives a fresh bounded envelope, Gateway connection, and tool authority.
 The standalone command above remains a single-turn entry point.
 
+Stopping a node worker environment cancels pending admission and attempts cleanup
+of its workspace processes, managed workers, and durable launch owners. A failure
+in one cleanup owner does not skip the others. Stop reports cleanup errors after
+these attempts finish; launches whose cleanup remains unconfirmed keep their
+capacity reservations until recovery succeeds. The same environment cannot admit
+another turn while Stop is waiting for tracked worker cleanup to settle.
+If initialization fails, independent cleanup can still finish, but the node does
+not advertise free capacity until initialization succeeds.
+When failed-turn cleanup records a terminal placement, session descriptions
+refresh to `failed` with the recovery reason instead of retaining `draining`.
+
+On current Linux and macOS node hosts, the launch journal identifies the worker's
+process owner; the application `worker.mjs` runs as its child. The owner survives
+an application crash and retains nested command cleanup before releasing capacity.
+After a node-host restart, recovery briefly observes that exact owner without
+terminating its cleanup observer. Unfinished cleanup keeps its slot reserved
+while other free slots remain available. The node supervisor continues observing
+that cleanup and automatically returns the slot after recorded lineage completion
+and physical process-tree extinction. Closing the supervisor abandons and joins
+its observation without releasing unfinished ownership. Status, launch replay,
+and cancellation share the same recovery while a turn receipt is retained;
+completed turn results stay unchanged. This protection requires
+an updated node host as well as the current worker bundle; updating the Gateway
+alone does not replace an older node's supervision path.
+
 Launches must fit 25 MiB in each complete serialized form: the node invocation
 event and the managed worker input line, including the node's connection endpoint.
 The Gateway trims older complete turns when needed, without discarding the newest
@@ -64,15 +89,48 @@ The process runs the normal embedded agent loop with a restricted backend:
 - The `read`, `write`, `edit`, `apply_patch`, `exec`, and `process` coding tools
   run locally in the worker workspace when present in the Gateway-issued turn
   authority. An empty authority runs the model with no tools.
-- Model calls use the gateway inference proxy. No local model auth profile is
-  loaded.
+- Model calls use the Gateway inference proxy by default. Explicitly configured
+  paired-device profiles can select [worker-local inference](/gateway/cloud-workers/native-inference)
+  with node-provisioned model configuration and externally scoped proxy auth; no Gateway auth profile is loaded.
 - Transcript writes use the gateway transcript-commit RPC.
 - Streaming and tool lifecycle updates use the gateway live-event RPC.
 - Only the assigned session and turn are accepted.
 
 Worker mode does not start channels, Gateway HTTP surfaces, or plugin auto-start
-beyond the assigned session toolset. It uses a throwaway state directory and has
-no standing provider or forge credentials.
+beyond the assigned session toolset. It uses a throwaway state directory. Proxied
+workers have no model provider credentials, and worker `exec` does not read or
+project the Gateway secret store. Explicitly selected local-inference workers hold
+their node-granted opaque auth values in runtime memory. An external custodian must
+keep actual provider keys outside an untrusted worker workload; the worker process
+is not a same-user credential-isolation boundary. When the Gateway's effective shared GitHub identity
+is available, the worker receives a turn-bound access token in its private launch
+envelope. The token is materialized in a private per-turn profile inside the
+throwaway state directory, with earlier profiles removed before the next binding,
+and scrubbed when that directory is removed. The sealed worker launcher binds it
+to each `exec` child. GitHub CLI must be installed on the worker host; the bundle
+includes the launcher, not `gh`.
+
+Materialized skill files are temporary turn inputs in a private directory separate
+from worker state and its GitHub credentials. Their directory is scoped to the
+session and workspace, and each skill path uses a short readable name with a digest
+of its name, source, and verified content.
+Unchanged deliveries recreate the same paths in deterministic prompt order, so
+later turns can reuse the provider's prompt prefix and read references from earlier
+turns without rewriting transcript history. Changed skill content receives a new
+path. The worker holds a filesystem lock through cleanup; another live turn cannot
+replace its inputs, and crash recovery only reclaims a definitely dead owner.
+A failed per-turn deletion logs
+`Materialized skill cleanup failed`. Node Claude skill sessions separately report
+`Node Claude skill session cleanup failed` for temporary Workshop configuration. These
+bounded, redacted warnings identify files that may remain. Wait until the worker or
+session and its owned processes have stopped before checking permissions and manually
+removing the reported directory. A completed turn alone does not mean a managed worker
+has stopped. These filesystem deletion failures preserve the original success, error,
+cancellation, or timeout without replaying work or claiming deletion succeeded.
+Worker state deletion, including GitHub credential cleanup, still rejects on failure.
+Process draining, authority revocation, database close, and transport or MCP close
+retain their existing failure behavior. Invalid skill integrity or delivery limits
+still reject the turn.
 
 The worker loads workspace `AGENTS.md` through the bounded bootstrap loader and
 appends Gateway-supplied system instructions as literal text. It does not discover
@@ -94,12 +152,21 @@ fences the process and causes a clean exit.
 A `stale-base-leaf` transcript rejection fail-stops the current run. Worker
 mode does not retry the rejected sequence against a different leaf, so no
 duplicate commit is produced; any still-uncommitted in-memory tail from that
-run is lost. Relaunch belongs to the milestone-3 placement owner, which must
+run is lost. Relaunch belongs to
+[placement](/gateway/cloud-workers/placement-and-machine-selection), which must
 create a fresh assignment from the gateway's authoritative transcript and
 commit ledger. Likewise, a gateway process restart terminates a pending
 inference turn with a provider error; only a worker WebSocket reconnect can
 reattach to an active same-process inference stream.
 
-See [Gateway protocol](/gateway/protocol#worker-role-and-closed-protocol) for the
+The Gateway persists inference admission before acknowledging it and persists
+completion before publishing a terminal message. Gateway shutdown and session
+lifecycle drains also join accepted provider and storage work, including an
+admission that was still waiting when cancellation began.
+If native storage settlement is unknown, the Gateway preserves that failure and
+does not retry the terminal write or replay the affected inference identity.
+Independent shutdown cleanup still runs before the failure is reported.
+
+See [Gateway protocol](/gateway/protocol/handshake#worker-role-and-closed-protocol) for the
 closed worker RPC surface and [Cloud workers](/gateway/cloud-workers) for the
 architecture and security model.

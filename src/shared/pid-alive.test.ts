@@ -1,17 +1,41 @@
 // PID liveness tests cover process existence checks across platforms.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   getFileLockProcessStartTime,
+  getProcessInstanceStartTime,
   getProcessStartTime,
   isPidAlive,
   isPidDefinitelyDead,
+  readDarwinProcessIdentity,
 } from "./pid-alive.js";
 
+const readWindowsProcessStartTimeSyncMock = vi.hoisted(() =>
+  vi.fn<(pid: number) => number | null>(() => null),
+);
+const readFreeBsdProcessStartTimeMock = vi.hoisted(() =>
+  vi.fn<(pid: number) => number | null>(() => null),
+);
+
+vi.mock("./freebsd-process-identity.ts", () => ({
+  readFreeBsdProcessStartTime: readFreeBsdProcessStartTimeMock,
+}));
+
+vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
+  readWindowsProcessStartTimeSync: readWindowsProcessStartTimeSyncMock,
+}));
+
+// These cases exercise the portable shell fallback, also used by sealed helpers.
+beforeEach(() => vi.stubGlobal("SEALED_RUNTIME_BUILD", true));
+
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  readWindowsProcessStartTimeSyncMock.mockReset();
+  readFreeBsdProcessStartTimeMock.mockReset();
 });
 
 function mockProcReads(entries: Record<string, string>) {
@@ -42,35 +66,6 @@ describe("isPidAlive", () => {
     expect(isPidAlive(Number.POSITIVE_INFINITY)).toBe(false);
   });
 
-  it("returns true when process probing reports EPERM", () => {
-    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw error;
-    });
-    mockProcReads({
-      "/proc/42/status": "Name:\tnode\nState:\tS (sleeping)\nPid:\t42\n",
-    });
-
-    expect(isPidAlive(42)).toBe(true);
-    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
-  });
-
-  it("returns false for Linux zombies even when probing reports EPERM", async () => {
-    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw error;
-    });
-    mockProcReads({
-      "/proc/42/status": "Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t42\nPid:\t42\n",
-    });
-
-    await withMockedPlatform("linux", async () => {
-      expect(isPidAlive(42)).toBe(false);
-    });
-
-    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
-  });
-
   it("returns false when process probing reports ESRCH", () => {
     const error = Object.assign(new Error("missing process"), { code: "ESRCH" });
     vi.spyOn(process, "kill").mockImplementation(() => {
@@ -79,17 +74,6 @@ describe("isPidAlive", () => {
 
     expect(isPidAlive(42)).toBe(false);
     expect(process["kill"]).toHaveBeenCalledWith(42, 0);
-  });
-
-  it("returns false for zombie processes on Linux", async () => {
-    const zombiePid = process.pid;
-
-    mockProcReads({
-      [`/proc/${zombiePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t${zombiePid}\nPid:\t${zombiePid}\n`,
-    });
-    await withMockedPlatform("linux", async () => {
-      expect(isPidAlive(zombiePid)).toBe(false);
-    });
   });
 
   it("treats unreadable linux proc status as non-zombie when kill succeeds", async () => {
@@ -125,41 +109,93 @@ describe("isPidDefinitelyDead", () => {
     expect(isPidDefinitelyDead(42)).toBe(true);
     expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
-
-  it("returns false when process probing reports EPERM", () => {
-    const error = Object.assign(new Error("permission denied"), { code: "EPERM" });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw error;
-    });
-
-    expect(isPidDefinitelyDead(42)).toBe(false);
-    expect(process["kill"]).toHaveBeenCalledWith(42, 0);
-  });
-
-  it("returns true for zombie processes on Linux", async () => {
-    const zombiePid = process.pid;
-    vi.spyOn(process, "kill").mockImplementation(() => true);
-    mockProcReads({
-      [`/proc/${zombiePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t${zombiePid}\nPid:\t${zombiePid}\n`,
-    });
-
-    await withMockedPlatform("linux", async () => {
-      expect(isPidDefinitelyDead(zombiePid)).toBe(true);
-    });
-  });
-
-  it("returns false for live non-zombie processes", async () => {
-    const livePid = process.pid;
-    vi.spyOn(process, "kill").mockImplementation(() => true);
-    mockProcReads({
-      [`/proc/${livePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t${livePid}\nPid:\t${livePid}\n`,
-    });
-
-    await withMockedPlatform("linux", async () => {
-      expect(isPidDefinitelyDead(livePid)).toBe(false);
-    });
-  });
 });
+
+describe.each(["success", "EPERM"])("Linux process liveness (probe=%s)", (probe) => {
+  it.each([
+    { state: "S", threads: "1", dead: false },
+    { state: "Z", threads: "1", dead: true },
+    { state: "Z", threads: "2", dead: false },
+    { state: "Z", threads: "", dead: false },
+    { state: "X", threads: "1", dead: true },
+    { state: "X", threads: "2", dead: false },
+    { state: "X", threads: "", dead: false },
+  ])(
+    "requires exited threads (state=$state, threads=$threads)",
+    async ({ state, threads, dead }) => {
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        if (probe === "EPERM") {
+          throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+        }
+        return true;
+      });
+      mockProcReads({
+        "/proc/42/status": `Name:\tnode\nState:\t${state}\n${threads ? `Threads:\t${threads}\n` : ""}`,
+      });
+      await withMockedPlatform("linux", async () => {
+        expect(isPidAlive(42)).toBe(!dead);
+        expect(isPidDefinitelyDead(42)).toBe(dead && probe !== "EPERM");
+      });
+    },
+  );
+});
+
+const livenessProbes = [
+  { name: "isPidAlive", probe: isPidAlive, dead: false, live: true },
+  { name: "isPidDefinitelyDead", probe: isPidDefinitelyDead, dead: true, live: false },
+] as const;
+
+describe.each(livenessProbes)("$name after a failed Linux status read", ({ probe, dead, live }) => {
+  it.each(["ESRCH", "EPERM", "success"] as const)(
+    "requires ESRCH to confirm exit (fresh probe=%s)",
+    (result) => {
+      let statusRead = false;
+      const originalReadFileSync = fsSync.readFileSync;
+      vi.spyOn(fsSync, "readFileSync").mockImplementation((...args) => {
+        if (String(args[0]) !== "/proc/42/status") {
+          return originalReadFileSync(...args);
+        }
+        statusRead = true;
+        throw Object.assign(new Error("process status unavailable"), { code: "ENOENT" });
+      });
+      vi.spyOn(process, "kill").mockImplementation(() => {
+        if (!statusRead || result === "success") {
+          return true;
+        }
+        throw Object.assign(new Error("process probe failed"), { code: result });
+      });
+
+      withMockedPlatform("linux", () => {
+        expect(probe(42)).toBe(result === "ESRCH" ? dead : live);
+      });
+    },
+  );
+});
+
+describe.each(livenessProbes)(
+  "$name after a zero-thread Linux snapshot",
+  ({ probe, dead, live }) => {
+    it.each(
+      ["R", "Z", "X"].flatMap((state) =>
+        ["ESRCH", "EPERM", "success"].map((result) => ({ state, result })),
+      ),
+    )("revalidates the current PID (state=$state, fresh probe=$result)", ({ state, result }) => {
+      mockProcReads({ "/proc/42/status": `Name:\tnode\nState:\t${state}\nThreads:\t0\n` });
+      vi.spyOn(process, "kill")
+        .mockImplementationOnce(() => true)
+        .mockImplementation(() => {
+          if (result === "success") {
+            return true;
+          }
+          throw Object.assign(new Error("current PID probe failed"), { code: result });
+        });
+
+      withMockedPlatform("linux", () => {
+        expect(probe(42)).toBe(result === "ESRCH" ? dead : live);
+      });
+    });
+  },
+);
 
 describe("process start times", () => {
   it("parses linux /proc stat start times and rejects malformed variants", async () => {
@@ -178,6 +214,7 @@ describe("process start times", () => {
     await withMockedPlatform("linux", async () => {
       expect(getProcessStartTime(process.pid)).toBe(98765);
       expect(getProcessStartTime(42)).toBe(55555);
+      expect(getProcessInstanceStartTime(42)).toBe(55555);
       expect(getProcessStartTime(43)).toBeNull();
       expect(getProcessStartTime(44)).toBe(66666);
       expect(getProcessStartTime(45)).toBeNull();
@@ -204,9 +241,11 @@ describe("process start times", () => {
         expect.objectContaining({
           encoding: "utf8",
           env: expect.objectContaining({ LC_ALL: "C", TZ: "UTC" }),
-          timeout: 1000,
+          timeout: expect.any(Number),
         }),
       );
+      expect(execSpy.mock.calls[0]?.[2]?.timeout).toBeGreaterThan(0);
+      expect(execSpy.mock.calls[0]?.[2]?.timeout).toBeLessThanOrEqual(1000);
     });
   });
 
@@ -223,31 +262,66 @@ describe("process start times", () => {
     });
   });
 
-  it("reads a bounded Windows PowerShell process start identity", () => {
-    const execSpy = vi
-      .spyOn(childProcess, "execFileSync")
-      .mockReturnValue("2026-07-06T12:34:56.7890000Z\n");
+  it("reads Windows file-lock identity through the canonical reader", () => {
+    readWindowsProcessStartTimeSyncMock.mockReturnValue(1_752_000_000_123);
 
     return withMockedPlatform("win32", async () => {
       expect(getProcessStartTime(42)).toBeNull();
-      expect(getFileLockProcessStartTime(42)).toBe(Date.UTC(2026, 6, 6, 12, 34, 56, 789));
-      expect(execSpy).toHaveBeenCalledWith(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          "(Get-Process -Id 42).StartTime.ToString('o')",
-        ],
-        expect.objectContaining({ timeout: 1000, windowsHide: true }),
-      );
-      execSpy.mockReturnValueOnce("invalid\n");
-      expect(getFileLockProcessStartTime(42)).toBeNull();
+      expect(getFileLockProcessStartTime(42)).toBe(1_752_000_000_123);
+      expect(getProcessInstanceStartTime(42)).toBeNull();
     });
   });
 
+  it.each(["darwin", "linux", "win32", "freebsd"] as const)(
+    "retries failed self probes and keeps foreign %s identities fresh",
+    async (platform) => {
+      const identity = platform === "linux" ? 0 : 1_752_000_000;
+      const foreignPid = process.pid + 1;
+      const probe = vi
+        .fn<(pid: number) => number | null>()
+        .mockReturnValueOnce(null)
+        .mockReturnValueOnce(identity)
+        .mockReturnValueOnce(111)
+        .mockReturnValueOnce(222);
+      readWindowsProcessStartTimeSyncMock.mockImplementation(probe);
+      readFreeBsdProcessStartTimeMock.mockImplementation(probe);
+      vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, args) => {
+        const value = probe(Number(args?.[3]));
+        if (value === null) {
+          throw new Error("process start time unavailable");
+        }
+        return new Date(value * 1000).toUTCString();
+      });
+      const originalReadFileSync = fsSync.readFileSync;
+      vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
+        const pid = /^\/proc\/(\d+)\/stat$/.exec(String(filePath))?.[1];
+        if (!pid) {
+          return originalReadFileSync(filePath as never, encoding as never) as never;
+        }
+        const value = probe(Number(pid));
+        if (value === null) {
+          throw new Error("process start time unavailable");
+        }
+        return `${pid} (node) S ${"0 ".repeat(18)}${value}` as never;
+      });
+
+      await withMockedPlatform(platform, async () => {
+        // Each simulated platform needs a fresh module's process-lifetime state.
+        vi.resetModules();
+        const { getFileLockProcessStartTime: readIdentity } = await import("./pid-alive.js");
+        expect(readIdentity(process.pid)).toBeNull();
+        expect(readIdentity(process.pid)).toBe(identity);
+        expect(readIdentity(process.pid)).toBe(identity);
+        expect(readIdentity(foreignPid)).toBe(111);
+        expect(readIdentity(foreignPid)).toBe(222);
+        expect(readIdentity(process.pid)).toBe(identity);
+        expect(probe).toHaveBeenCalledTimes(4);
+      });
+    },
+  );
+
   it("returns null on unsupported platforms", () => {
-    return withMockedPlatform("freebsd", async () => {
+    return withMockedPlatform("aix", async () => {
       expect(getProcessStartTime(process.pid)).toBeNull();
       expect(getFileLockProcessStartTime(process.pid)).toBeNull();
     });
@@ -260,5 +334,47 @@ describe("process start times", () => {
     expect(getProcessStartTime(Number.NaN)).toBeNull();
     expect(getProcessStartTime(Number.POSITIVE_INFINITY)).toBeNull();
     expect(getFileLockProcessStartTime(0)).toBeNull();
+  });
+});
+
+describe("Darwin combined process identity", () => {
+  it("reads only the requested PID with the existing epoch-seconds birth contract", () => {
+    const read = vi
+      .spyOn(childProcess, "execFileSync")
+      .mockReturnValue("   42     1 Thu Sep 24 00:00:00 2026\n");
+    withMockedPlatform("darwin", () => {
+      expect(readDarwinProcessIdentity(42)).toEqual({
+        parentPid: 1,
+        startedAt: Date.UTC(2026, 8, 24) / 1000,
+      });
+    });
+    expect(read).toHaveBeenCalledExactlyOnceWith(
+      "/bin/ps",
+      ["-o", "pid=,ppid=,lstart=", "-p", "42"],
+      expect.objectContaining({
+        timeout: expect.any(Number),
+        maxBuffer: 4096,
+        killSignal: "SIGKILL",
+      }),
+    );
+    expect(read.mock.calls[0]?.[2]?.timeout).toBeGreaterThan(0);
+    expect(read.mock.calls[0]?.[2]?.timeout).toBeLessThanOrEqual(1000);
+  });
+
+  it.each([
+    "",
+    "42 1 Thu Sep 24 00:00:00 2026",
+    "43 1 Thu Sep 24 00:00:00 2026\n",
+    "42 -1 Thu Sep 24 00:00:00 2026\n",
+    "42 1 Thu Sep 24 00:00:00 2026\n\n",
+    "42 1 Thu Sep 24 00:00:00 2026\n43 1 Thu Sep 24 00:00:00 2026\n",
+    "42 1 Thu Feb 31 00:00:00 2026\n",
+    "42 1 Fri Sep 24 00:00:00 2026\n",
+    "42 1 unavailable\n",
+  ])("does not adopt incomplete or inconsistent metadata: %j", (stdout) => {
+    vi.spyOn(childProcess, "execFileSync").mockReturnValue(stdout);
+    withMockedPlatform("darwin", () => {
+      expect(readDarwinProcessIdentity(42)).toBeNull();
+    });
   });
 });

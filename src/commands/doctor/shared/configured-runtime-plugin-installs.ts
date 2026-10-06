@@ -1,4 +1,3 @@
-// Doctor helpers for installing plugins required by configured agent runtimes.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   collectConfiguredAgentHarnessRuntimes,
@@ -7,19 +6,13 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 
-type ConfiguredRuntimePluginInstallCandidate = {
-  /** Runtime/plugin id used in config and plugin installation records. */
+type ConfiguredRuntimePluginInstallCandidate = Pick<
+  PluginPackageInstall,
+  "npmSpec" | "clawhubSpec" | "defaultChoice"
+> & {
   pluginId: string;
-  /** Human-readable plugin label for prompts and notes. */
   label: string;
-  /** npm package spec for an official runtime plugin install. */
-  npmSpec?: string;
-  /** ClawHub install spec when the runtime plugin is sourced from ClawHub. */
-  clawhubSpec?: string;
-  /** True when the install source is trusted to link official runtime support. */
   trustedSourceLinkedOfficialInstall?: boolean;
-  /** Default installer choice when multiple official sources are available. */
-  defaultChoice?: PluginPackageInstall["defaultChoice"];
   /** Keep this official runtime package on the same release cohort as OpenClaw. */
   versionBoundToOpenClaw?: boolean;
 };
@@ -63,7 +56,7 @@ export function resolveConfiguredRuntimePluginInstallCandidate(
   );
 }
 
-function acpxRuntimeIsConfigured(cfg: OpenClawConfig): boolean {
+export function acpxRuntimeIsConfigured(cfg: OpenClawConfig): boolean {
   const acp = asOptionalRecord(cfg.acp);
   const backend = typeof acp?.backend === "string" ? acp.backend.trim().toLowerCase() : "";
   return (
@@ -74,8 +67,8 @@ function acpxRuntimeIsConfigured(cfg: OpenClawConfig): boolean {
   );
 }
 
-/** Collect runtime plugin ids implied by configured harness runtimes and ACPX settings. */
-export function collectConfiguredRuntimePluginIds(
+/** Collect runtime ids without loading plugin metadata during startup planning. */
+export function collectConfiguredRuntimeIds(
   cfg: OpenClawConfig,
   options?: ConfiguredAgentHarnessRuntimeOptions,
 ): string[] {

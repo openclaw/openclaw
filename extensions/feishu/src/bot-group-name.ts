@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -23,18 +24,7 @@ function evictGroupNameCache(): void {
     }
   }
 
-  const excess = feishuGroupNameCache.size - GROUP_NAME_CACHE_MAX_SIZE;
-  if (excess <= 0) {
-    return;
-  }
-  let removed = 0;
-  for (const key of feishuGroupNameCache.keys()) {
-    if (removed >= excess) {
-      break;
-    }
-    feishuGroupNameCache.delete(key);
-    removed++;
-  }
+  pruneMapToMaxSize(feishuGroupNameCache, GROUP_NAME_CACHE_MAX_SIZE);
 }
 
 function setCacheEntry(key: string, name: string): void {

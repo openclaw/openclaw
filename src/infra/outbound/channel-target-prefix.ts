@@ -1,5 +1,3 @@
-// Target prefix helpers separate provider-owned prefixes from generic target
-// kind prefixes and validate selected-channel mismatches.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { listRuntimeVisibleChannelPlugins } from "./runtime-visible-channels.js";
@@ -13,6 +11,8 @@ const TARGET_KIND_PREFIXES = new Set([
   "thread",
   "user",
 ]);
+const DEFAULT_TARGET_KINDS = [...TARGET_KIND_PREFIXES];
+const TARGET_KIND_PATTERN = new RegExp(`^(${DEFAULT_TARGET_KINDS.join("|")}):`, "i");
 
 /** Removes a selected channel/provider prefix from an outbound target string. */
 export function stripTargetProviderPrefix(raw: string, ...providers: string[]): string {
@@ -30,8 +30,11 @@ export function stripTargetProviderPrefix(raw: string, ...providers: string[]): 
 /** Removes generic target-kind prefixes such as room:, thread:, or user:. */
 export function stripOutboundTargetKindPrefix(
   raw: string,
-  kinds: readonly string[] = ["channel", "conversation", "dm", "group", "room", "thread", "user"],
+  kinds: readonly string[] = DEFAULT_TARGET_KINDS,
 ): string {
+  if (kinds === DEFAULT_TARGET_KINDS) {
+    return raw.replace(TARGET_KIND_PATTERN, "").trim();
+  }
   const kindPattern = kinds
     .map((kind) => normalizeOptionalLowercaseString(kind))
     .filter((kind): kind is string => Boolean(kind))
@@ -52,15 +55,12 @@ export function stripTargetTopicSuffix(
   return trimmed.replace(/:topic:.*$/i, "").trim();
 }
 
-/** Parsed provider prefix and the channel that owns it. */
-type ChannelTargetProviderPrefix = {
-  prefix: string;
-  channel: string;
-};
-
-function resolvePluginTargetPrefix(prefix: string): string | undefined {
-  const normalizedPrefix = normalizeOptionalLowercaseString(prefix);
-  if (!normalizedPrefix) {
+function resolveChannelTargetProviderPrefix(
+  raw?: string | null,
+): { prefix: string; channel: string } | undefined {
+  const match = /^\s*([a-z][a-z0-9_-]*):/i.exec(raw ?? "");
+  const prefix = normalizeOptionalLowercaseString(match?.[1]);
+  if (!prefix || TARGET_KIND_PREFIXES.has(prefix)) {
     return undefined;
   }
   for (const plugin of listRuntimeVisibleChannelPlugins()) {
@@ -68,26 +68,12 @@ function resolvePluginTargetPrefix(prefix: string): string | undefined {
     const candidates = plugin.messaging?.targetPrefixes ?? [];
     if (
       channelId &&
-      candidates.some(
-        (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedPrefix,
-      )
+      candidates.some((candidate) => normalizeOptionalLowercaseString(candidate) === prefix)
     ) {
-      return channelId;
+      return { prefix, channel: channelId };
     }
   }
   return undefined;
-}
-
-function resolveChannelTargetProviderPrefix(
-  raw?: string | null,
-): ChannelTargetProviderPrefix | undefined {
-  const match = /^\s*([a-z][a-z0-9_-]*):/i.exec(raw ?? "");
-  const prefix = normalizeOptionalLowercaseString(match?.[1]);
-  if (!prefix || TARGET_KIND_PREFIXES.has(prefix)) {
-    return undefined;
-  }
-  const channel = resolvePluginTargetPrefix(prefix);
-  return channel ? { prefix, channel } : undefined;
 }
 
 /** Resolves the channel implied by a plugin-owned target prefix, if any. */

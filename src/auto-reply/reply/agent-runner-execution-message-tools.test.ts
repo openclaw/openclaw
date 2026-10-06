@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
+  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
@@ -16,7 +18,7 @@ import type {
 } from "./agent-runner-execution.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: message tool progress", () => {
   it("suppresses progress callbacks after message-tool-only delivery completes", async () => {
@@ -106,17 +108,7 @@ describe("executeAgentTurn: message tool progress", () => {
         progressPreambleEnabled: true,
       } satisfies InternalGetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
+      ...createAgentTurnExecutionDefaults(),
       resolvedVerboseLevel: "on",
     });
 
@@ -138,33 +130,126 @@ describe("executeAgentTurn: message tool progress", () => {
   });
 
   it("records mute when a message-tool-only run completes without a send", async () => {
+    const onAgentRunTerminalOutcome = vi.fn();
     state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     const followupRun = createFollowupRun();
     followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+    await executeAgentTurn(
+      createMinimalRunAgentTurnParams({ followupRun, opts: { onAgentRunTerminalOutcome } }),
+    );
 
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("completed");
     expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "mute", runStatus: "completed" }),
     );
   });
 
-  it("classifies a failed message-tool-only run separately from omission", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      meta: { error: { message: "provider crashed" } },
-    });
-    const followupRun = createFollowupRun();
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+  it.each([false, true])(
+    "settles failed recording without replaying the turn (runFailed=%s)",
+    async (runFailed) => {
+      const original = new Error("invalid image metadata");
+      if (runFailed) {
+        state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(original);
+      } else {
+        state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+      }
+      state.recordMessageToolRunOutcomeMock.mockRejectedValueOnce(
+        new SqliteWorkerError("Outcome could not be confirmed", "outcome-unknown"),
+      );
+      const followupRun = createFollowupRun();
+      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const execution = executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+      if (runFailed) {
+        await expect(execution).rejects.toBe(original);
+      } else {
+        await expect(execution).resolves.toMatchObject({
+          kind: "success",
+          runResult: { payloads: [] },
+        });
+      }
+      expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledTimes(1);
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(runFailed ? 0 : 1);
+    },
+  );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+  it.each([false, true])(
+    "records failed execution independently of delivery (%s)",
+    async (delivered) => {
+      const onAgentRunTerminalOutcome = vi.fn();
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [],
+        didDeliverSourceReplyViaMessageTool: delivered,
+        meta: { error: { message: "provider crashed" } },
+      });
+      const followupRun = createFollowupRun();
+      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
 
-    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "mute", runStatus: "errored" }),
-    );
-  });
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      await executeAgentTurn(
+        createMinimalRunAgentTurnParams({ followupRun, opts: { onAgentRunTerminalOutcome } }),
+      );
+
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+      expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: delivered ? "tool_delivered" : "mute",
+          runStatus: "errored",
+        }),
+      );
+    },
+  );
+
+  it.each(["image", "model"] as const)(
+    "clears run ownership when %s preflight fails",
+    async (stage) => {
+      const onAgentRunTerminalOutcome = vi.fn();
+      const followupRun = createFollowupRun();
+      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+      const agentRunRegistry = await import("../../infra/agent-run-registry.js");
+      const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
+      const failure = new Error(`${stage} preflight failed`);
+      const modelRead =
+        stage === "model"
+          ? vi
+              .spyOn(
+                await import("../../agents/session-model-auto-revert.js"),
+                "createAgentPatchedSessionModelRunGuard",
+              )
+              .mockRejectedValueOnce(failure)
+          : undefined;
+      if (stage === "image") {
+        state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(failure);
+      }
+
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      try {
+        await expect(
+          executeAgentTurn(
+            createMinimalRunAgentTurnParams({
+              followupRun,
+              opts: { runId: "preflight-failure", onAgentRunTerminalOutcome },
+            }),
+          ),
+        ).rejects.toBe(failure);
+      } finally {
+        modelRead?.mockRestore();
+      }
+
+      expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+      expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          runId: "preflight-failure",
+          outcome: "mute",
+          runStatus: "errored",
+        }),
+      );
+      expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves message-tool-only suppression across fallback candidates", async () => {
     const onItemEvent = vi.fn();
@@ -226,17 +311,7 @@ describe("executeAgentTurn: message tool progress", () => {
       sessionCtx: { Provider: "discord", MessageSid: "msg" } as unknown as TemplateContext,
       opts: { onItemEvent, onCommandOutput } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
+      ...createAgentTurnExecutionDefaults(),
       resolvedVerboseLevel: "on",
     });
 
@@ -315,17 +390,7 @@ describe("executeAgentTurn: message tool progress", () => {
         onCommandOutput,
       } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
+      ...createAgentTurnExecutionDefaults(),
       resolvedVerboseLevel: "on",
     });
 
@@ -405,17 +470,7 @@ describe("executeAgentTurn: message tool progress", () => {
         onCommandOutput,
       } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
+      ...createAgentTurnExecutionDefaults(),
       resolvedVerboseLevel: "on",
     });
 

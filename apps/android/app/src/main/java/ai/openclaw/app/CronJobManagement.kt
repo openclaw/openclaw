@@ -5,7 +5,6 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.node.asObjectOrNull
-import ai.openclaw.app.node.asStringOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -246,18 +245,9 @@ internal data class CronEditorDraftState(
 
   fun observeJob(job: GatewayCronJobDetail): CronEditorDraftState {
     val incoming = job.toCronJobEdit()
-    if (incoming == edit) {
-      return CronEditorDraftState(
-        baseline = incoming,
-        edit = incoming,
-      )
-    }
-    if (incoming == baseline) {
-      return copy(hasIncomingConflict = false)
-    }
-    val canAdopt = !isDirty || saveSucceeded
-    if (!canAdopt) {
-      return copy(hasIncomingConflict = true)
+    if (incoming != edit) {
+      if (incoming == baseline) return copy(hasIncomingConflict = false)
+      if (isDirty && !saveSucceeded) return copy(hasIncomingConflict = true)
     }
     return CronEditorDraftState(
       baseline = incoming,
@@ -286,10 +276,17 @@ internal fun CronEditorDraftState.reconcileRestoredAction(
   // Preserve pending only when the restored runtime still owns this Save.
   val retainedSaveState =
     when (actionState) {
-      is GatewayCronActionState.Running ->
+      is GatewayCronActionState.Running -> {
         actionState.id == jobId && actionState.action == GatewayCronAction.Save
-      is GatewayCronActionState.Notice -> actionState.id == jobId
-      GatewayCronActionState.Idle -> false
+      }
+
+      is GatewayCronActionState.Notice -> {
+        actionState.id == jobId
+      }
+
+      GatewayCronActionState.Idle -> {
+        false
+      }
     }
   return if (isConnected && retainedSaveState) this else saveAborted()
 }
@@ -360,43 +357,66 @@ internal fun GatewayCronJobDetail.toCronJobEdit(): GatewayCronJobEdit =
     deleteAfterRun = deleteAfterRun && scheduleKind == "at",
     schedule =
       when (scheduleKind) {
-        "at" -> GatewayCronScheduleEdit.At(at = scheduleAt.orEmpty())
-        "every" ->
+        "at" -> {
+          GatewayCronScheduleEdit.At(at = scheduleAt.orEmpty())
+        }
+
+        "every" -> {
           GatewayCronScheduleEdit.Every(
             everyMs = scheduleEveryMs?.toString().orEmpty(),
             anchorMs = scheduleAnchorMs?.toString().orEmpty(),
           )
-        "cron" ->
+        }
+
+        "cron" -> {
           GatewayCronScheduleEdit.Cron(
             expression = scheduleCronExpr.orEmpty(),
             timezone = scheduleTimezone.orEmpty(),
             staggerMs = scheduleStaggerMs?.toString().orEmpty(),
           )
-        "on-exit" ->
+        }
+
+        "on-exit" -> {
           GatewayCronScheduleEdit.OnExit(
             command = scheduleCommand.orEmpty(),
             cwd = scheduleCwd.orEmpty(),
           )
-        else -> error("Unsupported cron schedule kind: $scheduleKind")
+        }
+
+        else -> {
+          error("Unsupported cron schedule kind: $scheduleKind")
+        }
       },
     sessionTarget = sessionTarget,
     wakeMode = wakeMode,
     payload =
       when (payloadKind) {
-        "systemEvent" -> GatewayCronPayloadEdit.SystemEvent(text = payloadText.orEmpty())
-        "agentTurn" ->
+        "systemEvent" -> {
+          GatewayCronPayloadEdit.SystemEvent(text = payloadText.orEmpty())
+        }
+
+        "agentTurn" -> {
           GatewayCronPayloadEdit.AgentTurn(
             message = payloadText.orEmpty(),
             model = payloadModel.orEmpty(),
             thinking = payloadThinking.orEmpty(),
           )
-        "command" ->
+        }
+
+        "command" -> {
           GatewayCronPayloadEdit.Command(
             argvJson = JsonArray(payloadCommandArgv.orEmpty().map(::JsonPrimitive)).toString(),
             cwd = payloadCommandCwd.orEmpty(),
           )
-        "script" -> GatewayCronPayloadEdit.ReadOnlyScript(script = payloadText.orEmpty())
-        else -> error("Unsupported cron payload kind: $payloadKind")
+        }
+
+        "script" -> {
+          GatewayCronPayloadEdit.ReadOnlyScript(script = payloadText.orEmpty())
+        }
+
+        else -> {
+          error("Unsupported cron payload kind: $payloadKind")
+        }
       },
   )
 
@@ -453,15 +473,15 @@ internal fun parseGatewayCronRunOutcome(root: JsonObject?): GatewayCronRunOutcom
   val ok = value.optionalBoolean("ok") ?: return null
   if (!ok) return GatewayCronRunOutcome.Rejected
   if (value.optionalBoolean("ran") == true) {
-    return GatewayCronRunOutcome.Started(runId = value.string("runId"))
+    return GatewayCronRunOutcome.Started(runId = value.nonBlankString("runId"))
   }
   if (value.optionalBoolean("enqueued") == true) {
-    val runId = value.string("runId") ?: return null
+    val runId = value.nonBlankString("runId") ?: return null
     return GatewayCronRunOutcome.Started(runId = runId)
   }
   if (value.optionalBoolean("ran") != false) return null
   val reason =
-    when (value.string("reason")) {
+    when (value.nonBlankString("reason")) {
       "not-due" -> GatewayCronRunSkipReason.NotDue
       "already-running" -> GatewayCronRunSkipReason.AlreadyRunning
       "restart-recovery-pending" -> GatewayCronRunSkipReason.RestartRecoveryPending
@@ -479,14 +499,14 @@ internal fun parseGatewayCronRunHistory(entries: JsonArray?): List<GatewayCronRu
       val ts = value.long("ts") ?: return@mapNotNull null
       GatewayCronRunSummary(
         ts = ts,
-        runId = value.string("runId"),
-        status = value.string("status"),
-        summary = value.string("summary"),
-        error = value.string("error"),
+        runId = value.nonBlankString("runId"),
+        status = value.nonBlankString("status"),
+        summary = value.nonBlankString("summary"),
+        error = value.nonBlankString("error"),
         durationMs = value.long("durationMs"),
-        deliveryStatus = value.string("deliveryStatus"),
-        sessionKey = value.string("sessionKey"),
-        model = value.string("model"),
+        deliveryStatus = value.nonBlankString("deliveryStatus"),
+        sessionKey = value.nonBlankString("sessionKey"),
+        model = value.nonBlankString("model"),
       )
     }.orEmpty()
 
@@ -508,6 +528,7 @@ private fun buildCronSchedulePatch(
         }
       }
     }
+
     is GatewayCronScheduleEdit.Every -> {
       require(original.scheduleKind == "every") { "Changing schedule type is not supported here." }
       val everyMs = edit.everyMs.trim().toLongOrNull()
@@ -523,6 +544,7 @@ private fun buildCronSchedulePatch(
         }
       }
     }
+
     is GatewayCronScheduleEdit.Cron -> {
       require(original.scheduleKind == "cron") { "Changing schedule type is not supported here." }
       val expression = edit.expression.trim()
@@ -546,6 +568,7 @@ private fun buildCronSchedulePatch(
         }
       }
     }
+
     is GatewayCronScheduleEdit.OnExit -> {
       require(original.scheduleKind == "on-exit") { "Changing schedule type is not supported here." }
       val command = edit.command.trim()
@@ -581,6 +604,7 @@ private fun buildCronPayloadPatch(
         }
       }
     }
+
     is GatewayCronPayloadEdit.AgentTurn -> {
       require(original.payloadKind == "agentTurn") { "Changing payload type is not supported here." }
       val message = edit.message.trim()
@@ -604,6 +628,7 @@ private fun buildCronPayloadPatch(
         }
       }
     }
+
     is GatewayCronPayloadEdit.Command -> {
       require(original.payloadKind == "command") { "Changing payload type is not supported here." }
       val argv = parseCommandArgv(edit.argvJson)
@@ -623,6 +648,7 @@ private fun buildCronPayloadPatch(
         }
       }
     }
+
     is GatewayCronPayloadEdit.ReadOnlyScript -> {
       require(original.payloadKind == "script" && edit.script == original.payloadText) {
         "Script payloads are read-only on Android."
@@ -655,17 +681,5 @@ private fun parseOptionalNonNegativeLong(
   require(parsed != null && parsed >= 0L) { "$label must be a non-negative number of milliseconds." }
   return parsed
 }
-
-private fun JsonObject.string(key: String): String? =
-  this[key]
-    .asStringOrNull()
-    ?.trim()
-    ?.takeIf { it.isNotEmpty() }
-
-private fun JsonObject.long(key: String): Long? =
-  (this[key] as? JsonPrimitive)
-    ?.content
-    ?.trim()
-    ?.toLongOrNull()
 
 private fun JsonObject.optionalBoolean(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull

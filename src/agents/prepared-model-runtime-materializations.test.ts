@@ -26,6 +26,7 @@ function createOwner(params: {
     metadataSnapshot: { index: { plugins: [] }, plugins: [] },
     modelCatalog: { entries: [], routeVariants: [] },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({ authStorage: { getAll: () => ({}) }, modelRegistry: {} }),
   } as unknown as PreparedModelRuntimeSnapshot;
@@ -37,6 +38,7 @@ function createOwner(params: {
     provenance: "configured",
     generation: 1,
     needsRefresh: params.needsRefresh === true,
+    catalogStale: false,
     snapshot,
   };
 }

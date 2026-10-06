@@ -2,12 +2,49 @@
  * Runtime matcher for sandbox tool policies. Deny patterns always win, then
  * an empty allow list means "allow everything not denied".
  */
+import { TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
-import { readToolAllowlistIntersection } from "./tool-policy-shared.js";
-import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
+import {
+  expandToolGroups,
+  normalizeToolPolicyName,
+  readToolAllowlistIntersection,
+} from "./tool-policy-shared.js";
 
-function makeToolPolicyMatcher(policy: SandboxToolPolicy, writeAllowsApplyPatch = true) {
+/** Exclude a server before discovery only when every tool in its namespace is denied. */
+export function createMcpServerToolDenyMatcher(toolDenylist?: string[]) {
+  const denials = toolDenylist?.map(normalizeToolPolicyName) ?? [];
+  const denyAll = denials.includes("bundle-mcp") || denials.includes("group:plugins");
+  const namespaces = compileGlobPatterns({
+    // A matched prefix covers arbitrary tool suffixes only with a trailing wildcard.
+    raw: denials.filter((pattern) => pattern.endsWith("*")),
+    normalize: normalizeToolPolicyName,
+  });
+  return (safeServerName: string): boolean =>
+    denyAll ||
+    matchesAnyGlobPattern(
+      normalizeToolPolicyName(safeServerName + TOOL_NAME_SEPARATOR),
+      namespaces,
+    );
+}
+
+/** Snapshot one synchronous filtering operation; execution checks must prepare current policy. */
+export function createToolPolicyMatcher(
+  policy?: SandboxToolPolicy,
+  writeAllowsApplyPatch = true,
+): (name: string) => boolean {
+  if (!policy) {
+    return () => true;
+  }
+  const restrictions = policy.allow && readToolAllowlistIntersection(policy.allow);
+  if (restrictions) {
+    const matchers = restrictions.map((allow) =>
+      allow.length > 0
+        ? createToolPolicyMatcher({ ...policy, allow }, writeAllowsApplyPatch)
+        : () => false,
+    );
+    return (name) => matchers.every((matches) => matches(name));
+  }
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
     normalize: normalizeToolPolicyName,
@@ -27,6 +64,15 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy, writeAllowsApplyPatch 
     if (matchesAnyGlobPattern(normalized, allow)) {
       return true;
     }
+    // Code Mode shipped whole skill reads under the ordinary read grant.
+    // The separately named tool keeps that grant; explicit denials still win.
+    if (
+      normalized === "skills_read" &&
+      matchesAnyGlobPattern("read", allow) &&
+      !matchesAnyGlobPattern("read", deny)
+    ) {
+      return true;
+    }
     // Runtime policy historically treats `write` as covering `apply_patch`.
     // Construction planning can disable that compatibility to avoid selecting a shell factory.
     if (
@@ -42,30 +88,39 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy, writeAllowsApplyPatch 
 
 /** Return whether one tool name is allowed by a single sandbox policy. */
 export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
-  if (!policy) {
-    return true;
-  }
-  return makeToolPolicyMatcher(policy)(name);
+  return createToolPolicyMatcher(policy)(name);
 }
 
 /** Runtime caps deny empty lists and preserve every independently merged restriction. */
-export function isRuntimeToolAllowed(name: string, toolsAllow?: string[]): boolean {
-  return (
-    toolsAllow === undefined ||
-    (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow]).every(
-      (allow) => allow.length > 0 && isToolAllowedByPolicyName(name, { allow }),
-    )
+export function createRuntimeToolMatcher(
+  toolsAllow?: readonly string[],
+  writeAllowsApplyPatch = true,
+) {
+  const matchers = (
+    toolsAllow === undefined ? [] : (readToolAllowlistIntersection(toolsAllow) ?? [[...toolsAllow]])
+  ).map((allow) =>
+    allow.length > 0 ? createToolPolicyMatcher({ allow }, writeAllowsApplyPatch) : () => false,
   );
+  return (name: string) => matchers.every((matches) => matches(name));
 }
 
-/** Avoid selecting the shell factory solely through the `write` compatibility alias. */
-export function isRuntimeToolAllowedForConstruction(name: string, toolsAllow?: string[]): boolean {
-  return (
-    toolsAllow === undefined ||
-    (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow]).every(
-      (allow) => allow.length > 0 && makeToolPolicyMatcher({ allow }, false)(name),
-    )
-  );
+export function isRuntimeToolAllowed(name: string, toolsAllow?: readonly string[]): boolean {
+  return createRuntimeToolMatcher(toolsAllow)(name);
+}
+
+/** Filter runtime tools by policy without rebuilding its patterns for each tool. */
+export function filterToolsByPolicy<TTool extends { name: string }>(
+  tools: TTool[],
+  policy?: SandboxToolPolicy,
+): TTool[] {
+  if (!policy) {
+    return tools;
+  }
+  if (tools.length === 0) {
+    return [];
+  }
+  const matches = createToolPolicyMatcher(policy);
+  return tools.filter((tool) => matches(tool.name));
 }
 
 /** Return whether one tool name is allowed by every active sandbox policy. */

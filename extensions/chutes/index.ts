@@ -1,6 +1,3 @@
-/**
- * Chutes provider plugin entrypoint with OAuth and API-key auth methods.
- */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   resolveOAuthApiKeyMarker,
@@ -9,6 +6,7 @@ import {
   buildOauthProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -142,7 +140,7 @@ export default definePluginEntry({
             groupLabel: "Chutes",
             groupHint: "OAuth + API key",
           },
-          run: async (ctx) => await runChutesOAuth(ctx),
+          run: runChutesOAuth,
         },
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
@@ -160,7 +158,7 @@ export default definePluginEntry({
           ].join("\n"),
           defaultModel: CHUTES_DEFAULT_MODEL_REF,
           expectedProviders: ["chutes"],
-          applyConfig: (cfg) => applyChutesApiKeyConfig(cfg),
+          applyConfig: applyChutesApiKeyConfig,
           wizard: {
             choiceId: "chutes-api-key",
             choiceLabel: "Chutes API key",
@@ -173,18 +171,22 @@ export default definePluginEntry({
       catalog: {
         order: "profile",
         run: async (ctx) => {
-          const { apiKey, discoveryApiKey } = ctx.resolveProviderAuth(PROVIDER_ID, {
+          const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderAuth(PROVIDER_ID, {
             oauthMarker: resolveOAuthApiKeyMarker(PROVIDER_ID),
           });
           if (!apiKey) {
             return null;
           }
-          return {
-            provider: {
-              ...(await buildChutesProvider(discoveryApiKey)),
-              apiKey,
-            },
-          };
+          return await runLiveProviderCatalog({
+            providerId: PROVIDER_ID,
+            profileId: discoveryApiKey ? profileId : undefined,
+            run: async () => ({
+              provider: {
+                ...(await buildChutesProvider(discoveryApiKey, { discoveryMode: "strict" })),
+                apiKey,
+              },
+            }),
+          });
         },
       },
       staticCatalog: {

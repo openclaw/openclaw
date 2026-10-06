@@ -1,16 +1,22 @@
 import { randomBytes } from "node:crypto";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { setReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
 import {
   classifyAgentRunTerminalOutcome,
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
+import { AGENT_LANE_SUBAGENT } from "../../lanes.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
+import { resolveReplyExpectation } from "../../reply-completion.js";
+import type { ReplyDeliveryState } from "../../reply-completion.js";
+import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { log } from "../logger.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
 import type {
@@ -19,14 +25,22 @@ import type {
   EmbeddedRunFailureSignal,
   TraceAttempt,
 } from "../types.js";
-import { hasAttemptTerminalState } from "./attempt-terminal-evidence.js";
+import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
+import {
+  hasAttemptTerminalState,
+  resolveCurrentAttemptAssistant,
+  shouldContinueInteractiveAcceptedSessionSpawns,
+} from "./attempt-terminal-evidence.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
+import { countSettledTurnDeliveryPayloads } from "./incomplete-turn-classification.js";
 import {
+  DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
+  DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   resolveSettledToolBatchEvidence,
@@ -43,6 +57,7 @@ import {
   YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentInternalParams as TerminalRunParams } from "./internal-params.js";
+import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -87,68 +102,46 @@ type TerminalResolution =
   | { action: "retry" }
   | { action: "complete"; result: EmbeddedAgentRunResult };
 
-function requiresVisibleTerminalReply(runParams: TerminalRunParams): boolean {
-  return (
-    runParams.terminalReplyExpectation === "required" ||
-    (runParams.terminalReplyExpectation == null &&
-      (runParams.trigger == null || runParams.trigger === "user" || runParams.trigger === "manual"))
-  );
-}
-
 export function resolveSettledTurnFinalizationRequest(input: {
   runParams: TerminalRunParams;
   attempt: EmbeddedRunAttemptResult;
   activeErrorContext: { provider: string; model: string };
-  modelApi: Parameters<typeof resolveReasoningOnlyRetryInstruction>[0]["modelApi"];
-  executionContract: Parameters<
-    typeof resolveReasoningOnlyRetryInstruction
-  >[0]["executionContract"];
+  modelApi: string | undefined;
+  executionContract: string | undefined;
   payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
   recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
   hasTerminalToolPresentation: boolean;
   terminalState: EmbeddedRunTerminalState;
   settledTurnFinalizationAvailable: boolean;
+  replyDeliveryState?: ReplyDeliveryState;
 }): string | null {
-  if (!input.settledTurnFinalizationAvailable) {
+  const terminalAssistant = resolveCurrentAttemptAssistant(input.attempt);
+  if (
+    !input.settledTurnFinalizationAvailable ||
+    isTerminalAssistantError(terminalAssistant) ||
+    resolveSourceReplyDelivery(input.attempt, input.replyDeliveryState) !== "missing"
+  ) {
     return null;
   }
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
+  // Generated errors and pre-tool commentary are fallback surfaces, not authored answers.
+  const preparedPayloadCount = countSettledTurnDeliveryPayloads({
+    payloads: input.payloadsWithToolMedia,
+    attempt: input.attempt,
+  });
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
     isCronTrigger: input.runParams.trigger === "cron",
-    payloadCount: input.payloadsWithToolMedia?.length ?? 0,
+    payloadCount: preparedPayloadCount,
     aborted: terminalAborted,
     timedOut: terminalTimedOut,
     attempt: input.attempt,
   });
-  const terminalAssistant = input.attempt.currentAttemptAssistant ?? input.attempt.lastAssistant;
-  // Payload preparation renders an undelivered tool-error fallback before the
-  // model gets its final answer. It must not masquerade as an assistant reply;
-  // exact failed-call settlement is independently proven by the finalizer owner.
-  const hasOnlySyntheticToolErrorPayload = Boolean(
-    terminalAssistant?.stopReason === "toolUse" &&
-    input.attempt.lastToolError &&
-    input.attempt.assistantTexts.every((text) => text.trim().length === 0) &&
-    (input.payloadsWithToolMedia?.length ?? 0) > 0 &&
-    input.payloadsWithToolMedia?.every(
-      (payload) =>
-        payload.isError === true &&
-        Object.keys(payload).every((key) => key === "text" || key === "isError"),
-    ),
-  );
   const payloadCount = input.recoveredFinalAssistantPayloadsAfterPromptTimeout
     ? input.recoveredFinalAssistantPayloadsAfterPromptTimeout.length
-    : hasOnlySyntheticToolErrorPayload
-      ? 0
-      : input.payloadsWithToolMedia?.length
-        ? input.payloadsWithToolMedia.length
-        : silentToolResultReplyPayload
-          ? 1
-          : 0;
+    : preparedPayloadCount || (silentToolResultReplyPayload ? 1 : 0);
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
-    allowEmptyAssistantReplyAsSilent: input.runParams.allowEmptyAssistantReplyAsSilent,
-    terminalReplyExpectation: input.runParams.terminalReplyExpectation,
-    onlyExplicitSilentReply: false,
+    terminalReplyExpectation: resolveReplyExpectation(input.runParams),
     payloadCount,
     aborted: terminalAborted,
     timedOut: terminalTimedOut,
@@ -162,7 +155,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
     modelId: input.activeErrorContext.model,
     modelApi: input.modelApi,
     executionContract: input.executionContract,
-    allowEmptyStopContinuation: requiresVisibleTerminalReply(input.runParams),
+    allowEmptyStopContinuation: resolveReplyExpectation(input.runParams) === "required",
     payloadCount,
     hasTerminalToolPresentation: input.hasTerminalToolPresentation,
     aborted: terminalAborted,
@@ -177,12 +170,11 @@ export async function resolveEmbeddedRunTerminal(input: {
   attempt: EmbeddedRunAttemptResult;
   attemptAssistant?: AssistantMessage;
   activeErrorContext: { provider: string; model: string };
-  modelApi: Parameters<typeof resolveReasoningOnlyRetryInstruction>[0]["modelApi"];
-  executionContract: Parameters<
-    typeof resolveReasoningOnlyRetryInstruction
-  >[0]["executionContract"];
+  modelApi: string | undefined;
+  executionContract: string | undefined;
   terminalState: EmbeddedRunTerminalState;
   payloadsWithToolMedia: EmbeddedAgentRunResult["payloads"];
+  replyDeliveryState?: ReplyDeliveryState;
   recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
   finalAssistantVisibleText?: string;
   finalAssistantRawText?: string;
@@ -190,13 +182,17 @@ export async function resolveEmbeddedRunTerminal(input: {
   attemptToolSummary: EmbeddedAgentRunResult["meta"]["toolSummary"];
   failureSignal?: EmbeddedRunFailureSignal;
   terminalToolFailure?: EmbeddedAgentRunResult["meta"]["terminalToolFailure"];
-  maxReasoningOnlyRetryAttempts: number;
-  maxEmptyResponseRetryAttempts: number;
   attemptCompactionCount: number;
   replayState: EmbeddedRunReplayState;
-  activePromptPersisted: boolean;
-  activateInternalPrompt: (prompt: string) => void;
-  setSuppressNextUserMessagePersistence: (value: boolean) => void;
+  sessionPromptState: Pick<
+    Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>,
+    | "activePrompt"
+    | "suppressNextUserMessagePersistence"
+    | "activateInternalPrompt"
+    | "markOwnedTranscriptRetry"
+    | "activateCompactionContinuation"
+    | "clearCompactionContinuation"
+  >;
   armPostCompactionGuard: () => void;
   readTerminalToolPresentation: () => string | undefined;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
@@ -219,16 +215,20 @@ export async function resolveEmbeddedRunTerminal(input: {
   attemptAuthProfileStore: AuthProfileStore;
   apiKeyInfo: ResolvedProviderAuth | null;
   agentHarnessId: string;
-  settledTurnFinalizationOutcome: "not-attempted" | "answered" | "completed-empty" | "failed";
+  settledTurnFinalizationOutcome:
+    | "not-attempted"
+    | "answered"
+    | "completed-empty"
+    | "failed"
+    | "silent-fallback";
   pluginHarnessOwnsTransport: boolean;
   pluginHarnessOwnsAuthBootstrap: boolean;
   reportedModelRef: { provider: string; model: string };
   traceAttempts: TraceAttempt[];
-  traceAttemptUsesFallback: (attempt: TraceAttempt) => boolean;
   thinkLevel?: string;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
 }): Promise<TerminalResolution> {
-  const { runParams, attempt, retryState } = input;
+  const { runParams, attempt, retryState, sessionPromptState } = input;
   const { externalAbort, promptError } = projectAgentRunAttemptTerminal(attempt.terminal);
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
@@ -258,57 +258,55 @@ export async function resolveEmbeddedRunTerminal(input: {
   // its settled side effects cascade into any ordinary retry family.
   const settledTurnFinalizationAttempted = input.settledTurnFinalizationOutcome !== "not-attempted";
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
-    allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
-    terminalReplyExpectation: runParams.terminalReplyExpectation,
-    onlyExplicitSilentReply: settledTurnFinalizationAttempted,
+    // The host intentionally suppressed its cron placeholder, not a required model answer.
+    terminalReplyExpectation:
+      input.settledTurnFinalizationOutcome === "silent-fallback"
+        ? "optional"
+        : resolveReplyExpectation(runParams),
     payloadCount,
     aborted: terminalAborted,
     timedOut: terminalTimedOut,
     attempt,
   });
+  const replyRecoverySuppressed =
+    emptyAssistantReplyIsSilent ||
+    resolveSourceReplyDelivery(attempt, input.replyDeliveryState) !== "missing";
+  const retryInput = {
+    provider: input.activeErrorContext.provider,
+    modelId: input.activeErrorContext.model,
+    modelApi: input.modelApi,
+    executionContract: input.executionContract,
+    payloadCount,
+    aborted: terminalAborted,
+    timedOut: terminalTimedOut,
+    attempt,
+  };
   const nextReasoningOnlyRetryInstruction =
-    emptyAssistantReplyIsSilent || settledTurnFinalizationAttempted
+    replyRecoverySuppressed || settledTurnFinalizationAttempted
       ? null
-      : resolveReasoningOnlyRetryInstruction({
-          provider: input.activeErrorContext.provider,
-          modelId: input.activeErrorContext.model,
-          modelApi: input.modelApi,
-          executionContract: input.executionContract,
-          aborted: terminalAborted,
-          timedOut: terminalTimedOut,
-          attempt,
-        });
+      : resolveReasoningOnlyRetryInstruction(retryInput);
   const nextEmptyResponseRetryInstruction =
-    emptyAssistantReplyIsSilent || settledTurnFinalizationAttempted
+    replyRecoverySuppressed || settledTurnFinalizationAttempted
       ? null
-      : resolveEmptyResponseRetryInstruction({
-          provider: input.activeErrorContext.provider,
-          modelId: input.activeErrorContext.model,
-          modelApi: input.modelApi,
-          executionContract: input.executionContract,
-          payloadCount,
-          aborted: terminalAborted,
-          timedOut: terminalTimedOut,
-          attempt,
-        });
+      : resolveEmptyResponseRetryInstruction(retryInput);
   if (
     nextReasoningOnlyRetryInstruction &&
-    retryState.reasoningOnlyAttempts < input.maxReasoningOnlyRetryAttempts
+    retryState.reasoningOnlyAttempts < DEFAULT_REASONING_ONLY_RETRY_LIMIT
   ) {
     retryState.reasoningOnlyAttempts += 1;
-    input.activateInternalPrompt(nextReasoningOnlyRetryInstruction);
+    sessionPromptState.activateInternalPrompt(nextReasoningOnlyRetryInstruction);
     log.warn(
       `reasoning-only assistant turn detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} ` +
+        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.reasoningOnlyAttempts}/${DEFAULT_REASONING_ONLY_RETRY_LIMIT} ` +
         `with visible-answer continuation`,
     );
     return { action: "retry" };
   }
   const reasoningOnlyRetriesExhausted =
     nextReasoningOnlyRetryInstruction &&
-    retryState.reasoningOnlyAttempts >= input.maxReasoningOnlyRetryAttempts;
+    retryState.reasoningOnlyAttempts >= DEFAULT_REASONING_ONLY_RETRY_LIMIT;
   if (
-    !emptyAssistantReplyIsSilent &&
+    !replyRecoverySuppressed &&
     !settledTurnFinalizationAttempted &&
     shouldRetryMissingAssistantTurn({
       payloadCount,
@@ -320,7 +318,8 @@ export async function resolveEmbeddedRunTerminal(input: {
     retryState.missingAssistantAttempts < MAX_MISSING_ASSISTANT_RETRIES
   ) {
     retryState.missingAssistantAttempts += 1;
-    input.setSuppressNextUserMessagePersistence(input.activePromptPersisted);
+    sessionPromptState.suppressNextUserMessagePersistence =
+      sessionPromptState.activePrompt.persisted;
     log.warn(
       `missing assistant terminal message detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.missingAssistantAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} with same prompt`,
@@ -331,21 +330,23 @@ export async function resolveEmbeddedRunTerminal(input: {
   if (
     !nextReasoningOnlyRetryInstruction &&
     nextEmptyResponseRetryInstruction &&
-    retryState.emptyResponseAttempts < input.maxEmptyResponseRetryAttempts
+    retryState.emptyResponseAttempts < DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT
   ) {
     retryState.emptyResponseAttempts += 1;
-    input.activateInternalPrompt(nextEmptyResponseRetryInstruction);
+    sessionPromptState.activateInternalPrompt(nextEmptyResponseRetryInstruction);
     log.warn(
       `empty response detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
+        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} ` +
+        `stopReason=${input.attemptAssistant?.stopReason ?? "missing"} — retrying ${retryState.emptyResponseAttempts}/${DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT} ` +
         `with visible-answer continuation`,
     );
     return { action: "retry" };
   }
   const completedEmptyFinalization = input.settledTurnFinalizationOutcome === "completed-empty";
+  const terminalAssistantError = isTerminalAssistantError(input.attemptAssistant);
   const incompleteTurnText =
-    emptyAssistantReplyIsSilent ||
-    (completedEmptyFinalization && !requiresVisibleTerminalReply(runParams))
+    replyRecoverySuppressed ||
+    (completedEmptyFinalization && resolveReplyExpectation(runParams) === "optional")
       ? null
       : resolveIncompleteTurnPayloadText({
           payloadCount,
@@ -363,16 +364,17 @@ export async function resolveEmbeddedRunTerminal(input: {
     !promptError &&
     !attempt.lastToolError &&
     !hasAttemptTerminalState(attempt) &&
+    !terminalAssistantError &&
     !input.replayState.hadPotentialSideEffects,
   );
   const terminalToolPresentation = incompleteTurnFallbackSafe
     ? availableTerminalToolPresentation
     : undefined;
   if (
-    !emptyAssistantReplyIsSilent &&
+    !replyRecoverySuppressed &&
     !settledTurnFinalizationAttempted &&
     (input.attemptCompactionCount > 0 ||
-      isCompactionReplayCheckpoint(attempt.currentAttemptAssistant?.providerReplay)) &&
+      isCompactionReplayCheckpoint(input.attemptAssistant?.providerReplay)) &&
     payloadCount === 0 &&
     !terminalInterrupted &&
     !promptError &&
@@ -380,11 +382,12 @@ export async function resolveEmbeddedRunTerminal(input: {
     !attempt.yieldDetected &&
     !attempt.didSendDeterministicApprovalPrompt &&
     !attempt.lastToolError &&
+    !terminalAssistantError &&
     !input.replayState.hadPotentialSideEffects &&
     retryState.compactionContinuationAttempts < 1
   ) {
     retryState.compactionContinuationAttempts += 1;
-    retryState.compactionContinuationInstruction = COMPACTION_CONTINUATION_RETRY_INSTRUCTION;
+    sessionPromptState.activateCompactionContinuation(COMPACTION_CONTINUATION_RETRY_INSTRUCTION);
     log.warn(
       `compaction interrupted visible final answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `compactions=${input.attemptCompactionCount} — retrying ${retryState.compactionContinuationAttempts}/1 with compacted-transcript continuation`,
@@ -392,13 +395,14 @@ export async function resolveEmbeddedRunTerminal(input: {
     input.armPostCompactionGuard();
     return { action: "retry" };
   }
-  retryState.compactionContinuationInstruction = null;
+  // Invisible retries return above; visible and terminal paths release this retained constraint.
+  sessionPromptState.clearCompactionContinuation();
 
   if (reasoningOnlyRetriesExhausted && !input.finalAssistantVisibleText) {
     const incompletePayloadText = "⚠️ Agent couldn't generate a response. Please try again.";
     log.warn(
       `reasoning-only retries exhausted: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} attempts=${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} — surfacing incomplete-turn error`,
+        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} attempts=${retryState.reasoningOnlyAttempts}/${DEFAULT_REASONING_ONLY_RETRY_LIMIT} — surfacing incomplete-turn error`,
     );
     return completeEmbeddedRun({
       ...input,
@@ -411,24 +415,23 @@ export async function resolveEmbeddedRunTerminal(input: {
   if (
     !nextReasoningOnlyRetryInstruction &&
     nextEmptyResponseRetryInstruction &&
-    retryState.emptyResponseAttempts >= input.maxEmptyResponseRetryAttempts
+    retryState.emptyResponseAttempts >= DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT
   ) {
     log.warn(
       `empty response retries exhausted: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
-        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} attempts=${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} — surfacing incomplete-turn error`,
+        `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} attempts=${retryState.emptyResponseAttempts}/${DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT} — surfacing incomplete-turn error`,
     );
   }
   if (incompleteTurnText) {
-    const incompleteStopReason =
-      attempt.currentAttemptAssistant?.stopReason ?? attempt.lastAssistant?.stopReason;
+    const incompleteStopReason = input.attemptAssistant?.stopReason;
     log.warn(
       `incomplete turn detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} ` +
         `stopReason=${incompleteStopReason ?? "missing"} hasLastAssistant=${attempt.lastAssistant ? "yes" : "no"} ` +
         `hasCurrentAttemptAssistant=${attempt.currentAttemptAssistant ? "yes" : "no"} payloads=${payloadCount} ` +
         `tools=${attempt.toolMetas?.length ?? 0} replaySafe=${attempt.replayMetadata.replaySafe ? "yes" : "no"} ` +
-        `compactions=${input.attemptCompactionCount} reasoningRetries=${retryState.reasoningOnlyAttempts}/${input.maxReasoningOnlyRetryAttempts} ` +
-        `emptyRetries=${retryState.emptyResponseAttempts}/${input.maxEmptyResponseRetryAttempts} ` +
+        `compactions=${input.attemptCompactionCount} reasoningRetries=${retryState.reasoningOnlyAttempts}/${DEFAULT_REASONING_ONLY_RETRY_LIMIT} ` +
+        `emptyRetries=${retryState.emptyResponseAttempts}/${DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT} ` +
         `missingAssistantRetries=${retryState.missingAssistantAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — ` +
         (terminalToolPresentation
           ? "surfacing tool-authored terminal presentation"
@@ -454,10 +457,12 @@ export async function resolveEmbeddedRunTerminal(input: {
     !emptyAssistantReplyIsSilent
   ) {
     retryState.beforeFinalizeRevisionAttempts += 1;
-    input.activateInternalPrompt(
+    sessionPromptState.activateInternalPrompt(
       `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${beforeFinalizeRevisionReason}`,
     );
-    retryState.compactionContinuationInstruction = null;
+    // Settlement excluded the rejected draft with a leaf control. Wait for its
+    // transcript projection to rebuild before reopening for the hidden pass.
+    sessionPromptState.markOwnedTranscriptRetry();
     log.warn(
       `before_agent_finalize requested one more pass: ` +
         `runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
@@ -518,13 +523,16 @@ async function completeEmbeddedRun(
           attempt: input.attempt,
           incompleteTurnText,
         });
-  const stopReason = error
-    ? undefined
-    : input.attempt.clientToolCalls
-      ? "tool_calls"
-      : input.attempt.yieldDetected
-        ? "end_turn"
-        : (input.attemptAssistant?.stopReason as string | undefined);
+  // Cancellation belongs to the runtime owner, not the last model tool-call message.
+  const stopReason = terminalAborted
+    ? input.terminalState.outcome.stopReason
+    : error
+      ? undefined
+      : input.attempt.clientToolCalls
+        ? "tool_calls"
+        : input.attempt.yieldDetected
+          ? "end_turn"
+          : (input.attemptAssistant?.stopReason as string | undefined);
   if (error) {
     input.setTerminalLifecycleMeta({ replayInvalid, livenessState });
     if (input.authProfileId) {
@@ -572,14 +580,18 @@ async function completeEmbeddedRun(
     });
     input.runParams.onSuccessfulAuthProfile?.(input.authProfileId);
   }
-  // The truncation notice belongs to exactly the turns this fix newly delivers:
-  // a length stop whose only output is partial assistant text. A length stop that
-  // also produced terminal output (tool media, a committed source reply) was
-  // already complete before this fix and must not gain a misleading extra reply.
-  // Nonblank assistant text is also required: a cron turn whose only payload is
-  // the synthesized silent result of a successful tool has no partial prose to
-  // label, and appending a notice there would turn intentional silence into a
-  // visible message.
+  const acceptedSessionSpawnContinuation =
+    !error &&
+    shouldContinueInteractiveAcceptedSessionSpawns({
+      attempt: input.attempt,
+      run: input.runParams,
+    });
+  // A subagent's blank success is delivery evidence; nonblank classified silence stays silent.
+  // The lifecycle owner needs that distinction to close only intentional non-delivery.
+  const keepEmptyReplySilent =
+    input.runParams.lane !== AGENT_LANE_SUBAGENT || Boolean(input.finalAssistantRawText?.trim());
+  // Label only partial assistant prose: terminal tool output already completes
+  // the reply, and a silent cron result must not gain a visible notice.
   const hasPartialAssistantText =
     input.attempt.assistantTexts.some((text) => text.trim().length > 0) ||
     resolveFinalAssistantVisibleText(input.attemptAssistant) !== undefined;
@@ -604,10 +616,16 @@ async function completeEmbeddedRun(
           ? [{ text: SILENT_REPLY_TOKEN }]
           : input.payloadsForTerminalPath?.length
             ? isTruncatedPartialReply
-              ? [...input.payloadsForTerminalPath, { text: TRUNCATED_REPLY_NOTICE_TEXT }]
+              ? [
+                  ...input.payloadsForTerminalPath,
+                  setReplyPayloadMetadata(
+                    { text: TRUNCATED_REPLY_NOTICE_TEXT },
+                    { hostNotice: true },
+                  ),
+                ]
               : input.payloadsForTerminalPath
             : input.attempt.yieldDetected && !yieldHasContinuation
-              ? [{ text: YIELD_DIAGNOSTIC_TEXT }]
+              ? [setReplyPayloadMetadata({ text: YIELD_DIAGNOSTIC_TEXT }, { hostNotice: true })]
               : input.payloadsForTerminalPath;
   if (!error) {
     input.setTerminalLifecycleMeta({
@@ -642,7 +660,8 @@ async function completeEmbeddedRun(
               ...(input.attempt.yieldAcknowledgment
                 ? { yieldAcknowledgment: input.attempt.yieldAcknowledgment }
                 : {}),
-              ...(input.emptyAssistantReplyIsSilent
+              ...(acceptedSessionSpawnContinuation ? { continuationPending: true as const } : {}),
+              ...(input.emptyAssistantReplyIsSilent && keepEmptyReplySilent
                 ? { terminalReplyKind: "silent-empty" as const }
                 : {}),
               ...(input.intentionalTerminalCompletion
@@ -671,7 +690,10 @@ async function completeEmbeddedRun(
                         },
                       ]
                     : undefined,
-                fallbackUsed: input.traceAttempts.some(input.traceAttemptUsesFallback),
+                fallbackUsed: input.traceAttempts.some(
+                  (attempt) =>
+                    attempt.result === "rotate_profile" || attempt.result === "fallback_model",
+                ),
                 runner: "embedded",
               },
               requestShaping: {
@@ -686,8 +708,7 @@ async function completeEmbeddedRun(
                   : {}),
               },
               completion: {
-                ...(stopReason ? { stopReason } : {}),
-                ...(stopReason ? { finishReason: stopReason } : {}),
+                ...(stopReason ? { stopReason, finishReason: stopReason } : {}),
                 ...(stopReason?.toLowerCase().includes("refusal") ? { refusal: true } : {}),
               },
               contextManagement:
@@ -700,23 +721,7 @@ async function completeEmbeddedRun(
         ...(input.terminalToolFailure ? { terminalToolFailure: input.terminalToolFailure } : {}),
       },
       ...copyAttemptDeliveryState(input.attempt),
+      sourceReplyDeliveryState: resolveSourceReplyDelivery(input.attempt, input.replyDeliveryState),
     },
-  };
-}
-
-export function copyAttemptDeliveryState(attempt: EmbeddedRunAttemptResult) {
-  return {
-    latestMcpAppChannelView: attempt.latestMcpAppChannelView,
-    latestMcpConnectAction: attempt.latestMcpConnectAction,
-    didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-    didDeliverSourceReplyViaMessageTool: attempt.didDeliverSourceReplyViaMessageTool === true,
-    didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
-    messagingToolSentTexts: attempt.messagingToolSentTexts,
-    messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
-    messagingToolSentTargets: attempt.messagingToolSentTargets,
-    messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
-    heartbeatToolResponse: attempt.heartbeatToolResponse,
-    successfulCronAdds: attempt.successfulCronAdds,
-    acceptedSessionSpawns: attempt.acceptedSessionSpawns,
   };
 }

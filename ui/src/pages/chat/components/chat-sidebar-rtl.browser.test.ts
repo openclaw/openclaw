@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import "../../../styles.css";
-import "../../../styles/chat.css";
-import type { SidebarContent } from "./chat-sidebar.ts";
-import "./chat-sidebar.ts";
+import "../../../styles/chat.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import "./chat-detail-panel.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 

@@ -1,14 +1,18 @@
 // Bundled Plugin Build Entries tests cover bundled plugin build entries script behavior.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  collectChannelConfigDoctorBuildEntries,
+  collectRetainedDoctorBuildEntries,
+  collectPluginDeclarationSourceEntries,
   collectRootPackageExcludedExtensionDirs,
+  collectSourceCheckoutPluginBuildEntries,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { resolvePluginNpmRuntimeBuildPlan } from "../../scripts/lib/plugin-npm-runtime-build.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -27,6 +31,93 @@ function pickEntries(entries: Record<string, string>, keys: readonly string[]) {
 }
 
 describe("bundled plugin build entries", () => {
+  it("preserves tracked entry names and ignores deleted or untracked plugin inputs", () => {
+    const cwd = tempDirs.make("openclaw-tracked-plugin-entries-");
+    const write = (name: string, contents = "export {};\n") => {
+      const target = path.join(cwd, name);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, contents);
+    };
+    write("package.json", JSON.stringify({ name: "openclaw", files: ["dist/**"] }));
+    const names = [
+      " leading-space.ts",
+      "café.ts",
+      "index.ts",
+      ...(process.platform === "win32" ? [] : ["line\nbreak.ts", "literal\\backslash.ts"]),
+    ];
+    write("extensions/demo/openclaw.plugin.json", JSON.stringify({ id: "demo" }));
+    write(
+      "extensions/demo/package.json",
+      JSON.stringify({ name: "@openclaw/demo", openclaw: { extensions: ["./index.ts"] } }),
+    );
+    for (const name of [...names, "deleted.ts", "probe.test.ts", "types.d.ts"]) {
+      write(`extensions/demo/${name}`);
+    }
+    write("extensions/demo/src/private.ts");
+    write("extensions/nested-only/src/private.ts");
+    write("extensions/gone/src/deleted.ts");
+    write(
+      "extensions/deleted-metadata/openclaw.plugin.json",
+      JSON.stringify({ id: "deleted-metadata" }),
+    );
+    write("extensions/deleted-metadata/index.ts");
+    execFileSync("git", ["init", "--quiet", cwd]);
+    execFileSync("git", ["-C", cwd, "add", "--", "extensions"]);
+    for (const name of [
+      "extensions/demo/deleted.ts",
+      "extensions/gone/src/deleted.ts",
+      "extensions/deleted-metadata/openclaw.plugin.json",
+    ]) {
+      fs.unlinkSync(path.join(cwd, name));
+    }
+    write("extensions/demo/untracked.ts");
+    write("extensions/untracked/openclaw.plugin.json", JSON.stringify({ id: "untracked" }));
+    write("extensions/untracked/index.ts");
+
+    const params = { cwd, env: { [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "nested-only" } };
+    const entries = collectSourceCheckoutPluginBuildEntries(params);
+    const expectedSources = [
+      "./index.ts",
+      ...names
+        .filter((name) => name !== "index.ts")
+        .toSorted((a, b) => a.localeCompare(b))
+        .map((name) => `./${name}`),
+    ];
+    expect(entries.map(({ id }) => id)).toEqual(["demo"]);
+    expect(entries[0]?.sourceEntries).toEqual(expectedSources);
+    expect(Object.values(listBundledPluginBuildEntries(params))).toEqual(
+      expectedSources.map((name) => `extensions/demo/${name.slice(2)}`),
+    );
+    expect(() =>
+      collectSourceCheckoutPluginBuildEntries({
+        cwd,
+        env: { [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "gone" },
+      }),
+    ).toThrow("unknown plugin id(s): gone");
+  });
+
+  it("selects typed barrels and manifest exports rather than every runtime sidecar", () => {
+    const sources = [
+      "./index.ts",
+      "./api.ts",
+      "./runtime-api.ts",
+      "./contract-api.ts",
+      "./client.ts",
+      "./types.ts",
+      "./runtime-helper.ts",
+      "./setup-entry.ts",
+    ];
+    expect(
+      collectPluginDeclarationSourceEntries(
+        {
+          exports: { "./client": { types: "./dist/client.d.ts", import: "./dist/client.js" } },
+          types: "./dist/types.d.ts",
+        },
+        sources,
+      ),
+    ).toEqual(["./api.ts", "./runtime-api.ts", "./contract-api.ts", "./client.ts", "./types.ts"]);
+  });
+
   it("retains manifest-owned config repairs independently of runtime package exclusions", () => {
     const cwd = tempDirs.make("openclaw-config-doctor-entries-");
     const pluginDir = path.join(cwd, "extensions", "external-owner");
@@ -51,21 +142,49 @@ describe("bundled plugin build entries", () => {
     };
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
     fs.writeFileSync(manifestPath, JSON.stringify(manifest));
-    expect(() => collectChannelConfigDoctorBuildEntries({ cwd })).toThrow(
+    expect(() => collectRetainedDoctorBuildEntries({ cwd })).toThrow(
       /Missing config-only doctor entrypoint/,
     );
     fs.writeFileSync(
       path.join(pluginDir, "config-doctor-api.ts"),
       "export const legacyConfigRules = [];\n",
     );
-    expect(collectChannelConfigDoctorBuildEntries({ cwd })).toEqual({
+    expect(collectRetainedDoctorBuildEntries({ cwd })).toEqual({
       "renamed-channel": "extensions/external-owner/config-doctor-api.ts",
     });
     fs.writeFileSync(
       manifestPath,
       JSON.stringify({ ...manifest, doctorContract: { stateMigrations: true } }),
     );
-    expect(collectChannelConfigDoctorBuildEntries({ cwd })).toEqual({});
+    expect(collectRetainedDoctorBuildEntries({ cwd })).toEqual({});
+  });
+
+  it("retains non-channel state checks under plugin IDs while excluding plugin runtimes", () => {
+    const cwd = tempDirs.make("openclaw-state-retention-entries-");
+    const pluginDir = path.join(cwd, "extensions", "external-owner");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({
+        files: ["dist/**", "!dist/extensions/external-owner/**"],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "external-owner",
+        doctorContract: { stateMigrations: [{ id: "retired-log" }] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "state-retention-api.ts"),
+      "export const stateMigrations = [];\n",
+    );
+    expect(collectRetainedDoctorBuildEntries({ cwd, surface: "state-retention" })).toEqual({
+      "external-owner": "extensions/external-owner/state-retention-api.ts",
+    });
+    expect(collectRetainedDoctorBuildEntries({ cwd })).toEqual({});
+    expect(listBundledPluginPackArtifacts({ cwd })).toEqual([]);
   });
 
   const bundledChannelEntrySources = ["index.ts", "channel-entry.ts", "setup-entry.ts"];
@@ -101,14 +220,31 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
-  it("keeps the Matrix packaged runtime shim in bundled plugin build entries", () => {
-    const entries = listBundledPluginBuildEntries();
-    const expectedEntries = {
-      "extensions/matrix/plugin-entry.handlers.runtime":
-        "extensions/matrix/plugin-entry.handlers.runtime.ts",
-    };
+  it.each([
+    ["openai", "realtime-quicksilver-audio.worker", false],
+    ["openai", "realtime-quicksilver-socket.worker", false],
+    ["discord", "src/voice/audio-worker.runtime", true],
+  ] as const)("emits %s/%s through its owning build", (id, worker, isolated) => {
+    const entry = collectSourceCheckoutPluginBuildEntries().find((plugin) => plugin.id === id);
+    const plan = resolvePluginNpmRuntimeBuildPlan({ packageDir: `extensions/${id}` });
+    const artifacts = listBundledPluginPackArtifacts();
 
-    expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
+    expect(entry?.isolated).toBe(isolated);
+    expect(entry?.sourceEntries).toContain(`./${worker}.ts`);
+    expect(plan?.entry[worker]).toBe(path.resolve(`extensions/${id}/${worker}.ts`));
+    expect(plan?.runtimeBuildOutputs).toContain(`./dist/${worker}.js`);
+    expect(plan?.runtimeExtensions).not.toContain(`./dist/${worker}.js`);
+    expect(artifacts.includes(`dist/extensions/${id}/${worker}.js`)).toBe(!isolated);
+  });
+
+  it("keeps the Matrix packaged runtime shim in its package-owned build", () => {
+    const entries = listBundledPluginBuildEntries();
+    const plan = resolvePluginNpmRuntimeBuildPlan({ packageDir: "extensions/matrix" });
+    expect(entries["extensions/matrix/plugin-entry.handlers.runtime"]).toBeUndefined();
+    expect(plan?.entry["plugin-entry.handlers.runtime"]).toBe(
+      path.resolve("extensions/matrix/plugin-entry.handlers.runtime.ts"),
+    );
+    expect(plan?.runtimeBuildOutputs).toContain("./dist/plugin-entry.handlers.runtime.js");
   });
 
   it("keeps Codex CLI metadata in bundled build and standalone pack entries", () => {
@@ -197,10 +333,10 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).not.toContain("dist/extensions/image-generation-core/openclaw.plugin.json");
   });
 
-  it("packs the Matrix packaged runtime shim", () => {
+  it("leaves Matrix packaging to the standalone package build", () => {
     const artifacts = listBundledPluginPackArtifacts({ includeRootPackageExcludedDirs: true });
 
-    expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
+    expectNoPrefixMatches(artifacts, "dist/extensions/matrix/");
   });
 
   it("keeps private QA bundles out of required npm pack artifacts", () => {
@@ -256,7 +392,7 @@ describe("bundled plugin build entries", () => {
     delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
     const dockerEnv = {
       ...baselineEnv,
-      [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack clickclack,slack,msteams",
+      [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "slack clickclack,slack,msteams,whatsapp",
     };
     const entries = listBundledPluginBuildEntries({ env: dockerEnv });
     const baselineArtifacts = listBundledPluginPackArtifacts({ env: baselineEnv });
@@ -264,7 +400,7 @@ describe("bundled plugin build entries", () => {
     const reorderedEntries = listBundledPluginBuildEntries({
       env: {
         ...baselineEnv,
-        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "msteams,clickclack slack",
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp,msteams,clickclack slack",
       },
     });
     const entryKeys = Object.keys(entries);
@@ -273,6 +409,8 @@ describe("bundled plugin build entries", () => {
     expect(entries["extensions/slack/index"]).toBe("extensions/slack/index.ts");
     expect(entries["extensions/slack/setup-entry"]).toBe("extensions/slack/setup-entry.ts");
     expect(entries["extensions/msteams/index"]).toBe("extensions/msteams/index.ts");
+    expect(entries["extensions/whatsapp/index"]).toBe("extensions/whatsapp/index.ts");
+    expect(entries["extensions/whatsapp/setup-entry"]).toBe("extensions/whatsapp/setup-entry.ts");
     expect(entries["extensions/clawrouter/index"]).toBe("extensions/clawrouter/index.ts");
     expect(entryKeys.findIndex((entry) => entry.startsWith("extensions/clickclack/"))).toBeLessThan(
       entryKeys.findIndex((entry) => entry.startsWith("extensions/slack/")),
@@ -282,6 +420,7 @@ describe("bundled plugin build entries", () => {
     expectNoPrefixMatches(artifacts, "dist/extensions/clickclack/");
     expectNoPrefixMatches(artifacts, "dist/extensions/msteams/");
     expectNoPrefixMatches(artifacts, "dist/extensions/slack/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/whatsapp/");
   });
 
   it("sorts Docker-selected build entries without git metadata", () => {
@@ -331,21 +470,6 @@ describe("bundled plugin build entries", () => {
     } finally {
       readdirSpy.mockRestore();
     }
-  });
-
-  it("preserves known dependency-only Docker plugin selections", () => {
-    const baselineEnv = { ...process.env };
-    delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
-    const baselineEntries = listBundledPluginBuildEntries({ env: baselineEnv });
-    const selectedEntries = listBundledPluginBuildEntries({
-      env: {
-        ...baselineEnv,
-        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "whatsapp",
-      },
-    });
-
-    expect(selectedEntries).toEqual(baselineEntries);
-    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/whatsapp/");
   });
 
   it("preserves known package-less bundled Docker plugin selections", () => {
@@ -434,7 +558,7 @@ describe("bundled plugin build entries", () => {
   it("excludes externalized meeting plugins from bundled artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
-    for (const pluginId of ["teams-meetings", "zoom-meetings"]) {
+    for (const pluginId of ["slack-huddles", "teams-meetings", "zoom-meetings"]) {
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/index.js`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/openclaw.plugin.json`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/package.json`);

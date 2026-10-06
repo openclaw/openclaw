@@ -1,6 +1,5 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
-// Discord plugin module owns progress-window state and agent-event rendering.
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
@@ -10,23 +9,6 @@ type ReplyOptions = Omit<GetReplyOptions, "onBlockReply">;
 type CallbackPayload<K extends keyof ReplyOptions> =
   NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
 type DraftPreview = ReturnType<typeof createDiscordDraftPreviewController>;
-
-function isProcessAborted(abortSignal?: AbortSignal): boolean {
-  return Boolean(abortSignal?.aborted);
-}
-
-function isFailedProgress(payload: {
-  phase?: string;
-  status?: string;
-  exitCode?: number | null;
-}): boolean {
-  return (
-    payload.phase === "error" ||
-    payload.status === "failed" ||
-    payload.status === "error" ||
-    (typeof payload.exitCode === "number" && payload.exitCode !== 0)
-  );
-}
 
 export function createDiscordMessageProgressRuntime(params: {
   ctx: DiscordMessagePreflightContext;
@@ -71,7 +53,8 @@ export function createDiscordMessageProgressRuntime(params: {
   const reasoningWindowEnabled = reasoningLevel === "stream";
   // The durable verbose lane mirrors commentary, not tool lifecycle rows.
   // Yield only the draft content that has a durable counterpart.
-  let shouldYieldDraftCommentary: () => boolean = () => false;
+  let shouldYieldDraftCommentary = async () => false;
+  let turnCommentaryVisible = false;
   const handleAssistantMessageBoundary = () => {
     if (draftPreview.handleAssistantMessageBoundary()) {
       params.onTurnReset();
@@ -87,7 +70,7 @@ export function createDiscordMessageProgressRuntime(params: {
       : undefined,
     onReasoningEnd: draftPreview.draftStream
       ? () => {
-          handleAssistantMessageBoundary();
+          draftPreview.resetReasoningProgress();
           return false;
         }
       : undefined,
@@ -98,6 +81,8 @@ export function createDiscordMessageProgressRuntime(params: {
           }
         }
       : undefined,
+    // Queued turns can finish after dispatch closeout has already cleaned up.
+    onQueuedFollowupSettled: draftPreview.draftStream ? () => draftPreview.cleanup() : undefined,
     suppressDefaultToolProgressMessages:
       (params.sourceRepliesAreToolOnly && params.reactions.statusReactionsExplicitlyEnabled) ||
       draftPreview.suppressDefaultToolProgressMessages
@@ -116,15 +101,16 @@ export function createDiscordMessageProgressRuntime(params: {
       : undefined,
     shouldDeliverCommentaryPayloads:
       draftPreview.isProgressMode && draftPreview.commentaryProgressEnabled
-        ? () => shouldYieldDraftCommentary()
+        ? () => turnCommentaryVisible
         : undefined,
     reasoningPayloadsEnabled: reasoningDurableEnabled,
-    onVerboseProgressVisibility: (isActive) => {
+    onVerboseProgressVisibilityAsync: async (isActive) => {
       shouldYieldDraftCommentary = isActive;
+      turnCommentaryVisible = await isActive();
     },
     onNarrationUpdate: draftPreview.narrationProgressEnabled
       ? async (payload) => {
-          if (isProcessAborted(abortSignal) || shouldYieldDraftCommentary()) {
+          if ((await shouldYieldDraftCommentary()) || abortSignal?.aborted) {
             return;
           }
           await draftPreview.pushNarrationProgress(payload.text);
@@ -148,7 +134,7 @@ export function createDiscordMessageProgressRuntime(params: {
     },
     streamReasoningInNonStreamModes: reasoningWindowEnabled,
     onToolStart: async (payload) => {
-      if (isProcessAborted(abortSignal)) {
+      if (abortSignal?.aborted) {
         return false;
       }
       await params.reactions.maybeBindToToolReaction(payload);
@@ -156,14 +142,11 @@ export function createDiscordMessageProgressRuntime(params: {
       return await draftPreview.pushToolEvent(payload);
     },
     onItemEvent: async (payload) => {
-      if (isFailedProgress(payload)) {
-        return false;
-      }
-      if (payload.kind === "preamble") {
-        if (shouldYieldDraftCommentary()) {
-          return undefined;
-        }
-        return await draftPreview.pushPreambleItemEvent(payload);
+      if (
+        payload.kind === "preamble" &&
+        ((await shouldYieldDraftCommentary()) || abortSignal?.aborted)
+      ) {
+        return undefined;
       }
       return await draftPreview.pushItemEvent(payload);
     },
@@ -171,6 +154,7 @@ export function createDiscordMessageProgressRuntime(params: {
       if (payload.phase === "update") {
         return await draftPreview.pushPlanProgress(payload.steps, {
           explanation: payload.explanation,
+          explanationFormat: payload.explanationFormat,
         });
       }
       return false;
@@ -178,23 +162,14 @@ export function createDiscordMessageProgressRuntime(params: {
     onApprovalEvent: async (payload) => {
       return await draftPreview.pushApprovalEvent(payload);
     },
-    onCommandOutput: async (payload) => {
-      if (isFailedProgress(payload)) {
-        return false;
-      }
-      return await draftPreview.pushCommandOutputEvent(payload);
-    },
-    onPatchSummary: async (payload) => {
-      return await draftPreview.pushPatchEvent(payload);
-    },
     onCompactionStart: async () => {
-      if (!isProcessAborted(abortSignal)) {
+      if (!abortSignal?.aborted) {
         await params.reactions.controller.setCompacting();
       }
       return false;
     },
     onCompactionEnd: async () => {
-      if (!isProcessAborted(abortSignal)) {
+      if (!abortSignal?.aborted) {
         params.reactions.controller.cancelPending();
         await params.reactions.controller.setThinking();
       }

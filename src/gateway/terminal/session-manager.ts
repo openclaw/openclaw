@@ -1,4 +1,3 @@
-// Owns gateway PTYs for operator connections and agent tool sessions.
 import { randomUUID } from "node:crypto";
 import {
   ensureTerminalUploadCleanup,
@@ -7,16 +6,12 @@ import {
   type TerminalUploadResult,
 } from "../../infra/terminal-file-upload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { spawnTerminalPty } from "../../process/terminal-pty.js";
 import {
   agentTerminalOwnerMatches,
   AgentTerminalSessionDrainTracker,
-  terminalTaskOwnerMatches,
 } from "./agent-session-drain.js";
-import {
-  createLocalTerminalBackend,
-  type LocalTerminalBackendSpawner,
-  type TerminalBackend,
-} from "./backend.js";
+import type { TerminalBackend } from "./backend.js";
 import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
 import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalOutputController } from "./output-flow-control.js";
@@ -50,10 +45,7 @@ export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
 
 const log = createSubsystemLogger("gateway/terminal");
 
-/**
- * Tracks live PTY sessions keyed by session id, with a reverse index for
- * connection owners and viewers so disconnect cleanup stays bounded.
- */
+/** Owns PTYs and indexes their connections for bounded disconnect cleanup. */
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly pendingOpens = new Map<TerminalPendingOpen, TerminalOwner>();
@@ -64,9 +56,9 @@ export class TerminalSessionManager {
   // orphan for a dead connection.
   private readonly emit: TerminalEventSink;
   private readonly getBufferedAmount: (connId: string) => number | undefined;
-  private readonly spawn?: LocalTerminalBackendSpawner;
+  private readonly spawn: typeof spawnTerminalPty;
   private readonly maxSessions: number;
-  private readonly detachGraceMs: number;
+  private detachGraceMs: number;
   private readonly maxDetachedSessions: number;
   private readonly scrollbackChars: number;
   // Slots reserved by opens that are still awaiting spawn. Counted against the
@@ -81,19 +73,17 @@ export class TerminalSessionManager {
     void ensureTerminalUploadCleanup();
     this.emit = options.emit;
     this.getBufferedAmount = options.getBufferedAmount ?? (() => undefined);
-    this.spawn = options.spawn;
+    this.spawn = options.spawn ?? spawnTerminalPty;
     this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
     this.detachGraceMs = options.detachGraceMs ?? 0;
     this.maxDetachedSessions = options.maxDetachedSessions ?? DEFAULT_MAX_DETACHED_SESSIONS;
     this.scrollbackChars = options.scrollbackChars ?? DEFAULT_SCROLLBACK_CHARS;
   }
 
-  /** Number of live sessions; used by tests and health surfaces. */
   get size(): number {
     return this.sessions.size;
   }
 
-  /** Spawns a shell and wires its output/exit to its live connection recipients. */
   async open(request: TerminalOpenRequest): Promise<TerminalOpenOutcome> {
     if (request.signal?.aborted) {
       return { ok: false, code: "closed", message: this.openAbortMessage(request.signal) };
@@ -108,11 +98,8 @@ export class TerminalSessionManager {
         message: `terminal spawn limit reached (${this.maxSessions * 2})`,
       };
     }
-    // Agent-opened shells outlive their commands and have no automatic reaper,
-    // so a busy agent would otherwise exhaust the pool for the whole gateway
-    // until restart. Under pressure, claim the longest-idle viewer-free agent
-    // session as an eviction candidate; it is killed only after the replacement
-    // backend spawns, so a failed spawn never destroys a live session.
+    // Agent shells outlive commands. Under pressure, reserve an idle viewer-free
+    // victim, but keep it alive until its replacement backend successfully spawns.
     let evictionCandidate: TerminalSession | undefined;
     if (this.sessions.size + this.opening >= this.maxSessions) {
       evictionCandidate = this.claimLongestIdleAgentSession();
@@ -130,7 +117,7 @@ export class TerminalSessionManager {
         evictionCandidate = undefined;
       }
     };
-    // Reserve the slot before the async spawn so it is visible to concurrent opens.
+    // Reserve capacity before spawn yields to concurrent opens.
     this.opening += 1;
     this.spawning += 1;
     let reservationActive = true;
@@ -145,10 +132,8 @@ export class TerminalSessionManager {
       agentId: request.agentId,
       abort: (message) => {
         pending.abortMessage ??= message;
-        // A hung spawn must not consume capacity after its owner is gone.
-        // Its eventual backend is still killed by the abortMessage check below.
-        // The eviction claim must also drop now: a cancelled open whose spawn
-        // never settles would otherwise keep its victim unclaimable forever.
+        // A hung spawn must release capacity and its victim claim immediately;
+        // the abortMessage check still kills any backend that eventually arrives.
         releaseReservation();
         releaseEvictionClaim();
       },
@@ -159,20 +144,18 @@ export class TerminalSessionManager {
     request.signal?.addEventListener("abort", abortPending, { once: true });
     this.trackPendingOpen(request.owner, pending, request.viewerConnId);
     let backend: TerminalBackend;
+    const spawn = this.spawn;
     try {
       backend = request.createBackend
         ? await request.createBackend()
-        : await createLocalTerminalBackend(
-            {
-              file: request.shell,
-              args: request.args,
-              cwd: request.cwd,
-              env: request.env,
-              cols: request.cols,
-              rows: request.rows,
-            },
-            this.spawn,
-          );
+        : await spawn({
+            file: request.shell,
+            args: request.args,
+            cwd: request.cwd,
+            env: request.env,
+            cols: request.cols,
+            rows: request.rows,
+          });
     } catch (err) {
       this.spawning -= 1;
       releaseReservation();
@@ -188,8 +171,7 @@ export class TerminalSessionManager {
     releaseReservation();
     request.signal?.removeEventListener("abort", abortPending);
     if (pending.abortMessage) {
-      // The request was cancelled while the shell was spawning; kill it now
-      // rather than register an unreachable orphan.
+      // A cancelled spawn cannot register an orphaned PTY.
       releaseEvictionClaim();
       backend.onExit(() => this.untrackPendingOpen(request.owner, pending, request.viewerConnId));
       try {
@@ -202,22 +184,16 @@ export class TerminalSessionManager {
     }
     this.untrackPendingOpen(request.owner, pending, request.viewerConnId);
     if (evictionCandidate) {
-      // The replacement backend exists; retire a victim now, still inside the
-      // synchronous window, so registration stays within the cap. Revalidate
-      // first: the claimed candidate may have gained a viewer or exited during
-      // the spawn await, and viewer-attached sessions are never evicted.
+      // Revalidate the victim after spawn: it may have exited or gained a viewer.
+      // Eviction and replacement registration stay in one synchronous window.
       const claimed = evictionCandidate;
       evictionCandidate = undefined;
       claimed.evictionClaimed = false;
-      // Count other opens' outstanding reservations (our own was released
-      // above): skipping eviction against sessions.size alone lets concurrent
-      // spawns that finish out of order register past the hard cap. Evicting
-      // for a reservation whose spawn later fails is the safer direction.
+      // Include outstanding reservations: out-of-order spawns must not exceed the cap,
+      // even if a reserved replacement later fails.
       if (this.sessions.size + this.opening >= this.maxSessions) {
-        // Reselect fresh: the idle ranking goes stale across the spawn await —
-        // the claimed session may now be viewer-attached or active while an
-        // idler alternative exists. The released claim rejoins the pool, so a
-        // still-idlest claimed session is simply selected again.
+        // Activity during spawn can change the idle ranking; the released victim
+        // rejoins the pool and may still be selected.
         const victim = this.claimLongestIdleAgentSession();
         if (!victim) {
           try {
@@ -241,8 +217,8 @@ export class TerminalSessionManager {
 
     const sessionId = randomUUID();
     const buffer = new TerminalOutputRing(this.scrollbackChars);
-    // getConnIds runs only when output emits, after `session` below is assigned,
-    // so the forward reference from this closure is safe.
+    // getConnIds runs after `session` below is assigned, including for incoming
+    // chunks before output emits, so the forward reference is safe.
     const output = new TerminalOutputController({
       backend,
       getConnIds: () => terminalSessionRecipientIds(session),
@@ -268,6 +244,7 @@ export class TerminalSessionManager {
       agentId: request.agentId,
       cwd: request.cwd,
       shell: request.shell,
+      ...(request.title ? { title: request.title } : {}),
       backend,
       stageUpload: request.stageUpload ?? stageTerminalUpload,
       closed: false,
@@ -323,7 +300,6 @@ export class TerminalSessionManager {
     };
   }
 
-  /** Writes client input to a session; returns false when the session is gone. */
   write(connId: string, sessionId: string, data: string): boolean {
     const session = this.interactiveSession(connId, sessionId);
     if (!session) {
@@ -357,7 +333,6 @@ export class TerminalSessionManager {
     }
   }
 
-  /** Applies a new PTY grid size; returns false when the session is gone. */
   resize(connId: string, sessionId: string, cols: number, rows: number): boolean {
     const session = this.interactiveSession(connId, sessionId);
     if (!session) {
@@ -410,7 +385,6 @@ export class TerminalSessionManager {
     return this.interactiveSession(connId, sessionId) === session ? result : undefined;
   }
 
-  /** Closes one session on operator request. */
   close(connId: string, sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -445,22 +419,6 @@ export class TerminalSessionManager {
     return { ok: true };
   }
 
-  /** Closes every live or spawning PTY bound to one exact terminal task. */
-  closeTaskSessions(taskId: string): number {
-    for (const [pending, owner] of this.pendingOpens) {
-      if (terminalTaskOwnerMatches(owner, taskId)) {
-        pending.abort("terminal closed because its task ended");
-      }
-    }
-    const owned = [...this.sessions.values()].filter(
-      (session) => !session.closed && terminalTaskOwnerMatches(session.owner, taskId),
-    );
-    for (const session of owned) {
-      this.finalize(session, "closed", {});
-    }
-    return owned.length;
-  }
-
   /** Fences and closes one durable agent-session incarnation through archive commit. */
   beginAgentSessionDrain(owner: AgentTerminalOwner): AgentTerminalSessionDrain {
     const drain = this.agentSessionDrain.begin(owner, () => this.hasAgentSessionWork(owner));
@@ -489,7 +447,7 @@ export class TerminalSessionManager {
       return undefined;
     }
     if (session.owner?.kind === "agent") {
-      this.markSharedSessionAdopted(session);
+      delete session.unadoptedViewerConnId;
       // Emit pending bytes to existing viewers before the new viewer's replay
       // snapshot. This prevents the newcomer from receiving those bytes twice.
       session.output.prepareViewerAttach();
@@ -526,7 +484,6 @@ export class TerminalSessionManager {
       .toSorted((a, b) => a.createdAtMs - b.createdAtMs);
   }
 
-  /** Raw buffered output for one session, or undefined when it is gone. */
   snapshot(sessionId: string): string | undefined {
     const session = this.sessions.get(sessionId);
     if (!session || session.closed) {
@@ -540,14 +497,11 @@ export class TerminalSessionManager {
     return this.agentOwnedSession(owner, sessionId)?.buffer.snapshot();
   }
 
-  /** Live sessions owned by one agent tool caller. */
   listAgent(owner: AgentTerminalOwner): TerminalSessionSummary[] {
-    const sessionIds = new Set(
-      [...this.sessions.values()]
-        .filter((session) => !session.closed && agentTerminalOwnerMatches(session.owner, owner))
-        .map((session) => session.id),
-    );
-    return this.list().filter((summary) => sessionIds.has(summary.sessionId));
+    return [...this.sessions.values()]
+      .filter((session) => !session.closed && agentTerminalOwnerMatches(session.owner, owner))
+      .map(terminalSessionSummary)
+      .toSorted((a, b) => a.createdAtMs - b.createdAtMs);
   }
 
   private trackPendingOpen(
@@ -653,9 +607,7 @@ export class TerminalSessionManager {
         pending.abort("terminal closed because the agent policy changed");
       }
     }
-    // Snapshot first: finalize() mutates the session map. Detached sessions of
-    // disallowed agents are killed too; finalize clears their reaper and skips
-    // the exit event when no connection owns the stream.
+    // Snapshot before finalize mutates the map, including detached sessions.
     for (const session of Array.from(this.sessions.values())) {
       if (!isAllowed(session.agentId)) {
         this.finalize(session, "closed", {
@@ -670,13 +622,37 @@ export class TerminalSessionManager {
     session.output.resetOwnership();
     session.owner = null;
     session.detachedAtMs = Date.now();
+    this.scheduleDetachedExpiry(session, session.detachedAtMs);
+    this.enforceDetachedCap();
+  }
+
+  updateDetachGraceMs(graceMs: number): void {
+    if (this.detachGraceMs === graceMs) {
+      return;
+    }
+    this.detachGraceMs = graceMs;
+    for (const session of this.sessions.values()) {
+      if (session.detachedAtMs !== null) {
+        this.scheduleDetachedExpiry(session, session.detachedAtMs);
+      }
+    }
+  }
+
+  private scheduleDetachedExpiry(session: TerminalSession, detachedAtMs: number): void {
+    if (session.reaper) {
+      clearTimeout(session.reaper);
+    }
+    // A reload changes the deadline, not the time the terminal disconnected.
+    const remainingMs = detachedAtMs + this.detachGraceMs - Date.now();
+    if (remainingMs <= 0) {
+      this.finalize(session, "disconnected", {}, { silent: true });
+      return;
+    }
     session.reaper = setTimeout(() => {
       // Silent: nobody owns the stream, so there is no socket to notify.
       this.finalize(session, "disconnected", {}, { silent: true });
-    }, this.detachGraceMs);
-    // Never keep the process alive just to reap an abandoned shell.
+    }, remainingMs);
     session.reaper.unref?.();
-    this.enforceDetachedCap();
   }
 
   private enforceDetachedCap(): void {
@@ -691,12 +667,7 @@ export class TerminalSessionManager {
     }
   }
 
-  /**
-   * Tears down every session — detached ones included — on gateway
-   * shutdown/stop. Silent because the sockets are going away anyway (disabling
-   * the terminal is a `gateway` restart, so that path also runs through here,
-   * not a live notification).
-   */
+  /** Tears down all sessions silently on Gateway shutdown; their sockets are closing too. */
   disposeAll(): void {
     // Abort any opens still spawning so they don't register after shutdown.
     for (const pending of this.pendingOpens.keys()) {
@@ -708,13 +679,7 @@ export class TerminalSessionManager {
     }
   }
 
-  /**
-   * Claims the longest-idle agent-owned session as an eviction candidate when
-   * the pool is exhausted. Viewer-attached and connection-owned sessions are
-   * never evicted; an idle viewer-free background job losing its PTY under
-   * pressure is the accepted tradeoff for keeping the pool available. Claimed
-   * sessions are skipped so concurrent opens select distinct victims.
-   */
+  /** Viewer-free agent PTYs may be evicted; concurrent opens claim distinct victims. */
   private claimLongestIdleAgentSession(): TerminalSession | undefined {
     let candidate: TerminalSession | undefined;
     for (const session of this.sessions.values()) {
@@ -763,7 +728,7 @@ export class TerminalSessionManager {
     if (session.owner?.kind !== "agent" || !session.viewers.has(connId)) {
       return undefined;
     }
-    this.markSharedSessionAdopted(session);
+    delete session.unadoptedViewerConnId;
     return session;
   }
 
@@ -773,20 +738,11 @@ export class TerminalSessionManager {
     sessionId: string,
   ): TerminalSession | undefined {
     const session = this.sessions.get(sessionId);
-    if (
-      !session ||
-      session.closed ||
-      session.owner?.kind !== "agent" ||
-      !agentTerminalOwnerMatches(session.owner, owner)
-    ) {
+    if (!session || session.closed || !agentTerminalOwnerMatches(session.owner, owner)) {
       return undefined;
     }
-    this.markSharedSessionAdopted(session);
-    return session;
-  }
-
-  private markSharedSessionAdopted(session: TerminalSession): void {
     delete session.unadoptedViewerConnId;
+    return session;
   }
 
   private finalize(

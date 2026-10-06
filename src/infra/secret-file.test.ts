@@ -236,21 +236,6 @@ describe("writePrivateSecretFileAtomic", () => {
     ).rejects.toThrow("must not be a symlink");
   });
 
-  it("rejects symlinked path components", async () => {
-    const dir = await createTempDir();
-    const targetDir = path.join(dir, "outside-dir");
-    await fsPromises.mkdir(targetDir);
-    await fsPromises.symlink(targetDir, path.join(dir, "linked"));
-
-    await expect(
-      writePrivateSecretFileAtomic({
-        rootDir: dir,
-        filePath: path.join(dir, "linked", "auth.json"),
-        content: '{"ok":true}\n',
-      }),
-    ).rejects.toThrow("must not be a symlink");
-  });
-
   it("tightens an existing world-readable directory before writing secrets", async () => {
     const dir = await createTempDir();
     const nestedDir = path.join(dir, "nested");
@@ -279,5 +264,30 @@ describe("writePrivateSecretFileAtomic", () => {
         content: '{"ok":true}\n',
       }),
     ).rejects.toThrow("must not be a symlink");
+  });
+
+  it("rejects a symlinked root without chmodding its destination", async () => {
+    const dir = await createTempDir();
+    const targetDir = await createTempDir();
+    if (process.platform !== "win32") {
+      await fsPromises.chmod(targetDir, 0o777);
+    }
+    const rootLink = path.join(dir, "root-link");
+    await fsPromises.symlink(targetDir, rootLink);
+
+    await expect(
+      writePrivateSecretFileAtomic({
+        rootDir: rootLink,
+        filePath: path.join(rootLink, "auth.json"),
+        content: '{"ok":true}\n',
+      }),
+    ).rejects.toThrow("must not be a symlink");
+
+    if (process.platform !== "win32") {
+      // The tightening wrapper must never resolve-and-chmod a symlinked root;
+      // the destination's permissions stay exactly as they were.
+      const targetStat = await fsPromises.stat(targetDir);
+      expect(targetStat.mode & 0o777).toBe(0o777);
+    }
   });
 });

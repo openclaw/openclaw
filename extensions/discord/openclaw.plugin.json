@@ -1,12 +1,21 @@
 {
   "id": "discord",
+  "categories": [
+    "channels"
+  ],
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": true
+    "stateMigrations": [
+      {
+        "id": "discord-retired-state"
+      },
+      {
+        "id": "discord-legacy-state"
+      }
+    ]
   },
   "name": "Discord",
   "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
-  "icon": "https://cdn.simpleicons.org/discord",
   "skills": [
     "./skills"
   ],
@@ -21,9 +30,22 @@
       "discord-voice"
     ]
   },
+  "transcriptSources": {
+    "discord-voice": {
+      "name": "Discord Voice",
+      "autoStart": {
+        "accountId": "optional",
+        "guildId": "required",
+        "channelId": "required"
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/c2d38d8e93a88aeda39593ffa781b8440dd107d307b55973bf881c95f3601e71/index.js"
   }
 }

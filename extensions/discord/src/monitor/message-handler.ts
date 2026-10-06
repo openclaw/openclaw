@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler behavior.
 import type { Client } from "../internal/discord.js";
 import { createDiscordIngressMonitor } from "./ingress.js";
 import type { DiscordMessageHandler } from "./listeners.js";

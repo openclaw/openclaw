@@ -2,8 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createDeliveryRecoveryCoordinator,
   isDeliveryRecoveryRetryEligible,
+  isRetryableDeliveryNotSentError,
+  resolveDeliveryNotSentRetryability,
   resolveDeliveryRecoveryDeadlineMs,
 } from "./delivery-recovery.shared.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "./outbound/deliver-types.js";
 
 type RecoveryTestEntry = {
   id: string;
@@ -16,6 +22,66 @@ type RecoveryTestEntry = {
 function createEntry(id: string, enqueuedAt: number): RecoveryTestEntry {
   return { id, enqueuedAt, retryCount: 0 };
 }
+
+describe("typed no-send retryability", () => {
+  const retryableMarker = () =>
+    new PlatformMessageNotDispatchedError("Outbound not configured for channel: proof", {
+      cause: new Error("adapter unavailable"),
+    });
+
+  const permanentMarker = () =>
+    new PlatformMessageNotDispatchedError("chat not found", {
+      cause: new Error("invalid recipient"),
+      retryable: false,
+    });
+
+  it.each([
+    { name: "retryable marker", error: retryableMarker, typed: true, retryable: true },
+    { name: "permanent marker", error: permanentMarker, typed: false, retryable: false },
+    {
+      name: "untyped pre-connect failure",
+      error: () =>
+        Object.assign(new Error("connection refused"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      typed: undefined,
+      retryable: true,
+    },
+    {
+      name: "unproven failure",
+      error: () => new Error("chat not found"),
+      typed: undefined,
+      retryable: false,
+    },
+    {
+      name: "mixed retryable and permanent markers",
+      error: () => new AggregateError([retryableMarker(), permanentMarker()]),
+      typed: false,
+      retryable: false,
+    },
+    {
+      name: "delivery with an already-dispatched result",
+      error: () =>
+        new OutboundDeliveryError("delivery failed after dispatch", {
+          cause: retryableMarker(),
+          results: [{ channel: "telegram", messageId: "sent" }],
+        }),
+      typed: undefined,
+      retryable: false,
+    },
+    {
+      name: "marker with contradictory visible-send evidence",
+      error: () => Object.assign(retryableMarker(), { visibleReplySent: true }),
+      typed: undefined,
+      retryable: false,
+    },
+  ])("preserves typed and fallback retry policy for $name", ({ error, typed, retryable }) => {
+    const failure = error();
+    expect(resolveDeliveryNotSentRetryability(failure)).toBe(typed);
+    expect(isRetryableDeliveryNotSentError(failure)).toBe(retryable);
+  });
+});
 
 describe("shared durable delivery recovery coordinator", () => {
   it("shares active claims between live delivery and recovery scans", async () => {

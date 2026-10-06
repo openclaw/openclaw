@@ -1,5 +1,7 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isRecord } from "../utils.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { snapshotOwnCronRecord } from "./own-record.js";
 
 const CRON_RUNTIME_AUTHORITY_MAX_BYTES = 64 * 1024;
 const CRON_RUNTIME_AUTHORITY_MAX_ID_LENGTH = 128;
@@ -89,31 +91,22 @@ function cloneJsonObject(value: unknown): Record<string, JsonValue> | undefined 
     : undefined;
 }
 
-function deepFreezeJson(value: JsonValue): JsonValue {
-  if (value && typeof value === "object") {
-    for (const item of Array.isArray(value) ? value : Object.values(value)) {
-      deepFreezeJson(item);
-    }
-    Object.freeze(value);
-  }
-  return value;
-}
-
 /** Validates the private persisted transport without learning runtime-owned payload semantics. */
 export function normalizeCronRuntimeAuthority(value: unknown): CronRuntimeAuthority | undefined {
+  const input = isRecord(value) ? snapshotOwnCronRecord(value) : undefined;
   if (
-    !isRecord(value) ||
-    value.version !== 1 ||
-    Object.keys(value).some((key) => !CRON_RUNTIME_AUTHORITY_KEYS.has(key)) ||
-    !Object.hasOwn(value, "runtimeId") ||
-    !Object.hasOwn(value, "namespace") ||
-    !Object.hasOwn(value, "payload")
+    !input ||
+    input.version !== 1 ||
+    Object.keys(input).some((key) => !CRON_RUNTIME_AUTHORITY_KEYS.has(key)) ||
+    !("runtimeId" in input) ||
+    !("namespace" in input) ||
+    !("payload" in input)
   ) {
     return undefined;
   }
-  const runtimeId = normalizeAuthorityId(value.runtimeId);
-  const namespace = normalizeAuthorityId(value.namespace);
-  const payload = cloneJsonObject(value.payload);
+  const runtimeId = normalizeAuthorityId(input.runtimeId);
+  const namespace = normalizeAuthorityId(input.namespace);
+  const payload = cloneJsonObject(input.payload);
   if (!runtimeId || !namespace || !payload) {
     return undefined;
   }
@@ -121,7 +114,7 @@ export function normalizeCronRuntimeAuthority(value: unknown): CronRuntimeAuthor
     version: 1,
     runtimeId,
     namespace,
-    payload: deepFreezeJson(payload) as Readonly<Record<string, unknown>>,
+    payload: freezeJsonSnapshot(payload),
   } as const;
   if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > CRON_RUNTIME_AUTHORITY_MAX_BYTES) {
     return undefined;

@@ -3,14 +3,12 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { normalizeActiveSummary, truncateSummary } from "./prompt.js";
 import { extractTextContent } from "./query.js";
 import { readMergedActiveMemoryTranscriptState } from "./transcript-watch.js";
 import {
-  fileTranscriptSource,
-  hasUnavailableMemoryResultInSessionRecord,
-  hasUsableMemoryResultInSessionRecord,
-  isUnavailableMemorySearchDebug,
+  readMemoryResultFromSessionRecord,
   resolveTranscriptReadLimits,
   streamActiveMemoryTranscriptRecords,
 } from "./transcript.js";
@@ -27,7 +25,7 @@ import {
 
 let timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
 
-function readMemoryToolResultEvidence(params: {
+export function readMemoryToolResultEvidence(params: {
   toolName: string;
   result: unknown;
   isError: boolean;
@@ -54,13 +52,9 @@ function readMemoryToolResultEvidence(params: {
       details: result?.details,
     },
   };
-  return {
-    hasUsableMemoryResult: hasUsableMemoryResultInSessionRecord(record, params.toolsAllow),
-    hasUnavailableMemorySearchResult: hasUnavailableMemoryResultInSessionRecord(
-      record,
-      params.toolsAllow,
-    ),
-  };
+  const { hasUsableMemoryResult, hasUnavailableMemorySearchResult } =
+    readMemoryResultFromSessionRecord(record, params.toolsAllow);
+  return { hasUsableMemoryResult, hasUnavailableMemorySearchResult };
 }
 
 function extractAssistantTextFromSessionRecord(value: unknown): string {
@@ -77,18 +71,15 @@ function extractAssistantTextFromSessionRecord(value: unknown): string {
   return extractTextContent(message.content).trim();
 }
 
-async function readPartialAssistantText(
-  source: ActiveMemoryTranscriptSource | string | undefined,
+export async function readPartialAssistantText(
+  source: ActiveMemoryTranscriptSource,
   limits?: TranscriptReadLimits,
 ): Promise<string | null> {
-  if (!source) {
-    return null;
-  }
   const texts: string[] = [];
   const resolvedLimits = resolveTranscriptReadLimits(limits);
   let collectedChars = 0;
   await streamActiveMemoryTranscriptRecords({
-    source: typeof source === "string" ? fileTranscriptSource(source) : source,
+    source,
     limits: resolvedLimits,
     onRecord: (record) => {
       const text = extractAssistantTextFromSessionRecord(record);
@@ -115,7 +106,7 @@ async function readPartialAssistantText(
   return joined || null;
 }
 
-async function readPartialAssistantTextFromSources(
+export async function readPartialAssistantTextFromSources(
   sources: readonly ActiveMemoryTranscriptSource[],
   limits?: TranscriptReadLimits,
 ): Promise<string | null> {
@@ -128,7 +119,10 @@ async function readPartialAssistantTextFromSources(
   return null;
 }
 
-function attachPartialTimeoutData(error: unknown, data: ActiveMemoryPartialTimeoutData): void {
+export function attachPartialTimeoutData(
+  error: unknown,
+  data: ActiveMemoryPartialTimeoutData,
+): void {
   if (!error || typeof error !== "object") {
     return;
   }
@@ -136,7 +130,7 @@ function attachPartialTimeoutData(error: unknown, data: ActiveMemoryPartialTimeo
   target.activeMemoryPartialData = { ...target.activeMemoryPartialData, ...data };
 }
 
-function readPartialTimeoutData(error: unknown): ActiveMemoryPartialTimeoutData {
+export function readPartialTimeoutData(error: unknown): ActiveMemoryPartialTimeoutData {
   if (!error || typeof error !== "object") {
     return {};
   }
@@ -149,29 +143,19 @@ async function waitForSubagentPartialTimeoutData(
   if (!subagentPromise) {
     return { settled: true };
   }
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<{ settled: false }>((resolve) => {
-    timeoutId = setTimeout(() => resolve({ settled: false }), timeoutPartialDataGraceMs);
-    timeoutId.unref?.();
-  });
-  try {
-    return await Promise.race([
-      subagentPromise.then(
-        (result) => ({
-          hasUsableMemoryResult: result.hasUsableMemoryResult === true,
-          // Cleanup can cross the deadline after execution has already failed.
-          resultStatus: result.resultStatus,
-          settled: true as const,
-        }),
-        (error: unknown) => ({ ...readPartialTimeoutData(error), settled: true as const }),
-      ),
-      timeoutPromise,
-    ]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
+  return await raceWithTimeout(
+    subagentPromise.then(
+      (result) => ({
+        // Cleanup may remove temporary transcripts before this result settles.
+        ...result,
+        settled: true as const,
+      }),
+      (error: unknown) => ({ ...readPartialTimeoutData(error), settled: true as const }),
+    ),
+    timeoutPartialDataGraceMs,
+    () => ({ settled: false }),
+    { ref: false },
+  );
 }
 
 function normalizeGroundedSummary(
@@ -183,7 +167,7 @@ function normalizeGroundedSummary(
   return summary ? truncateSummary(summary, maxSummaryChars) : null;
 }
 
-async function buildTimeoutRecallResult(
+export async function buildTimeoutRecallResult(
   params: ActiveMemoryPartialTimeoutData & {
     elapsedMs: number;
     maxSummaryChars: number;
@@ -221,7 +205,7 @@ async function buildTimeoutRecallResult(
     subagentPartialData.resultStatus === "failed" ||
     params.cleanupFailed ||
     subagentPartialData.cleanupFailed ||
-    isUnavailableMemorySearchDebug(searchDebug) ||
+    Boolean(searchDebug?.error) ||
     !subagentPartialData.settled ||
     params.hasUnavailableMemorySearchResult ||
     subagentPartialData.hasUnavailableMemorySearchResult ||
@@ -232,7 +216,7 @@ async function buildTimeoutRecallResult(
   return { status: "timeout_partial", elapsedMs: params.elapsedMs, summary, searchDebug };
 }
 
-function buildSubagentRecallResult(params: {
+export function buildSubagentRecallResult(params: {
   subagentResult: RecallSubagentResult;
   fallbackSearchDebug?: ActiveMemorySearchDebug;
   fallbackHasUsableMemoryResult?: boolean;
@@ -252,29 +236,17 @@ function buildSubagentRecallResult(params: {
     resultStatus === "failed"
       ? "failed"
       : resultStatus === "unavailable" ||
-          isUnavailableMemorySearchDebug(searchDebug) ||
+          Boolean(searchDebug?.error) ||
           params.subagentResult.hasUnavailableMemorySearchResult === true
         ? "unavailable"
         : "no_relevant_memory";
   return { status, elapsedMs: params.elapsedMs, summary: null, searchDebug };
 }
 
-function resetActiveMemoryTranscriptForTests(): void {
+export function resetActiveMemoryTranscriptForTests(): void {
   timeoutPartialDataGraceMs = TIMEOUT_PARTIAL_DATA_GRACE_MS;
 }
 
-function setTimeoutPartialDataGraceMsForTests(value: number): void {
+export function setTimeoutPartialDataGraceMsForTests(value: number): void {
   timeoutPartialDataGraceMs = Math.max(0, Math.floor(value));
 }
-
-export {
-  attachPartialTimeoutData,
-  buildSubagentRecallResult,
-  buildTimeoutRecallResult,
-  readMemoryToolResultEvidence,
-  readPartialAssistantText,
-  readPartialAssistantTextFromSources,
-  readPartialTimeoutData,
-  resetActiveMemoryTranscriptForTests,
-  setTimeoutPartialDataGraceMsForTests,
-};

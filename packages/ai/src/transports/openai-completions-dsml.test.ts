@@ -86,7 +86,9 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: "before  after",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
       {
         type: "toolCall",
@@ -128,7 +130,9 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: "I'll check",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
       {
         type: "toolCall",
@@ -178,7 +182,9 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: " visible",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
@@ -218,7 +224,9 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: "before ",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
       {
         type: "toolCall",
@@ -229,7 +237,9 @@ describe("openai completions DSML", () => {
       {
         type: "text",
         text: " after",
-        textSignature: '{"v":1,"id":"commentary-1","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-1-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
@@ -262,6 +272,46 @@ describe("openai completions DSML", () => {
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
+
+  it.each([
+    { name: "__proto__", value: "scalar value", duplicate: true },
+    { name: "constructor", value: "scalar value", duplicate: true },
+    { name: "text", value: "scalar value", duplicate: true },
+    { name: "text", value: "", duplicate: false },
+    { name: "text", value: "", duplicate: true },
+    { name: "text", value: " \t ", duplicate: false },
+  ])(
+    "preserves DSML parameter $name as an own scalar argument ($value, duplicate: $duplicate)",
+    async ({ name, value, duplicate }) => {
+      const model = createDeepSeekCompletionsModel();
+      const output = createAssistantOutput(model);
+      const content =
+        '<|DSML|tool_calls><|DSML|invoke name="echo">' +
+        (duplicate
+          ? `<|DSML|parameter name="${name}" string="true">first value</|DSML|parameter>`
+          : "") +
+        `<|DSML|parameter name="${name}" string="true">${value}</|DSML|parameter>` +
+        "</|DSML|invoke></|DSML|tool_calls>";
+
+      await processCompletionsStream(
+        streamChunks([makeCompletionsChunk({ content }, "stop")]),
+        output,
+        model,
+        { push() {} },
+      );
+
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toHaveLength(1);
+      const call = output.content.find((block) => block.type === "toolCall");
+      expect(call).toMatchObject({ type: "toolCall", name: "echo" });
+      expect(call?.arguments).toStrictEqual({ [name]: value });
+      expect(Object.getOwnPropertyDescriptor(call?.arguments, name)).toMatchObject({
+        value,
+        enumerable: true,
+      });
+      expect(Object.getPrototypeOf(call?.arguments)).toBe(Object.prototype);
+    },
+  );
 
   it("rejects an oversized DeepSeek DSML block when the crossing chunk contains its close", async () => {
     const model = createDeepSeekCompletionsModel();

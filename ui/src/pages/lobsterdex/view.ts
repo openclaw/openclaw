@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
+import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
 import {
   canonicalLobsterLook,
@@ -9,14 +10,10 @@ import {
 import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { i18n, t } from "../../i18n/index.ts";
+// Page stars must override the shared mini-star rules loaded by lobster-pet-look.
+import "../../styles/lobsterdex.css";
 
-type LobsterdexViewEntry = {
-  firstSeenAt: number | null;
-  name: string | null;
-  shinySeenAt: number | null;
-};
-
-type LobsterdexViewEntries = ReadonlyMap<string, LobsterdexViewEntry>;
+type LobsterdexViewEntries = ReturnType<typeof getLobsterdexEntries>;
 
 export type LobsterdexCopyFeedback = {
   paletteId: LobsterPetPaletteId;
@@ -50,10 +47,15 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
         </div>
         <span class="lobsterdex-page__count">${countLabel}</span>
       </header>
-      ${props.copyFeedback?.status === "error"
-        ? html`<div class="callout danger" role="alert">${t("common.copyFailed")}</div>`
-        : nothing}
-      <div class="lobsterdex-page__grid" aria-label=${countLabel}>
+      <span class="sr-only" role="status">
+        ${props.copyFeedback?.status === "copied" ? t("common.copied") : nothing}
+      </span>
+      ${
+        props.copyFeedback?.status === "error"
+          ? html`<div class="callout danger" role="alert">${t("common.copyFailed")}</div>`
+          : nothing
+      }
+      <section class="lobsterdex-page__grid" aria-label=${countLabel}>
         ${LOBSTER_PET_PALETTES.map((palette) => {
           const look = canonicalLobsterLook(palette);
           const entry = entries.get(palette.id);
@@ -84,41 +86,42 @@ export function renderLobsterdex(entries: LobsterdexViewEntries, props: Lobsterd
                 @click=${() => props.onCopyLink?.(palette.id)}
               >
                 <span aria-hidden="true"
-                  >${props.copyFeedback?.status === "copied" &&
-                  props.copyFeedback.paletteId === palette.id
-                    ? icons.check
-                    : icons.link}</span
+                  >${
+                    props.copyFeedback?.status === "copied" &&
+                    props.copyFeedback.paletteId === palette.id
+                      ? icons.check
+                      : icons.link
+                  }</span
                 >
               </button>
               <div
-                class="lobsterdex-page__sprite lobster-pet lobster-pet--palette-${palette.id} ${seen
-                  ? ""
-                  : "lobsterdex__mini--unseen"}"
+                class="lobsterdex-page__sprite lobster-pet lobster-pet--palette-${palette.id} ${
+                  seen ? "" : "lobsterdex__mini--unseen"
+                }"
                 style=${lobsterLookStyle(look)}
               >
                 ${renderLobsterSvg(look, { standalone: true })}
-                ${entry?.shinySeenAt != null
-                  ? html`<span
-                      class="lobsterdex__mini-star lobsterdex-page__star"
-                      aria-hidden="true"
-                      >✦</span
-                    >`
-                  : nothing}
+                ${
+                  entry?.shinySeenAt != null
+                    ? html`<span
+                        class="lobsterdex__mini-star lobsterdex-page__star"
+                        aria-hidden="true"
+                        >✦</span
+                      >`
+                    : nothing
+                }
               </div>
               <h3>${name}</h3>
               <p class="lobsterdex-page__lore">${seen ? lore.flavor : lore.hint}</p>
               <div class="lobsterdex-page__dates">
-                ${firstSeen
-                  ? html`<p class="lobsterdex-page__date"><time>${firstSeen}</time></p>`
-                  : nothing}
-                ${shinySeen
-                  ? html`<p class="lobsterdex-page__date"><time>${shinySeen}</time></p>`
-                  : nothing}
+                ${[firstSeen, shinySeen].map((date) =>
+                  date ? html`<p class="lobsterdex-page__date"><time>${date}</time></p>` : nothing,
+                )}
               </div>
             </article>
           `;
         })}
-      </div>
+      </section>
     </section>
   `;
 }

@@ -143,15 +143,6 @@ export function createSessionUsageRollupData(): SessionUsageRollupData {
   return { buckets: {}, untimestamped: createUntimestampedRollup() };
 }
 
-function incrementTool(tools: Array<{ name: string; count: number }>, name: string): void {
-  const existing = tools.find((entry) => entry.name === name);
-  if (existing) {
-    existing.count += 1;
-  } else {
-    tools.push({ name, count: 1 });
-  }
-}
-
 function mergeTools(
   target: Map<string, number>,
   tools: ReadonlyArray<{ name: string; count: number }>,
@@ -159,27 +150,6 @@ function mergeTools(
   for (const tool of tools) {
     target.set(tool.name, (target.get(tool.name) ?? 0) + tool.count);
   }
-}
-
-function addModelUsage(
-  models: SessionModelUsage[],
-  provider: string | undefined,
-  model: string | undefined,
-  totals: CostUsageTotals,
-): void {
-  if (!provider && !model) {
-    return;
-  }
-  const modelRef = usageModelIdentity(provider, model);
-  let existing = models.find(
-    (entry) => usageModelIdentity(entry.provider, entry.model) === modelRef,
-  );
-  if (!existing) {
-    existing = { provider, model, count: 0, totals: createEmptyCostUsageTotals() };
-    models.push(existing);
-  }
-  existing.count += 1;
-  addCostUsageTotals(existing.totals, totals);
 }
 
 function mergeModels(target: Map<string, SessionModelUsage>, models: SessionModelUsage[]): void {
@@ -197,33 +167,6 @@ function mergeModels(target: Map<string, SessionModelUsage>, models: SessionMode
   }
 }
 
-function addMessageContribution(
-  target: SessionMessageCounts,
-  contribution: SessionUsageRollupContribution,
-): void {
-  if (contribution.role === "user") {
-    target.user += 1;
-    target.total += 1;
-  } else if (contribution.role === "assistant") {
-    target.assistant += 1;
-    target.total += 1;
-  }
-  target.toolCalls += contribution.toolNames.length;
-  target.toolResults += contribution.toolResultCounts.total;
-  target.errors += contribution.toolResultCounts.errors;
-  if (contribution.stopReason && ERROR_STOP_REASONS.has(contribution.stopReason)) {
-    target.errors += 1;
-  }
-}
-
-function createBucket(timestampMs: number): SessionUsageRollupBucket {
-  return {
-    timestampMs,
-    ...createUntimestampedRollup(),
-    latency: createLatencyAggregate(),
-  };
-}
-
 export function appendSessionUsageRollupContribution(
   rollup: SessionUsageRollupData,
   contribution: SessionUsageRollupContribution,
@@ -232,20 +175,46 @@ export function appendSessionUsageRollupContribution(
   const timedBucket =
     timestamp === undefined
       ? undefined
-      : (rollup.buckets[String(timestamp)] ??= createBucket(timestamp));
+      : (rollup.buckets[String(timestamp)] ??= {
+          timestampMs: timestamp,
+          ...createUntimestampedRollup(),
+          latency: createLatencyAggregate(),
+        });
   const bucket = timedBucket ?? rollup.untimestamped;
-  addMessageContribution(bucket.messageCounts, contribution);
-  for (const toolName of contribution.toolNames) {
-    incrementTool(bucket.tools, toolName);
+  const { messageCounts } = bucket;
+  if (contribution.role === "user" || contribution.role === "assistant") {
+    messageCounts[contribution.role] += 1;
+    messageCounts.total += 1;
+  }
+  messageCounts.toolCalls += contribution.toolNames.length;
+  messageCounts.toolResults += contribution.toolResultCounts.total;
+  messageCounts.errors += contribution.toolResultCounts.errors;
+  if (contribution.stopReason && ERROR_STOP_REASONS.has(contribution.stopReason)) {
+    messageCounts.errors += 1;
+  }
+  for (const name of contribution.toolNames) {
+    const existing = bucket.tools.find((entry) => entry.name === name);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      bucket.tools.push({ name, count: 1 });
+    }
   }
   if (contribution.usageTotals) {
     addCostUsageTotals(bucket.totals, contribution.usageTotals);
-    addModelUsage(
-      bucket.models,
-      contribution.provider,
-      contribution.model,
-      contribution.usageTotals,
-    );
+    const { provider, model } = contribution;
+    if (provider || model) {
+      const modelRef = usageModelIdentity(provider, model);
+      let existing = bucket.models.find(
+        (entry) => usageModelIdentity(entry.provider, entry.model) === modelRef,
+      );
+      if (!existing) {
+        existing = { provider, model, count: 0, totals: createEmptyCostUsageTotals() };
+        bucket.models.push(existing);
+      }
+      existing.count += 1;
+      addCostUsageTotals(existing.totals, contribution.usageTotals);
+    }
   }
   if (!timedBucket) {
     return;
@@ -295,11 +264,10 @@ function computeLatencyStats(
 function getUtcQuarterHourBucketKey(date: Date): {
   date: string;
   quarterIndex: number;
-  bucketId: string;
 } {
   const dateKey = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
   const quarterIndex = Math.floor((date.getUTCHours() * 60 + date.getUTCMinutes()) / 15);
-  return { date: dateKey, quarterIndex, bucketId: `${dateKey}\0${quarterIndex}` };
+  return { date: dateKey, quarterIndex };
 }
 
 function addMessageCounts(target: SessionMessageCounts, source: SessionMessageCounts): void {
@@ -309,6 +277,30 @@ function addMessageCounts(target: SessionMessageCounts, source: SessionMessageCo
   target.toolCalls += source.toolCalls;
   target.toolResults += source.toolResults;
   target.errors += source.errors;
+}
+
+function addQuarterHourTokens(
+  target: SessionUtcQuarterHourTokenUsage,
+  source: SessionUtcQuarterHourTokenUsage,
+): void {
+  target.input += source.input;
+  target.output += source.output;
+  target.cacheRead += source.cacheRead;
+  target.cacheWrite += source.cacheWrite;
+  target.totalTokens += source.totalTokens;
+  target.totalCost += source.totalCost;
+}
+
+function addDailyModelUsage(target: SessionDailyModelUsage, source: SessionDailyModelUsage): void {
+  target.tokens += source.tokens;
+  target.cost += source.cost;
+  target.count += source.count;
+}
+
+function createDailyModelAccumulator() {
+  return createDatedRowsAccumulator<SessionDailyModelUsage>(addDailyModelUsage, {
+    key: (row) => usageDailyModelIdentity(row.date, row.provider, row.model),
+  });
 }
 
 function sortedModelUsage(
@@ -334,9 +326,9 @@ function buildToolUsage(
   if (tools.size === 0) {
     return undefined;
   }
-  const entries = Array.from(tools.entries())
-    .map(([name, count]) => ({ name, count }))
-    .toSorted((a, b) => b.count - a.count || (sortTiesByName ? a.name.localeCompare(b.name) : 0));
+  const entries = Array.from(tools, ([name, count]) => ({ name, count })).toSorted(
+    (a, b) => b.count - a.count || (sortTiesByName ? a.name.localeCompare(b.name) : 0),
+  );
   return {
     totalCalls: entries.reduce((sum, entry) => sum + entry.count, 0),
     uniqueTools: entries.length,
@@ -344,40 +336,52 @@ function buildToolUsage(
   };
 }
 
-function mergeDatedRows<T extends { date: string; quarterIndex?: number }>(
-  left: T[] | undefined,
-  right: T[] | undefined,
+function createDatedRowsAccumulator<T extends { date: string; quarterIndex?: number }>(
   add: (target: T, source: T) => void,
-): T[] | undefined {
+  options?: {
+    key?: (row: T) => string;
+    clone?: (row: T) => T;
+  },
+) {
   const rows = new Map<string, T>();
-  for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const key = row.quarterIndex === undefined ? row.date : `${row.date}:${row.quarterIndex}`;
-    const existing = rows.get(key);
-    if (existing) {
-      add(existing, row);
-    } else {
-      rows.set(key, { ...row });
-    }
-  }
-  return rows.size
-    ? Array.from(rows.values()).toSorted(
-        (a, b) => a.date.localeCompare(b.date) || (a.quarterIndex ?? 0) - (b.quarterIndex ?? 0),
-      )
-    : undefined;
+  const keyOf =
+    options?.key ??
+    ((row: T) => (row.quarterIndex === undefined ? row.date : `${row.date}:${row.quarterIndex}`));
+  const clone = options?.clone ?? ((row: T) => ({ ...row }));
+  return {
+    add(source: T[] | undefined): void {
+      for (const row of source ?? []) {
+        const key = keyOf(row);
+        const existing = rows.get(key);
+        if (existing) {
+          add(existing, row);
+        } else {
+          rows.set(key, clone(row));
+        }
+      }
+    },
+    finish(compare?: (left: T, right: T) => number): T[] | undefined {
+      return rows.size
+        ? Array.from(rows.values()).toSorted(
+            compare ??
+              ((a, b) =>
+                a.date.localeCompare(b.date) || (a.quarterIndex ?? 0) - (b.quarterIndex ?? 0)),
+          )
+        : undefined;
+    },
+  };
 }
 
 function mergeMessageCountSummaries(
   left: SessionMessageCounts | undefined,
   right: SessionMessageCounts | undefined,
 ): SessionMessageCounts | undefined {
-  if (!left && !right) {
-    return undefined;
+  if (!left) {
+    return right ? { ...right } : undefined;
   }
-  const counts = emptyMessageCounts();
-  for (const source of [left, right]) {
-    if (source) {
-      addMessageCounts(counts, source);
-    }
+  const counts = { ...left };
+  if (right) {
+    addMessageCounts(counts, right);
   }
   return counts;
 }
@@ -405,121 +409,94 @@ function mergeLatencyStats(
   };
 }
 
-function mergeDailyLatencyStats(
-  left: SessionDailyLatency[] | undefined,
-  right: SessionDailyLatency[] | undefined,
-): SessionDailyLatency[] | undefined {
-  const rows = new Map<string, SessionDailyLatency>();
-  for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const existing = rows.get(row.date);
-    if (!existing) {
-      rows.set(row.date, { ...row });
-      continue;
-    }
-    const count = existing.count + row.count;
-    existing.avgMs =
-      count > 0 ? (existing.avgMs * existing.count + row.avgMs * row.count) / count : 0;
-    existing.count = count;
-    existing.p95Ms = Math.max(existing.p95Ms, row.p95Ms);
-    existing.minMs = Math.min(existing.minMs, row.minMs);
-    existing.maxMs = Math.max(existing.maxMs, row.maxMs);
-  }
-  return rows.size
-    ? Array.from(rows.values()).toSorted((a, b) => a.date.localeCompare(b.date))
-    : undefined;
-}
-
-function mergeDailyModels(
-  left: SessionDailyModelUsage[] | undefined,
-  right: SessionDailyModelUsage[] | undefined,
-): SessionDailyModelUsage[] | undefined {
-  const rows = new Map<string, SessionDailyModelUsage>();
-  for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const key = usageDailyModelIdentity(row.date, row.provider, row.model);
-    const existing = rows.get(key);
-    if (!existing) {
-      rows.set(key, { ...row });
-      continue;
-    }
-    existing.tokens += row.tokens;
-    existing.cost += row.cost;
-    existing.count += row.count;
-  }
-  return rows.size
-    ? Array.from(rows.values()).toSorted((a, b) => a.date.localeCompare(b.date))
-    : undefined;
-}
-
-/** Merges historical session summaries through the canonical usage aggregation rules. */
-export function mergeSessionCostSummaryInto(
-  target: SessionCostSummary,
-  source: SessionCostSummary,
-): void {
-  addCostUsageTotals(target, source);
-  target.firstActivity =
-    target.firstActivity === undefined
-      ? source.firstActivity
-      : source.firstActivity === undefined
-        ? target.firstActivity
-        : Math.min(target.firstActivity, source.firstActivity);
-  target.lastActivity =
-    target.lastActivity === undefined
-      ? source.lastActivity
-      : source.lastActivity === undefined
-        ? target.lastActivity
-        : Math.max(target.lastActivity, source.lastActivity);
-  if (target.firstActivity !== undefined && target.lastActivity !== undefined) {
-    target.durationMs = Math.max(0, target.lastActivity - target.firstActivity);
-  }
-
-  const activityDates = new Set([...(target.activityDates ?? []), ...(source.activityDates ?? [])]);
-  if (activityDates.size) {
-    target.activityDates = Array.from(activityDates).toSorted();
-  }
-  target.dailyBreakdown = mergeDatedRows(
-    target.dailyBreakdown,
-    source.dailyBreakdown,
+export function createSessionCostSummaryAccumulator(
+  identity: Pick<SessionCostSummary, "sessionId" | "sessionFile">,
+) {
+  const target: SessionCostSummary = { ...createEmptyCostUsageTotals(), ...identity };
+  const activityDates = new Set<string>();
+  const dailyBreakdown = createDatedRowsAccumulator<
+    NonNullable<SessionCostSummary["dailyBreakdown"]>[number]
+  >(
     (current, row) => {
+      addCostUsageTotals(current, row);
       current.tokens += row.tokens;
       current.cost += row.cost;
     },
+    { clone: (row) => ({ ...row, ...cloneCostUsageTotals(row) }) },
   );
-  target.dailyMessageCounts = mergeDatedRows(
-    target.dailyMessageCounts,
-    source.dailyMessageCounts,
-    addMessageCounts,
-  );
-  target.utcQuarterHourMessageCounts = mergeDatedRows(
-    target.utcQuarterHourMessageCounts,
-    source.utcQuarterHourMessageCounts,
-    addMessageCounts,
-  );
-  target.utcQuarterHourTokenUsage = mergeDatedRows(
-    target.utcQuarterHourTokenUsage,
-    source.utcQuarterHourTokenUsage,
-    (current, row) => {
-      current.input += row.input;
-      current.output += row.output;
-      current.cacheRead += row.cacheRead;
-      current.cacheWrite += row.cacheWrite;
-      current.totalTokens += row.totalTokens;
-      current.totalCost += row.totalCost;
-    },
-  );
-  target.dailyLatency = mergeDailyLatencyStats(target.dailyLatency, source.dailyLatency);
-  target.dailyModelUsage = mergeDailyModels(target.dailyModelUsage, source.dailyModelUsage);
-  target.messageCounts = mergeMessageCountSummaries(target.messageCounts, source.messageCounts);
+  const dailyMessageCounts =
+    createDatedRowsAccumulator<SessionDailyMessageCounts>(addMessageCounts);
+  const quarterMessages =
+    createDatedRowsAccumulator<SessionUtcQuarterHourMessageCounts>(addMessageCounts);
+  const quarterTokens =
+    createDatedRowsAccumulator<SessionUtcQuarterHourTokenUsage>(addQuarterHourTokens);
+  const dailyLatency = createDatedRowsAccumulator<SessionDailyLatency>((current, row) => {
+    Object.assign(current, mergeLatencyStats(current, row));
+  });
+  const dailyModels = createDailyModelAccumulator();
 
-  // Family rows retain first-seen/tie order; response-wide aggregates sort independently later.
-  const tools = new Map<string, number>();
-  mergeTools(tools, target.toolUsage?.tools ?? []);
-  mergeTools(tools, source.toolUsage?.tools ?? []);
-  target.toolUsage = buildToolUsage(tools, false);
-  const models = new Map<string, SessionModelUsage>();
-  mergeModels(models, target.modelUsage ?? []);
-  mergeModels(models, source.modelUsage ?? []);
-  target.modelUsage = sortedModelUsage(models, false);
-  target.latency = mergeLatencyStats(target.latency, source.latency);
+  return {
+    add(source: SessionCostSummary): void {
+      addCostUsageTotals(target, source);
+      if (source.computedAt !== undefined) {
+        target.computedAt = Math.min(target.computedAt ?? source.computedAt, source.computedAt);
+      }
+      if (source.staleSince !== undefined) {
+        target.staleSince = Math.min(target.staleSince ?? source.staleSince, source.staleSince);
+      }
+      if (source.refreshing) {
+        target.refreshing = true;
+      }
+      target.firstActivity =
+        target.firstActivity === undefined
+          ? source.firstActivity
+          : source.firstActivity === undefined
+            ? target.firstActivity
+            : Math.min(target.firstActivity, source.firstActivity);
+      target.lastActivity =
+        target.lastActivity === undefined
+          ? source.lastActivity
+          : source.lastActivity === undefined
+            ? target.lastActivity
+            : Math.max(target.lastActivity, source.lastActivity);
+      if (target.firstActivity !== undefined && target.lastActivity !== undefined) {
+        target.durationMs = Math.max(0, target.lastActivity - target.firstActivity);
+      }
+      for (const date of source.activityDates ?? []) {
+        activityDates.add(date);
+      }
+      dailyBreakdown.add(source.dailyBreakdown);
+      dailyMessageCounts.add(source.dailyMessageCounts);
+      quarterMessages.add(source.utcQuarterHourMessageCounts);
+      quarterTokens.add(source.utcQuarterHourTokenUsage);
+      dailyLatency.add(source.dailyLatency);
+      dailyModels.add(source.dailyModelUsage);
+      target.messageCounts = mergeMessageCountSummaries(target.messageCounts, source.messageCounts);
+
+      // Later count ties inherit the preceding ranking, so tools still fold after each instance.
+      const tools = new Map<string, number>();
+      mergeTools(tools, target.toolUsage?.tools ?? []);
+      mergeTools(tools, source.toolUsage?.tools ?? []);
+      target.toolUsage = buildToolUsage(tools, false);
+      const models = new Map<string, SessionModelUsage>();
+      mergeModels(models, target.modelUsage ?? []);
+      mergeModels(models, source.modelUsage ?? []);
+      target.modelUsage = sortedModelUsage(models, false);
+      target.latency = mergeLatencyStats(target.latency, source.latency);
+    },
+    finish(): SessionCostSummary {
+      if (activityDates.size) {
+        target.activityDates = Array.from(activityDates).toSorted();
+      }
+      target.dailyBreakdown = dailyBreakdown.finish();
+      target.dailyMessageCounts = dailyMessageCounts.finish();
+      target.utcQuarterHourMessageCounts = quarterMessages.finish();
+      target.utcQuarterHourTokenUsage = quarterTokens.finish();
+      target.dailyLatency = dailyLatency.finish();
+      target.dailyModelUsage = dailyModels.finish();
+      return target;
+    },
+  };
 }
 
 function usageBucketsInRange(
@@ -545,92 +522,54 @@ export function buildSessionCostSummaryFromRollup(params: {
   const messageCounts = emptyMessageCounts();
   const tools = new Map<string, number>();
   const models = new Map<string, SessionModelUsage>();
-  const activityDates = new Set<string>();
-  const dailyUsage = new Map<string, { tokens: number; cost: number }>();
-  const dailyMessages = new Map<string, SessionDailyMessageCounts>();
-  const quarterMessages = new Map<string, SessionUtcQuarterHourMessageCounts>();
-  const quarterTokens = new Map<string, SessionUtcQuarterHourTokenUsage>();
+  const dailyUsage = new Map<string, CostUsageTotals>();
+  const dailyMessages = createDatedRowsAccumulator<SessionDailyMessageCounts>(addMessageCounts);
+  const quarterMessages =
+    createDatedRowsAccumulator<SessionUtcQuarterHourMessageCounts>(addMessageCounts);
+  const quarterTokens =
+    createDatedRowsAccumulator<SessionUtcQuarterHourTokenUsage>(addQuarterHourTokens);
   const dailyLatencies = new Map<string, SessionUsageLatencyAggregate>();
-  const dailyModels = new Map<string, SessionDailyModelUsage>();
+  const dailyModels = createDailyModelAccumulator();
   const allLatencies = createLatencyAggregate();
   let firstActivity: number | undefined;
   let lastActivity: number | undefined;
 
-  const mergeBucket = (bucket: SessionUsageRollupBucket): void => {
+  for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
     const date = new Date(bucket.timestampMs);
     const dayKey = params.formatDay(date);
     const quarter = getUtcQuarterHourBucketKey(date);
-    firstActivity =
-      firstActivity === undefined
-        ? bucket.timestampMs
-        : Math.min(firstActivity, bucket.timestampMs);
-    lastActivity =
-      lastActivity === undefined ? bucket.timestampMs : Math.max(lastActivity, bucket.timestampMs);
-    activityDates.add(dayKey);
+    firstActivity ??= bucket.timestampMs;
+    lastActivity = bucket.timestampMs;
     addCostUsageTotals(totals, bucket.totals);
     addMessageCounts(messageCounts, bucket.messageCounts);
     mergeTools(tools, bucket.tools);
     mergeModels(models, bucket.models);
 
-    const daily = dailyUsage.get(dayKey) ?? { tokens: 0, cost: 0 };
-    daily.tokens += bucket.totals.totalTokens;
-    daily.cost += bucket.totals.totalCost;
+    const daily = dailyUsage.get(dayKey) ?? createEmptyCostUsageTotals();
+    addCostUsageTotals(daily, bucket.totals);
     dailyUsage.set(dayKey, daily);
 
-    const dailyMessage = dailyMessages.get(dayKey) ?? { date: dayKey, ...emptyMessageCounts() };
-    addMessageCounts(dailyMessage, bucket.messageCounts);
-    dailyMessages.set(dayKey, dailyMessage);
-
-    const quarterMessage = quarterMessages.get(quarter.bucketId) ?? {
-      date: quarter.date,
-      quarterIndex: quarter.quarterIndex,
-      ...emptyMessageCounts(),
-    };
-    addMessageCounts(quarterMessage, bucket.messageCounts);
-    quarterMessages.set(quarter.bucketId, quarterMessage);
-
-    const quarterUsage = quarterTokens.get(quarter.bucketId) ?? {
-      date: quarter.date,
-      quarterIndex: quarter.quarterIndex,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      totalCost: 0,
-    };
-    quarterUsage.input += bucket.totals.input;
-    quarterUsage.output += bucket.totals.output;
-    quarterUsage.cacheRead += bucket.totals.cacheRead;
-    quarterUsage.cacheWrite += bucket.totals.cacheWrite;
-    quarterUsage.totalTokens += bucket.totals.totalTokens;
-    quarterUsage.totalCost += bucket.totals.totalCost;
-    quarterTokens.set(quarter.bucketId, quarterUsage);
-
-    for (const model of bucket.models) {
-      const modelBucketId = usageDailyModelIdentity(dayKey, model.provider, model.model);
-      const existing = dailyModels.get(modelBucketId) ?? {
+    dailyMessages.add([{ date: dayKey, ...bucket.messageCounts }]);
+    quarterMessages.add([{ ...quarter, ...bucket.messageCounts }]);
+    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost } = bucket.totals;
+    quarterTokens.add([
+      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost },
+    ]);
+    dailyModels.add(
+      bucket.models.map((model) => ({
         date: dayKey,
         provider: model.provider,
         model: model.model,
-        tokens: 0,
-        cost: 0,
-        count: 0,
-      };
-      existing.tokens += model.totals.totalTokens;
-      existing.cost += model.totals.totalCost;
-      existing.count += model.count;
-      dailyModels.set(modelBucketId, existing);
-    }
+        tokens: model.totals.totalTokens,
+        cost: model.totals.totalCost,
+        count: model.count,
+      })),
+    );
 
     mergeLatencyAggregate(allLatencies, bucket.latency);
     const dailyLatency = dailyLatencies.get(dayKey) ?? createLatencyAggregate();
     mergeLatencyAggregate(dailyLatency, bucket.latency);
     dailyLatencies.set(dayKey, dailyLatency);
-  };
-
-  for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
-    mergeBucket(bucket);
   }
   if (params.includeUntimestamped) {
     addCostUsageTotals(totals, params.rollup.untimestamped.totals);
@@ -639,19 +578,12 @@ export function buildSessionCostSummaryFromRollup(params: {
     mergeModels(models, params.rollup.untimestamped.models);
   }
 
-  const dailyLatency = Array.from(dailyLatencies.entries())
-    .map(([date, aggregate]) => {
-      const stats = computeLatencyStats(aggregate);
-      return stats ? Object.assign({ date }, stats) : null;
-    })
+  const dailyLatency = Array.from(dailyLatencies, ([date, aggregate]) => {
+    const stats = computeLatencyStats(aggregate);
+    return stats ? Object.assign({ date }, stats) : null;
+  })
     .filter((entry): entry is SessionDailyLatency => entry !== null)
     .toSorted((a, b) => a.date.localeCompare(b.date));
-  const utcQuarterHourMessageCounts = Array.from(quarterMessages.values()).toSorted(
-    (a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex,
-  );
-  const utcQuarterHourTokenUsage = Array.from(quarterTokens.values()).toSorted(
-    (a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex,
-  );
 
   return {
     sessionId: params.sessionId,
@@ -662,25 +594,15 @@ export function buildSessionCostSummaryFromRollup(params: {
       firstActivity !== undefined && lastActivity !== undefined
         ? Math.max(0, lastActivity - firstActivity)
         : undefined,
-    activityDates: Array.from(activityDates).toSorted(),
-    dailyBreakdown: Array.from(dailyUsage.entries())
-      .map(([date, usage]) => Object.assign({ date }, usage))
-      .toSorted((a, b) => a.date.localeCompare(b.date)),
-    dailyMessageCounts: Array.from(dailyMessages.values()).toSorted((a, b) =>
-      a.date.localeCompare(b.date),
-    ),
-    utcQuarterHourMessageCounts: utcQuarterHourMessageCounts.length
-      ? utcQuarterHourMessageCounts
-      : undefined,
-    utcQuarterHourTokenUsage: utcQuarterHourTokenUsage.length
-      ? utcQuarterHourTokenUsage
-      : undefined,
+    activityDates: Array.from(dailyUsage.keys()).toSorted(),
+    dailyBreakdown: Array.from(dailyUsage, ([date, usage]) =>
+      Object.assign({ date, tokens: usage.totalTokens, cost: usage.totalCost }, usage),
+    ).toSorted((a, b) => a.date.localeCompare(b.date)),
+    dailyMessageCounts: dailyMessages.finish() ?? [],
+    utcQuarterHourMessageCounts: quarterMessages.finish(),
+    utcQuarterHourTokenUsage: quarterTokens.finish(),
     dailyLatency: dailyLatency.length ? dailyLatency : undefined,
-    dailyModelUsage: dailyModels.size
-      ? Array.from(dailyModels.values()).toSorted(
-          (a, b) => a.date.localeCompare(b.date) || b.cost - a.cost,
-        )
-      : undefined,
+    dailyModelUsage: dailyModels.finish((a, b) => a.date.localeCompare(b.date) || b.cost - a.cost),
     messageCounts,
     toolUsage: buildToolUsage(tools),
     modelUsage: sortedModelUsage(models),
@@ -704,48 +626,4 @@ export function addRollupToCostUsageSummary(params: {
     params.daily.set(dayKey, daily);
     addCostUsageTotals(params.totals, bucket.totals);
   }
-}
-
-export function cloneSessionUsageRollupData(
-  rollup: SessionUsageRollupData,
-): SessionUsageRollupData {
-  return {
-    buckets: Object.fromEntries(
-      Object.entries(rollup.buckets).map(([bucketId, bucket]) => [
-        bucketId,
-        {
-          ...bucket,
-          totals: cloneCostUsageTotals(bucket.totals),
-          messageCounts: { ...bucket.messageCounts },
-          tools: bucket.tools.map((tool) => ({ ...tool })),
-          models: bucket.models.map((model) => ({
-            ...model,
-            totals: cloneCostUsageTotals(model.totals),
-          })),
-          latency: {
-            count: bucket.latency.count,
-            max: bucket.latency.max,
-            sum: bucket.latency.sum,
-            ...(bucket.latency.min !== undefined ? { min: bucket.latency.min } : {}),
-            centroids: bucket.latency.centroids.map((centroid) => ({
-              count: centroid.count,
-              value: centroid.value,
-            })),
-          },
-        },
-      ]),
-    ),
-    ...(rollup.lastUserTimestamp !== undefined
-      ? { lastUserTimestamp: rollup.lastUserTimestamp }
-      : {}),
-    untimestamped: {
-      totals: cloneCostUsageTotals(rollup.untimestamped.totals),
-      messageCounts: { ...rollup.untimestamped.messageCounts },
-      tools: rollup.untimestamped.tools.map((tool) => ({ ...tool })),
-      models: rollup.untimestamped.models.map((model) => ({
-        ...model,
-        totals: cloneCostUsageTotals(model.totals),
-      })),
-    },
-  };
 }

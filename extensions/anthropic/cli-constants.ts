@@ -1,8 +1,5 @@
-/**
- * Shared Claude CLI constants. These identify the synthetic backend, default
- * model refs, aliases, and session-id fields used across runtime and setup.
- */
-/** Synthetic provider/backend id for Claude Code CLI-backed Anthropic models. */
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 /** Retired OpenClaw auth profile replaced by Claude CLI's native login. */
 export const CLAUDE_CLI_PROFILE_ID = `anthropic:${CLAUDE_CLI_BACKEND_ID}`;
@@ -19,7 +16,6 @@ export const CLAUDE_CLI_NATIVE_AUTH_MARKER = ["openclaw", "claude-cli-native-aut
 // steer OpenClaw-managed Claude CLI runs toward a different provider,
 // endpoint, token source, plugin source, or telemetry bootstrap mode. Claude's
 // config directory remains inherited because it owns the selected native login.
-/** Environment variables removed before launching OpenClaw-managed Claude CLI runs. */
 export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_OLD",
@@ -68,24 +64,15 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "OTEL_TRACES_EXPORTER",
 ] as const;
 
-/** Default Claude CLI model ref for agent defaults and live tests. */
-export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-5`;
-/** Provider-relative model id for Anthropic runtime-policy resolution. */
+export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-5-5`;
 const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(
   CLAUDE_CLI_BACKEND_ID.length + 1,
 );
 /** Canonical model ref routed to the Claude CLI backend by Anthropic setup. */
 export const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = `anthropic/${CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID}`;
-/** Default Claude CLI models allowed when setup seeds the model allowlist. */
-export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
-  CLAUDE_CLI_DEFAULT_MODEL_REF,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-5`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-fable-5`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-8`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-7`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-6`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-6`,
-] as const;
+export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = manifest.modelCatalog.providers[
+  CLAUDE_CLI_BACKEND_ID
+].models.map(({ id }) => `${CLAUDE_CLI_BACKEND_ID}/${id}`);
 
 /**
  * Claude CLI model ids probed when detecting an existing CLI route, canonical
@@ -96,30 +83,24 @@ export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
 export const CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
   ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1),
 );
+export const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS.map(
+  (id) => `anthropic/${id}`,
+);
 
-/** User-facing Claude CLI model aliases normalized before execution. */
+/** Provider-owned aliases shared by setup, pricing, and native CLI selectors. */
+export const CLAUDE_MODEL_ID_ALIASES: ReadonlyMap<string, string> = new Map(
+  Object.entries(manifest.modelIdNormalization.providers.anthropic.aliases),
+);
+
 export const CLAUDE_CLI_MODEL_ALIASES: Record<string, string> = {
+  ...Object.fromEntries(CLAUDE_MODEL_ID_ALIASES),
+  ...Object.fromEntries(CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS.map((id) => [id, id])),
   opus: "opus",
-  "opus-5": "claude-opus-5",
-  "opus-4.8": "claude-opus-4-8",
-  "opus-4.7": "claude-opus-4-7",
-  "opus-4.6": "claude-opus-4-6",
-  "claude-opus-5": "claude-opus-5",
-  "claude-opus-4-8": "claude-opus-4-8",
-  "claude-opus-4-7": "claude-opus-4-7",
-  "claude-opus-4-6": "claude-opus-4-6",
   sonnet: "sonnet",
-  "sonnet-5": "claude-sonnet-5",
-  "claude-sonnet-5": "claude-sonnet-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "claude-sonnet-4-6": "claude-sonnet-4-6",
   fable: "fable",
-  "fable-5": "claude-fable-5",
-  "claude-fable-5": "claude-fable-5",
   haiku: "haiku",
 };
 
-/** JSONL fields that may contain Claude CLI session ids. */
 export const CLAUDE_CLI_SESSION_ID_FIELDS = [
   "session_id",
   "sessionId",

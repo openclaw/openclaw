@@ -9,7 +9,6 @@ import {
   capEntryCount,
   pruneStaleEntries,
   resolveMaintenanceConfigFromInput,
-  shouldPreserveMaintenanceEntry,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
@@ -36,7 +35,7 @@ function installThrowingConversationResolver() {
 }
 
 describe("recent session maintenance preservation", () => {
-  it.each(["classification", "pruning", "capping"] as const)(
+  it.each(["pruning", "capping"] as const)(
     "preserves external conversations during %s without invoking channel plugins",
     (boundary) => {
       const resolveSessionConversation = installThrowingConversationResolver();
@@ -48,6 +47,9 @@ describe("recent session maintenance preservation", () => {
         "agent:main:telegram:direct:user:topic:77",
         "agent:main:telegram:dm:user:topic:77",
         "agent:main:opaque:thread:reply",
+        "agent:main:broken:direct:peer",
+        "agent:main:broken:account:direct:peer",
+        "agent:main:direct:peer",
       ];
       const removableKeys = [
         "agent:main:old",
@@ -59,23 +61,14 @@ describe("recent session maintenance preservation", () => {
       );
 
       try {
-        if (boundary === "classification") {
-          for (const key of protectedKeys) {
-            expect(shouldPreserveMaintenanceEntry({ key, entry: store[key] })).toBe(true);
-          }
-          for (const key of removableKeys) {
-            expect(shouldPreserveMaintenanceEntry({ key, entry: store[key] })).toBe(false);
-          }
-        } else if (boundary === "pruning") {
-          expect(pruneStaleEntries(store, 30 * DAY_MS, { log: false })).toBe(removableKeys.length);
+        if (boundary === "pruning") {
+          expect(pruneStaleEntries(store, 30 * DAY_MS, { log: false })).toBe(1);
         } else {
-          expect(capEntryCount(store, protectedKeys.length, { log: false })).toBe(
-            removableKeys.length,
-          );
+          expect(capEntryCount(store, protectedKeys.length, { log: false })).toBe(3);
         }
 
         for (const key of protectedKeys) {
-          expect(store).toHaveProperty(key);
+          expect(store[key]).toEqual({ sessionId: key, updatedAt });
         }
         expect(resolveSessionConversation).not.toHaveBeenCalled();
       } finally {
@@ -108,15 +101,15 @@ describe("recent session maintenance preservation", () => {
       pruneStaleEntries(store, 12 * 60 * 60 * 1000, {
         preserveRecentMs,
       }),
-    ).toBe(2);
+    ).toBe(1);
     expect(store).toHaveProperty(recentKey);
-    expect(store).not.toHaveProperty(staleKey);
+    expect(store[staleKey]?.archivedAt).toEqual(expect.any(Number));
     expect(store).not.toHaveProperty(syntheticKey);
 
     store[staleKey] = { sessionId: "stale-2", updatedAt: now - 8 * DAY_MS };
     expect(capEntryCount(store, 1, { preserveRecentMs })).toBe(1);
     expect(store).toHaveProperty(recentKey);
-    expect(store).not.toHaveProperty(staleKey);
+    expect(store[staleKey]?.archivedAt).toEqual(expect.any(Number));
   });
 
   it("keeps recent and external sessions under disk pressure without invoking plugins", async () => {
@@ -136,6 +129,8 @@ describe("recent session maintenance preservation", () => {
           [staleKey]: {
             sessionId: "stale",
             updatedAt: now - 8 * DAY_MS,
+            archivedAt: now - 8 * DAY_MS,
+            archiveReason: "active-session-cap",
             displayName: "s".repeat(4_000),
           },
           [externalKey]: {

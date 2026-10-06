@@ -15,6 +15,8 @@ import type { MediaUnderstandingDecision } from "../media-understanding/types.js
 // caller so status rendering can stay presentation-focused and side-effect-light.
 export type BuildStatusTextParams = {
   cfg: OpenClawConfig;
+  /** Prepared owner for bare session keys shared by multiple agents. */
+  agentId?: string;
   sessionEntry?: SessionEntry;
   sessionKey: string;
   parentSessionKey?: string;
@@ -34,13 +36,15 @@ export type BuildStatusTextParams = {
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;
-  resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+  resolveDefaultThinkingLevel: (selection?: {
+    provider: string;
+    model: string;
+    agentRuntime?: string | null;
+  }) => Promise<ThinkLevel | undefined>;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
-  taskLineOverride?: string;
   pluginHealthLineOverride?: string;
-  skipDefaultTaskLookup?: boolean;
   primaryModelLabelOverride?: string;
   modelAuthOverride?: string;
   activeModelAuthOverride?: string;

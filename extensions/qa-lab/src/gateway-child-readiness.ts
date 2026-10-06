@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns gateway readiness and retry behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
@@ -9,7 +8,6 @@ import {
   type QaChildFailure,
   throwQaGatewayChildFailure,
 } from "./gateway-child-process.js";
-import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
 
 export const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
@@ -61,76 +59,13 @@ export function resolveQaGatewayStartupRetry(params: {
   };
 }
 
-function isRetryableGatewayCallError(details: string): boolean {
-  // The persistent QA client exposes preformatted close errors plus child logs,
-  // not the typed transport errors produced by one-shot gateway calls.
-  return (
-    details.includes("handshake timeout") ||
-    details.includes("gateway closed (1000") ||
-    details.includes("gateway closed (1012)") ||
-    details.includes("gateway closed (1006") ||
-    details.includes("abnormal closure") ||
-    details.includes("service restart")
-  );
-}
-
-export async function callQaGatewayWithRetry<T>(params: {
-  deadlineMs?: number;
-  logs: () => string;
-  request: (options: { deadlineMs?: number; timeoutMs: number }) => Promise<T>;
-  throwChildFailure: () => void;
-  timeoutMs: number;
-  waitForReady: (timeoutMs: number) => Promise<void>;
-}) {
-  const remainingMs = () =>
-    params.deadlineMs === undefined ? undefined : params.deadlineMs - Date.now();
-  const deadlineError = () =>
-    new Error(`gateway call deadline exceeded${formatQaGatewayLogsForError(params.logs())}`);
-  let lastDetails = "";
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    params.throwChildFailure();
-    const requestRemainingMs = remainingMs();
-    if (requestRemainingMs !== undefined && requestRemainingMs <= 0) {
-      throw deadlineError();
-    }
-    try {
-      return await params.request({
-        ...(params.deadlineMs === undefined ? {} : { deadlineMs: params.deadlineMs }),
-        timeoutMs:
-          requestRemainingMs === undefined
-            ? params.timeoutMs
-            : Math.min(params.timeoutMs, requestRemainingMs),
-      });
-    } catch (error) {
-      params.throwChildFailure();
-      const details = formatErrorMessage(error);
-      lastDetails = details;
-      if (attempt >= 3 || !isRetryableGatewayCallError(details)) {
-        throw new Error(`${details}${formatQaGatewayLogsForError(params.logs())}`, {
-          cause: error,
-        });
-      }
-      const readinessRemainingMs = remainingMs();
-      if (readinessRemainingMs !== undefined && readinessRemainingMs <= 0) {
-        throw deadlineError();
-      }
-      await params.waitForReady(
-        readinessRemainingMs === undefined
-          ? Math.max(10_000, params.timeoutMs)
-          : Math.min(Math.max(10_000, params.timeoutMs), readinessRemainingMs),
-      );
-    }
-  }
-  throw new Error(`${lastDetails}${formatQaGatewayLogsForError(params.logs())}`);
-}
-
-async function fetchLocalGatewayHealth(params: {
+async function fetchLocalGatewayProbe(params: {
   baseUrl: string;
-  healthPath: "/readyz" | "/healthz";
+  kind: "health" | "listening";
   timeoutMs?: number;
 }): Promise<boolean> {
   const { response, release } = await fetchWithSsrFGuard({
-    url: `${params.baseUrl}${params.healthPath}`,
+    url: `${params.baseUrl}/${params.kind === "health" ? "readyz" : "healthz"}`,
     init: {
       method: "HEAD",
       headers: {
@@ -139,30 +74,13 @@ async function fetchLocalGatewayHealth(params: {
       signal: AbortSignal.timeout(params.timeoutMs ?? 2_000),
     },
     policy: { allowPrivateNetwork: true },
-    auditContext: "qa-lab-gateway-child-health",
+    auditContext: `qa-lab-gateway-child-${params.kind}`,
   });
   try {
-    return response.ok;
+    return params.kind === "listening" || response.ok;
   } finally {
     await release();
   }
-}
-
-async function fetchLocalGatewayListening(baseUrl: string): Promise<boolean> {
-  const { release } = await fetchWithSsrFGuard({
-    url: `${baseUrl}/healthz`,
-    init: {
-      method: "HEAD",
-      headers: {
-        connection: "close",
-      },
-      signal: AbortSignal.timeout(2_000),
-    },
-    policy: { allowPrivateNetwork: true },
-    auditContext: "qa-lab-gateway-child-listening",
-  });
-  await release();
-  return true;
 }
 
 export async function waitForQaGatewayRestartBoundary(params: {
@@ -187,74 +105,52 @@ export async function waitForQaGatewayRestartBoundary(params: {
   throw new Error(`qa gateway child did not reach restart boundary within ${timeoutMs}ms`);
 }
 
-export async function waitForGatewayReady(params: {
+type QaGatewayProbeParams = {
   baseUrl: string;
   logs: () => string;
   child: QaGatewayHealthChild;
   getChildFailure?: () => QaChildFailure | null;
   timeoutMs?: number;
-}) {
+};
+
+async function waitForGatewayProbe(params: QaGatewayProbeParams, kind: "health" | "listening") {
   const deadline = Date.now() + (params.timeoutMs ?? 60_000);
+  const phase = kind === "health" ? "becoming healthy" : "listening";
   let remainingMs: number;
   while ((remainingMs = deadline - Date.now()) > 0) {
     throwQaGatewayChildFailure(params.getChildFailure, params.logs);
     if (hasQaGatewayChildExited(params.child)) {
       throw new QaSuiteInfraError(
         "gateway_startup_unhealthy",
-        `gateway exited before becoming healthy (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
+        `gateway exited before ${phase} (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
       );
     }
     // Listener liveness can turn green before the Gateway can admit startup or restart work.
     try {
       if (
-        await fetchLocalGatewayHealth({
+        await fetchLocalGatewayProbe({
           baseUrl: params.baseUrl,
-          healthPath: "/readyz",
-          timeoutMs: Math.min(2_000, remainingMs),
+          kind,
+          timeoutMs: kind === "health" ? Math.min(2_000, remainingMs) : undefined,
         })
       ) {
         return;
       }
-    } catch {
-      // retry until timeout
-    }
-    await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
+    } catch {}
+    await sleep(kind === "health" ? Math.min(250, Math.max(0, deadline - Date.now())) : 100);
   }
   throw new QaSuiteInfraError(
     "gateway_startup_unhealthy",
-    `gateway failed to become healthy:\n${params.logs()}`,
+    `gateway failed to ${kind === "health" ? "become healthy" : "listen before timeout"}:\n${params.logs()}`,
   );
 }
 
-export async function waitForGatewayListening(params: {
-  baseUrl: string;
-  logs: () => string;
-  child: QaGatewayHealthChild;
-  getChildFailure?: () => QaChildFailure | null;
-  timeoutMs?: number;
-}) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < (params.timeoutMs ?? 60_000)) {
-    throwQaGatewayChildFailure(params.getChildFailure, params.logs);
-    if (params.child.exitCode !== null || params.child.signalCode !== null) {
-      throw new QaSuiteInfraError(
-        "gateway_startup_unhealthy",
-        `gateway exited before listening (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
-      );
-    }
-    try {
-      if (await fetchLocalGatewayListening(params.baseUrl)) {
-        return;
-      }
-    } catch {
-      // retry until the HTTP listener accepts requests
-    }
-    await sleep(100);
-  }
-  throw new QaSuiteInfraError(
-    "gateway_startup_unhealthy",
-    `gateway failed to listen before timeout:\n${params.logs()}`,
-  );
+export function waitForGatewayReady(params: QaGatewayProbeParams) {
+  return waitForGatewayProbe(params, "health");
+}
+
+export function waitForGatewayListening(params: QaGatewayProbeParams) {
+  return waitForGatewayProbe(params, "listening");
 }
 
 export function isRetryableRpcStartupError(error: unknown) {

@@ -1,0 +1,7 @@
+set -euo pipefail
+node workflow-source/scripts/docker-release-artifacts.mjs publish \
+  --manifest "${RUNNER_TEMP}/docker-release/manifest.json" \
+  --manifest-sha256 "${PREPARED_MANIFEST_SHA256}" \
+  --artifact-name "${PREPARED_ARTIFACT_NAME}" \
+  --run-id "${PREPARED_RUN_ID}" --run-attempt "${PREPARED_RUN_ATTEMPT}" \
+  --directory "${RUNNER_TEMP}/docker-release/payloads"

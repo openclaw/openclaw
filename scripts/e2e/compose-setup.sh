@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -220,13 +224,25 @@ export OPENCLAW_CONFIG_DIR="$PROJECT_DIR/config"
 export OPENCLAW_WORKSPACE_DIR="$PROJECT_DIR/config/workspace"
 export OPENCLAW_AUTH_PROFILE_SECRET_DIR="$PROJECT_DIR/auth-profile"
 export OPENCLAW_GATEWAY_TOKEN="$TOKEN"
-export OPENCLAW_GATEWAY_PORT=0
 export OPENCLAW_BRIDGE_PORT=0
 export OPENCLAW_MSTEAMS_PORT=0
 export OPENCLAW_DISABLE_BONJOUR=1
 export OPENCLAW_CURRENT_PACKAGE_TGZ="$PACKAGE_TGZ"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" compose-setup "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" functional
+
+# Allocate after image preparation to minimize the release-to-bind race with Compose.
+# Persist the host port like setup.sh so env_file exercises both internal-port overrides.
+OPENCLAW_GATEWAY_PORT="$(node <<'NODE'
+const server = require("node:net").createServer();
+server.listen(0, "0.0.0.0", () => {
+  console.log(server.address().port);
+  server.close();
+});
+NODE
+)"
+export OPENCLAW_GATEWAY_PORT
+printf 'OPENCLAW_GATEWAY_PORT=%s\n' "$OPENCLAW_GATEWAY_PORT" >"$PROJECT_DIR/.env"
 
 assert_dockerfile_healthcheck
 "${COMPOSE[@]}" config --format json >"$PROJECT_DIR/compose-config.json"

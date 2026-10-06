@@ -1,10 +1,16 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
-import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import { createSessionStoreSummaryReaderStub } from "../../config/sessions/session-store-summary.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 
 let testConfig: OpenClawConfig = {};
 let healthPluginsForTest: ChannelPlugin[] = [];
+const tempDirs = createTempDirTracker();
+let sessionStorePath: string;
 
 let collectGatewayHealthSnapshot: typeof import("./collector.js").collectGatewayHealthSnapshot;
 let createChannelTestPluginBase: typeof import("../../test-utils/channel-plugins.js").createChannelTestPluginBase;
@@ -45,10 +51,10 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
       getRuntimeConfig: () => testConfig,
     }));
     vi.doMock("../../config/sessions/paths.js", () => ({
-      resolveSessionStorePathCore: () => "/tmp/sessions.json",
+      resolveSessionStorePathCore: () => sessionStorePath,
     }));
-    vi.doMock("../../config/sessions/session-accessor.js", () => ({
-      listSessionEntriesReadOnly: () => [],
+    vi.doMock("../../config/sessions/session-entry-read-runtime.js", () => ({
+      withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(),
     }));
     vi.doMock("../../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
@@ -63,13 +69,21 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
   });
 
   beforeEach(() => {
+    sessionStorePath = path.join(
+      tempDirs.make("openclaw-health-legacy-sessions-"),
+      "sessions.json",
+    );
     healthPluginsForTest = [createHealthPlugin()];
   });
 
-  it("projects the retained owner without inventing an explicit fleet default", async () => {
-    const migratedConfig = {
+  afterEach(() => {
+    tempDirs.cleanup();
+  });
+
+  it("projects the Doctor-migrated owner without inventing an ownerless fleet default", async () => {
+    const legacyConfig = {
       agents: {
-        entries: { first: {}, ops: {}, research: {} },
+        entries: { first: {}, ops: { default: true }, research: {} },
       },
       bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "ops" } }],
       channels: {
@@ -80,12 +94,15 @@ describe("collectGatewayHealthSnapshot legacy owner projection", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
-    testConfig = retainLegacyDefaultAgentId(migratedConfig, "ops");
+    };
+    testConfig = createCanonicalAgentConfigFixture(legacyConfig).config;
 
     const migrated = await collectGatewayHealthSnapshot({ audience: "admin", probe: false });
 
     expect(migrated.defaultAgentId).toBe("ops");
+    expect(migrated.agents.map(({ sessions }) => path.dirname(sessions.path))).toEqual(
+      migrated.agents.map(() => path.dirname(sessionStorePath)),
+    );
     const migratedOwner = migrated.agents.find((agent) => agent.isDefault);
     expect(migratedOwner?.agentId).toBe("ops");
     expect(migratedOwner?.heartbeat.enabled).toBe(true);

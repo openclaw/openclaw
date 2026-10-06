@@ -49,6 +49,8 @@ type CoreToolDefinition = {
   description: string;
   sectionId: string;
   profiles: ToolProfileId[];
+  executionLocation?: "placement" | "gateway";
+  includeInSectionGroup?: boolean;
   includeInOpenClawGroup?: boolean;
 };
 
@@ -68,37 +70,57 @@ const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
 
 const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
+    id: "decision_evaluate",
+    description: "Evaluate explicit evidence with the agent's decision model",
+    sectionId: "agents",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "ls",
+    executionLocation: "placement",
+    description: "List directory entries",
+    sectionId: "fs",
+    profiles: ["coding"],
+  },
+  {
     id: "read",
+    executionLocation: "placement",
     description: "Read file contents",
     sectionId: "fs",
     profiles: ["coding"],
   },
   {
     id: "write",
+    executionLocation: "placement",
     description: "Create or overwrite files",
     sectionId: "fs",
     profiles: ["coding"],
   },
   {
     id: "edit",
+    executionLocation: "placement",
     description: "Make precise edits",
     sectionId: "fs",
     profiles: ["coding"],
   },
   {
     id: "apply_patch",
+    executionLocation: "placement",
     description: "Patch files",
     sectionId: "fs",
     profiles: ["coding"],
   },
   {
     id: "exec",
+    executionLocation: "placement",
     description: EXEC_TOOL_DISPLAY_SUMMARY,
     sectionId: "runtime",
     profiles: ["coding"],
   },
   {
     id: "process",
+    executionLocation: "placement",
     description: PROCESS_TOOL_DISPLAY_SUMMARY,
     sectionId: "runtime",
     profiles: ["coding"],
@@ -153,6 +175,21 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "personal_instructions",
+    description: "Edit the requesting user’s personal instructions",
+    sectionId: "memory",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "presence",
+    executionLocation: "gateway",
+    description: "Online people, connected devices, recent activity, and connection location",
+    sectionId: "sessions",
+    profiles: ["minimal", "coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "sessions",
     description: "Session settings: label, pin, archive, groups",
     sectionId: "sessions",
@@ -203,6 +240,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   },
   {
     id: "sessions_send",
+    executionLocation: "gateway",
     description: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
@@ -210,6 +248,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   },
   {
     id: "sessions_spawn",
+    executionLocation: "gateway",
     description: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
@@ -273,6 +312,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   },
   {
     id: "browser",
+    executionLocation: "placement",
     description: "Control web browser",
     sectionId: "ui",
     profiles: [],
@@ -283,6 +323,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Drive operator web UI",
     sectionId: "ui",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "theme",
+    description: "List, select, and create appearance themes",
+    sectionId: "ui",
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -301,6 +348,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   },
   {
     id: "portal",
+    executionLocation: "gateway",
     description: "Expose local web apps through the gateway",
     sectionId: "ui",
     profiles: ["coding"],
@@ -342,7 +390,21 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   },
   {
     id: "gateway",
-    description: "Read Gateway config and schema",
+    description: "Update OpenClaw; read Gateway config/schema when permitted",
+    sectionId: "automation",
+    profiles: ["minimal", "coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "plugins",
+    description: "Manage and reload plugins",
+    sectionId: "automation",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "openclaw",
+    description: "Delegate OpenClaw setup and repair",
     sectionId: "automation",
     profiles: [],
     includeInOpenClawGroup: true,
@@ -356,7 +418,8 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   },
   {
     id: "computer",
-    description: "Control a paired computer node desktop",
+    executionLocation: "placement",
+    description: "Control the Gateway desktop or a paired computer",
     sectionId: "nodes",
     profiles: [],
     includeInOpenClawGroup: true,
@@ -412,7 +475,22 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   },
   {
     id: "skill_workshop",
+    executionLocation: "gateway",
     description: SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY,
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "skills_search",
+    description: "Search installed eligible skills",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "skills_read",
+    description: "Read complete installed skill instructions",
     sectionId: "agents",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -446,8 +524,23 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "transcripts",
+    description: "Inspect and manage meeting transcript captures",
+    sectionId: "media",
+    profiles: [],
+    // Catalog visibility must not change existing media group policies.
+    includeInSectionGroup: false,
+  },
+  {
     id: "tts",
     description: "Text-to-speech conversion",
+    sectionId: "media",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "pdf",
+    description: "PDF reading and extraction",
     sectionId: "media",
     profiles: [],
     includeInOpenClawGroup: true,
@@ -457,6 +550,22 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
 const CORE_TOOL_BY_ID = new Map<string, CoreToolDefinition>(
   CORE_TOOL_DEFINITIONS.map((tool) => [tool.id, tool]),
 );
+
+// Keep Gateway declarations for 2026.9.8 until the next supervisor dialect.
+export const CORE_WORKER_LAUNCH_TOOL_NAMES = Object.freeze(
+  CORE_TOOL_DEFINITIONS.filter((tool) => tool.executionLocation).map((tool) => tool.id),
+);
+
+export function resolveCoreToolExecutionLocation(toolId: string): "placement" | "gateway" {
+  return CORE_TOOL_BY_ID.get(toolId)?.executionLocation ?? "gateway";
+}
+
+// Section membership is static; capability filtering and response objects stay per request.
+const CORE_TOOL_SECTIONS = CORE_TOOL_SECTION_ORDER.map(({ id, label }) => ({
+  id,
+  label,
+  tools: CORE_TOOL_DEFINITIONS.filter((tool) => tool.sectionId === id),
+}));
 
 function listCoreToolIdsForProfile(profile: ToolProfileId): string[] {
   return CORE_TOOL_DEFINITIONS.filter((tool) => tool.profiles.includes(profile)).map(
@@ -482,6 +591,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
 function buildCoreToolGroupMap() {
   const sectionToolMap = new Map<string, string[]>();
   for (const tool of CORE_TOOL_DEFINITIONS) {
+    if (tool.includeInSectionGroup === false) {
+      continue;
+    }
     const groupId = `group:${tool.sectionId}`;
     const list = sectionToolMap.get(groupId) ?? [];
     list.push(tool.id);
@@ -513,10 +625,7 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
     return undefined;
   }
   const resolved = CORE_TOOL_PROFILES[profile as ToolProfileId];
-  if (!resolved) {
-    return undefined;
-  }
-  if (!resolved.allow && !resolved.deny) {
+  if (!resolved?.allow && !resolved?.deny) {
     return undefined;
   }
   return {
@@ -525,39 +634,34 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
   };
 }
 
-/** Lists core tools grouped into UI sections. */
+/** Lists configurable core tools; per-run authorization belongs to runtime assembly. */
 export function listCoreToolSections(params?: {
   swarmEnabled?: boolean;
-  githubPublicationAvailable?: boolean;
+  personalInstructionsEnabled?: boolean;
 }): CoreToolSection[] {
   // Callers resolve the swarm gate and pass the fact in; resolving config here
   // would couple this ui-shared module to the server graph.
   const swarmEnabled = params?.swarmEnabled === true;
-  return CORE_TOOL_SECTION_ORDER.map((section) => ({
+  return CORE_TOOL_SECTIONS.map((section) => ({
     id: section.id,
     label: section.label,
-    tools: CORE_TOOL_DEFINITIONS.filter(
-      (tool) =>
-        tool.sectionId === section.id &&
-        (tool.id !== "agents_wait" || swarmEnabled) &&
-        (tool.id !== "github_identity_status" ||
-          params?.githubPublicationAvailable !== undefined) &&
-        (tool.id !== "github_publish" || params?.githubPublicationAvailable === true),
-    ).map((tool) => ({
-      id: tool.id,
-      label: tool.id,
-      description: tool.description,
-    })),
+    tools: section.tools
+      .filter(
+        (tool) =>
+          (tool.id !== "agents_wait" || swarmEnabled) &&
+          (tool.id !== "personal_instructions" || params?.personalInstructionsEnabled === true),
+      )
+      .map((tool) => ({
+        id: tool.id,
+        label: tool.id,
+        description: tool.description,
+      })),
   })).filter((section) => section.tools.length > 0);
 }
 
 /** Lists built-in profile ids that include a core tool. */
 export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
-  const tool = CORE_TOOL_BY_ID.get(toolId);
-  if (!tool) {
-    return [];
-  }
-  return [...tool.profiles];
+  return [...(CORE_TOOL_BY_ID.get(toolId)?.profiles ?? [])];
 }
 
 /** Returns true when a tool id is a known core tool. */

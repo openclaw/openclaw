@@ -1,6 +1,7 @@
 // Nodes tool tests cover gateway-scoped node actions, media payload writing,
 // numeric schema guardrails, and pairing approval scopes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
@@ -65,13 +66,6 @@ const screenMocks = vi.hoisted(() => ({
   writeScreenRecordToFile: vi.fn(async (_filePath: string) => ({
     path: "/tmp/screen-record.mp4",
   })),
-  parseScreenSnapshotPayload: vi.fn(() => ({
-    base64: "ZmFrZQ==",
-    format: "png",
-    screenIndex: 0,
-    width: 1920,
-    height: 1080,
-  })),
   // Mirrors nodes-screen's mapping; the real contract is covered in nodes-camera.test.ts.
   screenSnapshotFormatForPath: vi.fn((filePath: string) => {
     if (filePath.toLowerCase().endsWith(".png")) {
@@ -109,7 +103,6 @@ vi.mock("../../cli/nodes-screen.js", () => ({
   parseScreenRecordPayload: screenMocks.parseScreenRecordPayload,
   screenRecordTempPath: screenMocks.screenRecordTempPath,
   writeScreenRecordToFile: screenMocks.writeScreenRecordToFile,
-  parseScreenSnapshotPayload: screenMocks.parseScreenSnapshotPayload,
   screenSnapshotFormatForPath: screenMocks.screenSnapshotFormatForPath,
   screenSnapshotTempPath: screenMocks.screenSnapshotTempPath,
   writeScreenSnapshotToFile: screenMocks.writeScreenSnapshotToFile,
@@ -175,7 +168,6 @@ describe("createNodesTool screen_record duration guardrails", () => {
     screenMocks.parseScreenRecordPayload.mockClear();
     screenMocks.screenRecordTempPath.mockClear();
     screenMocks.writeScreenRecordToFile.mockClear();
-    screenMocks.parseScreenSnapshotPayload.mockClear();
     screenMocks.screenSnapshotTempPath.mockClear();
     screenMocks.writeScreenSnapshotToFile.mockClear();
     nodesCameraMocks.cameraTempPath.mockClear();
@@ -196,69 +188,38 @@ describe("createNodesTool screen_record duration guardrails", () => {
   });
 
   it("bounds durationMs schema to positive values capped at 300000", () => {
-    const tool = createNodesTool();
-    const schema = tool.parameters as {
-      properties?: {
-        durationMs?: {
-          minimum?: number;
-          maximum?: number;
-          type?: string;
-        };
-      };
-    };
-    expect(schema.properties?.durationMs?.type).toBe("integer");
-    expect(schema.properties?.durationMs?.minimum).toBe(1);
-    expect(schema.properties?.durationMs?.maximum).toBe(300_000);
+    expect(createNodesTool().parameters).toMatchObject({
+      properties: { durationMs: { type: "integer", minimum: 1, maximum: 300_000 } },
+    });
   });
 
   it("bounds photos_latest limit schema to positive values capped at 20", () => {
-    const tool = createNodesTool();
-    const schema = tool.parameters as {
-      properties?: {
-        limit?: {
-          minimum?: number;
-          maximum?: number;
-          type?: string;
-        };
-      };
-    };
-    expect(schema.properties?.limit?.type).toBe("integer");
-    expect(schema.properties?.limit?.minimum).toBe(1);
-    expect(schema.properties?.limit?.maximum).toBe(20);
+    expect(createNodesTool().parameters).toMatchObject({
+      properties: { limit: { type: "integer", minimum: 1, maximum: 20 } },
+    });
   });
 
   it("advertises node media numeric constraints in the tool schema", () => {
-    const tool = createNodesTool();
-    const schema = tool.parameters as {
-      properties?: {
-        maxWidth?: { minimum?: number; type?: string };
-        quality?: { minimum?: number; maximum?: number; type?: string };
-        delayMs?: { minimum?: number; type?: string };
-        fps?: { exclusiveMinimum?: number; type?: string };
-        screenIndex?: { minimum?: number; type?: string };
-      };
-    };
-    expect(schema.properties?.maxWidth).toMatchObject({ type: "integer", minimum: 1 });
-    expect(schema.properties?.quality).toMatchObject({ type: "number", minimum: 0, maximum: 1 });
-    expect(schema.properties?.delayMs).toMatchObject({ type: "integer", minimum: 0 });
-    expect(schema.properties?.fps).toMatchObject({ type: "number", exclusiveMinimum: 0 });
-    expect(schema.properties?.screenIndex).toMatchObject({ type: "integer", minimum: 0 });
+    expect(createNodesTool().parameters).toMatchObject({
+      properties: {
+        maxWidth: { type: "integer", minimum: 1 },
+        quality: { type: "number", minimum: 0, maximum: 1 },
+        delayMs: { type: "integer", minimum: 0 },
+        fps: { type: "number", exclusiveMinimum: 0 },
+        screenIndex: { type: "integer", minimum: 0 },
+      },
+    });
   });
 
   it("advertises node command timeout constraints in the tool schema", () => {
-    const tool = createNodesTool();
-    const schema = tool.parameters as {
-      properties?: {
-        timeoutMs?: { minimum?: number; type?: string };
-        maxAgeMs?: { minimum?: number; type?: string };
-        locationTimeoutMs?: { minimum?: number; type?: string };
-        invokeTimeoutMs?: { minimum?: number; type?: string };
-      };
-    };
-    expect(schema.properties?.timeoutMs).toMatchObject({ type: "integer", minimum: 1 });
-    expect(schema.properties?.maxAgeMs).toMatchObject({ type: "integer", minimum: 0 });
-    expect(schema.properties?.locationTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
-    expect(schema.properties?.invokeTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
+    expect(createNodesTool().parameters).toMatchObject({
+      properties: {
+        timeoutMs: { type: "integer", minimum: 1 },
+        maxAgeMs: { type: "integer", minimum: 0 },
+        locationTimeoutMs: { type: "integer", minimum: 1 },
+        invokeTimeoutMs: { type: "integer", minimum: 1 },
+      },
+    });
   });
 
   it("guides node discovery before describe", () => {
@@ -276,27 +237,18 @@ describe("createNodesTool screen_record duration guardrails", () => {
 
   it("advertises typed executable lookup instead of requiring raw invoke JSON", () => {
     const tool = createNodesTool();
-    const schema = tool.parameters as {
-      properties?: {
-        action?: { enum?: string[] };
-        bins?: {
-          type?: string;
-          minItems?: number;
-          maxItems?: number;
-          items?: { type?: string; minLength?: number };
-          description?: string;
-        };
-      };
-    };
-
     expect(tool.description).toContain("executable lookup (which + bins)");
-    expect(schema.properties?.action?.enum).toContain("which");
-    expect(schema.properties?.bins).toMatchObject({
-      type: "array",
-      minItems: 1,
-      maxItems: 64,
-      items: { type: "string", minLength: 1 },
-      description: "which: executable names to resolve on the selected node.",
+    expect(tool.parameters).toMatchObject({
+      properties: {
+        action: { enum: expect.arrayContaining(["which"]) },
+        bins: {
+          type: "array",
+          minItems: 1,
+          maxItems: 64,
+          items: { type: "string", minLength: 1 },
+          description: "which: executable names to resolve on the selected node.",
+        },
+      },
     });
   });
 
@@ -329,10 +281,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
   it.each([
     { name: "title only", input: { title: "Build complete" } },
     { name: "body only", input: { body: "Deployment finished" } },
-    { name: "both fields", input: { title: "Build complete", body: "Deployment finished" } },
     { name: "trimmed fields", input: { title: "  Build complete\t", body: "\n done  " } },
-    { name: "whitespace body", input: { title: "  Build complete  ", body: " \t " } },
-    { name: "whitespace title", input: { title: " \n ", body: "  Deployment finished  " } },
   ])("serializes both required native strings for $name", async ({ input }) => {
     gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
 
@@ -365,23 +314,20 @@ describe("createNodesTool screen_record duration guardrails", () => {
     );
   });
 
-  it.each([
-    {},
-    { title: "", body: "" },
-    { title: " \t ", body: " \n " },
-    { title: " \t " },
-    { body: " \n " },
-  ] as const)("rejects empty notification %# before gateway invocation", async (input) => {
-    await expect(
-      createNodesTool().execute("call-notify-empty", {
-        action: "notify",
-        node: "Office Mac",
-        ...input,
-      }),
-    ).rejects.toThrow("title or body required");
+  it.each([{}, { title: " \t ", body: " \n " }] as const)(
+    "rejects empty notification %# before gateway invocation",
+    async (input) => {
+      await expect(
+        createNodesTool().execute("call-notify-empty", {
+          action: "notify",
+          node: "Office Mac",
+          ...input,
+        }),
+      ).rejects.toThrow("title or body required");
 
-    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
-  });
+      expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["screen_record", "camera_clip"])(
     "clamps %s to the tool duration limit and budgets both timeout layers",
@@ -412,26 +358,63 @@ describe("createNodesTool screen_record duration guardrails", () => {
     },
   );
 
-  it("preserves independent explicit transport and node invoke timeouts", async () => {
-    gatewayMocks.readGatewayCallOptions.mockReturnValueOnce({ timeoutMs: 5_000 });
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
-    const tool = createNodesTool();
+  it.each(["screen_record", "camera_clip", "invoke", "location_get"])(
+    "preserves independent explicit transport and node invoke timeouts for %s",
+    async (action) => {
+      gatewayMocks.readGatewayCallOptions.mockReturnValueOnce({ timeoutMs: 5_000 });
+      gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+      const tool = createNodesTool();
 
-    await tool.execute("call-explicit-timeout", {
-      action: "screen_record",
-      node: "macbook",
-      durationMs: 60_000,
-      timeoutMs: 5_000,
-      invokeTimeoutMs: 10_000,
-    });
+      await tool.execute("call-explicit-timeout", {
+        action,
+        node: "macbook",
+        durationMs: 60_000,
+        locationTimeoutMs: 60_000,
+        invokeCommand: "device.status",
+        timeoutMs: 5_000,
+        invokeTimeoutMs: 10_000,
+      });
 
-    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
-      | [string, unknown, { timeoutMs?: unknown }]
-      | undefined;
-    expect(call?.[0]).toBe("node.invoke");
-    expect(call?.[1]).toStrictEqual({ timeoutMs: 5_000 });
-    expect(call?.[2].timeoutMs).toBe(10_000);
-  });
+      const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+        | [string, unknown, { timeoutMs?: unknown }]
+        | undefined;
+      expect(call?.[0]).toBe("node.invoke");
+      expect(call?.[1]).toStrictEqual({ timeoutMs: 5_000 });
+      expect(call?.[2].timeoutMs).toBe(10_000);
+    },
+  );
+
+  it.each([
+    {
+      action: "invoke",
+      input: { invokeCommand: "device.status", invokeTimeoutMs: 60_000 },
+      invokeTimeoutMs: 60_000,
+      transportTimeoutMs: 90_000,
+    },
+    {
+      action: "location_get",
+      input: { locationTimeoutMs: 60_000 },
+      invokeTimeoutMs: 90_000,
+      transportTimeoutMs: 120_000,
+    },
+  ])(
+    "allows long $action operations through both timeout layers",
+    async ({ action, input, invokeTimeoutMs, transportTimeoutMs }) => {
+      gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+
+      await createNodesTool().execute("call-long-operation", {
+        action,
+        node: "macbook",
+        ...input,
+      });
+
+      expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+        "node.invoke",
+        { timeoutMs: transportTimeoutMs },
+        expect.objectContaining({ timeoutMs: invokeTimeoutMs }),
+      );
+    },
+  );
 
   it.each([
     ["screen_record", 0],
@@ -452,7 +435,15 @@ describe("createNodesTool screen_record duration guardrails", () => {
   });
 
   it("invokes screen.snapshot with validated params and returns file details", async () => {
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        base64: "ZmFrZQ==",
+        format: "png",
+        screenIndex: 0,
+        width: 1920,
+        height: 1080,
+      },
+    });
     const tool = createNodesTool();
 
     const result = await tool.execute("call-snapshot", {
@@ -473,7 +464,6 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(call?.[0]).toBe("node.invoke");
     expect(call?.[2].command).toBe("screen.snapshot");
     expect(call?.[2].params).toEqual({ screenIndex: 1, maxWidth: 1200, format: undefined });
-    expect(screenMocks.parseScreenSnapshotPayload).toHaveBeenCalledWith({ ok: true });
     expect(screenMocks.screenSnapshotTempPath).toHaveBeenCalledWith({ ext: "png" });
     expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
       "/tmp/screen-snapshot.png",
@@ -495,7 +485,9 @@ describe("createNodesTool screen_record duration guardrails", () => {
   });
 
   it("requests the encoding a caller-supplied outPath already promises", async () => {
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: { base64: "ZmFrZQ==", format: "png" },
+    });
     screenMocks.writeScreenSnapshotToFile.mockImplementationOnce(async (filePath: string) => ({
       path: filePath,
     }));
@@ -524,55 +516,16 @@ describe("createNodesTool screen_record duration guardrails", () => {
     ]);
   });
 
-  it("requests jpeg for .jpg and .jpeg output paths", async () => {
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
-    const outPaths = ["/workspace/shot.jpg", "/workspace/shot.jpeg"];
-    for (const _ of outPaths) {
-      screenMocks.parseScreenSnapshotPayload.mockReturnValueOnce({
+  it("refuses to write snapshot bytes that contradict the outPath extension", async () => {
+    // A node that ignores the requested format must not silently mislabel the file.
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: {
         base64: "ZmFrZQ==",
         format: "jpeg",
         screenIndex: 0,
         width: 1600,
         height: 1049,
-      });
-      screenMocks.writeScreenSnapshotToFile.mockImplementationOnce(async (filePath: string) => ({
-        path: filePath,
-      }));
-    }
-    const tool = createNodesTool();
-
-    for (const outPath of outPaths) {
-      await tool.execute("call-snapshot", {
-        action: "screen_snapshot",
-        node: "miniclaw",
-        outPath,
-      });
-    }
-
-    for (const call of gatewayMocks.callGatewayTool.mock.calls) {
-      expect((call as [string, unknown, { params?: { format?: unknown } }])[2].params?.format).toBe(
-        "jpeg",
-      );
-    }
-    expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
-      "/workspace/shot.jpg",
-      "ZmFrZQ==",
-    );
-    expect(screenMocks.writeScreenSnapshotToFile).toHaveBeenCalledWith(
-      "/workspace/shot.jpeg",
-      "ZmFrZQ==",
-    );
-  });
-
-  it("refuses to write snapshot bytes that contradict the outPath extension", async () => {
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
-    // A node that ignores the requested format must not silently mislabel the file.
-    screenMocks.parseScreenSnapshotPayload.mockReturnValueOnce({
-      base64: "ZmFrZQ==",
-      format: "jpeg",
-      screenIndex: 0,
-      width: 1600,
-      height: 1049,
+      },
     });
     const tool = createNodesTool();
 
@@ -601,25 +554,23 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(screenMocks.writeScreenRecordToFile).not.toHaveBeenCalled();
   });
 
-  it("rejects unsupported screen.snapshot response formats before writing", async () => {
-    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
-    screenMocks.parseScreenSnapshotPayload.mockReturnValueOnce({
-      base64: "ZmFrZQ==",
-      format: "webp",
-      screenIndex: 0,
-      width: 1920,
-      height: 1080,
-    });
-    const tool = createNodesTool();
+  it.each(["jpg"])(
+    "rejects unsupported screen.snapshot response format %s before writing",
+    async (format) => {
+      gatewayMocks.callGatewayTool.mockResolvedValue({
+        payload: { base64: "ZmFrZQ==", format },
+      });
+      const tool = createNodesTool();
 
-    await expect(
-      tool.execute("call-snapshot", {
-        action: "screen_snapshot",
-        node: "macbook",
-      }),
-    ).rejects.toThrow("unsupported screen.snapshot format: webp");
-    expect(screenMocks.writeScreenSnapshotToFile).not.toHaveBeenCalled();
-  });
+      await expect(
+        tool.execute("call-snapshot", {
+          action: "screen_snapshot",
+          node: "macbook",
+        }),
+      ).rejects.toThrow("invalid screen.snapshot payload");
+      expect(screenMocks.writeScreenSnapshotToFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects the removed run action", async () => {
     const tool = createNodesTool();

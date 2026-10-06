@@ -1,6 +1,3 @@
-/**
- * Cross-platform pnpm command resolver used by Canvas build scripts.
- */
 import { accessSync, closeSync, constants, openSync, readSync, statSync } from "node:fs";
 import path from "node:path";
 
@@ -106,21 +103,21 @@ function isNodeRunnablePnpmExecPath(value) {
   return hasNodeShebang(value);
 }
 
-function escapeForCmdExe(arg) {
-  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
-    throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
-  }
-  const escaped = arg.replace(/\^/g, "^^");
-  if (!escaped.includes(" ") && !escaped.includes('"')) {
-    return escaped;
-  }
-  return `"${escaped.replace(/"/g, '""')}"`;
-}
-
 function buildCmdExeCommandLine(command, args) {
-  const escapedCommand = escapeForCmdExe(command);
-  const commandLine = [escapedCommand, ...args.map(escapeForCmdExe)].join(" ");
-  return escapedCommand.startsWith('"') ? `"${commandLine}"` : commandLine;
+  const escaped = [command, ...args].map((arg) => {
+    if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
+      throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
+    }
+    // Quote through cmd and the CRT; consume backslash runs once to avoid quadratic scans.
+    const quoted = arg
+      .replace(/\\+/g, (backslashes, offset) => {
+        const next = arg[offset + backslashes.length];
+        return next === '"' || next === undefined ? backslashes.repeat(2) : backslashes;
+      })
+      .replace(/"/g, '""');
+    return `"${quoted}"`;
+  });
+  return `"${escaped.join(" ")}"`;
 }
 
 function windowsCmdSpec(command, args, comSpec) {
@@ -181,18 +178,14 @@ export function resolvePnpmRunner(params = {}) {
   const env = params.env ?? process.env;
   const envPath = env[platform === "win32" ? resolvePathEnvKey(env) : "PATH"];
   const cwd = params.cwd ?? process.cwd();
-  const pnpmPath = findExecutableOnPath("pnpm", envPath, platform, env, cwd);
-  if (pnpmPath) {
-    return platform === "win32"
-      ? windowsCmdSpec(pnpmPath, pnpmArgs, params.comSpec ?? process.env.ComSpec ?? "cmd.exe")
-      : { args: pnpmArgs, command: pnpmPath, shell: false };
-  }
-  const corepackPath = findExecutableOnPath("corepack", envPath, platform, env, cwd);
-  if (corepackPath) {
-    const args = ["pnpm", ...pnpmArgs];
-    return platform === "win32"
-      ? windowsCmdSpec(corepackPath, args, params.comSpec ?? process.env.ComSpec ?? "cmd.exe")
-      : { args, command: corepackPath, shell: false };
+  for (const command of ["pnpm", "corepack"]) {
+    const commandPath = findExecutableOnPath(command, envPath, platform, env, cwd);
+    if (commandPath) {
+      const args = command === "pnpm" ? pnpmArgs : ["pnpm", ...pnpmArgs];
+      return platform === "win32"
+        ? windowsCmdSpec(commandPath, args, params.comSpec ?? process.env.ComSpec ?? "cmd.exe")
+        : { args, command: commandPath, shell: false };
+    }
   }
   if (platform === "win32") {
     return windowsCmdSpec("pnpm.cmd", pnpmArgs, params.comSpec ?? process.env.ComSpec ?? "cmd.exe");

@@ -19,24 +19,36 @@ class OpenClawIpLocation extends OpenClawLightDomContentsElement {
   @state() private location: ClientGeolocation | null = null;
 
   private requestedIp: string | undefined;
+  private generation = 0;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private retryAttempt = 0;
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.requestUpdate();
+  }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
     this.clearRetry();
+    this.generation += 1;
+    this.requestedIp = undefined;
+    this.location = null;
   }
 
   override willUpdate() {
     const ip = this.ip?.trim();
-    if (!ip || ip === this.requestedIp) {
+    if (!this.isConnected || ip === this.requestedIp) {
       return;
     }
     this.clearRetry();
+    this.generation += 1;
     this.requestedIp = ip;
     this.retryAttempt = 0;
     this.location = null;
-    this.resolve(ip);
+    if (ip) {
+      this.resolve(ip);
+    }
   }
 
   private clearRetry() {
@@ -47,9 +59,12 @@ class OpenClawIpLocation extends OpenClawLightDomContentsElement {
   }
 
   private resolve(ip: string) {
+    const generation = this.generation;
+    const isCurrent = () =>
+      this.isConnected && this.requestedIp === ip && this.generation === generation;
     void lookupClientGeolocation(ip).then((result) => {
-      // A later address may have won while this request was in flight.
-      if (this.requestedIp !== ip) {
+      // Shared lookups may populate their cache after this element's connection ends.
+      if (!isCurrent()) {
         return;
       }
       if (result.status === "located") {
@@ -66,7 +81,7 @@ class OpenClawIpLocation extends OpenClawLightDomContentsElement {
       this.retryAttempt += 1;
       this.retryTimer = setTimeout(() => {
         this.retryTimer = undefined;
-        if (this.requestedIp === ip && this.isConnected) {
+        if (isCurrent()) {
           this.resolve(ip);
         }
       }, delay);
@@ -82,17 +97,19 @@ class OpenClawIpLocation extends OpenClawLightDomContentsElement {
     }
     const attribution = this.location?.attribution;
     return html`<span class="activity-feed__device-location"
-      >${label}${attribution
-        ? html`<a
-            class="activity-feed__device-attribution"
-            href=${attribution.url}
-            target="_blank"
-            rel="noreferrer noopener"
-            aria-label=${attribution.text}
-            title=${attribution.text}
-            >${icons.info}</a
-          >`
-        : nothing}</span
+      >${label}${
+        attribution
+          ? html`<a
+              class="activity-feed__device-attribution"
+              href=${attribution.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              aria-label=${attribution.text}
+              title=${attribution.text}
+              >${icons.info}</a
+            >`
+          : nothing
+      }</span
     >`;
   }
 }

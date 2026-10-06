@@ -1,4 +1,3 @@
-/** Ensures configured channel-to-ACP bindings have live sessions and matching runtime options. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,7 +11,6 @@ import {
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
 
-// Binding lifecycle keeps configured channel conversations attached to matching ACP sessions.
 function sessionStructurallyMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
@@ -53,8 +51,8 @@ function sessionStructurallyMatchesConfiguredBinding(params: {
   return true;
 }
 
-/** Creates or replaces the ACP session required by one configured binding. */
 export async function ensureConfiguredAcpBindingSession(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; sessionKey: string; error: string }> {
@@ -65,10 +63,13 @@ export async function ensureConfiguredAcpBindingSession(params: {
     ...(params.spec.thinking ? { thinking: params.spec.thinking } : {}),
   };
   try {
-    const resolution = acpManager.resolveSession({
+    const resolution = await acpManager.resolveSessionAsync({
       cfg: params.cfg,
+      agentId: params.spec.agentId,
       sessionKey,
+      assertCurrent: params.assertActive,
     });
+    params.assertActive?.();
     if (
       resolution.kind === "ready" &&
       sessionStructurallyMatchesConfiguredBinding({
@@ -83,8 +84,11 @@ export async function ensureConfiguredAcpBindingSession(params: {
       for (const key of ["model", "thinking"] as const) {
         const value = runtimeOptions[key];
         if (value !== undefined && normalizeText(currentOptions?.[key]) !== value) {
+          params.assertActive?.();
           currentOptions = await acpManager.setSessionConfigOption({
+            ...(params.assertActive ? { assertActive: params.assertActive } : {}),
             cfg: params.cfg,
+            agentId: params.spec.agentId,
             sessionKey,
             key,
             value,
@@ -98,8 +102,11 @@ export async function ensureConfiguredAcpBindingSession(params: {
     }
 
     if (resolution.kind !== "none") {
+      params.assertActive?.();
       await acpManager.closeSession({
+        ...(params.assertActive ? { assertActive: params.assertActive } : {}),
         cfg: params.cfg,
+        agentId: params.spec.agentId,
         sessionKey,
         reason: "config-binding-reconfigure",
         clearMeta: false,
@@ -108,8 +115,11 @@ export async function ensureConfiguredAcpBindingSession(params: {
       });
     }
 
+    params.assertActive?.();
     await acpManager.initializeSession({
+      ...(params.assertActive ? { assertActive: params.assertActive } : {}),
       cfg: params.cfg,
+      agentId: params.spec.agentId,
       sessionKey,
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       mode: params.spec.mode,
@@ -135,8 +145,8 @@ export async function ensureConfiguredAcpBindingSession(params: {
   }
 }
 
-/** Resolves a configured binding for a conversation and ensures its ACP session exists. */
 export async function ensureConfiguredAcpBindingReadyCore(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   configuredBinding: ResolvedConfiguredAcpBinding | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -144,6 +154,7 @@ export async function ensureConfiguredAcpBindingReadyCore(params: {
     return { ok: true };
   }
   const ensured = await ensureConfiguredAcpBindingSession({
+    ...(params.assertActive ? { assertActive: params.assertActive } : {}),
     cfg: params.cfg,
     spec: params.configuredBinding.spec,
   });
@@ -152,6 +163,6 @@ export async function ensureConfiguredAcpBindingReadyCore(params: {
   }
   return {
     ok: false,
-    error: ensured.error ?? "unknown error",
+    error: ensured.error,
   };
 }

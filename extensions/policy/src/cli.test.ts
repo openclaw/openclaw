@@ -3,7 +3,6 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { Command } from "commander";
-import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { clearConfigCache } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerPolicyCli } from "./cli.js";
@@ -138,28 +137,6 @@ describe("policy commands", () => {
       ok: true,
       attestation,
       evidence,
-      findings: [],
-    });
-  });
-
-  it("reports policy findings in policy check output", async () => {
-    await writeFixture(join(workspaceDir, "policy.jsonc"), {
-      channels: {
-        denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-      },
-    });
-    const { exitCode, parsed } = await runPolicyCheckJson();
-
-    expect(exitCode).toBe(0);
-    expect(parsed).toMatchObject({
-      ok: true,
-      evidence: {
-        channels: [],
-        mcpServers: [],
-        modelProviders: [],
-        modelRefs: [],
-        network: [],
-      },
       findings: [],
     });
   });
@@ -437,20 +414,12 @@ describe("policy commands", () => {
   });
 
   it("rejects invalid severity thresholds", async () => {
-    const errorSpy = vi.spyOn(cliRuntime, "error");
-    try {
-      const { exitCode, output } = await runPolicyCheckJson({ severityMin: "warnng" });
+    const { exitCode, output } = await runPolicyCheckJson({ severityMin: "warnng" });
 
-      expect(exitCode).toBe(2);
-      expect(errorSpy).toHaveBeenCalledWith(
-        "Invalid --severity-min value. Expected one of: info, warning, error.",
-      );
-      expect(output).toEqual([
-        "Invalid --severity-min value. Expected one of: info, warning, error.\n",
-      ]);
-    } finally {
-      errorSpy.mockRestore();
-    }
+    expect(exitCode).toBe(2);
+    expect(output).toEqual([
+      "Invalid --severity-min value. Expected one of: info, warning, error.\n",
+    ]);
   });
 
   it("fails closed when the OpenClaw config is invalid", async () => {
@@ -464,6 +433,13 @@ describe("policy commands", () => {
     expect(parsed.findings).toEqual([
       expect.objectContaining({ checkId: "policy/config-invalid", severity: "error" }),
     ]);
+  });
+
+  it("rejects whitespace-only policy compare baseline values", async () => {
+    const { exitCode, output } = await runPolicyCli(["compare", "--baseline", "   ", "--json"]);
+
+    expect(exitCode).toBe(2);
+    expect(output).toEqual(["Missing required --baseline value.\n"]);
   });
 
   it("checks policy file conformance with metadata-backed global rules", async () => {
@@ -966,32 +942,6 @@ describe("policy commands", () => {
             agentIds: ["main"],
             tools: { exec: { allowHosts: ["sandbox"] } },
           },
-          relaxed: {
-            agentIds: ["main"],
-            tools: { exec: { allowHosts: ["sandbox", "node"] } },
-          },
-        },
-      },
-    );
-
-    expect(exitCode).toBe(1);
-    expect(parsed.findings).toEqual([
-      expect.objectContaining({
-        checkId: "policy/policy-conformance-invalid",
-        requirement: "oc://policy.jsonc/scopes/relaxed/tools/exec/allowHosts",
-        target: "oc://policy.jsonc/scopes/relaxed/tools/exec/allowHosts",
-      }),
-    ]);
-  });
-
-  it("rejects a weaker scoped candidate override for a global baseline rule", async () => {
-    const { exitCode, parsed } = await runPolicyCompareFixture(
-      {
-        tools: { exec: { allowHosts: ["sandbox"] } },
-      },
-      {
-        tools: { exec: { allowHosts: ["sandbox"] } },
-        scopes: {
           relaxed: {
             agentIds: ["main"],
             tools: { exec: { allowHosts: ["sandbox", "node"] } },

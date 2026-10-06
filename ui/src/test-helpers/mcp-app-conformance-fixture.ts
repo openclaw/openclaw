@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { Browser, BrowserContext, ConsoleMessage, Frame, Locator, Page } from "playwright";
+import type { ConsoleMessage, Frame, Locator, Page } from "playwright";
 import { expect } from "vitest";
 
 const require = createRequire(import.meta.url);
@@ -90,45 +90,26 @@ export type McpAppFixtureEvent = {
   aborted?: boolean;
 };
 
-async function readMcpAppFixtureEvents(eventsPath: string): Promise<McpAppFixtureEvent[]> {
-  return (await fs.readFile(eventsPath, "utf8"))
+async function readMcpAppFixtureEvents(
+  eventsPath: string,
+  scenario?: string,
+): Promise<McpAppFixtureEvent[]> {
+  const events = (await fs.readFile(eventsPath, "utf8"))
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as McpAppFixtureEvent);
+  return scenario === undefined ? events : events.filter((event) => event.scenario === scenario);
 }
 
 export function createMcpAppFixtureControl(controlPath: string, eventsPath: string) {
   return {
-    readEvents: () => readMcpAppFixtureEvents(eventsPath),
+    readEvents: (scenario?: string) => readMcpAppFixtureEvents(eventsPath, scenario),
     async configure(value: Record<string, unknown>): Promise<void> {
       const nextPath = controlPath + ".next";
       await fs.writeFile(nextPath, JSON.stringify(value));
       await fs.rename(nextPath, controlPath);
     },
   };
-}
-
-export async function openMcpAppProofContext(
-  owner: Browser,
-  openContexts: Set<BrowserContext>,
-  { captureUiProof, proofDir }: { captureUiProof: boolean; proofDir: string },
-): Promise<BrowserContext> {
-  const context = await owner.newContext({
-    permissions: ["local-network-access"],
-    ...(captureUiProof
-      ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
-      : {}),
-  });
-  openContexts.add(context);
-  return context;
-}
-
-export async function closeMcpAppProofContext(
-  context: BrowserContext,
-  openContexts: Set<BrowserContext>,
-) {
-  await context.close();
-  openContexts.delete(context);
 }
 
 export function createMcpAppTeardownRecorder(proofDir: string, fixtureEventsPath: string) {
@@ -173,9 +154,7 @@ export function createMcpAppTeardownRecorder(proofDir: string, fixtureEventsPath
           startedAtMs,
           observedAtMs: Date.now(),
           diagnostics,
-          events: (await readMcpAppFixtureEvents(fixtureEventsPath)).filter(
-            (event) => event.scenario === scenario,
-          ),
+          events: await readMcpAppFixtureEvents(fixtureEventsPath, scenario),
         });
         await fs.writeFile(
           path.join(proofDir, "graceful-teardown.json"),
@@ -289,10 +268,13 @@ export async function mountControlUiHost(
 <script type="module">
 import { GatewayBrowserClient } from "/src/api/gateway.ts";
 import "/src/components/mcp-app-view-registration.ts";
-import { WIDGET_PROMPT_EVENT } from "/src/components/mcp-app-security.ts";
+import { MCP_APP_MESSAGE_EVENT } from "/src/components/mcp-app-security.ts";
+import { mcpAppMessageText } from "/src/lib/mcp-app-message-content.ts";
 window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
-document.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
-  window.mcpConformancePrompt = event.detail.text;
+document.addEventListener(MCP_APP_MESSAGE_EVENT, (event) => {
+  event.preventDefault();
+  window.mcpConformancePrompt = mcpAppMessageText(event.detail.content);
+  event.detail.respond(true);
 });
 window.mcpConformanceUnmount = async () => {
   const mount = document.getElementById("mount");
@@ -359,7 +341,7 @@ window.mcpConformanceUnmount = async () => {
       setTheme("dark");
       Reflect.set(view, "context", {
         gateway: {
-          snapshot: { client },
+          snapshot: { client, phase: "connected" },
           connection: { gatewayUrl: params.gatewayUrl },
         },
         theme: {
@@ -424,6 +406,7 @@ export function appHtml(appModuleUrl: string): string {
 <button id="arm-refresh">Arm catalog refresh</button>
 <output id="arm-result"></output>
 <button id="call-app">Call app tool</button>
+<button id="list-tools">List app tools</button>
 <button id="call-expiring">Call with deadline</button>
 <button id="cancel-call">Cancel app call</button>
 <button id="call-model">Call model tool</button>
@@ -434,6 +417,7 @@ export function appHtml(appModuleUrl: string): string {
 <output id="initialized">pending</output>
 <output id="capabilities"></output>
 <output id="ping"></output>
+<output id="tools"></output>
 <output id="input"></output>
 <output id="result"></output>
 <output id="app-tool"></output>
@@ -449,7 +433,6 @@ export function appHtml(appModuleUrl: string): string {
 <script type="module">
 import {
   App,
-  McpUiResourceTeardownResultSchema,
   applyDocumentTheme,
   applyHostStyleVariables,
 } from ${JSON.stringify(appModuleUrl)};
@@ -501,6 +484,10 @@ const callAppTool = async (timeout) => {
   } catch (error) { write("app-tool", "denied:" + error); }
 };
 document.getElementById("call-app").onclick = () => callAppTool();
+document.getElementById("list-tools").onclick = async () => {
+  try { write("tools", JSON.stringify(await app.request({ method: "tools/list", params: {} }))); }
+  catch (error) { write("tools", "denied:" + error); }
+};
 document.getElementById("call-expiring").onclick = () => callAppTool(3000);
 document.getElementById("cancel-call").onclick = () => activeCall?.abort(new Error("fixture caller cancelled"));
 document.getElementById("call-model").onclick = async () => {
@@ -532,10 +519,7 @@ document.getElementById("request-teardown").onclick = () => app.requestTeardown(
 await app.connect();
 applyHostContext();
 write("capabilities", JSON.stringify(app.getHostCapabilities() ?? {}));
-write("ping", JSON.stringify(await app.request(
-  { method: "ping", params: {} },
-  McpUiResourceTeardownResultSchema,
-)));
+write("ping", JSON.stringify(await app.request({ method: "ping", params: {} })));
 write("initialized", "ready");
 </script>`;
 }

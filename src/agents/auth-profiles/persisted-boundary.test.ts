@@ -8,18 +8,44 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { createApiKeyCredential, oidcIdentity } from "./credential-fixtures.test-support.js";
+import { applyLegacyAuthStore, coerceLegacyAuthStore } from "./legacy-flat-credential.js";
 import { resolveAuthProfileOrder } from "./order.js";
 import {
-  applyLegacyAuthStore,
-  coerceLegacyAuthStore,
+  buildPersistedAuthProfileSecretsStore,
   coercePersistedAuthProfileStore,
   mergeAuthProfileStores,
 } from "./persisted.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
+import { markRuntimePersistedProfiles } from "./runtime-snapshot-owner.js";
 import { buildPersistedAuthProfileState, coerceAuthProfileState } from "./state.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 describe("persisted auth profile boundary", () => {
+  it.each([
+    { mode: "api_key", provider: "example", apiKey: "synthetic-key" },
+    { type: "apiKey", provider: "example", apiKey: "synthetic-key" },
+    { type: "api_key", provider: "example", api_key: "synthetic-key" },
+    { type: "api_key", provider: "example", key: { source: "env", id: "SYNTHETIC_KEY" } },
+    { type: "token", provider: "example", token: { source: "env", id: "SYNTHETIC_TOKEN" } },
+    { type: "api_key", provider: "example", keyRef: { source: "env", id: "SYNTHETIC_KEY" } },
+    { type: "token", provider: "example", tokenRef: { source: "env", id: "SYNTHETIC_TOKEN" } },
+  ])(
+    "refuses unmigrated credential fields before publishing a partial store ($type/$mode)",
+    (credential) => {
+      const raw = {
+        version: 1,
+        profiles: {
+          "example:old": credential,
+          "example:current": { type: "api_key", provider: "example", key: "synthetic-current-key" },
+        },
+      };
+      const original = structuredClone(raw);
+      expect(() => coercePersistedAuthProfileStore(raw)).toThrow("openclaw doctor --fix");
+      expect(raw).toEqual(original);
+    },
+  );
+
   it.each([
     {
       name: "token-expired classification with auth reason",
@@ -66,29 +92,29 @@ describe("persisted auth profile boundary", () => {
     }
   });
 
-  it("normalizes malformed persisted credentials and state before runtime use", () => {
+  it("normalizes malformed canonical credentials and state before runtime use", () => {
     const store = coercePersistedAuthProfileStore({
       version: "not-a-version",
       profiles: {
         "openai:default": {
-          type: "apiKey",
+          type: "api_key",
           provider: " OpenAI ",
-          apiKey: "demo-openai-key",
-          keyRef: { source: "env", id: "OPENAI_API_KEY" },
+          key: "demo-openai-key",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           metadata: { account: "acct_123", bad: 123 },
           copyToAgents: "yes",
           email: ["wrong"],
           displayName: "Work",
         },
         "openai:legacy-api-key": {
-          type: "apiKey",
+          type: "api_key",
           provider: "openai",
-          apiKey: "legacy-openai-key",
+          key: "legacy-openai-key",
         },
         "openai:legacy-malformed-ref": {
-          type: "apiKey",
+          type: "api_key",
           provider: "openai",
-          apiKey: "legacy-fallback-key",
+          key: "legacy-fallback-key",
           keyRef: { source: "env", id: "" },
         },
         "minimax:default": {
@@ -109,6 +135,19 @@ describe("persisted auth profile boundary", () => {
             provider: "openai",
             id: "not-a-secret-id",
           },
+        },
+        "xai:oauth": {
+          type: "oauth",
+          provider: "xai",
+          access: "synthetic-xai-access",
+          refresh: "synthetic-xai-refresh",
+          expires: 1_900_000_000_000,
+          tokenEndpoint: "https://auth.x.ai/oauth2/token",
+          deviceAuthorizationEndpoint: ["wrong"],
+          issuer: "https://auth.x.ai",
+          authFlow: "device-code",
+          authorizationScope: "openid email profile",
+          grantedScope: "openid profile",
         },
         "broken:array": [],
       },
@@ -166,6 +205,18 @@ describe("persisted auth profile boundary", () => {
           refresh: "refresh-token",
           expires: 0,
         },
+        "xai:oauth": {
+          type: "oauth",
+          provider: "xai",
+          access: "synthetic-xai-access",
+          refresh: "synthetic-xai-refresh",
+          expires: 1_900_000_000_000,
+          tokenEndpoint: "https://auth.x.ai/oauth2/token",
+          issuer: "https://auth.x.ai",
+          authFlow: "device-code",
+          authorizationScope: "openid email profile",
+          grantedScope: "openid profile",
+        },
       },
       order: {
         openai: ["openai:default"],
@@ -184,6 +235,7 @@ describe("persisted auth profile boundary", () => {
     expect(store?.profiles["broken:array"]).toBeUndefined();
     expect(store?.profiles["openai:default"]).not.toHaveProperty("copyToAgents");
     expect(store?.profiles["openai:oauth"]).not.toHaveProperty("oauthRef");
+    expect(store?.profiles["xai:oauth"]).not.toHaveProperty("deviceAuthorizationEndpoint");
   });
 
   it("lets authoritative runtime external metadata remove stale base profiles", () => {
@@ -251,11 +303,7 @@ describe("persisted auth profile boundary", () => {
         runtimeExternalProfileIds: [],
         runtimeExternalProfileIdsAuthoritative: true,
         profiles: {
-          [profileId]: {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-local",
-          },
+          [profileId]: createApiKeyCredential("anthropic", "sk-local"),
         },
         order: {
           anthropic: [profileId],
@@ -278,44 +326,69 @@ describe("persisted auth profile boundary", () => {
   });
 
   it("tracks persisted profile provenance with override precedence", () => {
+    const sharedSource = { databasePath: "synthetic-shared.sqlite", provider: "openai" };
+    const localSource = { databasePath: "synthetic-local.sqlite", provider: "openai" };
     const merged = mergeAuthProfileStores(
       {
         version: AUTH_STORE_VERSION,
         runtimePersistedProfileIds: ["openai:base", "openai:overridden"],
+        runtimeCredentialSources: {
+          "openai:base": sharedSource,
+          "openai:overridden": sharedSource,
+        },
         profiles: {
-          "openai:base": {
-            type: "api_key",
-            provider: "openai",
-            key: "base-key",
-          },
-          "openai:overridden": {
-            type: "api_key",
-            provider: "openai",
-            key: "old-key",
-          },
+          "openai:base": createApiKeyCredential("openai", "base-key"),
+          "openai:overridden": createApiKeyCredential("openai", "old-key"),
         },
       },
       {
         version: AUTH_STORE_VERSION,
         runtimePersistedProfileIds: ["openai:added"],
         runtimeLocalProfileIds: ["openai:added"],
+        runtimeCredentialSources: { "openai:added": localSource },
         profiles: {
-          "openai:overridden": {
-            type: "api_key",
-            provider: "openai",
-            key: "scoped-key",
-          },
-          "openai:added": {
-            type: "api_key",
-            provider: "openai",
-            key: "added-key",
-          },
+          "openai:overridden": createApiKeyCredential("openai", "scoped-key"),
+          "openai:added": createApiKeyCredential("openai", "added-key"),
         },
       },
     );
 
     expect(merged.runtimePersistedProfileIds).toEqual(["openai:added", "openai:base"]);
     expect(merged.runtimeLocalProfileIds).toEqual(["openai:added"]);
+    expect(merged.runtimeCredentialSources).toEqual({
+      "openai:base": sharedSource,
+      "openai:added": localSource,
+    });
+    expect(buildPersistedAuthProfileSecretsStore(merged)).toEqual({
+      version: AUTH_STORE_VERSION,
+      profiles: merged.profiles,
+    });
+  });
+
+  it.each([
+    { name: "inherited order", order: undefined, localProviders: [] },
+    { name: "local override", order: { openai: ["openai:shared"] }, localProviders: ["openai"] },
+  ])("preserves local priority ownership for $name", ({ order, localProviders }) => {
+    const shared = markRuntimePersistedProfiles({
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:shared": { type: "api_key", provider: "openai", key: "shared-key" },
+      },
+      order: { openai: ["openai:shared"] },
+    });
+    const local = markRuntimePersistedProfiles({
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+      order,
+    });
+    const merged = mergeAuthProfileStores(shared, local);
+
+    expect(merged.order).toEqual({ openai: ["openai:shared"] });
+    expect(merged.runtimeLocalOrderProviderIds).toEqual(localProviders);
+    expect(markRuntimePersistedProfiles(merged, local).runtimeLocalOrderProviderIds).toEqual(
+      localProviders,
+    );
+    expect(shared.runtimeLocalOrderProviderIds).toEqual(["openai"]);
   });
 
   it("preserves config-only order fallbacks during agent-store merges", () => {
@@ -347,6 +420,66 @@ describe("persisted auth profile boundary", () => {
 
     expect(merged.order?.openai).toEqual(["openai:new-login", "openai:aws-sdk"]);
   });
+
+  it.each([
+    {
+      name: "unbound registered identity with a plain main-store account",
+      localIdentity: { ...oidcIdentity(), accountId: undefined },
+      mainIdentity: { accountId: "main-account" },
+      replace: false,
+    },
+    {
+      name: "unbound registered identity with a bound main-store account",
+      localIdentity: { ...oidcIdentity(), accountId: undefined },
+      mainIdentity: oidcIdentity(),
+      replace: false,
+    },
+    {
+      name: "unregistered legacy identities without comparable fields",
+      localIdentity: { email: "legacy@example.test" },
+      mainIdentity: { accountId: "main-account" },
+      replace: true,
+    },
+  ])(
+    "preserves the legacy replacement boundary for $name",
+    ({ localIdentity, mainIdentity, replace }) => {
+      const localProfileId = "openai:default";
+      const mainProfileId = "openai:connected";
+      const localCredential = {
+        type: "oauth" as const,
+        provider: "openai",
+        access: "local-access",
+        refresh: "local-refresh",
+        expires: 1,
+        ...localIdentity,
+      };
+      const merged = mergeAuthProfileStores(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [mainProfileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "main-access",
+              refresh: "main-refresh",
+              expires: Date.now() + 600_000,
+              ...mainIdentity,
+            },
+          },
+        },
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: { [localProfileId]: localCredential },
+          order: { openai: [localProfileId] },
+          lastGood: { openai: localProfileId },
+        },
+      );
+      expect(merged.profiles[localProfileId]).toEqual(replace ? undefined : localCredential);
+      const selectedProfileId = replace ? mainProfileId : localProfileId;
+      expect(merged.order?.openai).toEqual([selectedProfileId]);
+      expect(merged.lastGood?.openai).toBe(selectedProfileId);
+    },
+  );
 
   it("prefers agent-local provider profiles before inherited main profiles", () => {
     const expires = Date.now() + 60_000;
@@ -397,11 +530,7 @@ describe("persisted auth profile boundary", () => {
       {
         version: AUTH_STORE_VERSION,
         profiles: {
-          "openai:main": {
-            type: "api_key",
-            provider: "OpenAI",
-            key: "main-key",
-          },
+          "openai:main": createApiKeyCredential("OpenAI", "main-key"),
         },
         order: {
           OpenAI: ["openai:main"],
@@ -410,16 +539,8 @@ describe("persisted auth profile boundary", () => {
       {
         version: AUTH_STORE_VERSION,
         profiles: {
-          "openai:agent": {
-            type: "api_key",
-            provider: "openai",
-            key: "agent-key",
-          },
-          "openai:other-agent": {
-            type: "api_key",
-            provider: "openai",
-            key: "other-agent-key",
-          },
+          "openai:agent": createApiKeyCredential("openai", "agent-key"),
+          "openai:other-agent": createApiKeyCredential("openai", "other-agent-key"),
         },
         order: {
           openai: ["openai:agent"],

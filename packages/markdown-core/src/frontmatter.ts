@@ -1,6 +1,5 @@
-// Markdown Core module implements frontmatter behavior.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isMap, isNode, isScalar, parseDocument } from "yaml";
+import { isAlias, isMap, isNode, isScalar, parseDocument } from "yaml";
 
 type ParsedFrontmatter = Record<string, string>;
 
@@ -80,56 +79,84 @@ function parseLineFrontmatter(block: string): ParsedFrontmatter {
   return result;
 }
 
-function normalizeFreeformDescription(block: string): string {
-  const doc = parseDocument(block, { schema: "core", prettyErrors: false });
+const FREEFORM_TEXT_FIELDS = new Set(["description", "read_when", "summary"]);
+
+function normalizeFreeformFieldAtError(
+  block: string,
+  document?: ReturnType<typeof parseDocument>,
+): string {
+  const doc = document ?? parseDocument(block, { schema: "core", prettyErrors: false });
   if (!isMap(doc.contents)) {
     return block;
   }
-  const descriptionPair = doc.contents.items.find(
-    (pair) => isScalar(pair.key) && pair.key.value === "description",
+  const error = doc.errors.find((candidate) => candidate.pos?.[0] !== undefined);
+  // Aliases fail during toJS without adding a document error position.
+  const descriptionAlias = doc.contents.items.find(
+    (candidate) =>
+      isScalar(candidate.key) && candidate.key.value === "description" && isAlias(candidate.value),
   );
-  const keyStart = isNode(descriptionPair?.key) ? descriptionPair.key.range?.[0] : undefined;
-  if (keyStart === undefined) {
+  const pos =
+    error?.pos?.[0] ??
+    (isNode(descriptionAlias?.key) ? descriptionAlias.key.range?.[0] : undefined);
+  if (pos === undefined) {
     return block;
   }
-  const lineStart = block.lastIndexOf("\n", keyStart - 1) + 1;
-  const lineEnd = block.indexOf("\n", keyStart);
+  const lineStart = block.lastIndexOf("\n", pos) + 1;
+  const lineEnd = block.indexOf("\n", pos);
   const end = lineEnd === -1 ? block.length : lineEnd;
   const line = block.slice(lineStart, end);
-  const match = line.match(/^(?:description|"description"|'description'):\s*(.*)$/);
-  const rawValue = match?.[1]?.trim();
-  if (!rawValue || /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue)) {
+  const match = line.match(/^(?:([\w-]+)|"([\w-]+)"|'([\w-]+)'):\s*(.*)$/);
+  const keyName = match?.[1] ?? match?.[2] ?? match?.[3];
+  const rawValue = match?.[4]?.trim();
+  const isTopLevelField = doc.contents.items.some(
+    (pair) => isScalar(pair.key) && pair.key.value === keyName && pair.key.range?.[0] === lineStart,
+  );
+  // Keep shipped description recovery; other text fields only recover colon-rich parser errors.
+  const recoverColonRichText = error?.code === "BLOCK_AS_IMPLICIT_KEY" && rawValue?.includes(": ");
+  if (
+    !keyName ||
+    !rawValue ||
+    !FREEFORM_TEXT_FIELDS.has(keyName) ||
+    !isTopLevelField ||
+    (keyName !== "description" && !recoverColonRichText) ||
+    /^[|>](?:[1-9][+-]?|[+-][1-9]?)?$/.test(rawValue)
+  ) {
     return block;
   }
-  const replacement = `description: ${JSON.stringify(stripQuotes(rawValue))}`;
+  const replacement = `${keyName}: ${JSON.stringify(stripQuotes(rawValue))}`;
   return `${block.slice(0, lineStart)}${replacement}${block.slice(end)}`;
 }
+
+type ParsedYamlFrontmatterAttempt = {
+  result: ParsedFrontmatterBlockResult;
+  document: ReturnType<typeof parseDocument> | undefined;
+};
 
 function parseYamlFrontmatterOnce(
   block: string,
   fallback: ParsedFrontmatter,
-): ParsedFrontmatterBlockResult {
+): ParsedYamlFrontmatterAttempt {
+  let doc: ReturnType<typeof parseDocument> | undefined;
+  const failed = (issues: FrontmatterParseIssue[]): ParsedYamlFrontmatterAttempt => ({
+    document: doc,
+    result: { frontmatter: fallback, issues },
+  });
   try {
-    const doc = parseDocument(block, { schema: "core", prettyErrors: false });
+    doc = parseDocument(block, { schema: "core", prettyErrors: false });
     if (doc.errors.length > 0 || !isMap(doc.contents)) {
-      return {
-        frontmatter: fallback,
-        issues:
-          doc.errors.length > 0
-            ? doc.errors.map((error) => ({
-                code: error.code ?? error.name,
-                message: error.message,
-              }))
-            : [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
-      };
+      return failed(
+        doc.errors.length > 0
+          ? doc.errors.map((error) => ({
+              code: error.code ?? error.name,
+              message: error.message,
+            }))
+          : [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
+      );
     }
 
     const parsed = doc.toJS() as unknown;
     if (!isRecord(parsed)) {
-      return {
-        frontmatter: fallback,
-        issues: [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
-      };
+      return failed([{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }]);
     }
 
     const inlineColonKeys = new Set<string>();
@@ -144,13 +171,21 @@ function parseYamlFrontmatterOnce(
       const lineEnd = block.indexOf("\n", start);
       const line = block.slice(start, lineEnd === -1 ? block.length : lineEnd);
       const match = line.match(/^([\w-]+):\s*(.*)$/);
-      if (match?.[1] && match[2]?.includes(":")) {
+      const valueEnd = isNode(pair.value) ? pair.value.range?.[1] : undefined;
+      // The raw line is the authored value only when that line holds all of it.
+      // A flow that continues past the line was being replaced by its first line.
+      if (
+        match?.[1] &&
+        match[2]?.includes(":") &&
+        valueEnd !== undefined &&
+        (lineEnd === -1 || valueEnd <= lineEnd)
+      ) {
         inlineColonKeys.add(match[1]);
       }
     }
 
     const result: ParsedFrontmatter = {};
-    for (const [rawKey, value] of Object.entries(parsed as Record<string, unknown>)) {
+    for (const [rawKey, value] of Object.entries(parsed)) {
       const key = rawKey.trim();
       const coerced = key ? coerceYamlFrontmatterValue(value) : undefined;
       if (!coerced) {
@@ -168,24 +203,28 @@ function parseYamlFrontmatterOnce(
         result[key] = value;
       }
     }
-    return { frontmatter: result, issues: [] };
+    return { document: doc, result: { frontmatter: result, issues: [] } };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return {
-      frontmatter: fallback,
-      issues: [{ code: "YAML_EXCEPTION", message }],
-    };
+    return failed([{ code: "YAML_EXCEPTION", message }]);
   }
 }
 
 function parseYamlFrontmatter(block: string): ParsedFrontmatterBlockResult {
   const fallback = parseLineFrontmatter(block);
-  const parsed = parseYamlFrontmatterOnce(block, fallback);
-  if (parsed.issues.length === 0) {
-    return parsed;
+  let parsed = parseYamlFrontmatterOnce(block, fallback);
+  // Recover one error-located field per iteration, retrying parse each time,
+  // so multiple colon-rich fields are fixed without rewriting valid siblings.
+  let recoveredBlock = block;
+  for (let i = 0; i < FREEFORM_TEXT_FIELDS.size && parsed.result.issues.length > 0; i += 1) {
+    const next = normalizeFreeformFieldAtError(recoveredBlock, parsed.document);
+    if (next === recoveredBlock) {
+      break;
+    }
+    recoveredBlock = next;
+    parsed = parseYamlFrontmatterOnce(recoveredBlock, fallback);
   }
-  const recoveredBlock = normalizeFreeformDescription(block);
-  return recoveredBlock === block ? parsed : parseYamlFrontmatterOnce(recoveredBlock, fallback);
+  return parsed.result;
 }
 
 export type ExtractedFrontmatterBlock = {

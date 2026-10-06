@@ -1,16 +1,13 @@
-/** Prepares and runs auto-reply agent turns, including prompt context and session policy. */
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { ReplyPayload } from "../types.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
-import { prepareReplyRunContext } from "./get-reply-run-context.js";
+import { prepareReplyRunContext, type PreparedReplyRunContext } from "./get-reply-run-context.js";
 import { executePreparedReplyRun } from "./get-reply-run-execute.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 
-async function executePreparedReplyContext(
-  context: Exclude<Awaited<ReturnType<typeof prepareReplyRunContext>>, { kind: "reply" }>,
-) {
+async function executePreparedReplyContext(context: PreparedReplyRunContext) {
   const admission = await prepareReplyRunAdmission(context);
   if (admission.kind === "reply") {
     return admission.reply;
@@ -35,13 +32,20 @@ export async function runPreparedReply(
 
   const { acquireAgentRunPreparedModelRuntime } =
     await import("../../agents/prepared-model-runtime.js");
-  const lease = await acquireAgentRunPreparedModelRuntime(
+  await using lease = await acquireAgentRunPreparedModelRuntime(
     {
       config: dispatchRuntime.config,
       agentId: dispatchRuntime.agentId,
       agentDir: dispatchRuntime.agentDir,
       allowGatewaySubagentBinding: true,
       workspaceDir: context.workspaceDir,
+      runtimePluginSelections: [
+        {
+          provider: params.provider,
+          modelId: params.model,
+          runtime: context.thinkingRuntime,
+        },
+      ],
     },
     {
       catalogMode: "static",
@@ -52,7 +56,7 @@ export async function runPreparedReply(
   let leaseActive = true;
   try {
     return await withPreparedModelRuntimePluginGenerationScope(
-      dispatchRuntime.pluginGeneration,
+      lease.pluginGeneration,
       () =>
         withPluginRuntimeGenerationScope(lease.snapshot, () =>
           executePreparedReplyContext(context),
@@ -61,6 +65,5 @@ export async function runPreparedReply(
     );
   } finally {
     leaseActive = false;
-    lease.release();
   }
 }

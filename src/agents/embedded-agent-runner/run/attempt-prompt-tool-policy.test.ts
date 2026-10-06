@@ -1,18 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
-import { setPluginToolMeta } from "../../../plugins/tools.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import {
   applyPromptBuildToolsAllow,
   applyResolvedToolPromptFinalizer,
+  createPromptBuildToolPolicy,
 } from "./attempt-prompt-support.js";
 
-function catalogEntry(name: string, tool: { name: string } = { name }): ToolSearchCatalogEntry {
+function catalogEntry(
+  name: string,
+  tool: { name: string; description?: string } = { name, description: name },
+): ToolSearchCatalogEntry {
   return {
     id: name,
     source: "openclaw",
     name,
-    description: name,
+    description: tool.description ?? "",
     tool,
   } as ToolSearchCatalogEntry;
 }
@@ -38,6 +42,123 @@ function createBaseline(activeToolNames: string[], catalogRef?: ToolSearchCatalo
 }
 
 describe("applyPromptBuildToolsAllow", () => {
+  it.each(["before", "after"] as const)(
+    "keeps hook-denied tools fenced when the hook resolves %s a permission change",
+    (hookTiming) => {
+      const fixture = createSession(["tool_search"]);
+      const oldRead = { name: "read", generation: "old" };
+      const tools = [oldRead];
+      const catalogRef: ToolSearchCatalogRef = {
+        current: {
+          entries: [catalogEntry("read", oldRead)],
+          counterScope: "permissions",
+          searchCount: 0,
+          describeCount: 0,
+          callCount: 0,
+        },
+      };
+      const policy = createPromptBuildToolPolicy({
+        session: fixture.session,
+        effectiveTools: [{ name: "tool_search" }],
+        uncompactedEffectiveTools: tools,
+        tools,
+        catalogRef,
+        codeModeControlsEnabled: false,
+      });
+      if (hookTiming === "before") {
+        policy.apply(["read"]);
+      }
+
+      const freshRead = { name: "read", generation: "new" };
+      const freshWrite = { name: "write", generation: "new" };
+      const freshExec = { name: "exec", generation: "new" };
+      tools.splice(0, tools.length, freshRead, freshWrite, freshExec);
+      catalogRef.current!.entries = tools.map((tool) => catalogEntry(tool.name, tool));
+      fixture.session.setActiveToolsByName(["tool_search"]);
+      policy.refresh();
+      if (hookTiming === "after") {
+        policy.apply(["read"]);
+      }
+
+      expect(policy.current.tools).toEqual([freshRead]);
+      expect(catalogRef.current!.entries.map((entry) => entry.tool)).toEqual([freshRead]);
+      expect(fixture.readNames()).toEqual(["tool_search"]);
+
+      // A subsequent hook revision may use the new full host baseline, never the old generation.
+      policy.apply(["write"]);
+      expect(catalogRef.current!.entries.map((entry) => entry.tool)).toEqual([freshWrite]);
+    },
+  );
+
+  it.each(["structured", "search", "code"] as const)(
+    "withdraws only the Decision cap from the latest permitted %s generation",
+    async (mode) => {
+      const control = mode === "search" ? "tool_search" : "exec";
+      const fixture = createSession(
+        mode === "structured" ? ["read", "write", "message"] : [control, "message"],
+      );
+      const tools = [
+        { name: "read", generation: "old" },
+        { name: "write", generation: "old" },
+        { name: "message", generation: "old" },
+      ];
+      const effective =
+        mode === "structured" ? tools : [{ name: control, generation: "old" }, tools[2]!];
+      const catalogRef: ToolSearchCatalogRef | undefined =
+        mode === "structured"
+          ? undefined
+          : {
+              current: {
+                entries: tools.slice(0, 2).map((t) => catalogEntry(t.name, t)),
+                counterScope: "revocation",
+                searchCount: 0,
+                describeCount: 0,
+                callCount: 0,
+              },
+            };
+      const policy = createPromptBuildToolPolicy({
+        session: fixture.session,
+        effectiveTools: effective,
+        uncompactedEffectiveTools: tools,
+        tools,
+        catalogRef,
+        codeModeControlsEnabled: mode === "code",
+        forceToolNames: ["message", "denied"],
+      });
+      let current = true;
+      policy.apply(["read"], () => current);
+      expect(policy.current.tools.map((t) => t.name)).toEqual(["message"]);
+      // A permission publication installs a new baseline while the optional cap is active.
+      const freshRead = { name: "read", generation: "new" };
+      const freshMessage = { name: "message", generation: "new" };
+      tools.splice(0, tools.length, freshRead, freshMessage, { name: "other", generation: "new" });
+      if (catalogRef?.current) {
+        catalogRef.current.entries = [
+          catalogEntry("read", freshRead),
+          catalogEntry("other", tools[2]!),
+        ];
+      }
+      fixture.session.setActiveToolsByName(
+        mode === "structured" ? ["read", "message", "other"] : [control, "message"],
+      );
+      policy.refresh();
+      current = false;
+      const prepare = vi.fn(async () => {});
+      await policy.prepareForDispatch(prepare);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(policy.current.tools).toEqual([freshRead, freshMessage]);
+      expect(policy.current.callableToolNames).toContain("read");
+      expect(policy.current.callableToolNames).not.toContain("write");
+      expect(policy.current.callableToolNames).not.toContain("other");
+      expect(policy.current.callableToolNames).not.toContain("denied");
+      if (catalogRef) {
+        expect(catalogRef.current?.entries.map((e) => e.tool)).toEqual([freshRead]);
+      }
+      expect(policy.prepareForDispatch(prepare)).toBeUndefined();
+      expect(prepare).toHaveBeenCalledOnce();
+    },
+  );
+
   it("finalizes prompt guidance from an empty submitted surface", () => {
     const finalize = vi.fn(
       ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>
@@ -78,11 +199,9 @@ describe("applyPromptBuildToolsAllow", () => {
       tools: [{ name: "read" }, { name: "write" }, { name: "message" }],
       catalogRef,
       codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
     });
 
     expect(result.activeToolNames).toEqual([]);
-    expect(result.coreReadAuthorized).toBe(false);
     expect(result.effectiveTools).toEqual([]);
     expect(result.uncompactedEffectiveTools).toEqual([]);
     expect(result.tools).toEqual([]);
@@ -109,7 +228,6 @@ describe("applyPromptBuildToolsAllow", () => {
       uncompactedEffectiveTools: [{ name: "message" }, { name: "read" }],
       tools: [{ name: "message" }, { name: "read" }],
       codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
     });
 
     expect(result.activeToolNames).toEqual(["message"]);
@@ -146,11 +264,9 @@ describe("applyPromptBuildToolsAllow", () => {
       tools: [{ name: "read" }, { name: "write" }, { name: "message" }],
       catalogRef,
       codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
     });
 
     expect(result.activeToolNames).toEqual(["tool_search"]);
-    expect(result.coreReadAuthorized).toBe(true);
     expect(result.effectiveTools).toEqual([{ name: "tool_search" }]);
     expect(result.uncompactedEffectiveTools).toEqual([{ name: "read" }]);
     expect(result.tools).toEqual([{ name: "read" }]);
@@ -169,11 +285,9 @@ describe("applyPromptBuildToolsAllow", () => {
       uncompactedEffectiveTools: [{ name: "read" }],
       tools: [{ name: "read" }],
       codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
     });
 
     expect(result.activeToolNames).toEqual([]);
-    expect(result.coreReadAuthorized).toBe(false);
     expect(result.effectiveTools).toEqual([]);
     expect(result.uncompactedEffectiveTools).toEqual([]);
     expect(result.tools).toEqual([]);
@@ -205,7 +319,6 @@ describe("applyPromptBuildToolsAllow", () => {
       tools: [pluginTool],
       catalogRef,
       codeModeControlsEnabled: false,
-      coreReadAuthorized: false,
     });
 
     expect(result.activeToolNames).toEqual(["tool_search"]);
@@ -233,7 +346,6 @@ describe("applyPromptBuildToolsAllow", () => {
       tools: [{ name: "read" }, { name: "write" }],
       catalogRef,
       codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
     };
 
     applyPromptBuildToolsAllow({ ...params, toolsAllow: ["read"] });

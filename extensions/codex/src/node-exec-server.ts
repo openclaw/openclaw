@@ -52,6 +52,7 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
     cap: CODEX_NODE_EXEC_SERVER_CAPABILITY,
     dangerous: true,
     duplex: true,
+    hasActiveWork: () => activeProcesses.size > 0,
     onDisconnect: async () => {
       await Promise.all([...activeProcesses].map(async (terminate) => await terminate()));
     },
@@ -76,46 +77,42 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
       }
       const placement = parseCodexNodePlacementWorkspace(request.placement);
       if (
-        !context?.acquireManagedWorkspace ||
+        !context?.acquireManagedWorkspaceAsync ||
         context.sessionKey !== placement.sessionKey ||
         io.signal.aborted
       ) {
         throw new Error("Codex node exec-server requires active managed placement authority.");
       }
-      const workspace = context.acquireManagedWorkspace({
+      if (!context.prepareExecAuthorization) {
+        throw new Error(
+          "Codex node execution requires node-local exec policy support; update the node.",
+        );
+      }
+      const runtimeIo = context.signal
+        ? { ...io, signal: AbortSignal.any([io.signal, context.signal]) }
+        : io;
+      const assertExecAuthorized = context.prepareExecAuthorization(request.authorization);
+      const { runCodexNodeExecServer } = await import("./node-exec-server.runtime.js");
+      runtimeIo.signal.throwIfAborted();
+      const workspace = await context.acquireManagedWorkspaceAsync({
         workspaceDir: placement.cwd,
         environmentId: placement.environmentId,
         sessionId: placement.sessionId,
         ownerEpoch: placement.ownerEpoch,
         sessionKey: placement.sessionKey,
       });
-      const frames = io.frames;
-      let unsubscribe: (() => void) | undefined;
       try {
-        if (!context.prepareExecAuthorization) {
-          throw new Error(
-            "Codex node execution requires node-local exec policy support; update the node.",
-          );
-        }
-        const assertExecAuthorized = context.prepareExecAuthorization(request.authorization);
-        const { runCodexNodeExecServer } = await import("./node-exec-server.runtime.js");
-        return await runCodexNodeExecServer({
-          workspaceDir: workspace.workspaceDir,
-          io,
-          activeProcesses,
-          assertExecAuthorized,
-          // Listener registration announces readiness, so the child must own it first.
-          onFrameReceiver: (receiver) => {
-            unsubscribe = frames.onMessage(receiver);
-          },
-        });
-      } finally {
-        try {
-          unsubscribe?.();
-        } finally {
-          workspace.release();
-        }
+        runtimeIo.signal.throwIfAborted();
+      } catch (error) {
+        workspace.release();
+        throw error;
       }
+      return await runCodexNodeExecServer({
+        workspace,
+        io: runtimeIo,
+        activeProcesses,
+        assertExecAuthorized,
+      });
     },
   };
 }
@@ -125,6 +122,7 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
   return {
     commands: [CODEX_NODE_EXEC_SERVER_COMMAND],
     dangerous: true,
+    standingApproval: { kind: "placement", scope: CODEX_NODE_EXEC_SERVER_CAPABILITY },
     classifyRisk: () => ({ level: "high", family: CODEX_NODE_EXEC_SERVER_CAPABILITY }),
     handle: async (context) => {
       if (context.risk?.level !== "high") {
@@ -167,16 +165,26 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
       }
       const nodeName = context.node?.displayName ?? context.nodeId;
       const approval = await context.approvals.request({
-        title: "Run Codex execution on node",
-        description: `${nodeName}: ${placement.cwd}; allows arbitrary processes and filesystem access across the node account, not only this workspace.`,
+        title: "Run Codex on this node placement",
+        // Keep the risk visible when the Gateway bounds a long workspace description.
+        description: `Allows arbitrary processes and filesystem access across the node account, not only this workspace. Allow always applies only while this exact placement remains active. ${nodeName}: ${placement.cwd}`,
         severity: "critical",
-        allowedDecisions: ["allow-once"],
+        allowedDecisions: ["allow-once", "allow-always"],
       });
-      if (approval.decision !== "allow-once") {
+      if (approval.decision !== "allow-once" && approval.decision !== "allow-always") {
+        if (approval.decision === "deny") {
+          return {
+            ok: false,
+            code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
+            message:
+              "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
+          };
+        }
         return {
           ok: false,
-          code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
-          message: "Codex node execution requires one-time approval.",
+          code: "CODEX_NODE_EXEC_APPROVAL_EXPIRED",
+          message:
+            "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
         };
       }
       return await context.invokeNode({

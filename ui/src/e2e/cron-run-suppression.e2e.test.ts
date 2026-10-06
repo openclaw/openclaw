@@ -1,8 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { CronJob, CronRunLogEntry } from "../api/types.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -56,7 +57,7 @@ suite.define(() => {
         page.on("pageerror", (error) => pageErrors.push(error.message));
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "cron.list": {
+            "cron.list": cronListResponseFixture({
               jobs: [job],
               snapshotRevision: "delivery-history-proof",
               total: 1,
@@ -64,7 +65,7 @@ suite.define(() => {
               limit: 50,
               nextOffset: null,
               hasMore: false,
-            },
+            }),
             "cron.runs": {
               entries,
               total: entries.length,
@@ -82,7 +83,7 @@ suite.define(() => {
 
         for (const scope of ["all", "job"] as const) {
           if (scope === "job") {
-            await page.locator('[data-test-id="cron-list-tab-tasks"]').click();
+            await page.locator('[data-test-id="cron-tab-all"]').click();
             await page
               .locator(`[data-test-id="cron-row-${job.id}"] .cron-table__name-text`)
               .click();
@@ -118,9 +119,11 @@ suite.define(() => {
           expect(await suppressed.textContent()).not.toContain(
             "Synthetic delivery target unavailable.",
           );
-          const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR;
+          const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR;
+          const artifactDir = artifactRoot
+            ? createControlUiE2eArtifactDir("cron-run-suppression", artifactRoot)
+            : undefined;
           if (artifactDir) {
-            await fs.mkdir(artifactDir, { recursive: true });
             // Only the synthetic suppressed row is captured, never the error row.
             await suppressed.screenshot({
               path: path.join(artifactDir, `${scope}-suppressed.png`),

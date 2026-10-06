@@ -1,5 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parsePostContent } from "./post.js";
+import { renderPostContent } from "./post.js";
 
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
 const POST_FALLBACK_TEXT = "[Rich text message]";
@@ -128,7 +128,10 @@ function extractInteractiveElementText(
     }
     return parts.filter(Boolean).join("\n") || undefined;
   }
-  if ((tag === "markdown" || tag === "lark_md") && typeof element.content === "string") {
+  if (
+    (tag === "markdown" || tag === "lark_md" || tag === "plain_text") &&
+    typeof element.content === "string"
+  ) {
     return applyCardTemplateVariables(element.content, variables);
   }
   if ((tag === "text" || tag === "a" || tag === "button") && element.text !== undefined) {
@@ -137,9 +140,6 @@ function extractInteractiveElementText(
   if (tag === "at") {
     const mention = normalizeInteractiveValue(element.user_name ?? element.user_id, variables);
     return mention ? (mention.startsWith("@") ? mention : `@${mention}`) : undefined;
-  }
-  if (tag === "plain_text" && typeof element.content === "string") {
-    return applyCardTemplateVariables(element.content, variables);
   }
   if (tag === "table") {
     return extractInteractiveTableText(element, variables);
@@ -236,7 +236,7 @@ export function parseInteractiveCardContent(parsed: unknown): string {
     }
   }
 
-  const postText = parsePostContent(JSON.stringify(parsed)).textContent.trim();
+  const postText = renderPostContent(parsed).textContent.trim();
   if (postText && postText !== POST_FALLBACK_TEXT) {
     return postText;
   }

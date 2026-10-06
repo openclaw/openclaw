@@ -1,9 +1,13 @@
-// Generates short labels for sessions from conversation context.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createReasoningTagTextPartitioner } from "../../../packages/markdown-core/src/reasoning-tags.js";
+import {
+  assertOperatorModelAllowed,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -17,9 +21,9 @@ type ConversationLabelAttempt = {
   modelRef?: string;
   useUtilityModel?: boolean;
   preferredProfile?: string;
+  phase: LabelModelPhase;
 };
 
-/** Inputs for generating a short conversation label from the configured utility model. */
 export type ConversationLabelParams = {
   userMessage: string;
   prompt: string;
@@ -30,6 +34,9 @@ export type ConversationLabelParams = {
   modelRef?: string;
   timeoutMs?: number;
   maxLength?: number;
+  abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 };
 
 type ConversationLabelFallbackParams = ConversationLabelParams & {
@@ -37,12 +44,8 @@ type ConversationLabelFallbackParams = ConversationLabelParams & {
   regularModelRef: string;
   preferredProfile?: string;
   normalizeLabel?: (label: string) => string | null;
-};
-
-type ResolvedLabelParams = ConversationLabelParams & {
-  agentId: string;
-  timeoutMs: number;
-  maxLength: number;
+  /** Speculative callers: one utility attempt at most, never the regular model. */
+  utilityOnly?: boolean;
 };
 
 function resolvePositiveInteger(value: number | undefined, fallback: number): number {
@@ -71,34 +74,65 @@ function resolveRawModelProvider(modelRef: string | undefined): string | undefin
   return provider || undefined;
 }
 
+function resolveAttemptKey(
+  params: ConversationLabelParams & { agentId: string },
+  attempt: ConversationLabelAttempt,
+): string {
+  const selection = resolveAttemptSelection(params, attempt);
+  const rawRef = splitTrailingAuthProfile(attempt.modelRef?.trim() ?? "");
+  return selection
+    ? [
+        "resolved",
+        selection.provider,
+        selection.runtimeProvider ?? "",
+        selection.modelId,
+        selection.profileId ?? attempt.preferredProfile ?? "",
+      ].join("\0")
+    : ["raw", rawRef.model, rawRef.profile ?? attempt.preferredProfile ?? ""].join("\0");
+}
+
 async function runLabelAttempts(
-  params: ResolvedLabelParams & {
+  params: ConversationLabelParams & {
+    agentId: string;
     attempts: readonly ConversationLabelAttempt[];
+    /** Selections that must not run even when an attempt resolves onto them. */
+    skipAttempts?: readonly ConversationLabelAttempt[];
     normalizeLabel?: (label: string) => string | null;
   },
 ): Promise<string | null> {
-  const seen = new Set<string>();
+  const timeoutMs = resolvePositiveInteger(params.timeoutMs, TIMEOUT_MS);
+  const maxLength = resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH);
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    params.operatorAuthority?.assertCurrent();
+    params.abortSignal?.throwIfAborted();
+  };
+  const seen = new Set(params.skipAttempts?.map((attempt) => resolveAttemptKey(params, attempt)));
   const failures: LabelModelPhase[] = [];
-  for (const [index, attempt] of params.attempts.entries()) {
-    const selection = resolveAttemptSelection(params, attempt);
-    const rawRef = splitTrailingAuthProfile(attempt.modelRef?.trim() ?? "");
-    const key = selection
-      ? [
-          "resolved",
-          selection.provider,
-          selection.runtimeProvider ?? "",
-          selection.modelId,
-          selection.profileId ?? attempt.preferredProfile ?? "",
-        ].join("\0")
-      : ["raw", rawRef.model, rawRef.profile ?? attempt.preferredProfile ?? ""].join("\0");
+  for (const attempt of params.attempts) {
+    assertCurrent();
+    const key = resolveAttemptKey(params, attempt);
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
     try {
+      const selection = resolveAttemptSelection(params, attempt);
       if (!selection) {
         throw new Error("conversation label model selection unavailable");
       }
+      const model = { provider: selection.provider, model: selection.modelId };
+      if (params.operatorAuthority?.modelPolicy?.allows(model) === false) {
+        continue;
+      }
+      assertOperatorModelAllowed(params.operatorAuthority, model);
+      // The session's runtime override was resolved for its primary provider; a
+      // utility model on another provider cannot run through that harness.
+      const agentHarnessRuntimeOverride = resolveCompatibleAgentRuntimeForProvider({
+        provider: selection.provider,
+        runtime: params.agentHarnessRuntimeOverride,
+        cfg: params.cfg,
+      });
       const completion = await runIsolatedCompletion({
         config: params.cfg,
         provider: selection.runtimeProvider ?? selection.provider,
@@ -106,9 +140,7 @@ async function runLabelAttempts(
         authProfileId: selection.profileId ?? attempt.preferredProfile,
         agentId: params.agentId,
         agentDir: params.agentDir ?? selection.agentDir,
-        ...(params.agentHarnessRuntimeOverride
-          ? { agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride }
-          : {}),
+        ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
         systemPrompt: [
           params.prompt,
           "You are labeling the supplied message, not participating in its conversation.",
@@ -116,23 +148,28 @@ async function runLabelAttempts(
           "Do not describe your own capabilities or limitations.",
         ].join(" "),
         prompt: params.userMessage,
-        timeoutMs: params.timeoutMs,
+        timeoutMs,
+        abortSignal: params.abortSignal,
+        assertCurrent: params.assertCurrent,
+        ...(params.operatorAuthority ? { operatorAuthority: params.operatorAuthority } : {}),
         outputTextPolicy: "strict-visible",
         streamParams: { maxTokens: CONVERSATION_LABEL_MAX_TOKENS },
       });
+      assertCurrent();
       const partitioner = createReasoningTagTextPartitioner();
       partitioner.markStrict();
       const visibleText = [...partitioner.push(completion.text), ...partitioner.flush()]
         .flatMap((delta) => (delta.kind === "text" ? [delta.text] : []))
         .join("")
         .trim();
-      const label = truncateUtf16Safe(visibleText, params.maxLength) || null;
+      const label = truncateUtf16Safe(visibleText, maxLength) || null;
       const normalized = label && params.normalizeLabel ? params.normalizeLabel(label) : label;
       if (normalized) {
         return normalized;
       }
     } catch {
-      failures.push(index === params.attempts.length - 1 ? "primary fallback" : "utility");
+      assertCurrent();
+      failures.push(attempt.phase);
     }
   }
   if (failures.length > 0) {
@@ -149,15 +186,12 @@ export async function generateConversationLabel(
 ): Promise<string | null> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
   const attempts: ConversationLabelAttempt[] = params.modelRef
-    ? [{ modelRef: params.modelRef }]
-    : [{ useUtilityModel: true }, { useUtilityModel: false }];
-  return await runLabelAttempts({
-    ...params,
-    agentId,
-    attempts,
-    timeoutMs: resolvePositiveInteger(params.timeoutMs, TIMEOUT_MS),
-    maxLength: resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH),
-  });
+    ? [{ modelRef: params.modelRef, phase: "primary fallback" }]
+    : [
+        { useUtilityModel: true, phase: "utility" },
+        { useUtilityModel: false, phase: "primary fallback" },
+      ];
+  return await runLabelAttempts({ ...params, agentId, attempts });
 }
 
 /** Tries an explicit utility model once, then the regular model once when needed. */
@@ -168,11 +202,12 @@ export async function generateConversationLabelWithFallback(
   const regularAttempt: ConversationLabelAttempt = {
     modelRef: params.regularModelRef,
     ...(params.preferredProfile ? { preferredProfile: params.preferredProfile } : {}),
+    phase: "primary fallback",
   };
   const utilityRef = params.utilityModelRef?.trim();
   let utilityAttempt: ConversationLabelAttempt | undefined;
   if (utilityRef) {
-    const candidate: ConversationLabelAttempt = { modelRef: utilityRef };
+    const candidate: ConversationLabelAttempt = { modelRef: utilityRef, phase: "utility" };
     const resolvedParams = { ...params, agentId };
     const utilitySelection = resolveAttemptSelection(resolvedParams, candidate);
     const regularSelection = resolveAttemptSelection(resolvedParams, regularAttempt);
@@ -187,14 +222,16 @@ export async function generateConversationLabelWithFallback(
       utilityAuthProvider &&
       utilityAuthProvider === regularAuthProvider;
     utilityAttempt = inheritsRegularProfile
-      ? { modelRef: `${utilityRef}@${params.preferredProfile}` }
+      ? { ...candidate, modelRef: `${utilityRef}@${params.preferredProfile}` }
       : candidate;
   }
+  const utilityAttempts = utilityAttempt ? [utilityAttempt] : [];
   return await runLabelAttempts({
     ...params,
     agentId,
-    attempts: [...(utilityAttempt ? [utilityAttempt] : []), regularAttempt],
-    timeoutMs: resolvePositiveInteger(params.timeoutMs, TIMEOUT_MS),
-    maxLength: resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH),
+    // Utility-only callers pre-claim the regular selection so a utility ref that
+    // resolves onto the primary model is skipped instead of spending on it.
+    attempts: params.utilityOnly ? utilityAttempts : [...utilityAttempts, regularAttempt],
+    ...(params.utilityOnly ? { skipAttempts: [regularAttempt] } : {}),
   });
 }

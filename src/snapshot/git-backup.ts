@@ -1,12 +1,22 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatErrorMessage } from "../infra/errors.js";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import {
+  GIT_TIMEOUT_MS,
   executeGitCommand as runGit,
+  normalizeGitPathForFilesystem,
   requireGitCommand as requireGit,
-  requireGitCommandBuffer as requireGitBuffer,
+  requireGitCommandOutput,
 } from "../infra/git-exec.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
+import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
+import { spawnCommand } from "../process/exec-spawn.js";
+import { BACKUP_RUN_ERROR_MAX_LENGTH } from "../state/backup-run-records.contract.js";
 import {
   GIT_BACKUP_MANIFEST,
   GIT_BACKUP_SCHEMA,
@@ -23,7 +33,6 @@ import { ensurePrivateSnapshotRepositoryRoot } from "./local-repository.js";
 import { createOpenClawSnapshotCopy } from "./openclaw-snapshot-copy.js";
 import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 
-const GIT_BACKUP_MATERIALIZE_MAX_BYTES = 1024 * 1024 * 1024;
 const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
 const GIT_BACKUP_NON_BACKUP_HISTORY_WARNING =
   "repository history contains non-backup commits; use a dedicated backup repository";
@@ -35,16 +44,82 @@ type GitBackupCreateResult = {
   pushed: boolean;
   pushWarning?: string;
   manifests: GitBackupManifest[];
+  warnings: string[];
 };
 
+function redactGitBackupText(value: string): string {
+  return value
+    .split("\n")
+    .map((line) => redactSensitiveUrlLikeString(line))
+    .join("\n");
+}
+
 function sanitizeGitBackupDiagnostic(value: string): string {
-  return value.replace(/:\/\/[^@\s]+@/gu, "://***@").slice(0, GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH);
+  return truncateUtf16Safe(redactGitBackupText(value), GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH);
+}
+
+function formatGitBackupCommandResult(
+  command: string,
+  result: Awaited<ReturnType<typeof runGit>>,
+): string {
+  const redacted = {
+    ...result,
+    stderr: redactGitBackupText(result.stderr),
+    stdout: redactGitBackupText(result.stdout),
+  };
+  const header = formatCommandResult(command, { ...redacted, stderr: "", stdout: "" });
+  const streams = (["stderr", "stdout"] as const).flatMap((stream) => {
+    const output = formatCommandOutput(redacted[stream]);
+    return output ? [{ stream, output }] : [];
+  });
+  const fixedLength =
+    header.length + streams.reduce((total, { stream }) => total + 1 + `${stream}: `.length, 0);
+  if (streams.length === 0 || fixedLength >= BACKUP_RUN_ERROR_MAX_LENGTH) {
+    return truncateUtf16Safe(header, BACKUP_RUN_ERROR_MAX_LENGTH);
+  }
+  const outputBudget = BACKUP_RUN_ERROR_MAX_LENGTH - fixedLength;
+  const lengths = streams.map(({ output }) => output.length);
+  const first = Math.min(
+    lengths[0] ?? 0,
+    Math.max(Math.ceil(outputBudget / 2), outputBudget - (lengths[1] ?? 0)),
+  );
+  const allocations = [first, Math.min(lengths[1] ?? 0, outputBudget - first)];
+  const fit = (output: string, maxLength: number): string => {
+    if (output.length <= maxLength) {
+      return output;
+    }
+    if (maxLength <= 1) {
+      return truncateUtf16Safe("…", maxLength);
+    }
+    const source = output.startsWith("…\n") ? output.slice(2) : output;
+    return `…\n${sliceUtf16Safe(source, Math.max(0, source.length - (maxLength - 2)))}`;
+  };
+  return [
+    header,
+    ...streams.map(
+      ({ stream, output }, index) => `${stream}: ${fit(output, allocations[index] ?? 0)}`,
+    ),
+  ].join("\n");
+}
+
+function gitBackupRepositoryPrivacyRemediation(repositoryPath: string, cause: unknown): string {
+  if (process.platform === "win32") {
+    const detail =
+      cause instanceof Error && cause.message
+        ? ` ${sanitizeGitBackupDiagnostic(cause.message)}`
+        : "";
+    return (
+      `${detail} Remove non-user ACL grants from ${repositoryPath} or choose a private local directory. ` +
+      "Do not use a shared or synced folder for SQLite backups."
+    );
+  }
+  return `Fix its ownership and run chmod 700 ${repositoryPath}.`;
 }
 
 async function assertGitRepository(repositoryPath: string, env?: NodeJS.ProcessEnv): Promise<void> {
   const topLevel = await requireGit(repositoryPath, ["rev-parse", "--show-toplevel"], { env });
   const [canonicalTopLevel, canonicalRepository] = await Promise.all([
-    fs.realpath(topLevel),
+    fs.realpath(normalizeGitPathForFilesystem(topLevel)),
     fs.realpath(repositoryPath),
   ]);
   if (canonicalTopLevel !== canonicalRepository) {
@@ -77,7 +152,7 @@ export async function initializeGitBackupRepository(params: {
     await ensurePrivateSnapshotRepositoryRoot(repositoryPath);
   } catch (error) {
     throw new Error(
-      `Git backup repository must be owned by the current user and not writable by other users: ${repositoryPath}. Fix its ownership and run chmod 700 ${repositoryPath}.`,
+      `Git backup repository must be owned by the current user and not writable by other users: ${repositoryPath}. ${gitBackupRepositoryPrivacyRemediation(repositoryPath, error)}`,
       { cause: error },
     );
   }
@@ -142,7 +217,10 @@ async function assertBackupOwnedScope(scopePath: string): Promise<void> {
   }
 }
 
-async function removeStaleAgentScopes(repositoryPath: string): Promise<void> {
+async function removeStaleAgentScopes(
+  repositoryPath: string,
+  retainedScopes: Set<string>,
+): Promise<void> {
   const agentsPath = path.join(repositoryPath, "agents");
   let entries: string[];
   try {
@@ -155,7 +233,11 @@ async function removeStaleAgentScopes(repositoryPath: string): Promise<void> {
   }
   const scopes = entries.map((entry) => path.join(agentsPath, entry));
   await Promise.all(scopes.map(async (scope) => await assertBackupOwnedScope(scope)));
-  await Promise.all(scopes.map(async (scope) => await fs.rm(scope, { recursive: true })));
+  await Promise.all(
+    scopes
+      .filter((scope) => !retainedScopes.has(path.relative(repositoryPath, scope)))
+      .map(async (scope) => await fs.rm(scope, { recursive: true })),
+  );
 }
 
 async function copyStagedScope(
@@ -204,24 +286,40 @@ export async function createGitBackup(params: {
   now?: Date;
   gitEnv?: NodeJS.ProcessEnv;
 }): Promise<GitBackupCreateResult> {
+  for (const database of params.databases) {
+    assertNotUpdateCapturePath(database.path, params.stateDir);
+  }
   const repositoryPath = path.resolve(params.repositoryPath);
   await initializeGitBackupRepository({
     repositoryPath,
     stateDir: params.stateDir,
     gitEnv: params.gitEnv,
   });
-  const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-backup-"));
-  await fs.chmod(stagingRoot, 0o700);
+  const staging = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-git-backup-",
+  });
   const manifests: GitBackupManifest[] = [];
+  const warnings: string[] = [];
   try {
-    for (const database of params.databases) {
-      const outputPath = path.join(stagingRoot, gitBackupScopePath(database.identity));
+    for (const [index, database] of params.databases.entries()) {
+      const outputPath = path.join(staging.dir, gitBackupScopePath(database.identity));
       await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
-      const copyPath = path.join(
-        stagingRoot,
-        `${database.identity.role}-${manifests.length}.sqlite`,
-      );
-      await createOpenClawSnapshotCopy({ database, targetPath: copyPath });
+      const copyPath = staging.path(`${database.identity.role}-${index}.sqlite`);
+      try {
+        await createOpenClawSnapshotCopy({
+          database: { ...database, path: await fs.realpath(database.path) },
+          targetPath: copyPath,
+        });
+      } catch (error) {
+        if (!params.all || database.identity.role !== "agent") {
+          throw error;
+        }
+        warnings.push(
+          `Agent ${database.identity.agentId} degraded; keeping previous backup scope if present: ${sanitizeGitBackupDiagnostic(formatErrorMessage(error))}`,
+        );
+        continue;
+      }
       manifests.push(
         await dumpGitBackupDatabase({
           snapshotPath: copyPath,
@@ -232,14 +330,21 @@ export async function createGitBackup(params: {
       );
       await fs.rm(copyPath, { force: true });
     }
-    if (params.all) {
-      await removeStaleAgentScopes(repositoryPath);
+    if (manifests.length === 0) {
+      throw new Error("No Git backup databases were found for the selected scope.");
     }
-    for (const database of params.databases) {
-      await copyStagedScope(stagingRoot, repositoryPath, database.identity);
+    if (params.all) {
+      // Selection is the configured roster, including agents whose snapshot failed.
+      await removeStaleAgentScopes(
+        repositoryPath,
+        new Set(params.databases.map(({ identity }) => gitBackupScopePath(identity))),
+      );
+    }
+    for (const { identity } of manifests) {
+      await copyStagedScope(staging.dir, repositoryPath, identity);
     }
   } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
+    await staging.cleanup().catch(() => undefined);
   }
   // Keep both owned roots present so Git accepts both scoped pathspecs even on a first global-only
   // or agent-only backup. Empty directories remain untracked.
@@ -298,9 +403,7 @@ export async function createGitBackup(params: {
       if (pushedResult.code === 0) {
         pushed = true;
       } else {
-        pushWarning = sanitizeGitBackupDiagnostic(
-          (pushedResult.stderr || pushedResult.stdout).trim() || "git push failed",
-        );
+        pushWarning = formatGitBackupCommandResult("git push", pushedResult);
       }
     }
   }
@@ -311,15 +414,8 @@ export async function createGitBackup(params: {
     pushed,
     ...(pushWarning ? { pushWarning } : {}),
     manifests,
+    warnings,
   };
-}
-
-async function resolveGitCommit(repositoryPath: string, ref?: string): Promise<string> {
-  return await requireGit(repositoryPath, [
-    "rev-parse",
-    "--verify",
-    `${ref?.trim() || "HEAD"}^{commit}`,
-  ]);
 }
 
 /** Materialize one database scope from a Git ref into a private temporary directory. */
@@ -327,10 +423,14 @@ async function materializeGitBackupRef(params: {
   repositoryPath: string;
   identity: GitBackupIdentity;
   ref?: string;
-}): Promise<{ commit: string; path: string; cleanup: () => Promise<void> }> {
+}): Promise<{ commit: string; path: string } & AsyncDisposable> {
   const repositoryPath = path.resolve(params.repositoryPath);
   await assertGitRepository(repositoryPath);
-  const commit = await resolveGitCommit(repositoryPath, params.ref);
+  const commit = await requireGit(repositoryPath, [
+    "rev-parse",
+    "--verify",
+    `${params.ref?.trim() || "HEAD"}^{commit}`,
+  ]);
   const scope = gitBackupScopePath(params.identity).split(path.sep).join("/");
   const files = (
     await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", commit, "--", scope])
@@ -341,9 +441,11 @@ async function materializeGitBackupRef(params: {
   if ([...required].some((entry) => !files.includes(entry))) {
     throw new Error(`Git backup ref ${commit} does not contain ${scope}.`);
   }
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-restore-"));
-  await fs.chmod(root, 0o700);
-  const outputPath = path.join(root, scope);
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-git-restore-",
+  });
+  const outputPath = path.join(workspace.dir, scope);
   try {
     for (const file of files) {
       if (
@@ -356,23 +458,24 @@ async function materializeGitBackupRef(params: {
       const relative = file.slice(scope.length + 1);
       const destination = path.join(outputPath, relative);
       await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-      // Table dumps can be tens of megabytes on real agent databases; the
-      // 1MB exec default would truncate them into a hash-mismatch failure.
-      await fs.writeFile(
-        destination,
-        await requireGitBuffer(repositoryPath, ["show", `${commit}:${file}`], {
-          maxOutputBytes: GIT_BACKUP_MATERIALIZE_MAX_BYTES,
-        }),
-        { mode: 0o600 },
-      );
+      await fs.writeFile(destination, "", { flag: "wx", mode: 0o600 });
+      // Git owns decoding the blob; pipe its bytes into private staging rather
+      // than collecting another complete table in the parent process.
+      await spawnCommand(["git", "-C", repositoryPath, "show", `${commit}:${file}`], {
+        stdin: "ignore",
+        stdout: { file: destination },
+        buffer: { stdout: false },
+        maxBuffer: { stderr: 1024 * 1024 },
+        timeout: GIT_TIMEOUT_MS,
+      });
     }
     return {
       commit,
       path: outputPath,
-      cleanup: async () => await fs.rm(root, { recursive: true, force: true }),
+      [Symbol.asyncDispose]: workspace[Symbol.asyncDispose],
     };
   } catch (error) {
-    await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+    await workspace.cleanup().catch(() => undefined);
     throw error;
   }
 }
@@ -384,19 +487,15 @@ export async function restoreGitBackupRef(params: {
   ref?: string;
   targetPath: string;
 }): Promise<GitBackupRestoreResult & { commit: string }> {
-  const materialized = await materializeGitBackupRef(params);
-  try {
-    return {
-      ...(await restoreGitBackupDirectory({
-        sourcePath: materialized.path,
-        targetPath: params.targetPath,
-        expectedIdentity: params.identity,
-      })),
-      commit: materialized.commit,
-    };
-  } finally {
-    await materialized.cleanup();
-  }
+  await using materialized = await materializeGitBackupRef(params);
+  return {
+    ...(await restoreGitBackupDirectory({
+      sourcePath: materialized.path,
+      targetPath: params.targetPath,
+      expectedIdentity: params.identity,
+    })),
+    commit: materialized.commit,
+  };
 }
 
 /** Verify a Git snapshot by restoring it privately and comparing every table digest. */
@@ -405,15 +504,17 @@ export async function verifyGitBackupRef(params: {
   identity: GitBackupIdentity;
   ref?: string;
 }): Promise<GitBackupRestoreResult & { commit: string }> {
-  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-verify-"));
-  await fs.chmod(scratch, 0o700);
+  const scratch = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-git-verify-",
+  });
   try {
     return await restoreGitBackupRef({
       ...params,
-      targetPath: path.join(scratch, "database.sqlite"),
+      targetPath: scratch.path("database.sqlite"),
     });
   } finally {
-    await fs.rm(scratch, { recursive: true, force: true }).catch(() => undefined);
+    await scratch.cleanup().catch(() => undefined);
   }
 }
 
@@ -423,18 +524,34 @@ export async function readGitBackupLog(params: {
   limit: number;
 }): Promise<Array<{ commit: string; date: string; message: string }>> {
   await assertGitRepository(params.repositoryPath);
+  const symbolicHead = await runGit(params.repositoryPath, ["symbolic-ref", "--quiet", "HEAD"]);
+  if (symbolicHead.code === 0) {
+    const headRef = symbolicHead.stdout.trim();
+    const headExists = await runGit(params.repositoryPath, [
+      "show-ref",
+      "--verify",
+      "--quiet",
+      headRef,
+    ]);
+    if (headExists.code === 1 && headRef.startsWith("refs/heads/")) {
+      return [];
+    }
+    if (headExists.code !== 0) {
+      throw new Error(formatGitBackupCommandResult("git show-ref HEAD", headExists));
+    }
+  } else if (symbolicHead.code !== 1) {
+    throw new Error(formatGitBackupCommandResult("git symbolic-ref HEAD", symbolicHead));
+  }
   const result = await runGit(params.repositoryPath, [
     "log",
     `--max-count=${params.limit}`,
     "--pretty=format:%H%x09%cI%x09%s",
   ]);
-  if (result.code !== 0) {
-    if (result.stderr.includes("does not have any commits yet")) {
-      return [];
-    }
-    throw new Error((result.stderr || result.stdout).trim());
-  }
-  return result.stdout
+  return requireGitCommandOutput(
+    "git log",
+    result,
+    (command, failure) => new Error(formatGitBackupCommandResult(command, failure)),
+  )
     .split("\n")
     .filter(Boolean)
     .map((line) => {

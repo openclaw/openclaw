@@ -20,31 +20,16 @@ function providerMatchesManifestId(provider: ProviderPlugin, providerId: string)
     (provider.hookAliases ?? []).includes(providerId)
   );
 }
-function resolveProviderContractProvidersFromPublicArtifact(
-  pluginId: string,
-): ProviderContractEntry[] | null {
-  return resolveBundledExplicitProviderContractsFromPublicArtifacts({ onlyPluginIds: [pluginId] });
-}
 
 export function describeProviderContracts(pluginId: string) {
   let providerEntries: ProviderContractEntry[] | undefined;
-  const resolveProviderEntries = (): ProviderContractEntry[] => {
-    if (providerEntries) {
-      return providerEntries;
-    }
-    const publicArtifactProviders = resolveProviderContractProvidersFromPublicArtifact(pluginId);
-    if (publicArtifactProviders) {
-      providerEntries = publicArtifactProviders;
-      return providerEntries;
-    }
-    providerEntries = resolveProviderContractProvidersForPluginIds([pluginId]).map((provider) => ({
-      pluginId,
-      provider,
-    }));
-    return providerEntries;
-  };
-  const resolveProviderIds = (): string[] =>
-    resolveProviderEntries().map((entry) => entry.provider.id);
+  const resolveProviderEntries = (): ProviderContractEntry[] =>
+    (providerEntries ??=
+      resolveBundledExplicitProviderContractsFromPublicArtifacts({ onlyPluginIds: [pluginId] }) ??
+      resolveProviderContractProvidersForPluginIds([pluginId]).map((provider) => ({
+        pluginId,
+        provider,
+      })));
 
   describe(`${pluginId} provider contract registry load`, () => {
     it("loads bundled providers without import-time registry failure", () => {
@@ -54,7 +39,9 @@ export function describeProviderContracts(pluginId: string) {
     });
   });
 
-  for (const providerId of resolveProviderIds()) {
+  for (const {
+    provider: { id: providerId },
+  } of resolveProviderEntries()) {
     describe(`${pluginId}:${providerId} provider contract`, () => {
       // Resolve provider entries lazily so the non-isolated extension runner
       // does not race provider contract collection against other file imports.

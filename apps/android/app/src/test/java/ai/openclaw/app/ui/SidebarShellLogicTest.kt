@@ -1,8 +1,9 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.chat.ChatSessionEntry
-import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
+import ai.openclaw.app.ui.design.clawColorsForTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -11,74 +12,96 @@ import org.junit.Test
 
 class SidebarShellLogicTest {
   @Test
-  fun compactWidthUsesNavigationBarAcrossTheSixHundredDpBoundary() {
-    assertEquals(AdaptiveNavigationMode.Bar, adaptiveNavigationMode(599f, 800f))
-    assertEquals(AdaptiveNavigationMode.Rail, adaptiveNavigationMode(600f, 800f))
+  fun sidebarPaletteUsesEveryActiveThemeAndAccentToken() {
+    AppearanceThemeFamily.entries.forEach { family ->
+      listOf(false, true).forEach { dark ->
+        val colors =
+          clawColorsForTheme(
+            dark = dark,
+            family = family,
+            accentArgb = 0xFF2563EBL,
+          )
+        val palette = sidebarPalette(colors)
+
+        assertEquals(colors.canvas, palette.background)
+        assertEquals(colors.surfaceRaised, palette.elevated)
+        assertEquals(colors.accentSoft, palette.selection)
+        assertEquals(colors.text, palette.text)
+        assertEquals(colors.textMuted, palette.muted)
+        assertEquals(colors.border, palette.hairline)
+      }
+    }
   }
 
   @Test
-  fun expandedWidthUsesPermanentDrawerAcrossTheEightHundredFortyDpBoundary() {
-    assertEquals(AdaptiveNavigationMode.Rail, adaptiveNavigationMode(839f, 800f))
-    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(840f, 800f))
-  }
-
-  @Test
-  fun compactHeightUsesNavigationBarAcrossTheFourHundredEightyDpBoundary() {
-    assertEquals(AdaptiveNavigationMode.Bar, adaptiveNavigationMode(840f, 479f))
-    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(840f, 480f))
-  }
-
-  @Test
-  fun representativeAndroidWindowSizesMapToMaterialPatterns() {
-    assertEquals(AdaptiveNavigationMode.Bar, adaptiveNavigationMode(360f, 800f))
-    assertEquals(AdaptiveNavigationMode.Bar, adaptiveNavigationMode(800f, 360f))
-    assertEquals(AdaptiveNavigationMode.Rail, adaptiveNavigationMode(600f, 480f))
-    assertEquals(AdaptiveNavigationMode.Rail, adaptiveNavigationMode(839f, 899f))
-    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(841f, 701f))
-    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(1024f, 640f))
-    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(1280f, 800f))
-    assertEquals(AdaptiveNavigationMode.Drawer, adaptiveNavigationMode(1600f, 900f))
-  }
-
-  @Test
-  fun tabletopPostureAlwaysUsesReachableBottomNavigation() {
-    assertEquals(AdaptiveNavigationMode.Bar, adaptiveNavigationMode(1280f, 800f, tabletop = true))
-  }
-
-  @Test
-  fun hiddenCompactNavigationDoesNotHideRailOrPermanentDrawer() {
+  fun storedSidebarOrderAppendsMissingDestinationsInCanonicalOrder() {
+    val destinations = orderedSidebarDestinations(listOf("threads", "home", "threads", "unknown"))
     assertEquals(
-      NavigationSuiteType.None,
-      adaptiveNavigationSuiteType(AdaptiveNavigationMode.Bar, compactNavigationVisible = false),
+      listOf(
+        SidebarDestination.Threads,
+        SidebarDestination.Home,
+        SidebarDestination.Skills,
+        SidebarDestination.Work,
+        SidebarDestination.Agents,
+      ),
+      destinations.take(5),
+    )
+    assertTrue(SidebarDestination.SkillWorkshop in destinations.drop(5))
+    assertEquals(destinations.size, destinations.distinct().size)
+  }
+
+  @Test
+  fun reorderMovesOnePositionAndKeepsCanonicalDestinations() {
+    val initial = orderedSidebarDestinations(listOf("agents", "work", "home", "skills", "threads")).map(SidebarDestination::stableId)
+
+    assertEquals(
+      listOf("work", "agents") + initial.drop(2),
+      moveSidebarDestination(initial, destinationId = "work", direction = -1),
     )
     assertEquals(
-      NavigationSuiteType.NavigationBar,
-      adaptiveNavigationSuiteType(AdaptiveNavigationMode.Bar, compactNavigationVisible = true),
+      listOf("agents", "home", "work") + initial.drop(3),
+      moveSidebarDestination(initial, destinationId = "work", direction = 1),
     )
     assertEquals(
-      NavigationSuiteType.NavigationRail,
-      adaptiveNavigationSuiteType(AdaptiveNavigationMode.Rail, compactNavigationVisible = false),
+      initial,
+      moveSidebarDestination(initial, destinationId = "agents", direction = -1),
     )
     assertEquals(
-      NavigationSuiteType.NavigationDrawer,
-      adaptiveNavigationSuiteType(AdaptiveNavigationMode.Drawer, compactNavigationVisible = false),
+      initial,
+      moveSidebarDestination(initial, destinationId = "missing", direction = 1),
     )
   }
 
   @Test
-  fun compactNavigationUsesShortDistinctLabels() {
-    val labels = SidebarDestination.entries.map(SidebarDestination::compactLabelSource)
-
-    assertEquals(listOf("Chat", "Status", "Usage", "Cron", "Threads"), labels)
-    assertEquals(labels.size, labels.distinct().size)
-    assertTrue(labels.all { it.length <= 7 })
+  fun sessionDragMutatesOnlyTowardARealSidebarDestination() {
+    assertEquals(true, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Catalog, direction = -1))
+    assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Catalog, direction = 1))
+    assertEquals(false, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Catalog, direction = 1, currentlyPinned = true))
+    assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Catalog, direction = -1, currentlyPinned = true))
+    assertEquals(false, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Pinned, direction = 1))
+    assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Pinned, direction = -1))
+    assertEquals(true, sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Recent, direction = -1))
+    assertNull(sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Recent, direction = 1))
   }
 
   @Test
-  fun compactNavigationOnlyShowsTheSelectedLabel() {
-    assertFalse(alwaysShowAdaptiveNavigationLabel(AdaptiveNavigationMode.Bar))
-    assertTrue(alwaysShowAdaptiveNavigationLabel(AdaptiveNavigationMode.Rail))
-    assertTrue(alwaysShowAdaptiveNavigationLabel(AdaptiveNavigationMode.Drawer))
+  fun pinnedItemVisibilityKeepsCanonicalOrderAndAtLeastOnePage() {
+    assertEquals(
+      listOf("work", "home", "threads"),
+      updateSidebarDestinationVisibility(
+        visibleIds = listOf("threads", "home"),
+        destination = SidebarDestination.Work,
+        visible = true,
+      ),
+    )
+    assertEquals(
+      listOf("home"),
+      updateSidebarDestinationVisibility(
+        visibleIds = listOf("home"),
+        destination = SidebarDestination.Home,
+        visible = false,
+      ),
+    )
   }
 
   @Test
@@ -127,14 +150,29 @@ class SidebarShellLogicTest {
             session("fresh", activity = 30),
             session("archived", activity = 50, archived = true),
             session("fresh-pinned", activity = 20, pinned = true),
+            session("sleeping-pinned", activity = 40, pinned = true).copy(snoozedUntil = 101L),
+            session("expired", activity = 10).copy(snoozedUntil = 100L),
           ),
+        nowMs = 100L,
       )
 
-    assertEquals(listOf("fresh-pinned", "old-pinned", "fresh"), rows.map(ChatSessionEntry::key))
+    assertEquals(listOf("fresh-pinned", "old-pinned", "fresh", "expired"), rows.map(ChatSessionEntry::key))
   }
 
   @Test
-  fun collapsedSessionPresentationGroupsOnlyTheEightHighestPriorityActiveRows() {
+  fun sidebarPresentationRestoresSnoozedPinsAtTheirDeadline() {
+    val rows = listOf(session("sleeping", activity = 20, pinned = true).copy(snoozedUntil = 100L), session("active", activity = 10))
+    val before = sidebarSessionPresentation(rows, emptyList(), expanded = false, currentSessionKey = "sleeping", nowMs = 99L)
+    val after = sidebarSessionPresentation(rows, emptyList(), expanded = false, currentSessionKey = "sleeping", nowMs = 100L)
+
+    assertEquals(emptyList<ChatSessionEntry>(), before.pinned)
+    assertEquals(listOf("active"), before.recentSections.flatMap { it.entries }.map { it.key })
+    assertEquals(listOf("sleeping"), after.pinned.map { it.key })
+    assertEquals(before.recentSections, after.recentSections)
+  }
+
+  @Test
+  fun collapsedSessionPresentationKeepsAllPinsAndGroupsEightRecentRows() {
     val presentation =
       sidebarSessionPresentation(
         sessions =
@@ -153,12 +191,13 @@ class SidebarShellLogicTest {
         expanded = false,
       )
 
-    val keys = presentation.sections.flatMap { it.entries }.map(ChatSessionEntry::key)
-    assertEquals(8, keys.size)
-    assertEquals(setOf("pinned", "session-10", "session-9", "session-8", "session-7", "session-6", "session-5", "session-4"), keys.toSet())
-    assertEquals(listOf("Pinned", "Work", "Ungrouped"), presentation.sections.map { it.title })
-    assertTrue(presentation.sections.all { it.entries.isNotEmpty() })
-    assertTrue(presentation.canExpand)
+    val recentKeys = presentation.recentSections.flatMap { it.entries }.map(ChatSessionEntry::key)
+    assertEquals(listOf("pinned"), presentation.pinned.map(ChatSessionEntry::key))
+    assertEquals(8, recentKeys.size)
+    assertEquals(setOf("session-10", "session-9", "session-8", "session-7", "session-6", "session-5", "session-4", "session-3"), recentKeys.toSet())
+    assertEquals(listOf("Work", "Ungrouped"), presentation.recentSections.map { it.title })
+    assertTrue(presentation.recentSections.all { it.entries.isNotEmpty() })
+    assertTrue(presentation.canExpandRecent)
   }
 
   @Test
@@ -168,12 +207,116 @@ class SidebarShellLogicTest {
     val collapsed = sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false)
     val expanded = sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = true)
 
-    assertEquals(8, collapsed.sections.flatMap { it.entries }.size)
-    assertEquals(12, expanded.sections.flatMap { it.entries }.size)
-    assertFalse(collapsed.sections.flatMap { it.entries }.any { it.key == "session-1" })
-    assertTrue(expanded.sections.flatMap { it.entries }.any { it.key == "session-1" })
-    assertTrue(expanded.canExpand)
+    assertEquals(8, collapsed.recentSections.flatMap { it.entries }.size)
+    assertEquals(12, expanded.recentSections.flatMap { it.entries }.size)
+    assertFalse(collapsed.recentSections.flatMap { it.entries }.any { it.key == "session-1" })
+    assertTrue(expanded.recentSections.flatMap { it.entries }.any { it.key == "session-1" })
+    assertTrue(expanded.canExpandRecent)
     assertEquals(collapsed, sidebarSessionPresentation(sessions, knownGroups = emptyList(), expanded = false))
+  }
+
+  @Test
+  fun catalogSessionsAreExcludedBeforeRecentPagination() {
+    val sessions = (1L..10L).map { activity -> session("session-$activity", activity = activity) }
+
+    val presentation =
+      sidebarSessionPresentation(
+        sessions = sessions,
+        knownGroups = emptyList(),
+        expanded = false,
+        excludedSessionKeys = setOf("session-10", "session-9"),
+      )
+
+    assertEquals(
+      listOf("session-8", "session-7", "session-6", "session-5", "session-4", "session-3", "session-2", "session-1"),
+      presentation.recentSections.flatMap { it.entries }.map(ChatSessionEntry::key),
+    )
+    assertFalse(presentation.canExpandRecent)
+  }
+
+  @Test
+  fun catalogPinsRemainVisibleWithoutDuplicatingRecentRows() {
+    val presentation =
+      sidebarSessionPresentation(
+        sessions =
+          listOf(
+            session("visible-newest-pinned", activity = 50, pinned = true),
+            session("catalog-pinned", activity = 40, pinned = true),
+            session("visible-pinned", activity = 30, pinned = true),
+            session("catalog-recent", activity = 20),
+            session("visible-recent", activity = 10),
+          ),
+        knownGroups = emptyList(),
+        expanded = true,
+        excludedSessionKeys = setOf("catalog-pinned", "catalog-recent"),
+      )
+
+    assertEquals(
+      listOf("visible-newest-pinned", "catalog-pinned", "visible-pinned"),
+      presentation.pinned.map(ChatSessionEntry::key),
+    )
+    assertEquals(
+      listOf("visible-recent"),
+      presentation.recentSections.flatMap { it.entries }.map(ChatSessionEntry::key),
+    )
+  }
+
+  @Test
+  fun sessionActivityUsesCurrentFailureQueueRunAndUnreadPriority() {
+    assertEquals(
+      SidebarSessionActivity.Failed,
+      sidebarSessionActivity(
+        status = "running",
+        lastRunError = "boom",
+        hasActiveRun = true,
+        unread = true,
+      ),
+    )
+    assertEquals(
+      SidebarSessionActivity.Queued,
+      sidebarSessionActivity(
+        status = "queued",
+        lastRunError = null,
+        hasActiveRun = true,
+        unread = true,
+      ),
+    )
+    assertEquals(
+      SidebarSessionActivity.Running,
+      sidebarSessionActivity(
+        status = null,
+        lastRunError = null,
+        hasActiveRun = true,
+        unread = true,
+      ),
+    )
+    assertEquals(
+      SidebarSessionActivity.Unread,
+      sidebarSessionActivity(
+        status = "idle",
+        lastRunError = null,
+        hasActiveRun = false,
+        unread = true,
+      ),
+    )
+    assertNull(
+      sidebarSessionActivity(
+        status = "idle",
+        lastRunError = null,
+        hasActiveRun = false,
+        unread = false,
+      ),
+    )
+  }
+
+  @Test
+  fun terminalCatalogStatusesRemainFailuresWithoutALiveSession() {
+    listOf("failed", "timeout", "killed", "error").forEach { status ->
+      assertEquals(
+        SidebarSessionActivity.Failed,
+        sidebarSessionActivity(status, lastRunError = null, hasActiveRun = false, unread = false),
+      )
+    }
   }
 
   @Test
@@ -182,12 +325,29 @@ class SidebarShellLogicTest {
 
     assertEquals(
       "Working",
-      sidebarSessionSubtitle(session, activeRunLabel = "Working", nowMs = 1_000),
+      sessionListSubtitle(session, fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
     )
     assertEquals(
       "Telegram",
-      sidebarSessionSubtitle(session.copy(hasActiveRun = false), activeRunLabel = null, nowMs = 1_000),
+      sessionListSubtitle(session.copy(hasActiveRun = false), fallback = sessionSourceLabel(session.key), activeRunLabel = null, nowMs = 1_000),
     )
+    assertEquals(
+      "Working",
+      sessionListSubtitle(session.copy(hasActiveRun = null, status = " RUNNING "), fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
+    )
+    assertEquals(
+      "Telegram",
+      sessionListSubtitle(session.copy(hasActiveRun = false, status = "running"), fallback = sessionSourceLabel(session.key), activeRunLabel = "Working", nowMs = 1_000),
+    )
+    assertNull(sidebarSessionActivity("running", lastRunError = null, hasActiveRun = false, unread = false))
+    assertNull(sidebarSessionActivity("done", lastRunError = null, hasActiveRun = true, unread = false))
+    assertEquals(SidebarSessionActivity.Running, sidebarSessionActivity("done", null, false, false, continuing = true))
+    assertEquals(SidebarSessionActivity.Failed, sidebarSessionActivity("failed", null, false, false, continuing = true))
+    assertEquals(SidebarSessionActivity.Running, sidebarSessionActivity("queued", null, false, false, continuing = true))
+    assertEquals(SidebarSessionActivity.Queued, sidebarSessionActivity("queued", null, true, false, continuing = true))
+    assertEquals(SidebarSessionActivity.Queued, sidebarSessionActivity("queued", null, null, false))
+    assertNull(sidebarSessionActivity("queued", null, false, false))
+    assertEquals(SidebarSessionActivity.Unread, sidebarSessionActivity("queued", null, false, true))
   }
 
   private fun agent(

@@ -21,9 +21,10 @@ export {
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../../../gateway/method-scopes.js";
 export { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-export { resolveGatewaySessionStoreTarget } from "../../../gateway/session-utils.js";
+export { resolveGatewaySessionStoreTargetInWorker } from "../../../gateway/session-utils-store-worker.js";
+export { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-export { resolveProviderRefOwnership } from "../../../plugins/providers.js";
+export { prepareModelChoice } from "../../model-runtime-choice.js";
 export { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 export {
   mergeDeliveryContext,
@@ -31,10 +32,4 @@ export {
 } from "../../../utils/delivery-context.shared.js";
 export { resolveAgentConfig } from "../../agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "../../lanes.js";
-export { loadPreparedModelCatalog } from "../../prepared-model-catalog.js";
 export { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
-export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
-export {
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "../../tools/sessions-helpers.js";

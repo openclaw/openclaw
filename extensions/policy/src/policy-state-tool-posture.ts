@@ -1,3 +1,4 @@
+import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import {
   asNonArrayRecord,
   isRecord,
@@ -6,6 +7,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { collectPolicyConfiguredAgents, ocPathSegment } from "./policy-state-helpers.js";
 import type { PolicyToolPostureEvidence } from "./policy-state-types.js";
+
+type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 
 export function scanPolicyToolPosture(
   cfg: Record<string, unknown>,
@@ -23,7 +26,6 @@ export function scanPolicyToolPosture(
     sandbox: defaultSandbox,
     inheritedSandbox: {},
     sourceBase: "oc://openclaw.config/tools",
-    inheritedSourceBase: "oc://openclaw.config/tools",
   });
 
   collectPolicyConfiguredAgents(agents).forEach((configured) => {
@@ -40,7 +42,6 @@ export function scanPolicyToolPosture(
       sandbox: asNonArrayRecord(agent.sandbox),
       inheritedSandbox: defaultSandbox,
       sourceBase: `${configured.sourceBase}/tools`,
-      inheritedSourceBase: "oc://openclaw.config/tools",
     });
   });
 
@@ -49,17 +50,7 @@ export function scanPolicyToolPosture(
 
 function pushToolPostureEvidence(
   entries: PolicyToolPostureEvidence[],
-  params: {
-    readonly id: string;
-    readonly scope: "global" | "agent";
-    readonly agentId?: string;
-    readonly tools: Record<string, unknown>;
-    readonly inheritedTools: Record<string, unknown>;
-    readonly sandbox: Record<string, unknown>;
-    readonly inheritedSandbox: Record<string, unknown>;
-    readonly sourceBase: string;
-    readonly inheritedSourceBase: string;
-  },
+  params: ToolPostureParams,
 ): void {
   const localProfile = readString(params.tools.profile);
   const inheritedProfile = readString(params.inheritedTools.profile);
@@ -112,29 +103,54 @@ function pushToolExecPosture(
 
   const localSecurity = readString(localExec.security);
   const inheritedSecurity = readString(inheritedExec.security);
+  const localAsk = readString(localExec.ask);
+  const inheritedAsk = readString(inheritedExec.ask);
+  const localMode = readExecMode(localExec.mode);
+  const inheritedMode = readExecMode(inheritedExec.mode);
   // Config conformance intentionally ignores exec-approvals.json runtime/operator state.
   const sandboxMode = readString(params.sandbox.mode) ?? readString(params.inheritedSandbox.mode);
   const sandboxCanApply = sandboxMode === "all";
-  pushToolPostureValue(entries, params, {
-    suffix: "exec/security",
-    kind: "execSecurity",
-    value:
-      localSecurity ??
-      inheritedSecurity ??
-      (host === "sandbox" || (host === "auto" && sandboxCanApply) ? "deny" : "full"),
-    explicit: localSecurity !== undefined || inheritedSecurity !== undefined,
-    inherited: localSecurity === undefined && inheritedSecurity !== undefined,
-  });
-
-  const localAsk = readString(localExec.ask);
-  const inheritedAsk = readString(inheritedExec.ask);
-  pushToolPostureValue(entries, params, {
-    suffix: "exec/ask",
-    kind: "execAsk",
-    value: localAsk ?? inheritedAsk ?? "off",
-    explicit: localAsk !== undefined || inheritedAsk !== undefined,
-    inherited: localAsk === undefined && inheritedAsk !== undefined,
-  });
+  const defaultSecurity =
+    host === "sandbox" || (host === "auto" && sandboxCanApply) ? "deny" : "full";
+  const selectedMode =
+    localMode === undefined
+      ? inheritedMode === undefined
+        ? undefined
+        : { value: inheritedMode, inherited: true }
+      : { value: localMode, inherited: false };
+  const modePosture =
+    selectedMode === undefined
+      ? undefined
+      : {
+          ...selectedMode,
+          // A selected mode owns both posture fields, so the resolver ignores legacy inputs.
+          ...resolveExecModePolicy({
+            mode: selectedMode.value,
+            security: "full",
+            ask: "off",
+          }),
+        };
+  for (const [field, kind, local, inherited, fallback] of [
+    ["security", "execSecurity", localSecurity, inheritedSecurity, defaultSecurity],
+    ["ask", "execAsk", localAsk, inheritedAsk, "off"],
+  ] as const) {
+    const usesMode =
+      modePosture?.inherited === false || (local === undefined && modePosture?.inherited === true);
+    pushToolPostureValue(entries, params, {
+      suffix: `exec/${field}`,
+      sourceSuffix: usesMode ? "exec/mode" : undefined,
+      kind,
+      value:
+        modePosture?.inherited === false
+          ? modePosture[field]
+          : (local ?? modePosture?.[field] ?? inherited ?? fallback),
+      explicit: modePosture !== undefined || local !== undefined || inherited !== undefined,
+      inherited:
+        modePosture?.inherited === true
+          ? local === undefined
+          : local === undefined && inherited !== undefined,
+    });
+  }
 }
 
 function pushToolElevatedPosture(
@@ -142,9 +158,7 @@ function pushToolElevatedPosture(
   params: ToolPostureParams,
 ): void {
   const localElevated = asNonArrayRecord(params.tools.elevated);
-  const inheritedElevated = isRecord(params.inheritedTools.elevated)
-    ? params.inheritedTools.elevated
-    : {};
+  const inheritedElevated = asNonArrayRecord(params.inheritedTools.elevated);
   const localEnabled = readBoolean(localElevated.enabled);
   const inheritedEnabled = readBoolean(inheritedElevated.enabled);
   const effectiveEnabled =
@@ -160,9 +174,7 @@ function pushToolElevatedPosture(
   });
 
   const localAllowFrom = asNonArrayRecord(localElevated.allowFrom);
-  const inheritedAllowFrom = isRecord(inheritedElevated.allowFrom)
-    ? inheritedElevated.allowFrom
-    : {};
+  const inheritedAllowFrom = asNonArrayRecord(inheritedElevated.allowFrom);
   const providers = [
     ...new Set([...Object.keys(inheritedAllowFrom), ...Object.keys(localAllowFrom)]),
   ].toSorted((a, b) => a.localeCompare(b));
@@ -173,7 +185,7 @@ function pushToolElevatedPosture(
     entries.push({
       id: `${params.id}-elevated-allow-from-${ocPathSegment(provider)}`,
       kind: "elevatedAllowFrom",
-      source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/elevated/allowFrom/${ocPathSegment(provider)}`,
+      source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/elevated/allowFrom/${ocPathSegment(provider)}`,
       scope: params.scope,
       ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
       entries: localEntries.length > 0 ? localEntries : inheritedEntries,
@@ -191,7 +203,6 @@ type ToolPostureParams = {
   readonly sandbox: Record<string, unknown>;
   readonly inheritedSandbox: Record<string, unknown>;
   readonly sourceBase: string;
-  readonly inheritedSourceBase: string;
 };
 
 function pushToolPostureValue(
@@ -199,6 +210,7 @@ function pushToolPostureValue(
   params: ToolPostureParams,
   entry: {
     readonly suffix: string;
+    readonly sourceSuffix?: string;
     readonly kind: PolicyToolPostureEvidence["kind"];
     readonly value: boolean | string | undefined;
     readonly explicit: boolean;
@@ -208,12 +220,26 @@ function pushToolPostureValue(
   entries.push({
     id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
     kind: entry.kind,
-    source: `${entry.inherited ? params.inheritedSourceBase : params.sourceBase}/${entry.suffix}`,
+    source: `${entry.inherited ? "oc://openclaw.config/tools" : params.sourceBase}/${entry.sourceSuffix ?? entry.suffix}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     ...(entry.value === undefined ? {} : { value: entry.value }),
     explicit: entry.explicit,
   });
+}
+
+function readExecMode(value: unknown): ExecMode | undefined {
+  const mode = readString(value)?.toLowerCase();
+  switch (mode) {
+    case "deny":
+    case "allowlist":
+    case "ask":
+    case "auto":
+    case "full":
+      return mode;
+    default:
+      return undefined;
+  }
 }
 
 function pushToolPostureList(
@@ -227,7 +253,7 @@ function pushToolPostureList(
   entries.push({
     id: `${params.id}-${key}`,
     kind: key,
-    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/${key}`,
+    source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/${key}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     entries: [...inheritedEntries, ...localEntries],
@@ -243,13 +269,13 @@ function pushToolAlsoAllowPostureList(
   const inheritedValue = params.inheritedTools.alsoAllow;
   const localConfigured = Array.isArray(localValue);
   const inheritedConfigured = Array.isArray(inheritedValue);
-  const localEntries = localConfigured ? readStringArray(localValue) : [];
-  const inheritedEntries = inheritedConfigured ? readStringArray(inheritedValue) : [];
+  const localEntries = readStringArray(localValue);
+  const inheritedEntries = readStringArray(inheritedValue);
   const inherited = !localConfigured && inheritedConfigured;
   entries.push({
     id: `${params.id}-alsoAllow`,
     kind: "alsoAllow",
-    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/alsoAllow`,
+    source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/alsoAllow`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     entries: inherited ? inheritedEntries : localEntries,

@@ -9,14 +9,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 
 export const LLAMA_CPP_PROVIDER_ID = "llama-cpp";
 export const LLAMA_CPP_PROVIDER_LABEL = "llama.cpp";
-const LLAMA_CPP_LOCAL_AUTH_MARKER = "llama-cpp-local";
+export const LLAMA_CPP_LOCAL_AUTH_MARKER = "llama-cpp-local";
 export const LLAMA_CPP_DEFAULT_PORT = 19_432;
 const LLAMA_CPP_READY_TIMEOUT_MS = 30_000;
 const LLAMA_CPP_IDLE_STOP_MS = 10 * 60_000;
-
-export function resolveLlamaCppSyntheticApiKey(): string {
-  return LLAMA_CPP_LOCAL_AUTH_MARKER;
-}
 
 export const DEFAULT_LLAMA_CPP_MODEL_ID = "gemma-4-e4b-it-q4_k_m";
 export const DEFAULT_LLAMA_CPP_MODEL_URI =
@@ -29,7 +25,7 @@ export const DEFAULT_LLAMA_CPP_MODEL_SHA256 =
   "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87";
 // The full OpenClaw agent system prompt alone is ~31K tokens, so 8K overflows on
 // the first turn. 64K leaves real headroom for history and tool output; Gemma 4
-// supports far more, and the 16 GiB offer floor already bounds weaker machines.
+// supports far more; the setup catalog budgets memory for this initial context.
 export const DEFAULT_LLAMA_CPP_CONTEXT_SIZE = 65536;
 
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
@@ -42,14 +38,6 @@ export const DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE =
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES = 328_577_056;
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256 =
   "6fa0c02a9c302be6f977521d399b4de3a46310a4f2621ee0063747881b673f67";
-
-// 5 GB weights + KV cache + OS headroom. Below 16 GiB the default model
-// thrashes, so onboarding omits the download offer entirely.
-const LLAMA_CPP_DEFAULT_MODEL_RAM_FLOOR_BYTES = 16 * 1024 ** 3;
-
-export function meetsLlamaCppDefaultModelRamFloor(totalmemBytes = os.totalmem()): boolean {
-  return totalmemBytes >= LLAMA_CPP_DEFAULT_MODEL_RAM_FLOOR_BYTES;
-}
 
 export function resolveLlamaCppDataDir(): string {
   return path.join(resolveStateDir(), "tools", "llama.cpp");
@@ -123,19 +111,25 @@ export function resolveCachedLlamaCppModelPath(params: {
   return path.isAbsolute(source) ? source : path.resolve(cacheDir, source);
 }
 
-function buildDefaultLlamaCppModel(): ModelDefinitionConfig {
+export function buildLlamaCppModel(
+  model: Pick<ModelDefinitionConfig, "id" | "name"> & {
+    source: string;
+    reasoning?: boolean;
+    maxTokens?: number;
+  },
+): ModelDefinitionConfig {
   return {
-    id: DEFAULT_LLAMA_CPP_MODEL_ID,
-    name: "Gemma 4 E4B (Q4_K_M)",
+    id: model.id,
+    name: model.name,
     api: "openai-completions",
-    reasoning: false,
+    reasoning: model.reasoning ?? false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
     contextTokens: DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
-    maxTokens: 2048,
+    maxTokens: model.maxTokens ?? 2048,
     params: {
-      modelPath: DEFAULT_LLAMA_CPP_MODEL_URI,
+      modelPath: model.source,
       contextSize: DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
     },
     compat: {
@@ -159,7 +153,11 @@ export function buildLlamaCppProviderConfig(
   } = {},
 ): ModelProviderConfig {
   const { existing, managed, modelInventory } = params;
-  const defaultModel = buildDefaultLlamaCppModel();
+  const defaultModel = buildLlamaCppModel({
+    id: DEFAULT_LLAMA_CPP_MODEL_ID,
+    name: "Gemma 4 E4B (Q4_K_M)",
+    source: DEFAULT_LLAMA_CPP_MODEL_URI,
+  });
   const configuredModels = existing?.models ?? [];
   const models =
     modelInventory ??
@@ -170,7 +168,7 @@ export function buildLlamaCppProviderConfig(
     ...existing,
     baseUrl:
       managed?.baseUrl ?? existing?.baseUrl ?? `http://127.0.0.1:${LLAMA_CPP_DEFAULT_PORT}/v1`,
-    apiKey: existing?.apiKey ?? resolveLlamaCppSyntheticApiKey(),
+    apiKey: existing?.apiKey ?? LLAMA_CPP_LOCAL_AUTH_MARKER,
     api: "openai-completions",
     timeoutSeconds: existing?.timeoutSeconds ?? 600,
     ...(managed

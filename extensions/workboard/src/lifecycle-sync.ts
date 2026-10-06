@@ -1,8 +1,4 @@
-import type {
-  WorkboardCard,
-  WorkboardExecutionStatus,
-  WorkboardStatus,
-} from "@openclaw/workboard-contract";
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
@@ -25,24 +21,23 @@ const WORKBOARD_SESSION_SWEEP_LIMIT = 10_000;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
 // Keep readiness across plugin-only reloads, while the singleton lifecycle
 // clears it before an in-process Gateway restart starts replacement services.
-const workboardLifecycleGatewayState = resolveGlobalSingleton(
+const workboardLifecycleGatewayState = resolveGlobalSingleton<{
+  ready: boolean;
+  abortSignal?: AbortSignal;
+}>(
   Symbol.for("openclaw.workboard.lifecycleGatewayState"),
   () => ({ ready: false }),
   (state) => {
     state.ready = false;
+    state.abortSignal = undefined;
   },
 );
 
-type WorkboardLifecycleState = "running" | "succeeded" | "failed" | "idle" | "stale";
-
-type WorkboardLifecycleObservation = {
-  state: WorkboardLifecycleState;
-  sourceUpdatedAt?: number;
-  stale?: {
-    detectedAt: number;
-    lastSessionUpdatedAt: number;
-    reason: string;
-  };
+type WorkboardLifecycleSync = Parameters<WorkboardStore["syncLifecycle"]>[1];
+type WorkboardLifecycleObservation = Partial<
+  Pick<WorkboardLifecycleSync, "sourceUpdatedAt" | "stale">
+> & {
+  state: keyof typeof LIFECYCLE_TARGETS;
 };
 
 type WorkboardLifecycleSession = {
@@ -78,7 +73,8 @@ type WorkboardLifecycleMatchHandler = (input: {
 }) => Promise<void>;
 
 type WorkboardLifecycleService = OpenClawPluginService & {
-  onGatewayStart: () => void;
+  stop: () => void;
+  onGatewayStart: (abortSignal?: AbortSignal) => void;
   onGatewayStop: () => void;
 };
 
@@ -99,39 +95,15 @@ function needsWorkboardLifecycleReconciliation(card: WorkboardCard): boolean {
 }
 
 const LIFECYCLE_TARGETS = {
-  running: { card: "running", execution: "running" },
-  succeeded: { card: "review", execution: "review" },
-  failed: { card: "blocked", execution: "blocked" },
-  idle: { execution: "idle" },
-  stale: { card: "running", execution: "running" },
+  running: { targetStatus: "running", executionStatus: "running" },
+  succeeded: { targetStatus: "review", executionStatus: "review" },
+  failed: { targetStatus: "blocked", executionStatus: "blocked" },
+  idle: { targetStatus: undefined, executionStatus: "idle" },
+  stale: { targetStatus: "running", executionStatus: "running" },
 } as const satisfies Record<
-  WorkboardLifecycleState,
-  { card?: WorkboardStatus; execution?: WorkboardExecutionStatus }
+  string,
+  Pick<WorkboardLifecycleSync, "targetStatus" | "executionStatus">
 >;
-
-async function syncWorkboardCardLifecycle(params: {
-  store: WorkboardStore;
-  cardId: string;
-  observation: WorkboardLifecycleObservation;
-  now: number;
-  association?: {
-    expectedSessionKey?: string;
-    expectedRunId?: string;
-    sessionKey: string;
-    runId?: string;
-    acceptedAt?: number;
-  };
-}): Promise<boolean> {
-  const target = LIFECYCLE_TARGETS[params.observation.state];
-  return await params.store.syncLifecycle(params.cardId, {
-    targetStatus: "card" in target ? target.card : undefined,
-    executionStatus: "execution" in target ? target.execution : undefined,
-    sourceUpdatedAt: params.observation.sourceUpdatedAt,
-    stale: params.observation.stale,
-    now: params.now,
-    ...(params.association ? { association: params.association } : {}),
-  });
-}
 
 async function syncWorkboardLifecycleEvent(params: {
   store: WorkboardStore;
@@ -146,9 +118,11 @@ async function syncWorkboardLifecycleEvent(params: {
   const updates = Promise.all(
     cards.map(
       async (card) =>
-        await syncWorkboardCardLifecycle({
-          ...params,
-          cardId: card.id,
+        await params.store.syncLifecycle(card.id, {
+          ...LIFECYCLE_TARGETS[params.observation.state],
+          sourceUpdatedAt: params.observation.sourceUpdatedAt,
+          stale: params.observation.stale,
+          now: params.now,
           ...(params.source.sessionKey
             ? {
                 association: {
@@ -348,10 +322,10 @@ async function syncWorkboardLifecycleSessions(params: {
     }
     const observation = lifecycleFromSession(session, now);
     if (
-      await syncWorkboardCardLifecycle({
-        store: params.store,
-        cardId: card.id,
-        observation,
+      await params.store.syncLifecycle(card.id, {
+        ...LIFECYCLE_TARGETS[observation.state],
+        sourceUpdatedAt: observation.sourceUpdatedAt,
+        stale: observation.stale,
         now,
         association: {
           ...(cardSessionKey(card) ? { expectedSessionKey: cardSessionKey(card) } : {}),
@@ -442,6 +416,7 @@ export function createWorkboardLifecycleService(params: {
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let begin: (() => void) | undefined;
+  let removeDrainListener: (() => void) | undefined;
   let cleanupCursor = 0;
   const cleanupWorktrees = async (
     cards: readonly WorkboardCard[],
@@ -468,12 +443,33 @@ export function createWorkboardLifecycleService(params: {
     }
   };
   const stop = () => {
+    removeDrainListener?.();
+    removeDrainListener = undefined;
     generation += 1;
     begin = undefined;
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
     }
+  };
+  const onGatewayStop = () => {
+    workboardLifecycleGatewayState.ready = false;
+    workboardLifecycleGatewayState.abortSignal = undefined;
+    stop();
+  };
+  const beginWhenGatewayReady = () => {
+    if (!workboardLifecycleGatewayState.ready) {
+      return;
+    }
+    removeDrainListener?.();
+    const signal = workboardLifecycleGatewayState.abortSignal;
+    if (signal?.aborted) {
+      onGatewayStop();
+      return;
+    }
+    signal?.addEventListener("abort", onGatewayStop, { once: true });
+    removeDrainListener = () => signal?.removeEventListener("abort", onGatewayStop);
+    begin?.();
   };
   return {
     id: "workboard-lifecycle-sync",
@@ -482,39 +478,45 @@ export function createWorkboardLifecycleService(params: {
       let begun = false;
       const reconcile = async () => {
         try {
-          let cards = await params.store.list();
-          if (generation !== owner) {
-            return;
-          }
-          if (cards.some((card) => needsWorkboardLifecycleReconciliation(card))) {
-            try {
-              const snapshot = await params.readSessions({
-                includeUnknown: cards.some(
-                  (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
-                ),
-              });
-              if (generation !== owner) {
-                return;
-              }
-              await syncWorkboardLifecycleSessions({
-                store: params.store,
-                cards,
-                ...snapshot,
-                now: params.now?.() ?? Date.now(),
-              });
-              if (generation !== owner) {
-                return;
-              }
-              cards = await params.store.list();
-            } catch (error) {
-              ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);
+          await params.store.runOperation(async () => {
+            let cards = await params.store.list();
+            if (generation !== owner) {
+              return;
             }
-          }
-          if (generation === owner) {
-            await cleanupWorktrees(cards, (message) => ctx.logger.warn(message));
-          }
+            if (cards.some((card) => needsWorkboardLifecycleReconciliation(card))) {
+              try {
+                const snapshot = await params.readSessions({
+                  includeUnknown: cards.some(
+                    (card) => !card.metadata?.archivedAt && cardSessionKey(card) === "unknown",
+                  ),
+                });
+                if (generation !== owner) {
+                  return;
+                }
+                await syncWorkboardLifecycleSessions({
+                  store: params.store,
+                  cards,
+                  ...snapshot,
+                  now: params.now?.() ?? Date.now(),
+                });
+                if (generation !== owner) {
+                  return;
+                }
+                cards = await params.store.list();
+              } catch (error) {
+                if (generation === owner) {
+                  ctx.logger.warn(`workboard lifecycle sync failed: ${String(error)}`);
+                }
+              }
+            }
+            if (generation === owner) {
+              await cleanupWorktrees(cards, (message) => ctx.logger.warn(message));
+            }
+          });
         } catch (error) {
-          ctx.logger.warn(`workboard lifecycle recovery failed: ${String(error)}`);
+          if (generation === owner) {
+            ctx.logger.warn(`workboard lifecycle recovery failed: ${String(error)}`);
+          }
         } finally {
           if (generation === owner) {
             timer = setTimeout(() => void reconcile(), WORKBOARD_LIFECYCLE_SWEEP_MS);
@@ -531,18 +533,14 @@ export function createWorkboardLifecycleService(params: {
         // hooks keep end-state writes immediate between 60-second sweeps.
         void reconcile();
       };
-      if (workboardLifecycleGatewayState.ready) {
-        begin();
-      }
+      beginWhenGatewayReady();
     },
     stop,
-    onGatewayStart() {
+    onGatewayStart(abortSignal) {
       workboardLifecycleGatewayState.ready = true;
-      begin?.();
+      workboardLifecycleGatewayState.abortSignal = abortSignal;
+      beginWhenGatewayReady();
     },
-    onGatewayStop() {
-      workboardLifecycleGatewayState.ready = false;
-      stop();
-    },
+    onGatewayStop,
   };
 }

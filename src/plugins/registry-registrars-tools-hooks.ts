@@ -20,6 +20,7 @@ import {
   resolveConversationAccessAllowed,
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import {
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
@@ -29,14 +30,9 @@ import type {
   PluginAgentToolResultMiddlewareRegistration,
   PluginRecord,
 } from "./registry-types.js";
-import {
-  findUndeclaredPluginToolNames,
-  normalizePluginToolContractNames,
-  normalizePluginToolNames,
-} from "./tool-contracts.js";
+import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import {
-  isConversationHookName,
   isPluginHookAgentTrigger,
   isPluginHookName,
   isPluginHookReplyDispatchKind,
@@ -54,6 +50,22 @@ import type {
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
 
+const conversationHookNames = new Set<PluginHookName>([
+  "before_model_resolve",
+  "agent_turn_prepare",
+  "before_prompt_build",
+  "before_agent_reply",
+  "llm_input",
+  "llm_output",
+  "before_agent_finalize",
+  "agent_end",
+  "before_agent_run",
+]);
+
+function isConversationHookName(hookName: PluginHookName): boolean {
+  return conversationHookNames.has(hookName);
+}
+
 function normalizeHookEligibility<T>(value: unknown, isEligible: (item: unknown) => item is T) {
   if (!Array.isArray(value)) {
     return undefined;
@@ -70,20 +82,25 @@ function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
 }
 
 export function createToolHookRegistrars(state: PluginRegistryState) {
-  const { registry, registryParams, pluginsWithChannelRegistrationConflict, pushDiagnostic } =
-    state;
+  const {
+    registry,
+    createRegistration,
+    registryParams,
+    pluginsWithChannelRegistrationConflict,
+    reportRegistrationError,
+    reportRegistrationWarning,
+  } = state;
+  const declaredToolNames = new WeakMap<PluginRecord, ReadonlySet<string>>();
 
   const registerCodexAppServerExtensionFactory = (
     record: PluginRecord,
     factory: Parameters<OpenClawPluginApi["registerCodexAppServerExtensionFactory"]>[0],
   ) => {
     if (record.origin !== "bundled") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "only bundled plugins can register Codex app-server extension factories",
-      });
+      reportRegistrationError(
+        record,
+        "only bundled plugins can register Codex app-server extension factories",
+      );
       return;
     }
     if (
@@ -91,22 +108,14 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         CODEX_APP_SERVER_EXTENSION_RUNTIME_ID,
       )
     ) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message:
-          'plugin must declare contracts.embeddedExtensionFactories: ["codex-app-server"] to register Codex app-server extension factories',
-      });
+      reportRegistrationError(
+        record,
+        'plugin must declare contracts.embeddedExtensionFactories: ["codex-app-server"] to register Codex app-server extension factories',
+      );
       return;
     }
-    if (typeof (factory as unknown) !== "function") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "codex app-server extension factory must be a function",
-      });
+    if (typeof factory !== "function") {
+      reportRegistrationError(record, "codex app-server extension factory must be a function");
       return;
     }
     if (
@@ -127,12 +136,8 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       }
     };
     registry.codexAppServerExtensionFactories.push({
-      pluginId: record.id,
-      pluginName: record.name,
+      ...createRegistration(record, { factory: safeFactory }),
       rawFactory: factory,
-      factory: safeFactory,
-      source: record.source,
-      rootDir: record.rootDir,
     });
   };
 
@@ -142,46 +147,35 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
     policy?: PluginTypedHookPolicy,
   ) => {
-    if (typeof (handler as unknown) !== "function") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "agent tool result middleware must be a function",
-      });
-      return;
-    }
-    const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
-    const matcher = normalizePluginToolMatcher(options?.matcher);
-    if (runtimes.length === 0) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "agent tool result middleware must target at least one supported runtime",
-      });
+    if (typeof handler !== "function") {
+      reportRegistrationError(record, "agent tool result middleware must be a function");
       return;
     }
     const declared = normalizeAgentToolResultMiddlewareRuntimeIds(
       record.contracts?.agentToolResultMiddleware,
     );
+    const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options, declared);
+    const matcher = normalizePluginToolMatcher(options?.matcher);
+    if (runtimes.length === 0) {
+      reportRegistrationError(
+        record,
+        "agent tool result middleware must target at least one supported runtime",
+      );
+      return;
+    }
     const missing = runtimes.filter((runtime) => !declared.includes(runtime));
     if (missing.length > 0) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin must declare contracts.agentToolResultMiddleware for: ${missing.join(", ")}`,
-      });
+      reportRegistrationError(
+        record,
+        `plugin must declare contracts.agentToolResultMiddleware for: ${missing.join(", ")}`,
+      );
       return;
     }
     if (!canRegisterInstalledTrustedHook(record)) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "plugin must be explicitly enabled to register agent tool result middleware",
-      });
+      reportRegistrationError(
+        record,
+        "plugin must be explicitly enabled to register agent tool result middleware",
+      );
       return;
     }
     const existing = registry.agentToolResultMiddlewares.find(
@@ -213,67 +207,86 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       }
     };
     const registration: PluginAgentToolResultMiddlewareRegistration = {
-      pluginId: record.id,
-      pluginName: record.name,
+      ...createRegistration(record, {
+        handler: safeHandler,
+        runtimes,
+        scopes: [{ runtimes, ...(matcher ? { matcher } : {}) }],
+      }),
       rawHandler: handler,
-      handler: safeHandler,
-      runtimes,
-      scopes: [{ runtimes, ...(matcher ? { matcher } : {}) }],
-      source: record.source,
-      rootDir: record.rootDir,
     };
     registry.agentToolResultMiddlewares.push(registration);
   };
 
   const registerTool = (
     record: PluginRecord,
-    tool: AnyAgentTool | OpenClawPluginToolFactory,
+    tool: AnyAgentTool | OpenClawPluginToolFactory | OpenClawPluginToolFactory<2>,
     opts?: OpenClawPluginToolOptions,
   ) => {
     if (pluginsWithChannelRegistrationConflict.has(record.id)) {
       return;
     }
-    const declaredNames = normalizePluginToolContractNames(record.contracts);
-    if (declaredNames.length === 0) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "plugin must declare contracts.tools before registering agent tools",
-      });
+    let declaredNames = declaredToolNames.get(record);
+    if (!declaredNames) {
+      declaredNames = new Set(normalizePluginToolContractNames(record.contracts));
+      declaredToolNames.set(record, declaredNames);
+    }
+    if (declaredNames.size === 0) {
+      reportRegistrationError(
+        record,
+        "plugin must declare contracts.tools before registering agent tools",
+      );
       return;
     }
     const names = [...(opts?.names ?? []), ...(opts?.name ? [opts.name] : [])];
     const optional = opts?.optional === true;
+    const versioned = typeof tool !== "function" && "contextVersion" in tool;
+    if (versioned && (tool.contextVersion !== 2 || typeof tool.create !== "function")) {
+      reportRegistrationError(record, "unsupported plugin tool context version");
+      return;
+    }
     const factory: OpenClawPluginToolFactory =
-      typeof tool === "function" ? tool : (_ctx: OpenClawPluginToolContext) => tool;
-    if (typeof tool !== "function") {
+      typeof tool === "function"
+        ? tool
+        : versioned
+          ? (ctx) => {
+              if (!ctx.assertInvocationCurrent) {
+                throw new Error("Version 2 tool factories require host invocation authority");
+              }
+              return tool.create({
+                ...ctx,
+                get senderIsOwner() {
+                  return ctx.senderIsOwner;
+                },
+                assertInvocationCurrent: ctx.assertInvocationCurrent,
+              });
+            }
+          : (_ctx: OpenClawPluginToolContext) => tool;
+    if (typeof tool !== "function" && !versioned) {
       names.push(tool.name);
     }
     const normalized = normalizePluginToolNames(names);
-    const undeclared = findUndeclaredPluginToolNames({ declaredNames, toolNames: normalized });
+    const undeclared = normalized.filter((name) => !declaredNames.has(name));
     if (undeclared.length > 0) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
-      });
+      reportRegistrationError(
+        record,
+        `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+      );
       return;
     }
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
+    getPluginInstance(record)?.admitFactory(factory);
     registry.tools.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      factory,
-      names: normalized,
+      ...createRegistration(record, {
+        factory,
+        ...(versioned ? { contextVersion: 2 as const } : {}),
+        names: normalized,
+        optional,
+        origin: record.origin,
+      }),
+      // Host-owned membership must not re-enter the callable wrapper's graph walk.
       declaredNames,
-      optional,
-      origin: record.origin,
-      source: record.source,
-      rootDir: record.rootDir,
     });
   };
 
@@ -291,15 +304,12 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     // fire. Warn so authors move to `api.on(...)` instead of trusting a false "loaded".
     for (const event of normalizedEvents) {
       if (isPluginHookName(event)) {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message:
-            `hook event "${event}" is dispatched by the typed hook runner only; ` +
+        reportRegistrationWarning(
+          record,
+          `hook event "${event}" is dispatched by the typed hook runner only; ` +
             `api.registerHook registrations for it are not invoked. ` +
             `Use api.on("${event}", ...) instead.`,
-        });
+        );
       }
     }
     const entry = opts?.entry ?? null;
@@ -311,41 +321,28 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       (entryLocal) => entryLocal.entry.hook.name === hookName,
     );
     if (existingHook) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `hook already registered: ${hookName} (${existingHook.pluginId})`,
-      });
+      reportRegistrationError(
+        record,
+        `hook already registered: ${hookName} (${existingHook.pluginId})`,
+      );
       return;
     }
     const description = entry?.hook.description ?? opts?.description ?? "";
-    const hookEntry: HookEntry = entry
-      ? {
-          ...entry,
-          hook: {
-            ...entry.hook,
-            name: hookName,
-            description,
-            source: "openclaw-plugin",
-            pluginId: record.id,
-          },
-          metadata: { ...entry.metadata, events: normalizedEvents },
-        }
-      : {
-          hook: {
-            name: hookName,
-            description,
-            source: "openclaw-plugin",
-            pluginId: record.id,
-            filePath: record.source,
-            baseDir: path.dirname(record.source),
-            handlerPath: record.source,
-          },
-          frontmatter: {},
-          metadata: { events: normalizedEvents },
-          invocation: { enabled: true },
-        };
+    const hookEntry: HookEntry = {
+      ...(entry ?? { frontmatter: {}, invocation: { enabled: true } }),
+      hook: {
+        ...(entry?.hook ?? {
+          filePath: record.source,
+          baseDir: path.dirname(record.source),
+          handlerPath: record.source,
+        }),
+        name: hookName,
+        description,
+        source: "openclaw-plugin",
+        pluginId: record.id,
+      },
+      metadata: { ...entry?.metadata, events: normalizedEvents },
+    };
     record.hookNames.push(hookName);
     registry.hooks.push({
       pluginId: record.id,
@@ -391,44 +388,30 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `unknown typed hook "${String(hookName)}" ignored`,
-      });
+      reportRegistrationWarning(record, `unknown typed hook "${String(hookName)}" ignored`);
       return;
     }
     if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
-      });
+      reportRegistrationWarning(
+        record,
+        `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+      );
       return;
     }
-    if (
-      isConversationHookName(hookName) &&
-      !resolveConversationAccessAllowed(record.origin, policy)
-    ) {
+    const conversationAccessAllowed = resolveConversationAccessAllowed(record.origin, policy);
+    if (isConversationHookName(hookName) && !conversationAccessAllowed) {
       if (record.origin !== "bundled") {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message:
-            `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
+        reportRegistrationWarning(
+          record,
+          `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
             `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
-        });
+        );
         return;
       }
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
-      });
+      reportRegistrationWarning(
+        record,
+        `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+      );
       return;
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
@@ -445,12 +428,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         ? normalizePluginToolMatcher(opts?.matcher)
         : undefined;
     if (opts?.matcher && hookName !== "before_tool_call" && hookName !== "after_tool_call") {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `typed hook "${hookName}" ignores tool matcher`,
-      });
+      reportRegistrationWarning(record, `typed hook "${hookName}" ignores tool matcher`);
     }
     record.hookCount += 1;
     registry.typedHooks.push({
@@ -465,6 +443,9 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
       ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
         ? { requiresToolAuthority: true }
+        : {}),
+      ...(hookName === "session_end" && conversationAccessAllowed
+        ? { conversationAccessAllowed: true }
         : {}),
       source: record.source,
     } as TypedPluginHookRegistration);

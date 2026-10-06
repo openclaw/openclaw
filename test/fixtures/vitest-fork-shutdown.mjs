@@ -3,11 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
-import { installVitestProcessGroupCleanup } from "../../scripts/vitest-process-group.mts";
+import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.ts";
 
 const [root, rawOptions] = process.argv.slice(2);
 const { scenario, setup, fail } = JSON.parse(rawOptions);
+const unexpectedExit = scenario.startsWith("unexpected-");
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const events = path.join(root, "events.jsonl");
 const ready = path.join(root, "ready");
@@ -51,6 +51,13 @@ import { syncBuiltinESMExports } from "node:module";
 const scenario = ${JSON.stringify(scenario)};
 const ready = ${JSON.stringify(ready)};
 const record = (event) => fs.appendFileSync(${JSON.stringify(events)}, JSON.stringify(event) + "\\n");
+// Capture the native exit before Vitest installs its process.exit interceptor.
+globalThis[Symbol.for("openclaw.fixture.nativeExit")] = process.exit.bind(process);
+if (scenario === "unexpected-start" && process.argv[1] === ${JSON.stringify(path.join(path.dirname(fileURLToPath(import.meta.resolve("vitest/package.json"))), "dist/workers/forks.js"))}) {
+  fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ pid: process.pid, threadId: 0, home: process.env.HOME }));
+  fs.writeSync(1, "unexpected-exit-tail\\n");
+  globalThis[Symbol.for("openclaw.fixture.nativeExit")](23);
+}
 const fork = childProcess.fork;
 childProcess.fork = (...args) => {
   const child = fork(...args);
@@ -146,7 +153,7 @@ if (scenario === "forced") {
     `
 if (process.send) {
   process.on("SIGTERM", () => {});
-  fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+  fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
 }
 `,
   );
@@ -172,7 +179,13 @@ if (process.send) {
   } finally {
     await worker.stop();
   }
-  console.log(JSON.stringify({ ...(await exited), stopped: true }));
+  console.log(
+    JSON.stringify({
+      ...(await exited),
+      workerPid: Number(fs.readFileSync(ready, "utf8")),
+      stopped: true,
+    }),
+  );
 } else {
   const setupFiles =
     setup === "raw"
@@ -185,8 +198,8 @@ if (process.send) {
       runner,
       `
 import fs from "node:fs";
-import Runner from ${JSON.stringify(pathToFileURL(path.join(repo, "test/non-isolated-runner.ts")).href)};
-export default class extends Runner {
+import { TestRunner } from "vitest";
+export default class extends TestRunner {
   constructor(config) {
     super(config);
     this.onCleanupWorkerContext(() => {
@@ -260,6 +273,12 @@ ${scenario === "hung-exit" ? `process.once("exit", () => { fs.writeFileSync(${JS
 ${scenario === "bad-exit" ? 'process.once("exit", () => { process.exitCode = 23; });' : ""}
 it("completes the test before worker shutdown", () => {
   fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ pid: process.pid, threadId, home: process.env.HOME }));
+  ${
+    unexpectedExit && scenario !== "unexpected-start"
+      ? `fs.writeSync(1, "unexpected-exit-tail\\n");
+  ${scenario === "unexpected-signal" ? 'process.kill(process.pid, "SIGKILL");' : `globalThis[Symbol.for("openclaw.fixture.nativeExit")](${scenario === "unexpected-exit-zero" ? 0 : 23});`}`
+      : ""
+  }
   ${fail ? 'expect.fail("intentional fixture failure");' : "expect(true).toBe(true);"}
 });
 `,
@@ -274,7 +293,7 @@ it("completes the test before worker shutdown", () => {
     "--configLoader",
     "native",
   ];
-  if (scenario !== "plain" && scenario !== "custom") {
+  if (scenario !== "plain" && scenario !== "custom" && !unexpectedExit) {
     // This shutdown contract covers Node's exit-time writes, not the Inspector
     // profiler's awaited cleanup. Pass native flags only to the actual worker.
     args.push(
@@ -284,63 +303,61 @@ it("completes the test before worker shutdown", () => {
       `--execArgv=--heap-prof-dir=${profiles}`,
     );
   }
-  const { child, completion } = spawnOwnedVitestProcess({
-    command: process.execPath,
+  const { code, stdout, stderr } = await runVitestShutdownCommand({
     args,
-    options: { cwd: root, env, stdio: "pipe" },
+    cwd: root,
+    env,
   });
-  const detachCleanup = installVitestProcessGroupCleanup({ child, forceSignal: "SIGKILL" });
-  let output = "";
-  child.stdout.on("data", (chunk) => {
-    output += chunk;
-  });
-  child.stderr.on("data", (chunk) => {
-    output += chunk;
-  });
-  const { code } = await completion.finally(detachCleanup);
-  assert.ok(
-    fs.existsSync(receipt),
-    `Vitest exited before the fixture test (code ${code}):\n${output}`,
-  );
-  const state = JSON.parse(fs.readFileSync(receipt, "utf8"));
-  let workerStopped = false;
-  try {
-    process.kill(state.pid, 0);
-  } catch (error) {
-    if (error.code === "ESRCH") {
-      workerStopped = true;
-    } else {
-      throw error;
+  const output = stdout + stderr;
+  // Scenario failures are data; cancellation of this supervisor is an execution failure.
+  if (code > 1) {
+    console.error(`Shutdown fixture ${root} failed with exit code ${code}:\n${output}`);
+    process.exitCode = code;
+  } else {
+    assert.ok(
+      fs.existsSync(receipt),
+      `Vitest exited before the fixture test (code ${code}):\n${output}`,
+    );
+    const state = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    let workerStopped = false;
+    try {
+      process.kill(state.pid, 0);
+    } catch (error) {
+      if (error.code === "ESRCH") {
+        workerStopped = true;
+      } else {
+        throw error;
+      }
     }
+    const counts = { cpu: 0, heap: 0 };
+    for (const file of fs.readdirSync(profiles)) {
+      // Native profile names contain PID/thread ID. A launcher profile cannot
+      // establish that the worker's exit-time writes completed.
+      const [pid, workerThreadId] = file.split(".").slice(3, 5);
+      if (pid !== String(state.pid) || workerThreadId !== String(state.threadId)) {
+        continue;
+      }
+      const profile = JSON.parse(fs.readFileSync(path.join(profiles, file), "utf8"));
+      if (file.endsWith(".cpuprofile") && profile.nodes?.length) {
+        counts.cpu++;
+      }
+      if (file.endsWith(".heapprofile") && profile.head) {
+        counts.heap++;
+      }
+    }
+    console.log(
+      JSON.stringify({
+        code,
+        output,
+        worker: { pid: state.pid, threadId: state.threadId },
+        workerStopped,
+        profiles: counts,
+        homeRemoved: !fs.existsSync(state.home),
+        callerPreserved: fs.readFileSync(path.join(root, "home", "caller"), "utf8") === "keep",
+        events: fs.existsSync(events)
+          ? fs.readFileSync(events, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse)
+          : [],
+      }),
+    );
   }
-  const counts = { cpu: 0, heap: 0 };
-  for (const file of fs.readdirSync(profiles)) {
-    // Native profile names contain PID/thread ID. A launcher profile cannot
-    // establish that the worker's exit-time writes completed.
-    const [, , , pid, workerThreadId] = file.split(".");
-    if (pid !== String(state.pid) || workerThreadId !== String(state.threadId)) {
-      continue;
-    }
-    const profile = JSON.parse(fs.readFileSync(path.join(profiles, file), "utf8"));
-    if (file.endsWith(".cpuprofile") && profile.nodes?.length) {
-      counts.cpu++;
-    }
-    if (file.endsWith(".heapprofile") && profile.head) {
-      counts.heap++;
-    }
-  }
-  console.log(
-    JSON.stringify({
-      code,
-      output,
-      worker: { pid: state.pid, threadId: state.threadId },
-      workerStopped,
-      profiles: counts,
-      homeRemoved: !fs.existsSync(state.home),
-      callerPreserved: fs.readFileSync(path.join(root, "home", "caller"), "utf8") === "keep",
-      events: fs.existsSync(events)
-        ? fs.readFileSync(events, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse)
-        : [],
-    }),
-  );
 }

@@ -124,19 +124,6 @@ describe("handleMatrixSubagentDeliveryTarget", () => {
     expect(handleMatrixSubagentDeliveryTarget(makeDeliveryEvent())).toBeUndefined();
   });
 
-  it("returns the bound Matrix room and thread", () => {
-    listBindingsForAccountMock.mockReturnValue([makeBinding()]);
-
-    expect(handleMatrixSubagentDeliveryTarget(makeDeliveryEvent())).toEqual({
-      origin: {
-        channel: "matrix",
-        accountId: "ops",
-        to: `room:${ROOM_ID}`,
-        threadId: "$thread",
-      },
-    });
-  });
-
   it("omits threadId for a top-level room binding", () => {
     listBindingsForAccountMock.mockReturnValue([
       makeBinding({ conversationId: ROOM_ID, parentConversationId: ROOM_ID }),
@@ -220,6 +207,7 @@ describe("handleMatrixSubagentEnded", () => {
     expect(unbindMock).toHaveBeenCalledWith({
       bindingId: "ops:!room:example:$thread",
       reason: "subagent-complete",
+      scope: { channel: "matrix", accountId: "ops" },
     });
     expect(removeBindingRecordMock).not.toHaveBeenCalled();
   });

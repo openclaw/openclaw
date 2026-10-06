@@ -1,5 +1,3 @@
-// Interactive updater entrypoint: resolves current install/channel state, prompts for
-// a target channel, then delegates the actual mutation to the non-interactive updater.
 import { confirm, isCancel } from "@clack/prompts";
 import { selectStyled } from "../../../packages/terminal-core/src/prompt-select-styled.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
@@ -7,25 +5,23 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  formatUpdateChannelLabel,
   normalizeUpdateChannel,
-  resolveEffectiveUpdateChannel,
+  resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
-import { checkUpdateStatus } from "../../infra/update-check.js";
+import { resolveUpdateInstallIdentity } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
 import { VERSION } from "../../version.js";
+import { reportHostOwnedUpdate } from "./host-owned.js";
 import {
   isEmptyDir,
   isGitCheckout,
-  parseTimeoutMsOrExit,
+  parseUpdateTimeoutMs,
   resolveGitInstallDir,
   resolveUpdateRoot,
   type UpdateWizardOptions,
 } from "./shared.js";
-import { updateCommand } from "./update-command.js";
 
-/** Run the TTY-only update wizard and preserve `updateCommand` as the single update executor. */
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
   if (!process.stdin.isTTY) {
     defaultRuntime.error(
@@ -35,36 +31,34 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     return;
   }
 
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
+  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
 
   const root = await resolveUpdateRoot();
   const [updateStatus, configSnapshot] = await Promise.all([
-    checkUpdateStatus({
+    resolveUpdateInstallIdentity({
       root,
       timeoutMs: timeoutMs ?? 3500,
-      fetchGit: false,
-      includeRegistry: false,
     }),
     readConfigFileSnapshot({ observe: false }),
   ]);
 
+  if (updateStatus.installKind === "host") {
+    reportHostOwnedUpdate(updateStatus.installOwner ?? null, {});
+  }
+  if (updateStatus.installKind === "immutable") {
+    defaultRuntime.log(
+      "Use openclaw update for official main, or openclaw update --sha <full-sha> for an exact revision. Immutable activation runs only when explicitly enabled in the adoption record; --no-restart prepares only.",
+    );
+    return;
+  }
+
   const configChannel = configSnapshot.valid
     ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
     : null;
-  const channelInfo = resolveEffectiveUpdateChannel({
+  const channelInfo = resolveUpdateChannelDisplay({
     configChannel,
     currentVersion: VERSION,
     installKind: updateStatus.installKind,
-    git: updateStatus.git
-      ? { tag: updateStatus.git.tag, branch: updateStatus.git.branch }
-      : undefined,
-  });
-  const channelLabel = formatUpdateChannelLabel({
-    channel: channelInfo.channel,
-    source: channelInfo.source,
     gitTag: updateStatus.git?.tag ?? null,
     gitBranch: updateStatus.git?.branch ?? null,
   });
@@ -75,7 +69,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
       {
         value: "keep",
         label: `Keep current (${channelInfo.channel})`,
-        hint: channelLabel,
+        hint: channelInfo.label,
       },
       {
         value: "stable",
@@ -101,7 +95,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     initialValue: "keep",
   });
 
-  if (isCancel(pickedChannel)) {
+  if (typeof pickedChannel === "symbol") {
     defaultRuntime.log(theme.muted("Update cancelled."));
     defaultRuntime.exit(0);
     return;
@@ -113,16 +107,12 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     const gitDir = resolveGitInstallDir();
     const hasGit = await isGitCheckout(gitDir);
     if (!hasGit) {
-      const dirExists = await pathExists(gitDir);
-      if (dirExists) {
-        const empty = await isEmptyDir(gitDir);
-        if (!empty) {
-          defaultRuntime.error(
-            `OPENCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
-          );
-          defaultRuntime.exit(1);
-          return;
-        }
+      if ((await pathExists(gitDir)) && !(await isEmptyDir(gitDir))) {
+        defaultRuntime.error(
+          `OPENCLAW_GIT_DIR points at a non-git directory: ${gitDir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
+        );
+        defaultRuntime.exit(1);
+        return;
       }
 
       const ok = await confirm({
@@ -143,14 +133,16 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     message: stylePromptMessage("Restart the gateway service after update?"),
     initialValue: true,
   });
-  if (isCancel(restart)) {
+  if (typeof restart === "symbol") {
     defaultRuntime.log(theme.muted("Update cancelled."));
     defaultRuntime.exit(0);
     return;
   }
 
   try {
+    const { updateCommand } = await import("./update-command.js");
     await updateCommand({
+      runtimeRecoveryEnv: opts.runtimeRecoveryEnv,
       channel: requestedChannel ?? undefined,
       restart,
       timeout: opts.timeout,

@@ -1,26 +1,45 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../api/types.ts";
+import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatReplyTarget,
+  HumanMention,
+} from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatRunError, LocalTerminalReconcile } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
+import type {
+  LiveToolStreamState,
+  ProviderPolicyNotice,
+  RunOutputUsage,
+} from "./tool-stream-contract.ts";
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
 };
 
+export type ChatHistorySessions = Pick<SessionCapability, "captureReconcile">;
+
+export type ChatHistoryHost = ChatState & { sessions: ChatHistorySessions };
+
 export type ChatState = StreamCausalBoundaryState & {
+  uploadConfig?: ApplicationConfigCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
-  initialUserMessage?: ApplicationInitialUserMessageHandoff;
+  chatSubmissions?: ApplicationChatSubmissions;
+  hasPendingInitialTurn?: (sessionKey: string) => boolean;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
+  /** Config changes retire preview tickets even when session permissions stay inherited. */
+  mediaPolicyEpoch?: number;
   sessionKey: string;
   currentSessionId?: string | null;
   reconnectResumeSessionId?: string | null;
@@ -28,6 +47,7 @@ export type ChatState = StreamCausalBoundaryState & {
   chatHistoryPagination: ChatHistoryPagination;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
+  chatHistoryCursor?: ChatHistoryCursor;
   /** Active leaf of the history snapshot currently rendered by this pane. */
   chatDisplayedLeafEntryId?: string | null;
   chatThinkingLevel: string | null;
@@ -38,6 +58,7 @@ export type ChatState = StreamCausalBoundaryState & {
   chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
   chatSending: boolean;
   chatMessage: string;
+  chatMentions?: readonly HumanMention[];
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
@@ -46,7 +67,8 @@ export type ChatState = StreamCausalBoundaryState & {
   /** True when the active run was recovered from the embedded-run registry and
    * Stop must use the session-owned abort path (sessions.abort), not chat.abort. */
   chatRunSessionAbortable?: boolean;
-  chatRunUsageById?: Map<string, number>;
+  chatRunUsageById?: Map<string, RunOutputUsage>;
+  providerPolicyNotice?: ProviderPolicyNotice | null;
   /** Producer-cumulative text; visible tails derive from the segment baseline. */
   chatStream: string | null;
   chatStreamStartedAt: number | null;
@@ -55,7 +77,7 @@ export type ChatState = StreamCausalBoundaryState & {
   chatError?: string | null;
   chatRunError?: ChatRunError | null;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
-  chatReplyTarget?: unknown;
+  chatReplyTarget?: ChatReplyTarget | null;
   agentsError?: string | null;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;
@@ -73,4 +95,8 @@ export type ChatState = StreamCausalBoundaryState & {
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;
   requestUpdate?: () => void;
-};
+  /** Reports transcript loading edges; see CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT. */
+  transcriptLoadingChanged?: () => void;
+  /** Reports transient read recovery to the shell connection indicator. */
+  historyRecoveryChanged?: () => void;
+} & LiveToolStreamState;

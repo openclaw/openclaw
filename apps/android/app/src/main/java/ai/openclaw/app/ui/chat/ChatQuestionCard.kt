@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.gateway.Question
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -16,8 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -37,6 +38,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import java.text.DateFormat
+import java.util.Date
 
 @Composable
 internal fun ChatQuestionCard(
@@ -72,6 +75,14 @@ internal fun ChatQuestionCard(
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
       prompt.record.questions.forEach { question ->
+        if (question.secretStore != null) {
+          SecretStoreConsent(
+            prompt = prompt,
+            question = question,
+            enabled = pending,
+            onDraftChanged = { update -> onDraftChanged(prompt, update) },
+          )
+        }
         QuestionSection(
           question = question,
           draft = draft,
@@ -86,6 +97,61 @@ internal fun ChatQuestionCard(
         nowMs = nowMs,
         onSubmit = onSubmit,
         onSkip = onSkip,
+      )
+    }
+  }
+}
+
+@Composable
+private fun SecretStoreConsent(
+  prompt: ChatQuestionPrompt,
+  question: Question,
+  enabled: Boolean,
+  onDraftChanged: ((ChatQuestionDraft) -> ChatQuestionDraft) -> Unit,
+) {
+  val store = question.secretStore ?: return
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text(
+      text = nativeString("Requested by \$agent • \$session", prompt.record.agentId ?: nativeString("Unknown"), prompt.record.sessionKey ?: nativeString("Unknown")),
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textMuted,
+    )
+    Text(
+      text = nativeString("Stores \$name as \$kind", store.name, if (store.kind == "secret") nativeString("Protected secret") else nativeString("Agent-readable environment")),
+      style = ClawTheme.type.body,
+      color = ClawTheme.colors.text,
+    )
+    store.reason?.takeIf { it.isNotEmpty() }?.let {
+      Text(text = it, style = ClawTheme.type.body, color = ClawTheme.colors.text)
+    }
+    question.secretStoreExisting?.let { existing ->
+      val updated = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(existing.updatedAtMs))
+      Text(
+        text = nativeString("Replaces \$name — last updated \$updated", store.name, updated),
+        style = ClawTheme.type.caption,
+        fontWeight = FontWeight.SemiBold,
+        color = ClawTheme.colors.danger,
+      )
+      existing.updatedBy?.let {
+        Text(text = nativeString("Updated by \$name", it), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      }
+    }
+    if (store.kind == "secret") {
+      OutlinedTextField(
+        value = prompt.draft.secretStoreAllowedHostsText ?: store.allowedHosts.orEmpty().joinToString(", "),
+        onValueChange = { value -> onDraftChanged { it.copy(secretStoreAllowedHostsText = value) } },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = enabled,
+        label = { Text(nativeString("Allowed HTTPS hosts"), style = ClawTheme.type.body.copy(fontSize = LocalTextStyle.current.fontSize)) },
+        placeholder = { Text(nativeString("api.example.com, uploads.example.com"), style = ClawTheme.type.body) },
+        textStyle = ClawTheme.type.body,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+        maxLines = 4,
+      )
+      Text(
+        text = nativeString("Exact hostnames only, separated by commas or spaces. Leave empty for config SecretRefs without proxy use."),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
       )
     }
   }
@@ -137,14 +203,14 @@ private fun QuestionSection(
     Text(
       text = question.header.uppercase(),
       style = ClawTheme.type.caption,
-      color = ClawTheme.colors.primary,
+      color = ClawTheme.colors.text,
       fontWeight = FontWeight.SemiBold,
     )
     Text(text = question.question, style = ClawTheme.type.body, color = ClawTheme.colors.text)
     question.options.forEach { option ->
-      val selected = option.label in draft.selectedOptions[question.questionId].orEmpty()
+      val selected = (option.value ?: option.label) in draft.selectedOptions[question.questionId].orEmpty()
       Surface(
-        onClick = { onDraftChanged { it.toggle(question, option.label) } },
+        onClick = { onDraftChanged { it.toggle(question, option.value ?: option.label) } },
         enabled = enabled,
         shape = RoundedCornerShape(ClawTheme.radii.row),
         color = if (selected) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface,
@@ -169,9 +235,6 @@ private fun QuestionSection(
       }
     }
     if (question.options.isEmpty() || question.isOther == true) {
-      // Secret answers must never render on screen or feed the keyboard's
-      // prediction/autocorrect stores; password transformation + keyboard type
-      // cover both, and single-line keeps the masked value one obscured run.
       val secret = question.isSecret == true
       OutlinedTextField(
         value = draft.otherText[question.questionId].orEmpty(),
@@ -181,7 +244,7 @@ private fun QuestionSection(
         label = { Text(if (secret) nativeString("Secret value") else nativeString("Other answer")) },
         visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions =
-          if (secret) KeyboardOptions(keyboardType = KeyboardType.Password) else KeyboardOptions.Default,
+          if (secret) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false) else KeyboardOptions.Default,
         minLines = 1,
         maxLines = if (secret) 1 else 4,
       )
@@ -199,36 +262,32 @@ private fun QuestionFooter(
   onSkip: (ChatQuestionPrompt) -> Unit,
 ) {
   val answers = draft.answers(prompt.record.questions)
-  if (status == ChatQuestionStatus.Pending || status == ChatQuestionStatus.Submitting) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-      Text(
-        text = questionCountdown(prompt.record.expiresAtMs, nowMs),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-      )
-      Spacer(Modifier.weight(1f))
-      TextButton(
-        onClick = { onSkip(prompt) },
-        enabled = status == ChatQuestionStatus.Pending,
-      ) {
-        Text(nativeString("Skip"))
-      }
-      Button(
-        onClick = { answers?.let { onSubmit(prompt, it) } },
-        enabled = answers != null && status == ChatQuestionStatus.Pending,
-      ) {
-        Text(
-          if (status == ChatQuestionStatus.Submitting && !prompt.skipping) {
-            nativeString("Submitting…")
-          } else {
-            nativeString("Submit")
-          },
-        )
-      }
+  Row(verticalAlignment = Alignment.CenterVertically) {
+    Text(
+      text = questionCountdown(prompt.record.expiresAtMs, nowMs),
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textMuted,
+    )
+    Spacer(Modifier.weight(1f))
+    TextButton(
+      onClick = { onSkip(prompt) },
+      enabled = status == ChatQuestionStatus.Pending,
+    ) {
+      Text(nativeString("Skip"))
     }
-    prompt.errorText?.let { error ->
-      Text(text = error, style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
-    }
+    ClawPrimaryButton(
+      text =
+        if (status == ChatQuestionStatus.Submitting && !prompt.skipping) {
+          nativeString("Submitting…")
+        } else {
+          nativeString("Submit")
+        },
+      onClick = { answers?.let { onSubmit(prompt, it) } },
+      enabled = answers != null && status == ChatQuestionStatus.Pending,
+    )
+  }
+  prompt.errorText?.let { error ->
+    Text(text = error, style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
   }
 }
 
@@ -243,14 +302,12 @@ internal fun terminalQuestionAnswer(
   // Secret terminal summaries never echo submitted answer text.
   if (question.isSecret != true) {
     prompt.record.answers?.answers?.get(question.questionId)?.takeIf { it.isNotEmpty() }?.let {
-      return it.joinToString(", ")
+      return it.joinToString(", ") { value -> question.options.firstOrNull { option -> (option.value ?: option.label) == value }?.label ?: value }
     }
   }
   return if (status == ChatQuestionStatus.AnsweredElsewhere) nativeString("Answered elsewhere") else nativeString("Answered")
 }
 
-// nativeString is the non-composable resource accessor (nativeStringResource
-// is the @Composable variant), so this helper is safe outside composition.
 internal fun questionCountdown(
   expiresAtMs: Long,
   nowMs: Long,

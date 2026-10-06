@@ -4,6 +4,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../packages/agent-core/src/harness/compaction/compaction.js";
+import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import * as compactionPlanningWorkerRuntime from "./compaction-planning-worker-runtime.js";
 import {
   CompactionPlanningWorkerError,
@@ -16,7 +17,10 @@ import {
   computeAdaptiveChunkRatioWithWorker,
 } from "./compaction-planning-worker.js";
 import { buildSummaryChunks, estimateMessagesTokens } from "./compaction-planning.js";
-import { runCompactionPlanningWorkerInput } from "./compaction-planning.worker.js";
+import {
+  type CompactionPlanningWorkerInput,
+  runCompactionPlanningWorkerInput,
+} from "./compaction-planning.worker.js";
 import { summarizeInStages } from "./compaction.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
@@ -72,7 +76,7 @@ describe("compaction planning worker", () => {
     });
   });
 
-  it("rejects invalid and retired worker input", () => {
+  it("rejects invalid and retired worker input", async () => {
     for (const input of [
       { kind: "summaryChunks" },
       {
@@ -84,9 +88,15 @@ describe("compaction planning worker", () => {
         maxHistoryShare: 0.5,
       },
     ]) {
-      expect(runCompactionPlanningWorkerInput(input)).toEqual({
-        status: "failed",
-        error: "invalid compaction planning worker input",
+      await expect(
+        runCompactionPlanningWorker({
+          // SAFETY: Exercise the worker's runtime validation with malformed protocol input.
+          input: input as CompactionPlanningWorkerInput,
+        }),
+      ).rejects.toMatchObject({
+        name: "CompactionPlanningWorkerError",
+        code: "failed",
+        message: "invalid compaction planning worker input",
       });
     }
   });
@@ -372,17 +382,12 @@ describe("compaction planning worker", () => {
   }, 45_000);
 
   it("plans summary chunks for worker input", () => {
-    const result = runCompactionPlanningWorkerInput({
+    const value = runCompactionPlanningWorkerInput({
       kind: "summaryChunks",
       messages: [makeMessage(1), makeMessage(2), makeMessage(3)],
       maxChunkTokens: 1200,
     });
 
-    expect(result.status).toBe("ok");
-    if (result.status !== "ok") {
-      return;
-    }
-    const value = result.value;
     expect(value.kind).toBe("summaryChunks");
     if (value.kind !== "summaryChunks") {
       return;
@@ -397,8 +402,7 @@ describe("compaction planning worker", () => {
     { kind: "adaptiveChunkRatio", messages: [makeMessage(1)], contextWindow: 1200 },
   ])("plans $kind for worker input", (input) => {
     expect(runCompactionPlanningWorkerInput(input)).toMatchObject({
-      status: "ok",
-      value: { kind: input.kind },
+      kind: input.kind,
     });
   });
 
@@ -415,14 +419,7 @@ describe("compaction planning worker", () => {
         timestamp: 1,
       }),
       displacedUser,
-      {
-        role: "toolResult",
-        toolCallId: "call_large",
-        toolName: "read",
-        content: [{ type: "text", text: "small result" }],
-        isError: false,
-        timestamp: 3,
-      },
+      makeTextToolResult("call_large", "read", "small result", false, 3),
       ...Array.from({ length: 61 }, (_, index) => makeMessage(index + 4, "keep")),
     ];
 
@@ -437,13 +434,13 @@ describe("compaction planning worker", () => {
   it("clamps oversized worker timeouts before scheduling", async () => {
     const workerUrl = createSyntheticWorkerUrl(`
       import { parentPort } from "node:worker_threads";
-      parentPort.postMessage({
+      parentPort.on("message", () => parentPort.postMessage({
         status: "ok",
         value: {
           kind: "summaryChunks",
-          chunks: [],
+          chunkIndexes: [],
         },
-      });
+      }));
     `);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
@@ -485,13 +482,13 @@ describe("compaction planning worker", () => {
     // winning this race proves the worker path yielded control.
     const workerUrl = createSyntheticWorkerUrl(`
       import { parentPort } from "node:worker_threads";
-      parentPort.postMessage({
+      parentPort.on("message", () => parentPort.postMessage({
         status: "ok",
         value: {
           kind: "stageSplit",
           mode: "single",
         },
-      });
+      }));
     `);
     const timer = new Promise<"timer">((resolve) => {
       setTimeout(() => resolve("timer"), 0);

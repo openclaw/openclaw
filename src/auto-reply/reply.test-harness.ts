@@ -34,7 +34,7 @@ vi.mock("../agents/embedded-agent.js", () => ({
 
 vi.mock("../agents/model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: async () => [],
-  loadPreparedModelCatalog: (...args: unknown[]) =>
+  readPreparedModelCatalog: (...args: unknown[]) =>
     replyRuntimeMockState.mocks.loadModelCatalog(...args),
 }));
 
@@ -48,7 +48,7 @@ vi.mock("../commands-registry.runtime.js", () => ({
 }));
 
 vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
-  listSkillCommandsForWorkspace: () => [],
+  prepareSkillCommandsForWorkspace: () => [],
 }));
 
 vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({

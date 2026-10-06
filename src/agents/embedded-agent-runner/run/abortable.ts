@@ -1,11 +1,4 @@
-/**
- * AbortSignal-aware promise racing helper for embedded-agent attempts.
- */
 import { toErrorObject } from "../../../infra/errors.js";
-
-function getAbortReason(signal: AbortSignal): unknown {
-  return "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
-}
 
 /** Marks AbortErrors produced by abortable() so provider aborts stay retryable. */
 const OPENCLAW_ABORTABLE_WRAPPER = Symbol.for("openclaw.abortable.wrapper");
@@ -14,21 +7,13 @@ export function isOpenClawAbortableWrapper(err: unknown): boolean {
   return err !== null && typeof err === "object" && OPENCLAW_ABORTABLE_WRAPPER in err;
 }
 
-function tagAsAbortableWrapper(err: Error): Error {
-  (err as Error & { [OPENCLAW_ABORTABLE_WRAPPER]?: true })[OPENCLAW_ABORTABLE_WRAPPER] = true;
-  return err;
-}
-
-function makeAbortError(signal: AbortSignal): Error {
-  const reason = getAbortReason(signal);
-  if (reason instanceof Error) {
-    const err = new Error(reason.message, { cause: reason });
-    err.name = "AbortError";
-    return tagAsAbortableWrapper(err);
-  }
-  const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
-  err.name = "AbortError";
-  return tagAsAbortableWrapper(err);
+export function createAbortableError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  const err = new Error(
+    reason instanceof Error ? reason.message : "aborted",
+    reason ? { cause: reason } : undefined,
+  );
+  return Object.assign(err, { name: "AbortError", [OPENCLAW_ABORTABLE_WRAPPER]: true });
 }
 
 // Post-turn joins (pending subscription handlers, block-reply flush) ride
@@ -37,6 +22,14 @@ function makeAbortError(signal: AbortSignal): Error {
 // matches the cloud llm-idle class: anything quiet longer is a stuck lane,
 // not legitimate delivery work.
 export const RUN_LIVENESS_JOIN_TIMEOUT_MS = 120_000;
+
+type RunLivenessJoinCompletion = { finish: (() => void) | undefined };
+
+// Keep pending promise reactions outside the caller's closure scope so clearing
+// this completion releases the attempt even when delivery never settles.
+function finishRunLivenessJoin(completion: RunLivenessJoinCompletion): void {
+  completion.finish?.();
+}
 
 /**
  * Awaits post-turn work that must never dead-end the run: races the joined
@@ -52,12 +45,11 @@ export function joinWithRunLivenessDeadline(input: {
   onTimeout: () => void;
 }): Promise<void> {
   return new Promise<void>((resolve) => {
-    let settled = false;
     const finish = (reason: "settled" | "timeout" | "abort") => {
-      if (settled) {
+      if (!completion.finish) {
         return;
       }
-      settled = true;
+      completion.finish = undefined;
       clearTimeout(timer);
       input.runAbortSignal?.removeEventListener("abort", onAbort);
       if (reason === "timeout") {
@@ -65,6 +57,8 @@ export function joinWithRunLivenessDeadline(input: {
       }
       resolve();
     };
+    const completion: RunLivenessJoinCompletion = { finish: () => finish("settled") };
+    const onSettled = finishRunLivenessJoin.bind(undefined, completion);
     const onAbort = () => finish("abort");
     const timer = setTimeout(
       () => finish("timeout"),
@@ -78,10 +72,7 @@ export function joinWithRunLivenessDeadline(input: {
     input.runAbortSignal?.addEventListener("abort", onAbort, { once: true });
     Promise.resolve()
       .then(() => input.joinWork())
-      .then(
-        () => finish("settled"),
-        () => finish("settled"),
-      );
+      .then(onSettled, onSettled);
   });
 }
 
@@ -92,12 +83,14 @@ export function joinWithRunLivenessDeadline(input: {
  */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
-    return Promise.reject(makeAbortError(signal));
+    // The provider may already be running; cancellation still owns the result.
+    void promise.catch(() => {});
+    return Promise.reject(createAbortableError(signal));
   }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
-      reject(makeAbortError(signal));
+      reject(createAbortableError(signal));
     };
     signal.addEventListener("abort", onAbort, { once: true });
     promise.then(

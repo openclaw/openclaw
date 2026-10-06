@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayCanvasHostRoute
 import java.net.URI
 import java.net.URLDecoder
 
@@ -28,7 +29,7 @@ internal object ChatWidgetUrlResolver {
   fun supportsTarget(target: String): Boolean = parseRelativeTarget(target) != null
 
   private fun resolve(
-    surface: ChatWidgetSurface,
+    surface: GatewayCanvasHostRoute,
     target: String,
     role: ChatWidgetSurfaceRole,
     attemptedRoles: Set<ChatWidgetSurfaceRole>,
@@ -60,14 +61,11 @@ internal object ChatWidgetUrlResolver {
     target: String,
     failedResource: ChatWidgetResource,
     currentSurfaceUrls: () -> ChatWidgetSurfaceUrls,
-    refreshNodeSurface: suspend (String?) -> ChatWidgetSurface?,
-    refreshOperatorSurface: suspend (String?) -> ChatWidgetSurface?,
+    refreshNodeSurface: suspend (String?) -> GatewayCanvasHostRoute?,
+    refreshOperatorSurface: suspend (String?) -> GatewayCanvasHostRoute?,
   ): ChatWidgetResource? {
     val observed = currentSurfaceUrls()
     val blockedRoles = failedResource.attemptedSurfaceRoles
-    if (failedResource.surfaceRole == ChatWidgetSurfaceRole.LEGACY && ChatWidgetSurfaceRole.LEGACY in blockedRoles) {
-      return null
-    }
     val attemptedRoles = blockedRoles + failedResource.surfaceRole
     if (ChatWidgetSurfaceRole.NODE !in blockedRoles) {
       observed.node
@@ -114,15 +112,8 @@ internal object ChatWidgetUrlResolver {
     failedResource: ChatWidgetResource?,
   ): Boolean {
     if (failedResource == null) return true
-    return if (
-      failedResource.surfaceRole == ChatWidgetSurfaceRole.LEGACY &&
-      failedResource.tlsFingerprintSha256 == null
-    ) {
-      candidate.url != failedResource.url
-    } else {
-      candidate.url != failedResource.url ||
-        candidate.tlsFingerprintSha256 != failedResource.tlsFingerprintSha256
-    }
+    return candidate.url != failedResource.url ||
+      candidate.tlsFingerprintSha256 != failedResource.tlsFingerprintSha256
   }
 
   private fun parseCapabilitySurface(raw: String?): URI? {
@@ -170,24 +161,18 @@ internal object ChatWidgetUrlResolver {
 }
 
 internal data class ChatWidgetSurfaceUrls(
-  val node: ChatWidgetSurface?,
-  val operator: ChatWidgetSurface?,
-)
-
-internal data class ChatWidgetSurface(
-  val url: String,
-  val tlsFingerprintSha256: String?,
+  val node: GatewayCanvasHostRoute?,
+  val operator: GatewayCanvasHostRoute?,
 )
 
 internal enum class ChatWidgetSurfaceRole {
   NODE,
   OPERATOR,
-  LEGACY,
 }
 
 internal data class ChatWidgetResource(
   val url: String,
   val tlsFingerprintSha256: String?,
-  val surfaceRole: ChatWidgetSurfaceRole = ChatWidgetSurfaceRole.LEGACY,
+  val surfaceRole: ChatWidgetSurfaceRole,
   val attemptedSurfaceRoles: Set<ChatWidgetSurfaceRole> = emptySet(),
 )

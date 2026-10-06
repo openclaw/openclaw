@@ -8,10 +8,10 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.js";
 import {
   readRecentSessionTranscriptActiveEvents,
-  readSessionTranscriptActiveStats,
   readSessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
+import { readActiveTranscriptStats } from "./session-accessor.sqlite-history.test-support.js";
 import {
   appendTranscriptEventsInTransaction,
   replaceSqliteTranscriptEventsInTransaction,
@@ -85,7 +85,9 @@ it("converges an older current-watermark rebuild and a following append without 
       sessionId,
       sessionKey: "agent:main:eligibility",
     };
-    await replaceTranscriptEvents(scope, [...entries]);
+    runOpenClawAgentWriteTransaction((database) => {
+      expect(appendTranscriptEventsInTransaction(database, scope, entries)).toBe(entries.length);
+    }, scope);
     const { db } = openOpenClawAgentDatabase(scope);
     const expectedRows = projectionRows(db);
     expect(expectedRows.map((row) => row.context_eligible)).toEqual([1, 1, 0, 1]);
@@ -109,17 +111,19 @@ it("converges an older current-watermark rebuild and a following append without 
     ).toEqual({ needs_rebuild: 0, indexed_seq: 3 });
     expect(sessionTranscriptIndexNeedsReconcile(db, sessionId)).toBe(true);
     expect(listSessionsNeedingTranscriptIndexReconcile(db)).toContain(sessionId);
-    expect(() => readSessionTranscriptActiveStats(scope)).toThrow(
+    expect(() => readActiveTranscriptStats(scope)).toThrow(
       SessionTranscriptProjectionUnavailableError,
     );
     runOpenClawAgentWriteTransaction((database) => {
       appendTranscriptEventsInTransaction(database, scope, [
+        entries[3],
         {
           type: "message",
           id: "new",
           parentId: "answer",
           message: { role: "user", content: "next" },
         },
+        entries[3],
       ]);
       expect(
         db
@@ -133,7 +137,7 @@ it("converges an older current-watermark rebuild and a following append without 
     expect(sessionTranscriptIndexNeedsReconcile(db, sessionId)).toBe(false);
     expect(rawRows(db).slice(0, before.length)).toEqual(before);
     expect(projectionRows(db).slice(0, expectedRows.length)).toEqual(expectedRows);
-    expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(4);
+    expect(readActiveTranscriptStats(scope).eventCount).toBe(4);
     expect(
       readSessionTranscriptMessageEventPage(scope, { offset: 0, maxMessages: 10 }).totalMessages,
     ).toBe(4);
@@ -164,7 +168,7 @@ it("reclassifies exact rewrites in both directions and deletes eligibility with 
         ]);
       }, scope);
       expect(projectionRows(db)[2]?.context_eligible).toBe(excludeFromContext ? 0 : 1);
-      expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(excludeFromContext ? 3 : 4);
+      expect(readActiveTranscriptStats(scope).eventCount).toBe(excludeFromContext ? 3 : 4);
       expect(
         readSessionTranscriptMessageEventPage(scope, { offset: 0, maxMessages: 10 }).totalMessages,
       ).toBe(3);
@@ -175,7 +179,7 @@ it("reclassifies exact rewrites in both directions and deletes eligibility with 
     await replaceTranscriptEvents(scope, []);
     expect(projectionRows(db)).toEqual([]);
     expect(rawRows(db)).toEqual([]);
-    expect(readSessionTranscriptActiveStats(scope)).toEqual({ eventCount: 0, sizeBytes: 0 });
+    expect(readActiveTranscriptStats(scope)).toEqual({ eventCount: 0, sizeBytes: 0 });
   });
 });
 
@@ -206,11 +210,11 @@ it("rejects a prepared projection after a same-sequence rewrite before its claim
       ).run(sessionId);
       expect(claimPreparedSessionTranscriptProjectionInTransaction(db, plan, -1)).toBe(false);
     }, scope);
-    expect(() => readSessionTranscriptActiveStats(scope)).toThrow(
+    expect(() => readActiveTranscriptStats(scope)).toThrow(
       SessionTranscriptProjectionUnavailableError,
     );
     await waitForSessionTranscriptIndexReconcile(scope);
-    expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(4);
+    expect(readActiveTranscriptStats(scope).eventCount).toBe(4);
   });
 });
 
@@ -301,7 +305,7 @@ it.each(["interrupted", "unclassified", "append", "rewrite", "delete"])(
       }
       await waitForSessionTranscriptIndexReconcile(scope);
       expect(sessionTranscriptIndexNeedsReconcile(db, sessionId)).toBe(false);
-      expect(readSessionTranscriptActiveStats(scope).eventCount).toBe(
+      expect(readActiveTranscriptStats(scope).eventCount).toBe(
         change === "delete" ? 0 : change === "append" || change === "rewrite" ? 4 : 3,
       );
       expect(projectionRows(db).every((row) => row.context_eligible !== null)).toBe(true);

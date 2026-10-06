@@ -23,6 +23,19 @@ export type ConfigFormCollectionDraftCommit = {
   value: unknown;
 };
 
+export function openCollectionDraft(event: Event, draftId: string): void {
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const block = target.closest(".cfg-block");
+  // Nested collection drafts belong to their own block, not this control.
+  const draft = Array.from(
+    block?.getElementsByTagName("openclaw-config-form-collection-draft") ?? [],
+  ).find((child) => child.parentElement === block && child.id === draftId);
+  draft?.openDraft?.();
+}
+
 export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
   @property({ attribute: false }) props?: ConfigFormCollectionDraftProps;
 
@@ -144,11 +157,10 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
       );
       return;
     }
-    if (props.existingValues?.some((value) => configValuesEqual(value, parsed.value))) {
-      this.fail("value", t("configForm.invalidString"));
-      return;
-    }
-    if (props.validateValue && !props.validateValue(parsed.value)) {
+    if (
+      props.existingValues?.some((value) => configValuesEqual(value, parsed.value)) ||
+      props.validateValue?.(parsed.value) === false
+    ) {
       this.fail("value", t("configForm.invalidString"));
       return;
     }
@@ -238,40 +250,44 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
       <div class="settings-row settings-row--stacked cfg-collection-draft">
         <div class="settings-row__control">
           <div class="cfg-collection-draft__controls">
-            ${props.existingKeys
-              ? html`
-                  <input
-                    data-collection-draft-key
-                    type="text"
-                    class="settings-input"
-                    aria-label=${t("configForm.key")}
-                    aria-describedby=${errorId}
-                    aria-invalid=${this.invalidTarget === "key" ? "true" : "false"}
-                    placeholder=${t("configForm.key")}
-                    .value=${this.draftKey}
-                    @input=${(event: Event) => {
-                      this.draftKey = (event.currentTarget as HTMLInputElement).value;
-                      this.clearError();
-                    }}
-                  />
-                `
-              : nothing}
-            ${canUseNull
-              ? html`
-                  <label class="field checkbox">
+            ${
+              props.existingKeys
+                ? html`
                     <input
-                      data-collection-draft-null
-                      type="checkbox"
-                      .checked=${this.draftIsNull}
-                      @change=${(event: Event) => {
-                        this.draftIsNull = (event.currentTarget as HTMLInputElement).checked;
+                      data-collection-draft-key
+                      type="text"
+                      class="settings-input"
+                      aria-label=${t("configForm.key")}
+                      aria-describedby=${errorId}
+                      aria-invalid=${this.invalidTarget === "key" ? "true" : "false"}
+                      placeholder=${t("configForm.key")}
+                      .value=${this.draftKey}
+                      @input=${(event: Event) => {
+                        this.draftKey = (event.currentTarget as HTMLInputElement).value;
                         this.clearError();
                       }}
                     />
-                    <span>${t("configForm.nullValue")}</span>
-                  </label>
-                `
-              : nothing}
+                  `
+                : nothing
+            }
+            ${
+              canUseNull
+                ? html`
+                    <label class="field checkbox">
+                      <input
+                        data-collection-draft-null
+                        type="checkbox"
+                        .checked=${this.draftIsNull}
+                        @change=${(event: Event) => {
+                          this.draftIsNull = (event.currentTarget as HTMLInputElement).checked;
+                          this.clearError();
+                        }}
+                      />
+                      <span>${t("configForm.nullValue")}</span>
+                    </label>
+                  `
+                : nothing
+            }
             ${valueControl}
             <span id=${errorId} class="cfg-field__error" role="alert" ?hidden=${!this.error}
               >${this.error}</span
@@ -293,4 +309,10 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
 
 if (!customElements.get("openclaw-config-form-collection-draft")) {
   customElements.define("openclaw-config-form-collection-draft", ConfigFormCollectionDraft);
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-config-form-collection-draft": ConfigFormCollectionDraft;
+  }
 }

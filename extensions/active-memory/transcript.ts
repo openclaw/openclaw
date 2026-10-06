@@ -1,17 +1,13 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
-import * as readline from "node:readline";
-import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { asPositiveFiniteNumber, resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
-  readSessionTranscriptRawDelta,
-  type SessionTranscriptTargetParams,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
-import {
+  asFiniteNumber,
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { clampInt } from "./config.js";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   readExplicitMemoryEvidence,
   readStructuredMemoryEvidenceFromContent,
@@ -30,105 +26,27 @@ import {
   type TranscriptReadLimits,
 } from "./types.js";
 
-function isUnavailableMemorySearchDebug(debug?: ActiveMemorySearchDebug): boolean {
-  return Boolean(debug?.error);
-}
-function resolveTranscriptReadLimits(
+export function resolveTranscriptReadLimits(
   limits?: TranscriptReadLimits,
 ): Required<TranscriptReadLimits> {
   return {
-    maxChars: clampInt(
-      limits?.maxChars,
-      DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
-      1,
-      DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
-    ),
-    maxLines: clampInt(
-      limits?.maxLines,
-      DEFAULT_TRANSCRIPT_READ_MAX_LINES,
-      1,
-      DEFAULT_TRANSCRIPT_READ_MAX_LINES,
-    ),
-    maxBytes: clampInt(
-      limits?.maxBytes,
-      DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
-      1,
-      DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
-    ),
+    maxChars: resolveIntegerOption(limits?.maxChars, DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS, {
+      min: 1,
+      max: DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
+    }),
+    maxLines: resolveIntegerOption(limits?.maxLines, DEFAULT_TRANSCRIPT_READ_MAX_LINES, {
+      min: 1,
+      max: DEFAULT_TRANSCRIPT_READ_MAX_LINES,
+    }),
+    maxBytes: resolveIntegerOption(limits?.maxBytes, DEFAULT_TRANSCRIPT_READ_MAX_BYTES, {
+      min: 1,
+      max: DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
+    }),
   };
 }
 
-async function streamBoundedTranscriptJsonl(params: {
-  sessionFile: string;
-  limits?: TranscriptReadLimits;
-  onRecord: (record: unknown) => boolean | void;
-}): Promise<void> {
-  const limits = resolveTranscriptReadLimits(params.limits);
-  try {
-    const stats = await fs.stat(params.sessionFile);
-    if (!stats.isFile() || stats.size > limits.maxBytes) {
-      return;
-    }
-  } catch {
-    return;
-  }
-  const stream = fsSync.createReadStream(params.sessionFile, {
-    encoding: "utf8",
-  });
-  const rl = readline.createInterface({
-    input: stream,
-    crlfDelay: Infinity,
-  });
-  let seenLines = 0;
-  try {
-    for await (const line of rl) {
-      seenLines += 1;
-      if (seenLines > limits.maxLines) {
-        break;
-      }
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      try {
-        if (params.onRecord(JSON.parse(trimmed) as unknown)) {
-          break;
-        }
-      } catch {}
-    }
-  } catch {
-    // Treat transcript recovery as best-effort on timeout/abort paths.
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
-}
-
-function fileTranscriptSource(sessionFile: string): ActiveMemoryTranscriptSource {
-  return { kind: "file", sessionFile };
-}
-
-function transcriptSourceFromReturnedSessionFile(params: {
-  sessionFile: string;
-  sessionKey: string;
-}): ActiveMemoryTranscriptSource {
-  const marker = parseSqliteSessionFileMarker(normalizeOptionalString(params.sessionFile));
-  if (!marker) {
-    return fileTranscriptSource(params.sessionFile);
-  }
-  return {
-    kind: "runtime",
-    target: {
-      agentId: marker.agentId,
-      sessionId: marker.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: marker.storePath,
-    },
-  };
-}
-
-async function streamRuntimeTranscriptEvents(params: {
-  target: SessionTranscriptTargetParams;
+export async function streamActiveMemoryTranscriptRecords(params: {
+  source: ActiveMemoryTranscriptSource;
   limits?: TranscriptReadLimits;
   onRecord: (record: unknown) => boolean | void;
 }): Promise<void> {
@@ -136,7 +54,7 @@ async function streamRuntimeTranscriptEvents(params: {
   let page: Awaited<ReturnType<typeof readSessionTranscriptRawDelta>>;
   try {
     page = await readSessionTranscriptRawDelta({
-      ...params.target,
+      ...params.source,
       maxBytes: limits.maxBytes,
       maxEvents: limits.maxLines,
     });
@@ -155,26 +73,6 @@ async function streamRuntimeTranscriptEvents(params: {
   }
 }
 
-async function streamActiveMemoryTranscriptRecords(params: {
-  source: ActiveMemoryTranscriptSource;
-  limits?: TranscriptReadLimits;
-  onRecord: (record: unknown) => boolean | void;
-}): Promise<void> {
-  if (params.source.kind === "runtime") {
-    await streamRuntimeTranscriptEvents({
-      target: params.source.target,
-      limits: params.limits,
-      onRecord: params.onRecord,
-    });
-    return;
-  }
-  await streamBoundedTranscriptJsonl({
-    sessionFile: params.source.sessionFile,
-    limits: params.limits,
-    onRecord: params.onRecord,
-  });
-}
-
 function resolveToolResultMessage(value: unknown): Record<string, unknown> | undefined {
   const record = asOptionalRecord(value);
   const message =
@@ -182,18 +80,9 @@ function resolveToolResultMessage(value: unknown): Record<string, unknown> | und
   return message && normalizeOptionalString(message.role) === "toolResult" ? message : undefined;
 }
 
-function extractActiveMemorySearchDebugFromSessionRecord(
-  value: unknown,
+function extractActiveMemorySearchDebug(
+  details: Record<string, unknown> | undefined,
 ): ActiveMemorySearchDebug | undefined {
-  const message = resolveToolResultMessage(value);
-  if (!message) {
-    return undefined;
-  }
-  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  if (toolName !== "memory_search" && toolName !== "memory_recall") {
-    return undefined;
-  }
-  const details = asOptionalRecord(message.details);
   const debug = asOptionalRecord(details?.debug);
   const warning = normalizeOptionalString(details?.warning);
   const action = normalizeOptionalString(details?.action);
@@ -206,91 +95,66 @@ function extractActiveMemorySearchDebugFromSessionRecord(
     configuredMode: normalizeOptionalString(debug?.configuredMode),
     effectiveMode: normalizeOptionalString(debug?.effectiveMode),
     fallback: normalizeOptionalString(debug?.fallback),
-    searchMs:
-      typeof debug?.searchMs === "number" && Number.isFinite(debug.searchMs)
-        ? debug.searchMs
-        : undefined,
-    hits: typeof debug?.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined,
+    searchMs: asFiniteNumber(debug?.searchMs),
+    hits: asFiniteNumber(debug?.hits),
     warning,
     action,
     error,
   };
 }
 
-function extractToolResultNameFromSessionRecord(value: unknown): string | undefined {
-  const message = resolveToolResultMessage(value);
-  if (!message) {
-    return undefined;
-  }
-  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  return toolName || undefined;
-}
-
-function hasUnavailableMemoryResultInSessionRecord(
+export function readMemoryResultFromSessionRecord(
   value: unknown,
   toolsAllow: readonly string[] = [
     ...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
     ...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
   ],
-): boolean {
+) {
   const message = resolveToolResultMessage(value);
-  if (!message) {
-    return false;
-  }
-  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  if (!toolName || !toolsAllow.includes(toolName)) {
-    return false;
-  }
-  const details = asOptionalRecord(message.details);
-  const unavailable = message.isError === true || readStructuredMemoryFailure(details) === true;
-  if (unavailable) {
-    return true;
-  }
-  return readStructuredMemoryFailureFromContent(message.content) === true;
-}
-
-function hasTerminalUnavailableMemoryResultInSessionRecord(
-  value: unknown,
-  toolsAllow: readonly string[],
-): boolean {
-  const message = resolveToolResultMessage(value);
-  if (!message) {
-    return false;
-  }
-  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  if (!toolName || !toolsAllow.includes(toolName)) {
-    return false;
-  }
-  const details = asOptionalRecord(message.details);
-  if (details?.disabled === true || details?.unavailable === true) {
-    return true;
-  }
+  const toolName = normalizeLowercaseStringOrEmpty(message?.toolName);
+  const details = asOptionalRecord(message?.details);
+  const isSearch = toolName === "memory_search" || toolName === "memory_recall";
+  const searchDebug = isSearch ? extractActiveMemorySearchDebug(details) : undefined;
+  const allowed = Boolean(toolName && toolsAllow.includes(toolName));
+  const hasUnavailableMemorySearchResult =
+    allowed &&
+    (message?.isError === true ||
+      readStructuredMemoryFailure(details) === true ||
+      readStructuredMemoryFailureFromContent(message?.content) === true);
   const status = normalizeOptionalString(details?.status)
     ?.toLowerCase()
     .replace(/[\s-]+/g, "_");
-  if (status === "disabled" || status === "unavailable") {
-    return true;
-  }
-  if (toolName !== "memory_search" && toolName !== "memory_recall") {
-    return false;
-  }
-  const debug = extractActiveMemorySearchDebugFromSessionRecord(value);
-  return Boolean(debug?.error) || Boolean(details?.error);
+  const terminalUnavailable =
+    allowed &&
+    (details?.disabled === true ||
+      details?.unavailable === true ||
+      status === "disabled" ||
+      status === "unavailable" ||
+      (isSearch && (Boolean(searchDebug?.error) || Boolean(details?.error))));
+  return {
+    toolName,
+    searchDebug,
+    hasUnavailableMemorySearchResult,
+    hasUsableMemoryResult:
+      allowed &&
+      !hasUnavailableMemorySearchResult &&
+      hasUsableMemoryResult(toolName, details, message?.content),
+    terminalUnavailable,
+  };
 }
 
 type ActiveMemoryHookDeadline = {
   arm: (timeoutMs: number, onTimeout: () => void) => void;
   promise: Promise<symbol>;
+  remainingMs: () => number;
   stop: () => void;
 };
 
-function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
+export function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   const timeoutSentinel = Symbol("active-memory-hook-timeout");
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let resolveTimeout: (value: symbol) => void = () => {};
-  const promise = new Promise<symbol>((resolve) => {
-    resolveTimeout = resolve;
-  });
+  let deadlineAt = 0;
+  const { promise, resolve: resolveTimeout } = createDeferred<symbol>();
   const stop = () => {
     if (timeoutId) {
       clearTimeout(timeoutId);
@@ -299,35 +163,33 @@ function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   };
   const arm = (timeoutMs: number, onTimeout: () => void) => {
     stop();
+    deadlineAt = performance.now() + timeoutMs;
     timeoutId = setTimeout(() => {
       onTimeout();
       resolveTimeout(timeoutSentinel);
     }, timeoutMs);
     timeoutId.unref?.();
   };
-  return { arm, promise, stop };
+  // Remaining budget of the armed phase, so optional sub-steps can bound
+  // themselves inside the same deadline instead of racing a fresh timer.
+  const remainingMs = () =>
+    timeoutId ? Math.max(0, Math.floor(deadlineAt - performance.now())) : 0;
+  return { arm, promise, remainingMs, stop };
 }
 
-function hasUsableMemoryResultInSessionRecord(
-  value: unknown,
-  toolsAllow: readonly string[] = [
-    ...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
-    ...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
-  ],
+function hasExpandedSummary(details: Record<string, unknown> | undefined): boolean {
+  return (
+    asPositiveFiniteNumber(details?.expandedSummaryCount) !== undefined &&
+    Boolean(normalizeOptionalString(details?.answer))
+  );
+}
+
+function hasUsableMemoryResult(
+  toolName: string,
+  details: Record<string, unknown> | undefined,
+  rawContent: unknown,
 ): boolean {
-  const message = resolveToolResultMessage(value);
-  if (!message) {
-    return false;
-  }
-  const toolName = normalizeLowercaseStringOrEmpty(message.toolName);
-  if (!toolName || !toolsAllow.includes(toolName)) {
-    return false;
-  }
-  if (hasUnavailableMemoryResultInSessionRecord(value, toolsAllow)) {
-    return false;
-  }
-  const details = asOptionalRecord(message.details);
-  const content = extractTextContent(message.content);
+  const content = extractTextContent(rawContent);
   if (toolName === "memory_search") {
     if (Array.isArray(details?.results)) {
       return details.results.length > 0;
@@ -347,11 +209,7 @@ function hasUsableMemoryResultInSessionRecord(
     return text !== undefined ? text.length > 0 : /"text"\s*:\s*"(?!")/.test(content);
   }
   if (toolName === "lcm_grep") {
-    if (
-      typeof details?.totalMatches === "number" &&
-      Number.isFinite(details.totalMatches) &&
-      details.totalMatches > 0
-    ) {
+    if (asPositiveFiniteNumber(details?.totalMatches) !== undefined) {
       return true;
     }
     return /^## LCM Grep Results[\s\S]*^\*\*Total matches:\*\*\s+[1-9]\d*$/m.test(content);
@@ -364,47 +222,17 @@ function hasUsableMemoryResultInSessionRecord(
     return /^LCM_SUMMARY \S+/m.test(content) || /^## LCM File: \S+/m.test(content);
   }
   if (toolName === "lcm_expand_query") {
-    if (
-      typeof details?.expandedSummaryCount === "number" &&
-      Number.isFinite(details.expandedSummaryCount) &&
-      details.expandedSummaryCount > 0 &&
-      Boolean(normalizeOptionalString(details?.answer))
-    ) {
-      return true;
-    }
-    try {
-      const parsed = asOptionalRecord(JSON.parse(content));
-      return (
-        typeof parsed?.expandedSummaryCount === "number" &&
-        Number.isFinite(parsed.expandedSummaryCount) &&
-        parsed.expandedSummaryCount > 0 &&
-        Boolean(normalizeOptionalString(parsed?.answer))
-      );
-    } catch {
-      return false;
-    }
+    return (
+      hasExpandedSummary(details) || hasExpandedSummary(asOptionalRecord(safeParseJson(content)))
+    );
   }
   const normalizedContent = normalizeOptionalString(content);
   const explicitEvidence = details ? readExplicitMemoryEvidence(details) : undefined;
   const structuredEvidence = normalizedContent
-    ? readStructuredMemoryEvidenceFromContent(message.content)
+    ? readStructuredMemoryEvidenceFromContent(rawContent)
     : undefined;
   // Custom recall tools have a shipped native-output contract. Preserve
   // non-empty model-visible results unless structured fields explicitly say
   // the lookup was empty; explicit failures are rejected above.
   return Boolean(normalizedContent) && explicitEvidence !== false && structuredEvidence !== false;
 }
-
-export {
-  createActiveMemoryHookDeadline,
-  extractActiveMemorySearchDebugFromSessionRecord,
-  extractToolResultNameFromSessionRecord,
-  fileTranscriptSource,
-  hasTerminalUnavailableMemoryResultInSessionRecord,
-  hasUnavailableMemoryResultInSessionRecord,
-  hasUsableMemoryResultInSessionRecord,
-  isUnavailableMemorySearchDebug,
-  resolveTranscriptReadLimits,
-  streamActiveMemoryTranscriptRecords,
-  transcriptSourceFromReturnedSessionFile,
-};

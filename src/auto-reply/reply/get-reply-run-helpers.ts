@@ -1,28 +1,12 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
-import {
-  deliveryContextFromSession,
-  sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
-import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
-import { isSystemEventProvider } from "./effective-reply-route.js";
-import type { ExecOverrides } from "./get-reply-run.types.js";
-import {
-  resolvePersistedPromptProvider,
-  resolvePersistedPromptSurface,
-} from "./prompt-session-context.js";
-
-const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
+import type { ReplyExecOverrides } from "./get-reply-exec-overrides.js";
 
 export function buildPersistedMediaImageLayout(params: {
   ctx: MsgContext;
@@ -83,9 +67,6 @@ export function buildPersistedMediaImageLayout(params: {
       slots.push({ kind: "offloaded", factIndex });
     }
   }
-  if (slots.length === 0 && suppressedFactIndexes.length === 0) {
-    return undefined;
-  }
   return {
     slots,
     ...(suppressedFactIndexes.length > 0 ? { suppressedFactIndexes } : {}),
@@ -124,16 +105,6 @@ export function routeThreadIdsMatch(
   return String(activeThreadId) === String(currentThreadId);
 }
 
-export function normalizeMessageTimestampMs(value: unknown): number | undefined {
-  const timestamp = typeof value === "number" && Number.isFinite(value) ? value : undefined;
-  if (timestamp === undefined || timestamp <= 0) {
-    return undefined;
-  }
-  const timestampMs =
-    timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
-  return asDateTimestampMs(timestampMs);
-}
-
 export async function updateRoomEventAmbientTranscriptWatermark(params: {
   expectedSessionId: string;
   sessionCtx: TemplateContext;
@@ -157,103 +128,8 @@ export async function updateRoomEventAmbientTranscriptWatermark(params: {
   });
 }
 
-export function resolvePromptSilentReplyConversationType(params: {
-  ctx: Pick<
-    MsgContext,
-    "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "CommandTurn" | "SessionKey"
-  >;
-  inboundSessionKey?: string;
-}): SilentReplyConversationType | undefined {
-  const sourceSessionKey = params.inboundSessionKey ?? params.ctx.SessionKey;
-  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(params.ctx);
-  if (commandTargetSessionKey && commandTargetSessionKey !== sourceSessionKey) {
-    return undefined;
-  }
-  const chatType = normalizeChatType(params.ctx.ChatType);
-  if (chatType === "direct") {
-    return "direct";
-  }
-  if (chatType === "group" || chatType === "channel") {
-    return "group";
-  }
-  return undefined;
-}
-
-export function resolvePromptSessionContextForSystemEvent(params: {
-  sessionCtx: TemplateContext;
-  sessionEntry?: SessionEntry;
-  ctx?: Pick<MsgContext, "Provider">;
-  isHeartbeat?: boolean;
-}): TemplateContext {
-  const { sessionCtx, sessionEntry } = params;
-  const isSystemEvent =
-    params.isHeartbeat === true ||
-    isSystemEventProvider(params.ctx?.Provider) ||
-    isSystemEventProvider(sessionCtx.Provider);
-  if (!isSystemEvent || !sessionEntry) {
-    return sessionCtx;
-  }
-
-  const origin = sessionDeliveryOrigin(sessionEntry);
-  const deliveryContext = deliveryContextFromSession(sessionEntry);
-  const persistedChatType =
-    normalizeChatType(sessionEntry.chatType) ?? normalizeChatType(origin?.chatType);
-  const liveChatType = normalizeChatType(sessionCtx.ChatType);
-  const effectiveChatType = liveChatType ?? persistedChatType;
-  const persistedProvider = resolvePersistedPromptProvider(sessionEntry);
-  const persistedSurface = resolvePersistedPromptSurface(sessionEntry);
-  const liveProvider = normalizeOptionalString(sessionCtx.Provider);
-  const liveSurface = normalizeOptionalString(sessionCtx.Surface);
-  const nextProvider =
-    liveProvider && !isSystemEventProvider(liveProvider)
-      ? liveProvider
-      : (persistedProvider ?? liveProvider);
-  const nextSurface =
-    liveSurface && !isSystemEventProvider(liveSurface)
-      ? liveSurface
-      : (persistedSurface ?? liveSurface);
-
-  const next: TemplateContext = { ...sessionCtx };
-  let changed = false;
-  const setIfMissing = <K extends keyof TemplateContext>(key: K, value: TemplateContext[K]) => {
-    if (next[key] != null && next[key] !== "") {
-      return;
-    }
-    if (value == null || value === "") {
-      return;
-    }
-    next[key] = value;
-    changed = true;
-  };
-  const setIfChanged = <K extends keyof TemplateContext>(key: K, value: TemplateContext[K]) => {
-    if (value == null || value === "" || next[key] === value) {
-      return;
-    }
-    next[key] = value;
-    changed = true;
-  };
-
-  setIfChanged("Provider", nextProvider);
-  setIfChanged("Surface", nextSurface);
-  setIfMissing("ChatType", persistedChatType);
-  if (effectiveChatType === "group" || effectiveChatType === "channel") {
-    setIfMissing("GroupSubject", normalizeOptionalString(sessionEntry.subject));
-    setIfMissing("GroupChannel", normalizeOptionalString(sessionEntry.groupChannel));
-    setIfMissing("GroupSpace", normalizeOptionalString(sessionEntry.space));
-  }
-  setIfMissing("OriginatingChannel", persistedProvider);
-  setIfMissing("OriginatingTo", normalizeOptionalString(deliveryContext?.to ?? origin?.to));
-  setIfMissing(
-    "AccountId",
-    normalizeOptionalString(deliveryContext?.accountId ?? origin?.accountId),
-  );
-  setIfMissing("MessageThreadId", deliveryContext?.threadId ?? origin?.threadId);
-
-  return changed ? next : sessionCtx;
-}
-
 export function buildExecOverridePromptHint(params: {
-  execOverrides?: ExecOverrides;
+  execOverrides?: ReplyExecOverrides;
   elevatedLevel: ElevatedLevel;
   fullAccessAvailable?: boolean;
   fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
@@ -304,29 +180,9 @@ export async function prewarmReplyRunRuntimes(): Promise<void> {
   ]);
 }
 
-export function loadEmbeddedAgentRuntime() {
-  return embeddedAgentRuntimeLoader.load();
-}
-
-export function loadAgentRunnerRuntime() {
-  return agentRunnerRuntimeLoader.load();
-}
-
-export function loadSessionUpdatesRuntime() {
-  return sessionUpdatesRuntimeLoader.load();
-}
-
-export function stripPromptThinkingDirectives(body: string): string {
-  return body
-    .split("\n")
-    .map((line) =>
-      line
-        .replace(/(^|\s)\/(?:thinking|think|t)(?=$|\s|:)(?:\s*:\s*|\s+)?[A-Za-z-]*/gi, "$1")
-        .replace(/[ \t]{2,}/g, " ")
-        .trimEnd(),
-    )
-    .join("\n");
-}
+export const loadEmbeddedAgentRuntime = embeddedAgentRuntimeLoader.load;
+export const loadAgentRunnerRuntime = agentRunnerRuntimeLoader.load;
+export const loadSessionUpdatesRuntime = sessionUpdatesRuntimeLoader.load;
 
 export function hasInboundHistoryBody(ctx: TemplateContext): boolean {
   return (
@@ -339,6 +195,6 @@ export function hasReplyTargetContext(ctx: MsgContext | TemplateContext): boolea
   if (normalizeOptionalString(ctx.ReplyToBody)) {
     return true;
   }
-  const replyChain = (ctx as { ReplyChain?: unknown }).ReplyChain;
+  const replyChain = ctx.ReplyChain;
   return Array.isArray(replyChain) && replyChain.length > 0;
 }

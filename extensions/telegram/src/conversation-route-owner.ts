@@ -1,7 +1,9 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveThreadBindingSpawnPolicy } from "openclaw/plugin-sdk/conversation-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { resolveTelegramAccount } from "./accounts.js";
+import { mergeTelegramAccountConfig } from "./account-config.js";
+import { hasTelegramAccountConfig } from "./account-selection.js";
 import { inspectTelegramConversationRoute } from "./conversation-route.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import { parseTelegramTarget } from "./targets.js";
@@ -51,15 +53,23 @@ export function inspectTelegramConversationRouteOwner(params: {
   if (!parsed) {
     return null;
   }
-  const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  const accountId = normalizeAccountId(params.accountId);
+  const accountConfig = mergeTelegramAccountConfig(params.cfg, accountId);
+  if (
+    params.cfg.channels?.telegram?.enabled === false ||
+    accountConfig.enabled === false ||
+    !hasTelegramAccountConfig(params.cfg, accountId)
+  ) {
+    return null;
+  }
   const { topicConfig } = resolveTelegramScopedGroupConfig(
-    account.config,
+    accountConfig,
     parsed.chatId,
     parsed.threadSpec.id,
   );
   const result = inspectTelegramConversationRoute({
     cfg: params.cfg,
-    accountId: account.accountId,
+    accountId,
     chatId: parsed.chatId,
     isGroup: params.conversation.kind !== "direct",
     threadSpec: parsed.threadSpec,
@@ -71,7 +81,7 @@ export function inspectTelegramConversationRouteOwner(params: {
     resolveThreadBindingSpawnPolicy({
       cfg: params.cfg,
       channel: "telegram",
-      accountId: params.accountId,
+      accountId,
       kind: "subagent",
     }).enabled
   ) {

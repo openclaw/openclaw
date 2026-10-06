@@ -1,4 +1,3 @@
-// Matrix plugin module implements subagent hooks behavior.
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -53,7 +52,11 @@ export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent)
     const reason = normalizeOptionalString(event.reason) || "subagent-ended";
     for (const binding of matching) {
       const bindingId = resolveBindingKey(binding);
-      const removed = await bindingService.unbind({ bindingId, reason });
+      const removed = await bindingService.unbind({
+        bindingId,
+        reason,
+        scope: { channel: "matrix", accountId: binding.accountId },
+      });
       if (removed.some((entry) => entry.bindingId === bindingId)) {
         removedBindingKeys.add(bindingId);
       }

@@ -5,7 +5,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./parse": "./src/parse.ts"
+    "./parse": "./src/parse.ts",
+    "./session-key-normalization": "./src/session-key-normalization.ts",
+    "./public-share": "./src/public-share.ts",
+    "./share-build": "./src/share-build.ts"
   },
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*"

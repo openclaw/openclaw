@@ -1,18 +1,23 @@
 // Diffs tests cover browser plugin behavior.
 import fs from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
   PluginBlobStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { registerDiffsPlugin } from "./plugin.js";
 import { createTempDiffRoot } from "./test-helpers.js";
 
@@ -21,6 +26,9 @@ const { launchMock } = vi.hoisted(() => ({
 }));
 
 let PlaywrightDiffScreenshotter: typeof import("./browser.runtime.js").PlaywrightDiffScreenshotter;
+type ScreenshotParams = Parameters<
+  InstanceType<typeof PlaywrightDiffScreenshotter>["screenshotHtml"]
+>[0];
 
 vi.mock("playwright-core", () => ({
   chromium: {
@@ -73,21 +81,31 @@ describe("PlaywrightDiffScreenshotter", () => {
     await cleanupRootDir();
   });
 
-  async function renderWithBrowserDiscovery(): Promise<{ executablePath?: string }> {
-    launchMock.mockResolvedValue(createMockBrowser([]));
-    const screenshotter = new PlaywrightDiffScreenshotter({ config: {}, browserIdleMs: 1_000 });
-    await screenshotter.screenshotHtml({
+  function screenshotParams(
+    overrides: Partial<Omit<ScreenshotParams, "image">> & {
+      image?: Partial<ScreenshotParams["image"]>;
+    } = {},
+  ): ScreenshotParams {
+    return {
       html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
       outputPath,
       theme: "dark",
+      ...overrides,
       image: {
         format: "png",
         qualityPreset: "standard",
-        scale: 1,
+        scale: 2,
         maxWidth: 960,
         maxPixels: 8_000_000,
+        ...overrides.image,
       },
-    });
+    };
+  }
+
+  async function renderWithBrowserDiscovery(): Promise<{ executablePath?: string }> {
+    launchMock.mockResolvedValue(createMockBrowser([]));
+    const screenshotter = new PlaywrightDiffScreenshotter({ config: {} });
+    await screenshotter.screenshotHtml(screenshotParams({ image: { scale: 1 } }));
     return firstMockCall(launchMock, "browser launch")[0] as { executablePath?: string };
   }
 
@@ -176,30 +194,8 @@ describe("PlaywrightDiffScreenshotter", () => {
   it("reuses the same browser across renders and closes it after the idle window", async () => {
     const { pages, browser, screenshotter } = await createScreenshotterHarness();
 
-    await screenshotter.screenshotHtml({
-      html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-      outputPath,
-      theme: "dark",
-      image: {
-        format: "png",
-        qualityPreset: "standard",
-        scale: 2,
-        maxWidth: 960,
-        maxPixels: 8_000_000,
-      },
-    });
-    await screenshotter.screenshotHtml({
-      html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-      outputPath,
-      theme: "dark",
-      image: {
-        format: "png",
-        qualityPreset: "standard",
-        scale: 2,
-        maxWidth: 960,
-        maxPixels: 8_000_000,
-      },
-    });
+    await screenshotter.screenshotHtml(screenshotParams());
+    await screenshotter.screenshotHtml(screenshotParams());
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(browser.newPage).toHaveBeenCalledTimes(2);
@@ -211,41 +207,51 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(pages[0]?.close).toHaveBeenCalledTimes(1);
     expect(pages[1]?.close).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(browser.close).toHaveBeenCalledTimes(1);
 
-    await screenshotter.screenshotHtml({
-      html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-      outputPath,
-      theme: "light",
-      image: {
-        format: "png",
-        qualityPreset: "standard",
-        scale: 2,
-        maxWidth: 960,
-        maxPixels: 8_000_000,
-      },
-    });
+    await screenshotter.screenshotHtml(screenshotParams({ theme: "light" }));
 
     expect(launchMock).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["config", "runtimeConfig"] as const)(
+    "uses explicit tool %s for viewer links and screenshot browser selection",
+    async (configField) => {
+      const processConfig: OpenClawConfig = {
+        gateway: { publicOrigin: "https://process.example" },
+        browser: { executablePath: path.join(rootDir, "unavailable-browser") },
+      };
+      const explicitConfig: OpenClawConfig = {
+        gateway: { publicOrigin: "https://explicit.example" },
+        browser: { executablePath: process.execPath },
+      };
+      const { render } = createRegistrationHarness({
+        pluginConfig: {},
+        currentConfig: () => processConfig,
+      });
+      launchMock.mockResolvedValue(createMockBrowser([]));
+
+      const { details } = await render({ config: processConfig, [configField]: explicitConfig });
+
+      expect
+        .soft(String(details.viewerUrl))
+        .toContain("https://explicit.example/plugins/diffs/view/");
+      expect(details.fileError).toBeUndefined();
+      expect(launchMock).toHaveBeenCalledWith(
+        expect.objectContaining({ executablePath: process.execPath }),
+      );
+      await expect(fs.readFile(String(details.filePath), "utf8")).resolves.toBe("png");
+    },
+  );
 
   it("renders PDF output when format is pdf", async () => {
     const { pages, screenshotter } = await createScreenshotterHarness();
     const pdfPath = path.join(rootDir, "preview.pdf");
 
-    await screenshotter.screenshotHtml({
-      html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-      outputPath: pdfPath,
-      theme: "light",
-      image: {
-        format: "pdf",
-        qualityPreset: "standard",
-        scale: 2,
-        maxWidth: 960,
-        maxPixels: 8_000_000,
-      },
-    });
+    await screenshotter.screenshotHtml(
+      screenshotParams({ outputPath: pdfPath, theme: "light", image: { format: "pdf" } }),
+    );
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(pages).toHaveLength(1);
@@ -261,34 +267,15 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("fails fast when PDF render exceeds size limits", async () => {
-    const pages: Array<{
-      close: ReturnType<typeof vi.fn>;
-      screenshot: ReturnType<typeof vi.fn>;
-      pdf: ReturnType<typeof vi.fn>;
-    }> = [];
-    const browser = createMockBrowser(pages, {
+    const { pages, screenshotter } = await createScreenshotterHarness({
       boundingBox: { x: 40, y: 40, width: 960, height: 60_000 },
-    });
-    launchMock.mockResolvedValue(browser);
-    const screenshotter = new PlaywrightDiffScreenshotter({
-      config: createConfig(),
-      browserIdleMs: 1_000,
     });
     const pdfPath = path.join(rootDir, "oversized.pdf");
 
     await expect(
-      screenshotter.screenshotHtml({
-        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-        outputPath: pdfPath,
-        theme: "light",
-        image: {
-          format: "pdf",
-          qualityPreset: "standard",
-          scale: 2,
-          maxWidth: 960,
-          maxPixels: 8_000_000,
-        },
-      }),
+      screenshotter.screenshotHtml(
+        screenshotParams({ outputPath: pdfPath, theme: "light", image: { format: "pdf" } }),
+      ),
     ).rejects.toThrow("Diff frame did not render within image size limits.");
 
     expect(launchMock).toHaveBeenCalledTimes(1);
@@ -301,18 +288,7 @@ describe("PlaywrightDiffScreenshotter", () => {
     const { pages, screenshotter } = await createScreenshotterHarness();
 
     await expect(
-      screenshotter.screenshotHtml({
-        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-        outputPath,
-        theme: "dark",
-        image: {
-          format: "png",
-          qualityPreset: "standard",
-          scale: 1,
-          maxWidth: 960,
-          maxPixels: 10,
-        },
-      }),
+      screenshotter.screenshotHtml(screenshotParams({ image: { scale: 1, maxPixels: 10 } })),
     ).rejects.toThrow("Diff frame did not render within image size limits.");
     expect(pages).toHaveLength(1);
     expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
@@ -322,23 +298,11 @@ describe("PlaywrightDiffScreenshotter", () => {
     launchMock.mockRejectedValue(new Error("launch failed"));
     const screenshotter = new PlaywrightDiffScreenshotter({
       config: createConfig(),
-      browserIdleMs: 1_000,
     });
 
-    await expect(
-      screenshotter.screenshotHtml({
-        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-        outputPath,
-        theme: "dark",
-        image: {
-          format: "png",
-          qualityPreset: "standard",
-          scale: 2,
-          maxWidth: 960,
-          maxPixels: 8_000_000,
-        },
-      }),
-    ).rejects.toThrow("requires a Chromium-compatible browser");
+    await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
+      "requires a Chromium-compatible browser",
+    );
   });
 
   it("wraps new-page failures with Chromium installation guidance", async () => {
@@ -347,26 +311,14 @@ describe("PlaywrightDiffScreenshotter", () => {
     launchMock.mockResolvedValue(browser);
     const screenshotter = new PlaywrightDiffScreenshotter({
       config: createConfig(),
-      browserIdleMs: 1_000,
     });
 
-    await expect(
-      screenshotter.screenshotHtml({
-        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-        outputPath,
-        theme: "dark",
-        image: {
-          format: "png",
-          qualityPreset: "standard",
-          scale: 2,
-          maxWidth: 960,
-          maxPixels: 8_000_000,
-        },
-      }),
-    ).rejects.toThrow("requires a Chromium-compatible browser");
+    await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
+      "requires a Chromium-compatible browser",
+    );
   });
 
-  it("preserves render errors after a browser page has opened", async () => {
+  it("limits hydration waits and preserves errors after a browser page has opened", async () => {
     const browser = createMockBrowser([]);
     const page = createMockPage();
     page.waitForFunction.mockRejectedValue(new Error("hydration timeout"));
@@ -374,143 +326,126 @@ describe("PlaywrightDiffScreenshotter", () => {
     launchMock.mockResolvedValue(browser);
     const screenshotter = new PlaywrightDiffScreenshotter({
       config: createConfig(),
-      browserIdleMs: 1_000,
     });
 
-    await expect(
-      screenshotter.screenshotHtml({
-        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
-        outputPath,
-        theme: "dark",
-        image: {
-          format: "png",
-          qualityPreset: "standard",
-          scale: 2,
-          maxWidth: 960,
-          maxPixels: 8_000_000,
-        },
-      }),
-    ).rejects.toThrow("hydration timeout");
+    await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
+      "hydration timeout",
+    );
+    expect(page.waitForFunction).toHaveBeenCalledWith(expect.any(Function), undefined, {
+      timeout: 10_000,
+    });
+    expect(page.close).toHaveBeenCalledOnce();
   });
 });
 
+function createRegistrationHarness(params: {
+  pluginConfig: Record<string, unknown>;
+  currentConfig: () => OpenClawConfig;
+}) {
+  const registered: {
+    tool?: Parameters<OpenClawPluginApi["registerTool"]>[0];
+    httpHandler?: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]["handler"];
+  } = {};
+  const on = vi.fn();
+  const blobStore = createMemoryBlobStore();
+  const api = createTestPluginApi({
+    id: "diffs",
+    name: "Diffs",
+    description: "Diffs",
+    source: "test",
+    config: { gateway: { port: 18789, bind: "loopback" } },
+    pluginConfig: params.pluginConfig,
+    runtime: {
+      config: { current: params.currentConfig },
+      state: { openBlobStore: () => blobStore },
+    } as never,
+    registerTool(tool) {
+      registered.tool = tool;
+    },
+    registerHttpRoute(route) {
+      registered.httpHandler = route.handler;
+    },
+    on,
+  });
+  registerDiffsPlugin(api);
+  const registration = expectDefined(registered.tool, "registered diffs tool");
+  if (typeof registration !== "function" && "contextVersion" in registration) {
+    throw new Error("expected legacy diffs registration");
+  }
+  const handleRequest = expectDefined(registered.httpHandler, "registered diffs HTTP handler");
+
+  return {
+    on,
+    handleRequest,
+    render: async (context: OpenClawPluginToolContext) => {
+      const tool = expectDefined(
+        typeof registration === "function" ? registration(context) : registration,
+        "diffs tool for context",
+      );
+      if (Array.isArray(tool)) {
+        throw new Error("expected one registered diffs tool");
+      }
+      const result = await tool.execute("tool-1", { before: "one\n", after: "two\n" });
+      const details = expectDefined(asOptionalRecord(result.details), "diffs tool details");
+      const viewerPath = details.viewerPath;
+      if (typeof viewerPath !== "string") {
+        throw new Error("expected a diff viewer path");
+      }
+      return { details, viewerPath };
+    },
+  };
+}
+
+const STARTUP_DIFFS_DEFAULTS = {
+  mode: "view",
+  theme: "light",
+  background: false,
+  layout: "split",
+  showLineNumbers: false,
+  diffIndicators: "classic",
+  lineSpacing: 2,
+};
+
+function createRuntimeConfig(config: Record<string, unknown>): OpenClawConfig {
+  return {
+    gateway: { port: 18789, bind: "loopback" },
+    plugins: { entries: { diffs: { config } } },
+  };
+}
+
 describe("diffs plugin registration", () => {
   it("uses live runtime tool config through the registered tool factory", async () => {
-    type RegisteredTool = {
-      execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    const startupConfig = {
+      viewerBaseUrl: "https://startup.example.com/openclaw",
+      defaults: STARTUP_DIFFS_DEFAULTS,
     };
-    type HttpRouteHandler = (
-      req: IncomingMessage,
-      res: ServerResponse,
-    ) => boolean | Promise<boolean>;
-    type RegisteredHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
-
-    let registeredToolFactory:
-      | ((ctx: OpenClawPluginToolContext) => RegisteredTool | RegisteredTool[] | null | undefined)
-      | undefined;
-    let registeredHttpRouteHandler: HttpRouteHandler | undefined;
-    let configFile: OpenClawConfig = {
-      gateway: {
-        port: 18789,
-        bind: "loopback",
-      },
-      plugins: {
-        entries: {
-          diffs: {
-            config: {
-              viewerBaseUrl: "https://startup.example.com/openclaw",
-              defaults: {
-                mode: "view",
-                theme: "light",
-                background: false,
-                layout: "split",
-                showLineNumbers: false,
-                diffIndicators: "classic",
-                lineSpacing: 2,
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const blobStore = createMemoryBlobStore();
-
-    const api = createTestPluginApi({
-      id: "diffs",
-      name: "Diffs",
-      description: "Diffs",
-      source: "test",
-      config: {
-        gateway: {
-          port: 18789,
-          bind: "loopback",
-        },
-      },
-      pluginConfig: {
-        viewerBaseUrl: "https://startup.example.com/openclaw",
-        defaults: {
-          mode: "view",
-          theme: "light",
-          background: false,
-          layout: "split",
-          showLineNumbers: false,
-          diffIndicators: "classic",
-          lineSpacing: 2,
-        },
-      },
-      runtime: {
-        config: {
-          current: () => configFile,
-        },
-        state: { openBlobStore: () => blobStore },
-      } as never,
-      registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
-        registeredToolFactory = typeof tool === "function" ? tool : () => tool;
-      },
-      registerHttpRoute(params: RegisteredHttpRouteParams) {
-        registeredHttpRouteHandler = params.handler as HttpRouteHandler;
-      },
-      on: vi.fn(),
+    let configFile = createRuntimeConfig(startupConfig);
+    const { render, handleRequest } = createRegistrationHarness({
+      pluginConfig: startupConfig,
+      currentConfig: () => configFile,
     });
 
-    registerDiffsPlugin(api as unknown as OpenClawPluginApi);
-
-    configFile = {
-      ...configFile,
-      plugins: {
-        entries: {
-          diffs: {
-            config: {
-              viewerBaseUrl: "https://live.example.com/gateway",
-              defaults: {
-                mode: "view",
-                theme: "dark",
-                background: true,
-                layout: "unified",
-                showLineNumbers: true,
-                diffIndicators: "bars",
-                lineSpacing: 1.6,
-              },
-            },
-          },
-        },
+    configFile = createRuntimeConfig({
+      viewerBaseUrl: "https://live.example.com/gateway",
+      defaults: {
+        mode: "view",
+        theme: "dark",
+        background: true,
+        layout: "unified",
+        showLineNumbers: true,
+        diffIndicators: "bars",
+        lineSpacing: 1.6,
       },
-    } as OpenClawConfig;
+    });
 
-    const registeredTool = registeredToolFactory?.({
+    const { details, viewerPath } = await render({
       agentId: "main",
       sessionId: "session-456",
       messageChannel: "discord",
       agentAccountId: "default",
-    }) as RegisteredTool | undefined;
-    const result = await registeredTool?.execute?.("tool-1", {
-      before: "one\n",
-      after: "two\n",
     });
-    const details = (result as { details?: Record<string, unknown> } | undefined)?.details;
-    const viewerPath = String(details?.viewerPath);
     const res = createMockServerResponse();
-    const handled = await registeredHttpRouteHandler?.(
+    const handled = await handleRequest(
       localReq({
         method: "GET",
         url: viewerPath,
@@ -519,7 +454,7 @@ describe("diffs plugin registration", () => {
     );
 
     expect(handled).toBe(true);
-    expect(String(details?.viewerUrl)).toContain("https://live.example.com/gateway");
+    expect(String(details.viewerUrl)).toContain("https://live.example.com/gateway");
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain('body data-theme="dark"');
     expect(String(res.body)).toContain('"backgroundEnabled":true');
@@ -530,80 +465,16 @@ describe("diffs plugin registration", () => {
   });
 
   it("uses live runtime viewer-access config through the registered HTTP handler", async () => {
-    type RegisteredTool = {
-      execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
-    };
-    type HttpRouteHandler = (
-      req: IncomingMessage,
-      res: ServerResponse,
-    ) => boolean | Promise<boolean>;
-    type RegisteredHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
-
-    let registeredToolFactory:
-      | ((ctx: OpenClawPluginToolContext) => RegisteredTool | RegisteredTool[] | null | undefined)
-      | undefined;
-    let registeredHttpRouteHandler: HttpRouteHandler | undefined;
-    const on = vi.fn();
-    let configFile: OpenClawConfig = {
-      gateway: {
-        port: 18789,
-        bind: "loopback",
-      },
-      plugins: {
-        entries: {
-          diffs: {
-            config: {
-              security: {
-                allowRemoteViewer: true,
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const blobStore = createMemoryBlobStore();
-
-    const api = createTestPluginApi({
-      id: "diffs",
-      name: "Diffs",
-      description: "Diffs",
-      source: "test",
-      config: {
-        gateway: {
-          port: 18789,
-          bind: "loopback",
-        },
-      },
+    let configFile = createRuntimeConfig({ security: { allowRemoteViewer: true } });
+    const { on, render, handleRequest } = createRegistrationHarness({
       pluginConfig: {
-        defaults: {
-          mode: "view",
-          theme: "light",
-          background: false,
-          layout: "split",
-          showLineNumbers: false,
-          diffIndicators: "classic",
-          lineSpacing: 2,
-        },
+        defaults: STARTUP_DIFFS_DEFAULTS,
         security: {
           allowRemoteViewer: true,
         },
       },
-      runtime: {
-        config: {
-          current: () => configFile,
-        },
-        state: { openBlobStore: () => blobStore },
-      } as never,
-      registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
-        registeredToolFactory = typeof tool === "function" ? tool : () => tool;
-      },
-      registerHttpRoute(params: RegisteredHttpRouteParams) {
-        registeredHttpRouteHandler = params.handler as HttpRouteHandler;
-      },
-      on,
+      currentConfig: () => configFile,
     });
-
-    registerDiffsPlugin(api as unknown as OpenClawPluginApi);
 
     expect(on).toHaveBeenCalledTimes(1);
     const [hookName, beforePromptBuild] = firstMockCall(on, "plugin hook registration");
@@ -628,21 +499,14 @@ describe("diffs plugin registration", () => {
     expect(promptResult?.prependSystemContext).not.toMatch(/\bmessage\b|\bcanvas\b/i);
     expect(promptResult?.prependContext).toBeUndefined();
 
-    const registeredTool = registeredToolFactory?.({
+    const { details, viewerPath } = await render({
       agentId: "main",
       sessionId: "session-123",
       messageChannel: "discord",
       agentAccountId: "default",
-    }) as RegisteredTool | undefined;
-    const result = await registeredTool?.execute?.("tool-1", {
-      before: "one\n",
-      after: "two\n",
     });
-    const viewerPath = String(
-      (result as { details?: Record<string, unknown> } | undefined)?.details?.viewerPath,
-    );
     const res = createMockServerResponse();
-    const handled = await registeredHttpRouteHandler?.(
+    const handled = await handleRequest(
       localReq({
         method: "GET",
         url: viewerPath,
@@ -652,32 +516,17 @@ describe("diffs plugin registration", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect((result as { details?: Record<string, unknown> } | undefined)?.details?.context).toEqual(
-      {
-        agentId: "main",
-        sessionId: "session-123",
-        messageChannel: "discord",
-        agentAccountId: "default",
-      },
-    );
+    expect(details.context).toEqual({
+      agentId: "main",
+      sessionId: "session-123",
+      messageChannel: "discord",
+      agentAccountId: "default",
+    });
 
-    configFile = {
-      ...configFile,
-      plugins: {
-        entries: {
-          diffs: {
-            config: {
-              security: {
-                allowRemoteViewer: false,
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    configFile = createRuntimeConfig({ security: { allowRemoteViewer: false } });
 
     const proxiedRes = createMockServerResponse();
-    const proxiedHandled = await registeredHttpRouteHandler?.(
+    const proxiedHandled = await handleRequest(
       localReq({
         method: "GET",
         url: viewerPath,
@@ -693,94 +542,32 @@ describe("diffs plugin registration", () => {
   });
 
   it("fails closed for remote viewer access when the live diffs plugin entry is removed", async () => {
-    type RegisteredTool = {
-      execute?: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
-    };
-    type HttpRouteHandler = (
-      req: IncomingMessage,
-      res: ServerResponse,
-    ) => boolean | Promise<boolean>;
-    type RegisteredHttpRouteParams = Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
-
-    let registeredToolFactory:
-      | ((ctx: OpenClawPluginToolContext) => RegisteredTool | RegisteredTool[] | null | undefined)
-      | undefined;
-    let registeredHttpRouteHandler: HttpRouteHandler | undefined;
-    let configFile: OpenClawConfig = {
-      gateway: {
-        port: 18789,
-        bind: "loopback",
-      },
-      plugins: {
-        entries: {
-          diffs: {
-            config: {
-              security: {
-                allowRemoteViewer: true,
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const blobStore = createMemoryBlobStore();
-
-    const api = createTestPluginApi({
-      id: "diffs",
-      name: "Diffs",
-      description: "Diffs",
-      source: "test",
-      config: {
-        gateway: {
-          port: 18789,
-          bind: "loopback",
-        },
-      },
+    let configFile = createRuntimeConfig({ security: { allowRemoteViewer: true } });
+    const { render, handleRequest } = createRegistrationHarness({
       pluginConfig: {
         security: {
           allowRemoteViewer: true,
         },
       },
-      runtime: {
-        config: {
-          current: () => configFile,
-        },
-        state: { openBlobStore: () => blobStore },
-      } as never,
-      registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
-        registeredToolFactory = typeof tool === "function" ? tool : () => tool;
-      },
-      registerHttpRoute(params: RegisteredHttpRouteParams) {
-        registeredHttpRouteHandler = params.handler as HttpRouteHandler;
-      },
-      on: vi.fn(),
+      currentConfig: () => configFile,
     });
 
-    registerDiffsPlugin(api as unknown as OpenClawPluginApi);
-
-    const registeredTool = registeredToolFactory?.({
+    const { viewerPath } = await render({
       agentId: "main",
       sessionId: "session-789",
       messageChannel: "discord",
       agentAccountId: "default",
-    }) as RegisteredTool | undefined;
-    const result = await registeredTool?.execute?.("tool-1", {
-      before: "one\n",
-      after: "two\n",
     });
-    const viewerPath = String(
-      (result as { details?: Record<string, unknown> } | undefined)?.details?.viewerPath,
-    );
 
     configFile = {
       ...configFile,
       plugins: {
         entries: {},
       },
-    } as OpenClawConfig;
+    };
 
     const proxiedRes = createMockServerResponse();
-    const proxiedHandled = await registeredHttpRouteHandler?.(
+    const proxiedHandled = await handleRequest(
       localReq({
         method: "GET",
         url: viewerPath,
@@ -927,7 +714,6 @@ async function createScreenshotterHarness(options?: {
   launchMock.mockResolvedValue(browser);
   const screenshotter = new PlaywrightDiffScreenshotter({
     config: createConfig(),
-    browserIdleMs: 1_000,
   });
   return { pages, browser, screenshotter };
 }

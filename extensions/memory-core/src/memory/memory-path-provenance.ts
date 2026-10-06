@@ -17,25 +17,45 @@ export async function resolveMemoryPathClassification(params: {
   absolutePath: string;
   source: MemorySource;
   workspaceDir: string;
+  readSource?: { canonicalRelativePath?: string };
 }): Promise<MemoryPathClassification> {
   if (params.source !== "memory") {
     return { curatedRoot: false, originClass: "untrusted" };
   }
-  let workspacePath: string;
-  let filePath: string;
-  try {
-    [workspacePath, filePath] = await Promise.all([
-      fs.realpath(params.workspaceDir),
-      fs.realpath(params.absolutePath),
-    ]);
-  } catch {
-    return { curatedRoot: false, originClass: "untrusted" };
+  let relativePath: string;
+  if (params.readSource !== undefined) {
+    const sourcePath = params.readSource.canonicalRelativePath;
+    if (
+      !sourcePath ||
+      sourcePath === "." ||
+      sourcePath === ".." ||
+      sourcePath.startsWith("../") ||
+      path.posix.isAbsolute(sourcePath) ||
+      path.win32.isAbsolute(sourcePath) ||
+      sourcePath.includes("\\") ||
+      sourcePath.includes("\0") ||
+      path.posix.normalize(sourcePath) !== sourcePath
+    ) {
+      return { curatedRoot: false, originClass: "untrusted" };
+    }
+    relativePath = sourcePath;
+  } else {
+    let workspacePath: string;
+    let filePath: string;
+    try {
+      [workspacePath, filePath] = await Promise.all([
+        fs.realpath(params.workspaceDir),
+        fs.realpath(params.absolutePath),
+      ]);
+    } catch {
+      return { curatedRoot: false, originClass: "untrusted" };
+    }
+    if (!isPathStrictlyInside(workspacePath, filePath)) {
+      return { curatedRoot: false, originClass: "untrusted" };
+    }
+    relativePath = path.relative(workspacePath, filePath).replaceAll(path.sep, "/");
   }
-  if (!isPathStrictlyInside(workspacePath, filePath)) {
-    return { curatedRoot: false, originClass: "untrusted" };
-  }
-  const relativePath = path.relative(workspacePath, filePath);
-  const segments = relativePath.split(path.sep);
+  const segments = relativePath.split("/");
   const curatedRoot =
     segments.length === 1 &&
     (segments[0] === "MEMORY.md" || segments[0] === "memory.md" || segments[0] === "USER.md");
@@ -46,12 +66,13 @@ export async function resolveMemoryPathClassification(params: {
     return { curatedRoot, originClass: "system" };
   }
   const isWorkspaceMemory =
-    curatedRoot || (segments[0] === "memory" && segments.at(-1)?.endsWith(".md") === true);
-  const normalizedRelativePath = relativePath.replaceAll(path.sep, "/");
+    curatedRoot ||
+    /^users\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\/USER\.md$/.test(relativePath) ||
+    (segments[0] === "memory" && segments.at(-1)?.endsWith(".md") === true);
   const recorded = isWorkspaceMemory
     ? await readMemoryArtifactProvenance({
         workspaceDir: params.workspaceDir,
-        relativePath: normalizedRelativePath,
+        relativePath,
       })
     : undefined;
   if (recorded) {

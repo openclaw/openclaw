@@ -1,31 +1,37 @@
-// Codex plugin module implements elicitation bridge behavior.
 import {
   embeddedAgentLog,
+  type CodexBundleMcpThreadConfig,
+  type ExecApprovalDecision,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  formatMcpCodexApprovalRemedy,
+  requiresMcpCodexToolApproval,
+  resolveProjectedMcpCodexToolApprovalMode,
+} from "openclaw/plugin-sdk/codex-mcp-projection";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
+import { codexAppIdentityKey } from "./app-identity.js";
 import {
   createCodexElicitationResponse,
   type CodexElicitationResponse,
 } from "./elicitation-response.js";
+import type { CodexActiveMcpToolCall } from "./event-projector-native-tool-lifecycle.js";
 import {
-  approvalRequestExplicitlyUnavailable,
-  codexApprovalTimeoutText,
-  mapExecDecisionToOutcome,
   requestPluginApproval,
+  requestPluginApprovalOutcome,
   sanitizeCodexApprovalVisibleText,
   truncateCodexApprovalDisplayText as truncateDisplayText,
   type AppServerApprovalOutcome,
-  type ExecApprovalDecision,
-  waitForPluginApprovalDecision,
+  type PluginApprovalOutcome,
 } from "./plugin-approval-roundtrip.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import type {
   CodexAppPolicyContextEntry,
   PluginAppPolicyContext,
   PluginAppPolicyContextEntry,
-} from "./plugin-thread-config.js";
-import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
+} from "./session-binding-record-codec.js";
 
 type ApprovalPropertyContext = {
   name: string;
@@ -42,7 +48,6 @@ type BridgeableApprovalElicitation = {
   allowedDecisions?: ExecApprovalDecision[];
 };
 
-type ElicitationApprovalOutcome = AppServerApprovalOutcome | "timed-out";
 type CodexApprovalElicitationResult =
   | { kind: "not-mine" }
   | { kind: "handled"; response: CodexElicitationResponse };
@@ -87,10 +92,13 @@ export async function routeCodexAppServerElicitationRequest(params: {
   turnId: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
   computerUseMcpServerName?: string;
+  autoApproveMcpTools?: boolean;
+  projectedMcpServers?: NonNullable<CodexBundleMcpThreadConfig["configPatch"]>["mcp_servers"];
+  getActiveMcpToolCall?: (serverName: string) => CodexActiveMcpToolCall | undefined;
   signal?: AbortSignal;
 }): Promise<CodexApprovalElicitationResult> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
-  if (!requestParams || readNonBlankStringField(requestParams, "threadId") !== params.threadId) {
+  if (!requestParams || readNonBlankString(requestParams.threadId) !== params.threadId) {
     return { kind: "not-mine" };
   }
   const requestTurnId = requestParams.turnId;
@@ -101,11 +109,14 @@ export async function routeCodexAppServerElicitationRequest(params: {
   const approvalShaped =
     meta?.[MCP_TOOL_APPROVAL_KIND_KEY] === MCP_TOOL_APPROVAL_KIND ||
     (params.computerUseMcpServerName !== undefined &&
-      readNonBlankStringField(requestParams, "serverName") === params.computerUseMcpServerName);
+      readNonBlankString(requestParams.serverName) === params.computerUseMcpServerName);
   // Plugin ownership identifies which approval policy applies; it does not turn
   // ordinary MCP forms or OAuth URLs into destructive-action approvals.
   if (!approvalShaped) {
     return { kind: "not-mine" };
+  }
+  if (params.signal?.aborted) {
+    return handled(createCodexElicitationResponse("cancel"));
   }
   const pluginResolution = resolvePluginElicitation({
     requestParams,
@@ -134,21 +145,103 @@ export async function routeCodexAppServerElicitationRequest(params: {
     );
   }
 
+  const serverName = readNonBlankString(requestParams.serverName);
+  const computerUsePrompt =
+    serverName && serverName === params.computerUseMcpServerName
+      ? readApprovalElicitation(requestParams, { kind: "computer-use" })
+      : undefined;
   const approvalPrompt =
-    readComputerUseApprovalElicitation(requestParams, params.computerUseMcpServerName) ??
-    readBridgeableApprovalElicitation(requestParams);
+    computerUsePrompt ?? readApprovalElicitation(requestParams, { kind: "mcp" });
   if (!approvalPrompt) {
     return handled(createCodexElicitationResponse("decline"));
   }
+  let persistence:
+    | Pick<
+        Parameters<typeof requestPluginApproval>[0],
+        "mcpTool" | "toolCallId" | "isMcpToolApprovalActive"
+      >
+    | undefined;
+  if (!computerUsePrompt) {
+    // App elicitation delegation changes Codex's policy; custom MCP servers still
+    // follow the original operator posture unless their server config overrides it.
+    const server = serverName ? params.paramsForRun.config?.mcp?.servers?.[serverName] : undefined;
+    const mode = serverName
+      ? resolveProjectedMcpCodexToolApprovalMode(
+          serverName,
+          server ?? {},
+          params.projectedMcpServers?.[serverName],
+        )
+      : undefined;
+    if (!requiresMcpCodexToolApproval({ mode, fullPermission: params.autoApproveMcpTools })) {
+      params.paramsForRun.hostCapabilities.assertActive();
+      return handled(buildElicitationResponse(approvalPrompt, "approved-once"));
+    }
+    // Explicit prompt is per-call consent, even if stale persistence hints arrive.
+    if (mode === "prompt") {
+      approvalPrompt.allowedDecisions = ["allow-once", "deny"];
+    } else if (
+      serverName &&
+      serverName !== CODEX_APPS_SERVER_NAME &&
+      Object.hasOwn(params.paramsForRun.config?.mcp?.servers ?? {}, serverName) &&
+      requestTurnId === params.turnId &&
+      readPersistHints(approvalPrompt.meta, "explicit").includes("always")
+    ) {
+      const resolveItem = () => {
+        const item = params.getActiveMcpToolCall?.(serverName);
+        return item?.server === serverName && matchesMcpApprovalDisplay(item, approvalPrompt.meta)
+          ? item
+          : undefined;
+      };
+      const item = resolveItem();
+      if (item) {
+        persistence = {
+          mcpTool: { server: serverName, tool: item.tool },
+          toolCallId: item.id,
+          // Recheck at the gateway's mint boundary: another call may start or
+          // this item may finish while the operator's approval card is pending.
+          isMcpToolApprovalActive: () => {
+            const current = resolveItem();
+            return current?.id === item.id && current.tool === item.tool;
+          },
+        };
+      }
+    }
+  }
 
   const outcome = await requestPluginApprovalOutcome({
-    paramsForRun: params.paramsForRun,
+    hostCapabilities: params.paramsForRun.hostCapabilities,
     title: approvalPrompt.title,
     description: approvalPrompt.description,
     allowedDecisions: approvalPrompt.allowedDecisions,
+    toolName: "codex_mcp_tool_approval",
+    ...persistence,
     signal: params.signal,
   });
   return handled(buildElicitationResponse(approvalPrompt, outcome));
+}
+
+function matchesMcpApprovalDisplay(item: CodexActiveMcpToolCall, meta: JsonObject): boolean {
+  if (!Object.hasOwn(meta, MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY)) {
+    return true;
+  }
+  const display = meta[MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY];
+  if (!Array.isArray(display)) {
+    return false;
+  }
+  const args = item.arguments;
+  return display.every((param) => {
+    if (!isJsonObject(param) || typeof param.name !== "string" || !isJsonObject(args)) {
+      return false;
+    }
+    if (!Object.hasOwn(args, param.name)) {
+      return false;
+    }
+    const value = args[param.name];
+    return (
+      typeof param.value !== "string" ||
+      param.value === (typeof value === "string" ? value : JSON.stringify(value))
+    );
+  });
 }
 
 function handled(response: CodexElicitationResponse): CodexApprovalElicitationResult {
@@ -170,28 +263,29 @@ function resolvePluginElicitation(params: {
     readFirstString(requestParams, PLUGIN_APP_ID_META_KEYS);
   const connectorId = readFirstString(meta, PLUGIN_CONNECTOR_ID_META_KEYS);
   const isCodexConnectorApproval = isCodexConnectorApprovalElicitation(requestParams, meta);
-  if (isCodexConnectorApproval && appId && connectorId && appId !== connectorId) {
+  if (
+    isCodexConnectorApproval &&
+    appId &&
+    connectorId &&
+    codexAppIdentityKey(appId) !== codexAppIdentityKey(connectorId)
+  ) {
     return { kind: "decline", reason: "app_id_connector_id_mismatch" };
   }
-  if (appId) {
+  const matchedAppId = appId ?? (isCodexConnectorApproval ? connectorId : undefined);
+  if (matchedAppId) {
     if (!context) {
       return { kind: "decline", reason: "missing_policy_context" };
     }
-    const entry = context.apps[appId];
-    if (entry?.source === "account" && !isCodexConnectorApproval) {
+    const matches = Object.entries(context.apps)
+      .filter(([id]) => codexAppIdentityKey(id) === codexAppIdentityKey(matchedAppId))
+      .map(([, entry]) => entry);
+    if (matches.some((entry) => entry.source === "account") && !isCodexConnectorApproval) {
       return { kind: "decline", reason: "account_app_source_mismatch" };
     }
-    return uniquePluginMatch(entry ? [entry] : [], "app_id");
-  }
-  if (isCodexConnectorApproval && connectorId) {
-    if (!context) {
-      return { kind: "decline", reason: "missing_policy_context" };
-    }
-    const entry = context.apps[connectorId];
-    return uniquePluginMatch(entry ? [entry] : [], "connector_id");
+    return uniquePluginMatch(matches, appId ? "app_id" : "connector_id");
   }
 
-  const serverName = readNonBlankStringField(requestParams, "serverName");
+  const serverName = readNonBlankString(requestParams.serverName);
   if (serverName && context) {
     const matches = entries.filter((entry) => entry.mcpServerNames.includes(serverName));
     if (matches.length > 0) {
@@ -199,14 +293,28 @@ function resolvePluginElicitation(params: {
     }
   }
 
-  const metadataResolution = resolvePluginStableMetadataMatch({
-    meta,
-    requestParams,
-    entries: pluginEntries,
-    context,
-  });
-  if (metadataResolution.kind !== "not_plugin") {
-    return metadataResolution;
+  const pluginName =
+    readFirstString(meta, PLUGIN_NAME_META_KEYS) ??
+    readFirstString(requestParams, PLUGIN_NAME_META_KEYS);
+  const configKey =
+    readFirstString(meta, PLUGIN_CONFIG_KEY_META_KEYS) ??
+    readFirstString(requestParams, PLUGIN_CONFIG_KEY_META_KEYS);
+  const marketplaceName =
+    readFirstString(meta, PLUGIN_MARKETPLACE_NAME_META_KEYS) ??
+    readFirstString(requestParams, PLUGIN_MARKETPLACE_NAME_META_KEYS);
+  if (pluginName || configKey) {
+    if (!context) {
+      return { kind: "decline", reason: "missing_policy_context" };
+    }
+    return uniquePluginMatch(
+      pluginEntries.filter(
+        (entry) =>
+          (!marketplaceName || entry.marketplaceName === marketplaceName) &&
+          (!pluginName || entry.pluginName === pluginName) &&
+          (!configKey || entry.configKey === configKey),
+      ),
+      "metadata",
+    );
   }
 
   if (context && hasDisplayNameOnlyPluginMatch(meta, entries)) {
@@ -218,47 +326,10 @@ function resolvePluginElicitation(params: {
 
 function isCodexConnectorApprovalElicitation(requestParams: JsonObject, meta: JsonObject): boolean {
   return (
-    readNonBlankStringField(requestParams, "serverName") === CODEX_APPS_SERVER_NAME &&
-    readNonBlankStringField(meta, MCP_TOOL_APPROVAL_KIND_KEY) === MCP_TOOL_APPROVAL_KIND &&
-    readNonBlankStringField(meta, MCP_TOOL_APPROVAL_SOURCE_KEY) ===
-      MCP_TOOL_APPROVAL_CONNECTOR_SOURCE
+    readNonBlankString(requestParams.serverName) === CODEX_APPS_SERVER_NAME &&
+    readNonBlankString(meta[MCP_TOOL_APPROVAL_KIND_KEY]) === MCP_TOOL_APPROVAL_KIND &&
+    readNonBlankString(meta[MCP_TOOL_APPROVAL_SOURCE_KEY]) === MCP_TOOL_APPROVAL_CONNECTOR_SOURCE
   );
-}
-
-function resolvePluginStableMetadataMatch(params: {
-  meta: JsonObject;
-  requestParams: JsonObject;
-  entries: PluginAppPolicyContextEntry[];
-  context?: PluginAppPolicyContext;
-}): PluginElicitationResolution {
-  const pluginName =
-    readFirstString(params.meta, PLUGIN_NAME_META_KEYS) ??
-    readFirstString(params.requestParams, PLUGIN_NAME_META_KEYS);
-  const configKey =
-    readFirstString(params.meta, PLUGIN_CONFIG_KEY_META_KEYS) ??
-    readFirstString(params.requestParams, PLUGIN_CONFIG_KEY_META_KEYS);
-  const marketplaceName =
-    readFirstString(params.meta, PLUGIN_MARKETPLACE_NAME_META_KEYS) ??
-    readFirstString(params.requestParams, PLUGIN_MARKETPLACE_NAME_META_KEYS);
-  if (!pluginName && !configKey) {
-    return { kind: "not_plugin" };
-  }
-  if (!params.context) {
-    return { kind: "decline", reason: "missing_policy_context" };
-  }
-  const matches = params.entries.filter((entry) => {
-    if (marketplaceName && entry.marketplaceName !== marketplaceName) {
-      return false;
-    }
-    if (pluginName && entry.pluginName !== pluginName) {
-      return false;
-    }
-    if (configKey && entry.configKey !== configKey) {
-      return false;
-    }
-    return true;
-  });
-  return uniquePluginMatch(matches, "metadata");
 }
 
 function uniquePluginMatch(
@@ -278,7 +349,7 @@ function hasDisplayNameOnlyPluginMatch(
   meta: JsonObject,
   entries: CodexAppPolicyContextEntry[],
 ): boolean {
-  const connectorName = readNonBlankStringField(meta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY);
+  const connectorName = readNonBlankString(meta[MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY]);
   if (!connectorName) {
     return false;
   }
@@ -311,67 +382,71 @@ async function buildPluginPolicyElicitationResponse(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   signal?: AbortSignal;
 }): Promise<CodexElicitationResponse> {
-  const mode = resolvePluginDestructiveApprovalMode(params.entry);
-  if (mode === "deny") {
+  const mode =
+    params.entry.destructiveApprovalMode ??
+    (params.entry.allowDestructiveActions ? "allow" : "deny");
+  const meta = isJsonObject(params.requestParams._meta) ? params.requestParams._meta : {};
+  // Hosted apps have their destructive ceiling enforced in the thread's tool
+  // config before dispatch. A remaining native prompt can require consent for
+  // an allowed read; plugin-provided MCP servers still use the decline policy.
+  if (mode === "deny" && !isCodexConnectorApprovalElicitation(params.requestParams, meta)) {
     logPluginElicitationDecline("destructive_actions_disabled", params.requestParams);
     return createCodexElicitationResponse("decline");
   }
-  const approvalPrompt = readPluginApprovalElicitation(params.entry, params.requestParams);
+  const approvalPrompt = readApprovalElicitation(params.requestParams, {
+    kind: "plugin",
+    displayName: appPolicyDisplayName(params.entry),
+  });
   if (!approvalPrompt) {
     logPluginElicitationDecline("unsupported_schema", params.requestParams);
     return createCodexElicitationResponse("decline");
   }
   const response = buildElicitationResponse(approvalPrompt, "approved-once");
-  if (response.action === "accept") {
-    if (mode === "allow") {
-      return response;
-    }
-    const outcome = await requestPluginApprovalOutcome({
-      paramsForRun: params.paramsForRun,
-      title: approvalPrompt.title,
-      description: approvalPrompt.description,
-      allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
-      signal: params.signal,
-    });
-    return buildElicitationResponse(
-      approvalPrompt,
-      mode === "ask" && outcome === "approved-session" ? "approved-once" : outcome,
-    );
+  if (response.action !== "accept") {
+    logPluginElicitationDecline("unmappable_schema", params.requestParams);
+    return createCodexElicitationResponse("decline");
   }
-  logPluginElicitationDecline("unmappable_schema", params.requestParams);
-  return createCodexElicitationResponse("decline");
-}
-
-function resolvePluginDestructiveApprovalMode(
-  entry: CodexAppPolicyContextEntry,
-): "allow" | "deny" | "auto" | "ask" {
-  return entry.destructiveApprovalMode ?? (entry.allowDestructiveActions ? "allow" : "deny");
-}
-
-function allowedPluginPolicyApprovalDecisions(
-  mode: "allow" | "deny" | "auto" | "ask",
-  approvalPrompt: BridgeableApprovalElicitation,
-): ExecApprovalDecision[] {
-  const allowedDecisions = approvalPrompt.allowedDecisions ?? ["allow-once", "deny"];
-  if (mode !== "ask") {
-    return allowedDecisions;
+  if (mode === "allow") {
+    return response;
   }
-  return allowedDecisions.filter((decision) => decision !== "allow-always");
+  const allowedDecisions: ExecApprovalDecision[] = approvalPrompt.allowedDecisions ?? [
+    "allow-once",
+    "deny",
+  ];
+  const outcome = await requestPluginApprovalOutcome({
+    hostCapabilities: params.paramsForRun.hostCapabilities,
+    title: approvalPrompt.title,
+    description: approvalPrompt.description,
+    allowedDecisions:
+      mode === "ask"
+        ? allowedDecisions.filter((decision) => decision !== "allow-always")
+        : allowedDecisions,
+    toolName: "codex_mcp_tool_approval",
+    signal: params.signal,
+  });
+  return buildElicitationResponse(approvalPrompt, outcome);
 }
 
-function readPluginApprovalElicitation(
-  entry: CodexAppPolicyContextEntry,
+function readApprovalElicitation(
   requestParams: JsonObject,
+  source: { kind: "plugin"; displayName: string } | { kind: "mcp" | "computer-use" },
 ): BridgeableApprovalElicitation | undefined {
   if (
-    readNonBlankStringField(requestParams, "mode") !== "form" ||
-    !isJsonObject(requestParams.requestedSchema)
+    readNonBlankString(requestParams.mode) !== "form" ||
+    (source.kind === "mcp" &&
+      (!isJsonObject(requestParams._meta) ||
+        requestParams._meta[MCP_TOOL_APPROVAL_KIND_KEY] !== MCP_TOOL_APPROVAL_KIND))
   ) {
     return undefined;
   }
-  const requestedSchema = requestParams.requestedSchema;
+  const requestedSchema = isJsonObject(requestParams.requestedSchema)
+    ? requestParams.requestedSchema
+    : source.kind === "computer-use"
+      ? EMPTY_OBJECT_SCHEMA
+      : undefined;
   if (
-    readNonBlankStringField(requestedSchema, "type") !== "object" ||
+    !requestedSchema ||
+    readNonBlankString(requestedSchema.type) !== "object" ||
     !isJsonObject(requestedSchema.properties)
   ) {
     return undefined;
@@ -379,11 +454,19 @@ function readPluginApprovalElicitation(
 
   const meta = isJsonObject(requestParams["_meta"]) ? requestParams["_meta"] : {};
   const title =
-    sanitizeDisplayText(readNonBlankStringField(requestParams, "message") ?? "") ||
-    "Codex plugin approval";
-  const descriptionMeta: JsonObject = { ...meta };
-  if (!readNonBlankStringField(descriptionMeta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY)) {
-    descriptionMeta[MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY] = appPolicyDisplayName(entry);
+    sanitizeDisplayText(readNonBlankString(requestParams.message) ?? "") ||
+    (source.kind === "plugin"
+      ? "Codex plugin approval"
+      : source.kind === "mcp"
+        ? "Codex MCP tool approval"
+        : COMPUTER_USE_APPROVAL_TITLE);
+  const serverName = readNonBlankString(requestParams.serverName);
+  const descriptionMeta: JsonObject = source.kind === "plugin" ? { ...meta } : meta;
+  if (
+    source.kind === "plugin" &&
+    !readNonBlankString(descriptionMeta[MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY])
+  ) {
+    descriptionMeta[MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY] = source.displayName;
   }
   return {
     title,
@@ -391,26 +474,45 @@ function readPluginApprovalElicitation(
       title,
       meta: descriptionMeta,
       requestedSchema,
-      serverName: sanitizeOptionalDisplayText(readNonBlankStringField(requestParams, "serverName")),
+      serverName: sanitizeOptionalDisplayText(serverName),
+      // Plugin and computer-use prompts have their own policies, not an MCP config remedy.
+      remedy:
+        source.kind === "mcp" && serverName ? formatMcpCodexApprovalRemedy(serverName) : undefined,
     }),
     requestedSchema,
     meta,
-    persistHintsMode: "explicit",
-    allowedDecisions: buildApprovalAllowedDecisions(requestedSchema, meta),
+    ...(source.kind !== "computer-use"
+      ? {
+          persistHintsMode: "explicit" as const,
+          allowedDecisions: buildApprovalAllowedDecisions(
+            requestedSchema,
+            meta,
+            source.kind === "mcp",
+          ),
+        }
+      : {}),
   };
 }
 
 function buildApprovalAllowedDecisions(
   requestedSchema: JsonObject,
   meta: JsonObject,
+  allowSession = false,
 ): ExecApprovalDecision[] {
-  return canMapPersistentApproval(requestedSchema, meta)
+  return canMapPersistentApproval(requestedSchema, meta, allowSession)
     ? ["allow-once", "allow-always", "deny"]
     : ["allow-once", "deny"];
 }
 
-function canMapPersistentApproval(requestedSchema: JsonObject, meta: JsonObject): boolean {
+function canMapPersistentApproval(
+  requestedSchema: JsonObject,
+  meta: JsonObject,
+  allowSession: boolean,
+): boolean {
   const persistHints = readPersistHints(meta, "explicit");
+  if (allowSession) {
+    return choosePersistHint(persistHints) !== undefined;
+  }
   if (persistHints.length > 0) {
     return persistHints.includes("always");
   }
@@ -430,87 +532,9 @@ function canMapPersistentApproval(requestedSchema: JsonObject, meta: JsonObject)
 function logPluginElicitationDecline(reason: string, requestParams: JsonObject | undefined): void {
   embeddedAgentLog.debug("codex plugin elicitation declined", {
     reason,
-    serverName: readNonBlankStringField(requestParams, "serverName"),
-    mode: readNonBlankStringField(requestParams, "mode"),
+    serverName: readNonBlankString(requestParams?.serverName),
+    mode: readNonBlankString(requestParams?.mode),
   });
-}
-
-function readBridgeableApprovalElicitation(
-  requestParams: JsonObject | undefined,
-): BridgeableApprovalElicitation | undefined {
-  if (
-    !requestParams ||
-    readNonBlankStringField(requestParams, "mode") !== "form" ||
-    !isJsonObject(requestParams["_meta"]) ||
-    requestParams["_meta"][MCP_TOOL_APPROVAL_KIND_KEY] !== MCP_TOOL_APPROVAL_KIND ||
-    !isJsonObject(requestParams.requestedSchema)
-  ) {
-    return undefined;
-  }
-
-  const requestedSchema = requestParams.requestedSchema;
-  if (
-    readNonBlankStringField(requestedSchema, "type") !== "object" ||
-    !isJsonObject(requestedSchema.properties)
-  ) {
-    return undefined;
-  }
-
-  const title =
-    sanitizeDisplayText(readNonBlankStringField(requestParams, "message") ?? "") ||
-    "Codex MCP tool approval";
-  return {
-    title,
-    description: buildApprovalDescription({
-      title,
-      meta: requestParams["_meta"],
-      requestedSchema,
-      serverName: sanitizeOptionalDisplayText(readNonBlankStringField(requestParams, "serverName")),
-    }),
-    requestedSchema,
-    meta: requestParams["_meta"],
-  };
-}
-
-function readComputerUseApprovalElicitation(
-  requestParams: JsonObject | undefined,
-  expectedServerName: string | undefined,
-): BridgeableApprovalElicitation | undefined {
-  const serverName = readNonBlankStringField(requestParams, "serverName");
-  if (
-    !serverName ||
-    !expectedServerName ||
-    serverName !== expectedServerName ||
-    readNonBlankStringField(requestParams, "mode") !== "form"
-  ) {
-    return undefined;
-  }
-
-  const requestedSchema = isJsonObject(requestParams?.requestedSchema)
-    ? requestParams.requestedSchema
-    : EMPTY_OBJECT_SCHEMA;
-  if (
-    readNonBlankStringField(requestedSchema, "type") !== "object" ||
-    !isJsonObject(requestedSchema.properties)
-  ) {
-    return undefined;
-  }
-
-  const meta = isJsonObject(requestParams?.["_meta"]) ? requestParams["_meta"] : {};
-  const title =
-    sanitizeDisplayText(readNonBlankStringField(requestParams, "message") ?? "") ||
-    COMPUTER_USE_APPROVAL_TITLE;
-  return {
-    title,
-    description: buildApprovalDescription({
-      title,
-      meta,
-      requestedSchema,
-      serverName: sanitizeOptionalDisplayText(serverName),
-    }),
-    requestedSchema,
-    meta,
-  };
 }
 
 function buildApprovalDescription(params: {
@@ -518,20 +542,24 @@ function buildApprovalDescription(params: {
   meta: JsonObject;
   requestedSchema: JsonObject;
   serverName: string | undefined;
+  remedy?: string;
 }): string {
   const connectorName = sanitizeOptionalDisplayText(
-    readNonBlankStringField(params.meta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY),
+    readNonBlankString(params.meta[MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY]),
   );
   const toolTitle = sanitizeOptionalDisplayText(
-    readNonBlankStringField(params.meta, MCP_TOOL_APPROVAL_TOOL_TITLE_KEY),
+    readNonBlankString(params.meta[MCP_TOOL_APPROVAL_TOOL_TITLE_KEY]),
   );
   const toolDescription = sanitizeOptionalDisplayText(
-    readNonBlankStringField(params.meta, MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY),
+    readNonBlankString(params.meta[MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY]),
   );
   const summaryLines = [
     connectorName && `App: ${connectorName}`,
     toolTitle && `Tool: ${toolTitle}`,
     params.serverName && `MCP server: ${params.serverName}`,
+    // Before the tool description: card text is truncated at 256 chars and the
+    // remedy is the line the operator must not lose.
+    params.remedy,
     toolDescription,
   ].filter((line): line is string => Boolean(line));
   const paramLines = readDisplayParamLines(params.meta);
@@ -555,12 +583,10 @@ function readPropertyDescriptionLines(requestedSchema: JsonObject): string[] {
         return undefined;
       }
       const propTitle =
-        sanitizeDisplayText(readNonBlankStringField(schema, "title") ?? "") ||
+        sanitizeDisplayText(readNonBlankString(schema.title) ?? "") ||
         sanitizeDisplayText(name) ||
         "field";
-      const description = sanitizeOptionalDisplayText(
-        readNonBlankStringField(schema, "description"),
-      );
+      const description = sanitizeOptionalDisplayText(readNonBlankString(schema.description));
       return description ? `- ${propTitle}: ${description}` : `- ${propTitle}`;
     })
     .filter((line): line is string => Boolean(line));
@@ -579,8 +605,8 @@ function readDisplayParamLines(meta: JsonObject): string[] {
         return undefined;
       }
       const name =
-        sanitizeOptionalDisplayText(readNonBlankStringField(param, "display_name")) ??
-        sanitizeOptionalDisplayText(readNonBlankStringField(param, "name"));
+        sanitizeOptionalDisplayText(readNonBlankString(param.display_name)) ??
+        sanitizeOptionalDisplayText(readNonBlankString(param.name));
       if (!name) {
         return undefined;
       }
@@ -664,64 +690,20 @@ function sanitizeDisplayText(value: string): string {
   return clipped && escaped ? `${escaped}...` : escaped;
 }
 
-async function requestPluginApprovalOutcome(params: {
-  paramsForRun: EmbeddedRunAttemptParams;
-  title: string;
-  description: string;
-  allowedDecisions?: ExecApprovalDecision[];
-  signal?: AbortSignal;
-}): Promise<ElicitationApprovalOutcome> {
-  try {
-    const requestResult = await requestPluginApproval({
-      hostCapabilities: params.paramsForRun.hostCapabilities,
-      title: params.title,
-      description: params.description,
-      severity: "warning",
-      toolName: "codex_mcp_tool_approval",
-      allowedDecisions: params.allowedDecisions,
-    });
-
-    const approvalId = requestResult?.id;
-    if (!approvalId) {
-      return "unavailable";
-    }
-
-    const approvalResult = approvalRequestExplicitlyUnavailable(requestResult)
-      ? undefined
-      : await waitForPluginApprovalDecision({
-          hostCapabilities: params.paramsForRun.hostCapabilities,
-          approvalId,
-          signal: params.signal,
-        });
-    if (params.signal?.aborted) {
-      return "cancelled";
-    }
-    if (approvalResult?.terminalReason === "timeout") {
-      return "timed-out";
-    }
-    return mapExecDecisionToOutcome(approvalResult?.decision);
-  } catch {
-    return params.signal?.aborted ? "cancelled" : "denied";
-  }
-}
-
 function buildElicitationResponse(
   approvalPrompt: Pick<
     BridgeableApprovalElicitation,
     "requestedSchema" | "meta" | "persistHintsMode"
   >,
-  outcome: ElicitationApprovalOutcome,
+  outcome: PluginApprovalOutcome,
 ): CodexElicitationResponse {
   const { requestedSchema, meta } = approvalPrompt;
   if (outcome === "cancelled") {
     return createCodexElicitationResponse("cancel");
   }
-  if (outcome === "timed-out") {
-    return createCodexElicitationResponse("decline", null, {
-      message: codexApprovalTimeoutText("other"),
-    });
-  }
-  if (outcome === "denied" || outcome === "unavailable") {
+  // Codex reads no response meta on decline (0.151.0 maps every decline to
+  // "user rejected MCP tool call"), so remedy text belongs on the operator card.
+  if (outcome === "timed-out" || outcome === "denied" || outcome === "unavailable") {
     return createCodexElicitationResponse("decline");
   }
 
@@ -762,6 +744,7 @@ function buildAcceptedContent(
     : new Set<string>();
   const content: JsonObject = {};
   let sawApprovalField = false;
+  const persist = choosePersistHint(readPersistHints(meta, approvalPrompt.persistHintsMode));
 
   for (const [name, value] of Object.entries(properties)) {
     const schema = isJsonObject(value) ? value : undefined;
@@ -770,23 +753,22 @@ function buildAcceptedContent(
     }
     const property = { name, schema, required: required.has(name) };
     const next =
-      readApprovalFieldValue(property, outcome) ??
+      readApprovalFieldValue(property, outcome, persist) ??
       readPersistFieldValue(property, meta, outcome, approvalPrompt.persistHintsMode ?? "legacy") ??
-      readFallbackFieldValue(property, outcome);
+      (outcome === "approved-once" && isPersistField(property)
+        ? undefined
+        : property.schema.default);
 
+    if (isApprovalField(property)) {
+      sawApprovalField = true;
+    }
     if (next === undefined) {
-      if (isApprovalField(property)) {
-        sawApprovalField = true;
-      }
       if (property.required) {
         return undefined;
       }
       continue;
     }
 
-    if (isApprovalField(property)) {
-      sawApprovalField = true;
-    }
     content[name] = next;
   }
 
@@ -796,11 +778,12 @@ function buildAcceptedContent(
 function readApprovalFieldValue(
   property: ApprovalPropertyContext,
   outcome: AppServerApprovalOutcome,
+  persist: "always" | "session" | undefined,
 ): JsonValue | undefined {
   if (!isApprovalField(property)) {
     return undefined;
   }
-  const type = readNonBlankStringField(property.schema, "type");
+  const type = readNonBlankString(property.schema.type);
   if (type === "boolean") {
     return true;
   }
@@ -809,12 +792,14 @@ function readApprovalFieldValue(
     return undefined;
   }
 
-  const sessionChoice = options.find((option) => isSessionApprovalOption(option));
   const acceptChoice = options.find((option) => isPositiveApprovalOption(option));
   if (outcome === "approved-session") {
-    return sessionChoice?.value ?? acceptChoice?.value;
+    return (
+      options.find((option) => isPersistentApprovalOption(option, persist))?.value ??
+      acceptChoice?.value
+    );
   }
-  return acceptChoice?.value ?? sessionChoice?.value;
+  return acceptChoice?.value;
 }
 
 function readPersistFieldValue(
@@ -844,16 +829,6 @@ function readPersistFieldValue(
   return undefined;
 }
 
-function readFallbackFieldValue(
-  property: ApprovalPropertyContext,
-  outcome: AppServerApprovalOutcome,
-): JsonValue | undefined {
-  if (outcome === "approved-once" && isPersistField(property)) {
-    return undefined;
-  }
-  return property.schema.default as JsonValue | undefined;
-}
-
 function isApprovalField(property: ApprovalPropertyContext): boolean {
   const haystack = propertyText(property).toLowerCase();
   return /\b(approve|approval|allow|accept|decision)\b/.test(haystack);
@@ -867,8 +842,8 @@ function isPersistField(property: ApprovalPropertyContext): boolean {
 function propertyText(property: ApprovalPropertyContext): string {
   return [
     property.name,
-    readNonBlankStringField(property.schema, "title"),
-    readNonBlankStringField(property.schema, "description"),
+    readNonBlankString(property.schema.title),
+    readNonBlankString(property.schema.description),
   ]
     .filter(Boolean)
     .join(" ");
@@ -938,11 +913,11 @@ function readEnumOptions(schema: JsonObject): Array<{ value: string; label: stri
     return schema.oneOf
       .map((entry) => {
         const option = isJsonObject(entry) ? entry : undefined;
-        const value = readNonBlankStringField(option, "const");
+        const value = readNonBlankString(option?.const);
         if (!value) {
           return undefined;
         }
-        return { value, label: readNonBlankStringField(option, "title") ?? value };
+        return { value, label: readNonBlankString(option?.title) ?? value };
       })
       .filter((entry): entry is { value: string; label: string } => Boolean(entry));
   }
@@ -954,21 +929,21 @@ function isPositiveApprovalOption(option: { value: string; label: string }): boo
   return /\b(allow|approve|accept|yes|continue|proceed|true)\b/.test(haystack);
 }
 
-function isSessionApprovalOption(option: { value: string; label: string }): boolean {
+function isPersistentApprovalOption(
+  option: { value: string; label: string },
+  persist: "always" | "session" | undefined,
+): boolean {
   const haystack = `${option.value} ${option.label}`.toLowerCase();
-  return (
-    /\b(session|always|persistent)\b/.test(haystack) && /\b(allow|approve|accept)\b/.test(haystack)
-  );
-}
-
-function readNonBlankStringField(record: JsonObject | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
+  const scopeMatches =
+    persist === "always"
+      ? /\b(always|persistent)\b|\bdon't ask me again\b/.test(haystack)
+      : persist === "session" && /\bsession\b/.test(haystack);
+  return scopeMatches && /\b(allow|approve|accept)\b/.test(haystack);
 }
 
 function readFirstString(record: JsonObject | undefined, keys: string[]): string | undefined {
   for (const key of keys) {
-    const value = readNonBlankStringField(record, key);
+    const value = readNonBlankString(record?.[key]);
     if (value) {
       return value;
     }

@@ -1,6 +1,7 @@
 // Covers runtime schema defaults and generated runtime config behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
@@ -10,6 +11,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import type { PluginEntryConfig } from "./types.plugins.js";
 
 const mockLoadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
 const mockReadConfigFileSnapshot = vi.hoisted(() =>
@@ -22,7 +24,7 @@ let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").read
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
 
 function explicitMainRoster(): OpenClawConfig {
-  return { agents: { list: [{ id: "main" }] } };
+  return { agents: { entries: { main: {} } } };
 }
 
 vi.mock("./config.js", () => {
@@ -96,75 +98,24 @@ function makeManifestRegistry() {
           },
         },
       },
-      {
-        id: "telegram",
-        name: "Telegram",
-        description: "Telegram plugin",
-        origin: "bundled",
-        channels: ["telegram"],
-        channelCatalogMeta: {
-          id: "telegram",
-          label: "Telegram",
-          blurb: "Telegram channel",
-        },
+      ...[
+        { id: "telegram", label: "Telegram", origin: "bundled", field: "botToken" },
+        { id: "slack", label: "Slack", origin: "bundled", field: "botToken" },
+        { id: "matrix", label: "Matrix", origin: "workspace", field: "homeserver" },
+      ].map(({ id, label, origin, field }) => ({
+        id,
+        name: label,
+        description: `${label} plugin`,
+        origin,
+        channels: [id],
+        channelCatalogMeta: { id, label, blurb: `${label} channel` },
         channelConfigs: {
-          telegram: {
-            schema: {
-              type: "object",
-              properties: {
-                botToken: { type: "string" },
-              },
-            },
+          [id]: {
+            schema: { type: "object", properties: { [field]: { type: "string" } } },
             uiHints: {},
           },
         },
-      },
-      {
-        id: "slack",
-        name: "Slack",
-        description: "Slack plugin",
-        origin: "bundled",
-        channels: ["slack"],
-        channelCatalogMeta: {
-          id: "slack",
-          label: "Slack",
-          blurb: "Slack channel",
-        },
-        channelConfigs: {
-          slack: {
-            schema: {
-              type: "object",
-              properties: {
-                botToken: { type: "string" },
-              },
-            },
-            uiHints: {},
-          },
-        },
-      },
-      {
-        id: "matrix",
-        name: "Matrix",
-        description: "Matrix plugin",
-        origin: "workspace",
-        channels: ["matrix"],
-        channelCatalogMeta: {
-          id: "matrix",
-          label: "Matrix",
-          blurb: "Matrix channel",
-        },
-        channelConfigs: {
-          matrix: {
-            schema: {
-              type: "object",
-              properties: {
-                homeserver: { type: "string" },
-              },
-            },
-            uiHints: {},
-          },
-        },
-      },
+      })),
     ],
   };
 }
@@ -306,6 +257,134 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(channelProps).toHaveProperty("telegram");
     expect(channelProps).toHaveProperty("matrix");
   });
+
+  it("does not execute plugin setup probes while selecting channel schemas", async () => {
+    const setupRegistry = await import("../plugins/setup-registry.js");
+    const probes = vi
+      .spyOn(setupRegistry, "resolvePluginSetupAutoEnableReasons")
+      .mockReturnValue([]);
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      plugins: { entries: { demo: { enabled: true, config: { mode: "synthetic" } } } },
+    });
+    try {
+      loadGatewayRuntimeConfigSchema();
+      expect(probes).not.toHaveBeenCalled();
+    } finally {
+      probes.mockRestore();
+    }
+  });
+
+  const ownerCases: Array<{
+    name: string;
+    entries: Record<string, PluginEntryConfig>;
+    allow?: string[];
+    deny: string[];
+    expected: "plus" | "core" | "first";
+    coreOrigin?: PluginOrigin;
+    plusOrigin?: PluginOrigin;
+  }> = [
+    { name: "preferred owner", entries: { plus: { enabled: true } }, deny: [], expected: "plus" },
+    {
+      name: "disabled replacement",
+      entries: { plus: { enabled: false }, core: { enabled: true } },
+      deny: [],
+      expected: "core",
+    },
+    {
+      name: "denied replacement",
+      entries: { plus: { enabled: true }, core: { enabled: true } },
+      deny: ["plus"],
+      expected: "core",
+    },
+    {
+      name: "explicit dual selection",
+      entries: { plus: { enabled: true }, core: { enabled: true } },
+      deny: [],
+      expected: "first",
+    },
+    {
+      name: "explicit dual selection after allowlist materialization",
+      entries: { plus: { enabled: true }, core: { enabled: true } },
+      allow: ["core"],
+      deny: [],
+      expected: "first",
+    },
+    {
+      name: "untrusted material config",
+      entries: { plus: { config: {} }, core: { enabled: true } },
+      allow: ["core"],
+      deny: [],
+      expected: "core",
+    },
+    {
+      name: "closer-origin owner",
+      entries: { plus: { enabled: true }, core: { enabled: true } },
+      deny: [],
+      coreOrigin: "workspace",
+      expected: "plus",
+    },
+    {
+      name: "ineligible workspace replacement",
+      entries: { core: { enabled: true } },
+      deny: [],
+      plusOrigin: "workspace",
+      expected: "core",
+    },
+  ];
+  it.each(
+    ownerCases.flatMap((scenario) =>
+      (["plus", "core"] as const).map((first) => ({ scenario, first })),
+    ),
+  )(
+    "publishes the $scenario.name schema and sensitive hints with $first first",
+    ({
+      scenario: { entries, allow, deny, expected, coreOrigin = "config", plusOrigin = "config" },
+      first,
+    }) => {
+      mockLoadConfig.mockReturnValue({
+        ...explicitMainRoster(),
+        plugins: { entries, allow, deny },
+        channels: { proofchat: { address: "local" } },
+      });
+      const order = first === "plus" ? ["plus", "core"] : ["core", "plus"];
+      mockLoadPluginManifestRegistry.mockReturnValue({
+        diagnostics: [],
+        plugins: order.map((id) => ({
+          id,
+          origin: id === "core" ? coreOrigin : plusOrigin,
+          channels: ["proofchat"],
+          providers: [],
+          cliBackends: [],
+          channelConfigs: {
+            proofchat: {
+              label: id,
+              ...(id === "plus" ? { preferOver: ["core"] } : {}),
+              schema: {
+                type: "object",
+                properties: { [id]: { type: "string" } },
+                additionalProperties: false,
+              },
+              uiHints: { [id]: { sensitive: true } },
+            },
+          },
+        })),
+      });
+      const owner = expected === "first" ? first : expected;
+      const result = loadGatewayRuntimeConfigSchema();
+      expect(result.uiHints["channels.proofchat"]).toMatchObject({ label: owner });
+      expect(result.uiHints[`channels.proofchat.${owner}`]?.sensitive).toBe(true);
+      expect(result.schema).toMatchObject({
+        properties: {
+          channels: {
+            properties: {
+              proofchat: { properties: { [owner]: { type: "string" } } },
+            },
+          },
+        },
+      });
+    },
+  );
 
   it("projects strict heartbeat visibility for external channels and their accounts", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({

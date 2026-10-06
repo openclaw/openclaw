@@ -139,8 +139,6 @@ describe("shared OpenClawKit Periphery workflow", () => {
     expect(workflow.jobs?.["scan-ios"]?.name).toBe("Scan shared kit from iOS");
     expect(workflow.jobs?.["scan-macos"]?.name).toBe("Scan shared kit from macOS");
     expect(workflow.jobs?.intersect?.needs).toEqual(["scope", "scan-ios", "scan-macos"]);
-    expect(workflow.jobs?.["scan-ios"]?.["runs-on"]).toContain("github.run_attempt > 1");
-    expect(workflow.jobs?.["scan-macos"]?.["runs-on"]).toContain("github.run_attempt > 1");
 
     const iosUpload = workflow.jobs?.["scan-ios"]?.steps?.find(
       (step) => step.name === "Upload iOS consumer report",
@@ -188,7 +186,7 @@ describe("shared OpenClawKit Periphery workflow", () => {
       const scan = workflow.jobs?.[jobName]?.steps?.find((step) => step.name === "Scan shared kit");
       expect(scan?.run).toContain("--report-include '../shared/OpenClawKit/Sources/**'");
       expect(scan?.run).toContain(
-        "--retain-files '../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift'",
+        "--retain-files '**/GenerateGatewayProtocol/GatewayModels.swift'",
       );
       expect(scan?.run).not.toContain("--strict");
     }

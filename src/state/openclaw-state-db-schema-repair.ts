@@ -2,26 +2,26 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
+import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import {
   canRepairLegacyAuditEventsSchema,
   hasCanonicalAuditEventsSchema,
 } from "./openclaw-state-db-audit-migration.js";
 import {
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
-  type OpenClawStateDatabaseOptions,
   type OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
-import { resolveDatabasePath } from "./openclaw-state-db-maintenance.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import {
+  ensureColumn,
   tableExists,
   tableHasColumn,
   tablePrimaryKeyColumns,
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
+import { readStateSchemaMigrationVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
   hasRecognizedRetiredCommitmentsSchema,
@@ -55,20 +55,13 @@ export function migrateWorkerPlacementExecutionModeSchema(
     "terminal_reason TEXT",
     "terminal_at_ms INTEGER",
   ]) {
-    const column = definition.split(" ", 1)[0]!;
-    if (!tableHasColumn(db, "worker_session_placements", column)) {
-      db.exec(`ALTER TABLE worker_session_placements ADD COLUMN ${definition};`);
-    }
+    ensureColumn(db, "worker_session_placements", definition);
   }
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS worker_session_placements (",
+  const placementSchema = extractSqliteTableSchema(
+    OPENCLAW_STATE_SCHEMA_SQL,
+    "worker_session_placements",
+    { errorMessage: "Canonical worker placement schema block is missing" },
   );
-  const endMarker = "\n) STRICT;";
-  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-  if (start < 0 || end < 0) {
-    throw new Error("Canonical worker placement schema block is missing");
-  }
-  const placementSchema = OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length);
   const canonical = openNodeSqliteDatabase(":memory:");
   let canonicalColumns: string[];
   try {
@@ -167,6 +160,16 @@ export function migrateAgentDatabaseRelativePaths(
   const hasPath = db.prepare(
     "SELECT 1 FROM agent_databases WHERE agent_id = ? AND path = ? LIMIT 1",
   );
+  const retainNewerFacts = db.prepare(`
+    UPDATE agent_databases AS canonical
+       SET schema_version = source.schema_version,
+           last_seen_at = source.last_seen_at,
+           size_bytes = source.size_bytes
+      FROM agent_databases AS source
+     WHERE canonical.agent_id = ? AND canonical.path = ?
+       AND source.agent_id = canonical.agent_id AND source.path = ?
+       AND source.last_seen_at > canonical.last_seen_at
+  `);
   let relativized = 0;
   const reanchored: string[] = [];
   const deleted: string[] = [];
@@ -181,8 +184,15 @@ export function migrateAgentDatabaseRelativePaths(
     }
     const storedPath = resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath);
     if (!path.isAbsolute(storedPath)) {
-      updatePath.run(storedPath, agentId, registeredPath);
-      relativized += 1;
+      if (hasPath.get(agentId, storedPath)) {
+        // Namespace aliases can converge before the foreign-path repair pass.
+        retainNewerFacts.run(agentId, storedPath, registeredPath);
+        deletePath.run(agentId, registeredPath);
+        deleted.push(registeredPath);
+      } else {
+        updatePath.run(storedPath, agentId, registeredPath);
+        relativized += 1;
+      }
     }
   }
   const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
@@ -231,57 +241,16 @@ export function migrateAgentDatabaseRelativePaths(
   };
 }
 
-function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
+export function assertCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync, pathname: string): void {
   if (!tableExists(db, "agent_databases")) {
-    return true;
+    return;
   }
   const primaryKey = tablePrimaryKeyColumns(db, "agent_databases");
-  return primaryKey.length === 2 && primaryKey[0] === "agent_id" && primaryKey[1] === "path";
-}
-
-function canRepairAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
-  if (!tableExists(db, "agent_databases")) {
-    return false;
-  }
-  const requiredColumns = ["agent_id", "path", "schema_version", "last_seen_at", "size_bytes"];
-  return requiredColumns.every((column) => tableHasColumn(db, "agent_databases", column));
-}
-
-export function repairAgentDatabasesCompositePrimaryKey(db: DatabaseSync): boolean {
-  if (hasCanonicalAgentDatabasesPrimaryKey(db) || !canRepairAgentDatabasesPrimaryKey(db)) {
-    return false;
-  }
-  // Released DBs may have PRIMARY KEY(agent_id); current registration upserts by
-  // (agent_id,path) so explicit relocated agent DBs do not overwrite each other.
-  db.exec(`
-    DROP TABLE IF EXISTS agent_databases_migration_new;
-    CREATE TABLE agent_databases_migration_new (
-      agent_id TEXT NOT NULL,
-      path TEXT NOT NULL,
-      schema_version INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL,
-      size_bytes INTEGER,
-      PRIMARY KEY (agent_id, path)
+  if (primaryKey.length !== 2 || primaryKey[0] !== "agent_id" || primaryKey[1] !== "path") {
+    throw new SqliteSchemaMismatchError(
+      `OpenClaw state database ${pathname} has an unsupported agent database registry schema. Upgrades from pre-July-2026 state are no longer migrated; restore a backup produced by a July 2026 or newer release before retrying.`,
     );
-    INSERT OR REPLACE INTO agent_databases_migration_new (
-      agent_id,
-      path,
-      schema_version,
-      last_seen_at,
-      size_bytes
-    )
-    SELECT
-      agent_id,
-      path,
-      schema_version,
-      last_seen_at,
-      size_bytes
-    FROM agent_databases
-    WHERE agent_id IS NOT NULL AND path IS NOT NULL;
-    DROP TABLE agent_databases;
-    ALTER TABLE agent_databases_migration_new RENAME TO agent_databases;
-  `);
-  return true;
+  }
 }
 
 export function repairLegacyGatewayRestartHandoffsForStrictMigration(db: DatabaseSync): void {
@@ -311,38 +280,14 @@ export function repairLegacyGatewayRestartHandoffsForStrictMigration(db: Databas
 
 export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
   operatorApprovalMigration.assertCanonicalOperatorApprovalKinds(db, pathname);
-  if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
-    if (canRepairAgentDatabasesPrimaryKey(db)) {
-      throw new OpenClawStateDatabaseSchemaMigrationRequiredError(
-        "agent-databases-composite-primary-key",
-        pathname,
-      );
-    }
-    throw new Error(
-      `OpenClaw state database ${pathname} has a noncanonical agent database registry schema that cannot be repaired automatically; restore the canonical agent_databases shape before retrying.`,
-    );
-  }
+  assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
   if (!hasCanonicalAuditEventsSchema(db)) {
     if (canRepairLegacyAuditEventsSchema(db)) {
       throw new OpenClawStateDatabaseSchemaMigrationRequiredError("audit-events-v2", pathname);
     }
-    throw new Error(
+    throw new SqliteSchemaMismatchError(
       `OpenClaw state database ${pathname} has a noncanonical audit event schema that cannot be repaired automatically; restore the canonical audit_events shape before retrying.`,
     );
-  }
-}
-export function detectOpenClawStateDatabaseSchemaMigrations(
-  options: OpenClawStateDatabaseOptions = {},
-): OpenClawStateDatabaseSchemaMigration[] {
-  const pathname = resolveDatabasePath(options);
-  if (!existsSync(pathname)) {
-    return [];
-  }
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
-  try {
-    return detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname);
-  } finally {
-    db.close();
   }
 }
 
@@ -356,8 +301,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   db: DatabaseSync,
   pathname: string,
 ): OpenClawStateDatabaseSchemaMigration[] {
+  assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
-  const userVersion = readSqliteUserVersion(db);
+  const userVersion = readStateSchemaMigrationVersion(db);
   if (
     userVersion < RETIRED_COMMITMENTS_SCHEMA_VERSION &&
     tableExists(db, "commitments") &&
@@ -409,8 +355,28 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   ) {
     migrations.push({ kind: "conversation-binding-targets-v15", path: pathname });
   }
-  if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
-    migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
+  if (
+    userVersion < 16 &&
+    (tableHasColumn(db, "skill_workshop_proposals", "workspace_dir") ||
+      tableHasColumn(db, "skill_workshop_proposals", "claim_released_time") ||
+      tableHasColumn(db, "skill_workshop_collection_reviews", "workspace_dir"))
+  ) {
+    migrations.push({ kind: "skill-workshop-directory-ownership-v16", path: pathname });
+  }
+  if (
+    userVersion < 17 &&
+    tableExists(db, "worker_environments") &&
+    !tableHasColumn(db, "worker_environments", "preparation_consumed_at_ms")
+  ) {
+    migrations.push({ kind: "prepared-worker-ownership-v17", path: pathname });
+  }
+  if (
+    userVersion < 18 &&
+    ["github_publication_session_lifecycles", "github_repository_publication_requests"].some(
+      (table) => tableExists(db, table) && !tableHasColumn(db, table, "requester_authority_json"),
+    )
+  ) {
+    migrations.push({ kind: "github-publication-requester-authority-v18", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

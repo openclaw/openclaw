@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import type { Insertable } from "kysely";
@@ -8,13 +7,10 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { parseSkillProposalRecord } from "./store-record.js";
-import {
-  openSkillWorkshopStore,
-  type SkillProposalRow,
-  type SkillWorkshopDatabase,
-  type SkillWorkshopStoreOptions,
-} from "./store-sqlite-schema.js";
+import type { SkillProposalRow, SkillWorkshopDatabase } from "./store-sqlite-schema.js";
 import type { SkillProposalRecord } from "./types.js";
+
+export type StoredSkillProposal = { record: SkillProposalRecord; row: SkillProposalRow };
 
 export function parseJson(value: string | null): unknown {
   return value === null ? undefined : safeParseJson(value);
@@ -40,13 +36,13 @@ export function parseSkillProposalRow(row: SkillProposalRow): SkillProposalRecor
   return record;
 }
 
-export function readStoredProposal(
+export function readStoredProposalInDatabase(
+  database: DatabaseSync,
   proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-): { record: SkillProposalRecord; row: SkillProposalRow } | null {
-  const { database, kysely } = openSkillWorkshopStore(options);
+): StoredSkillProposal | null {
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(
-    database.db,
+    database,
     kysely.selectFrom("skill_workshop_proposals").selectAll().where("proposal_id", "=", proposalId),
   );
   if (!row) {
@@ -59,15 +55,12 @@ export function readStoredProposal(
 function proposalRowValues(params: {
   record: SkillProposalRecord;
   ownerAgentId: string | null;
-  workspaceDir: string;
-  claimReleasedTime: number | null;
 }): Insertable<SkillWorkshopDatabase["skill_workshop_proposals"]> {
   const { record } = params;
   return {
     proposal_id: record.id,
     record_json: JSON.stringify(record),
     owner_agent_id: params.ownerAgentId,
-    workspace_dir: path.resolve(params.workspaceDir),
     kind: record.kind,
     status: record.status,
     created_at: record.createdAt,
@@ -82,20 +75,17 @@ function proposalRowValues(params: {
     quarantined_at: record.quarantinedAt ?? null,
     stale_at: record.staleAt ?? null,
     status_reason: record.statusReason ?? null,
-    claim_released_time: params.claimReleasedTime,
   };
 }
 
 export function insertProposal(
   database: DatabaseSync,
-  params: { record: SkillProposalRecord; ownerAgentId: string | null; workspaceDir: string },
+  params: { record: SkillProposalRecord; ownerAgentId: string | null },
 ): void {
   const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   executeSqliteQuerySync(
     database,
-    kysely
-      .insertInto("skill_workshop_proposals")
-      .values(proposalRowValues({ ...params, claimReleasedTime: null })),
+    kysely.insertInto("skill_workshop_proposals").values(proposalRowValues(params)),
   );
 }
 
@@ -103,13 +93,12 @@ export function updateProposal(
   database: DatabaseSync,
   current: SkillProposalRow,
   record: SkillProposalRecord,
+  ownerAgentId?: string,
 ): void {
   const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const { proposal_id: _proposalId, ...values } = proposalRowValues({
     record,
-    ownerAgentId: current.owner_agent_id,
-    workspaceDir: current.workspace_dir,
-    claimReleasedTime: current.claim_released_time,
+    ownerAgentId: ownerAgentId ?? current.owner_agent_id,
   });
   executeSqliteQuerySync(
     database,

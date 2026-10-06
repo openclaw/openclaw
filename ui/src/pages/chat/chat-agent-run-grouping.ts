@@ -1,17 +1,25 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveAssistantMessagePhase } from "../../../../src/shared/chat-message-content.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import type {
-  ActivityRunRenderItem,
-  CompletedTurnRenderItem,
-  StreamRunRenderItem,
-  WorkGroupRenderItem,
+import {
+  assistantMessageIsInterrupted,
+  resolveAssistantReplyPhase,
+} from "./chat-assistant-reply.ts";
+import {
+  groupEndsRunInFailure,
+  joinActivityRuns,
+  type ActivityRunRenderItem,
+  type CompletedTurnRenderItem,
+  type StreamRunRenderItem,
+  type WorkGroupRenderItem,
 } from "./chat-thread-grouping.ts";
-import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
-import { assistantGroupIsForwardedBoundary, chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
-import { readLiveTerminalDisposition } from "./terminal-message-identity.ts";
+import {
+  chatItemStartsDisplayTurn,
+  chatItemStartsUserTurn,
+  hasForwardedSource,
+} from "./chat-turn-boundary.ts";
+import { extractMessageMediaText } from "./components/chat-message-media.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -33,7 +41,10 @@ export type AgentRunFrameRenderItem = {
 
 type AgentRunFrameInput = CompletedTurnRenderItem | ActivityRunRenderItem;
 
-function itemGroups(item: AgentRunFramePart): MessageGroup[] {
+export function chatItemGroups(item: AgentRunFrameInput | AgentRunFrameRenderItem): MessageGroup[] {
+  if (item.kind === "agent-run-frame") {
+    return item.parts.flatMap(chatItemGroups);
+  }
   if (item.kind === "group") {
     return [item];
   }
@@ -44,30 +55,30 @@ function itemGroups(item: AgentRunFramePart): MessageGroup[] {
 }
 
 function itemRunId(item: AgentRunFramePart): string | undefined {
+  if (item.kind === "work-group") {
+    if (item.replyRunId) {
+      return item.replyRunId;
+    }
+    // Matching execution IDs cannot erase a forwarded presentation boundary.
+    if (item.groups.some(hasForwardedSource)) {
+      return undefined;
+    }
+  }
   if (item.kind === "stream-run") {
     return item.runId;
   }
-  const groups = itemGroups(item);
+  const groups = chatItemGroups(item);
   const runId = groups[0]?.runId;
   return runId && groups.every((group) => group.runId === runId) ? runId : undefined;
 }
 
-function messageIsInterrupted(message: unknown): boolean {
-  const record = asRecord(message);
-  const stopReason = typeof record?.stopReason === "string" ? record.stopReason.toLowerCase() : "";
-  return (
-    readLiveTerminalDisposition(message) !== null ||
-    asRecord(record?.openclawAbort)?.aborted === true ||
-    ["aborted", "cancelled", "canceled", "timeout", "timed_out"].includes(stopReason)
-  );
-}
-
 function itemFailsFrame(item: AgentRunFramePart): boolean {
-  return itemGroups(item).some((group) =>
-    group.messages.some(
-      ({ message }) => messageIsInterrupted(message) || asRecord(message)?.stopReason === "error",
-    ),
-  );
+  // A later reply owns completed work; recovered failures remain in the log,
+  // while the reply itself determines its frame’s terminal outcome.
+  if (item.kind === "work-group" && item.replyRunId) {
+    return false;
+  }
+  return chatItemGroups(item).some(groupEndsRunInFailure);
 }
 
 function itemIsActive(item: AgentRunFramePart): boolean {
@@ -76,33 +87,17 @@ function itemIsActive(item: AgentRunFramePart): boolean {
       (part) => part.kind === "reading-indicator" || (part.kind === "stream" && part.isStreaming),
     );
   }
-  return itemGroups(item).some((group) => group.isStreaming);
-}
-
-function itemBoundaryId(item: AgentRunFramePart): string | undefined {
-  return item.kind === "stream-run" ? item.boundaryId : undefined;
+  return chatItemGroups(item).some((group) => group.isStreaming);
 }
 
 function groupBoundaryId(group: MessageGroup): string | undefined {
   const firstMessage = group.messages[0]?.message;
   const identity = readSessionMessageIdentity(firstMessage);
-  if (!chatItemStartsUserTurn(group)) {
-    return undefined;
-  }
   const runId = identity?.runId;
   if (runId) {
     return `send:${runId}`;
   }
   return identity?.id ? `entry:${identity.id}` : undefined;
-}
-
-function isExternalBoundary(group: MessageGroup): boolean {
-  return group.role === "user" || assistantGroupIsForwardedBoundary(group);
-}
-
-function itemBoundaryGroup(item: AgentRunFramePart): MessageGroup | undefined {
-  const first = itemGroups(item)[0];
-  return first && chatItemStartsUserTurn(first) ? first : undefined;
 }
 
 function frameKey(runId: string, boundaryId: string, segmentId: string | undefined): string {
@@ -121,23 +116,17 @@ function frameSegmentId(
   );
 }
 
-export function agentRunFrameGroups(frame: AgentRunFrameRenderItem): MessageGroup[] {
-  return frame.parts.flatMap(itemGroups);
-}
-
 function messageCanOwnCompletedFrame(message: unknown, explicitOnly: boolean): boolean {
   const record = asRecord(message);
-  const phase = resolveAssistantMessagePhase(message);
+  const phase = resolveAssistantReplyPhase(message);
   const stopReason = record?.stopReason;
   const metadata = asRecord(record?.["__openclaw"]);
   if (
-    !extractTextCached(message)?.trim() ||
-    isKeyedAssistantStreamFallbackMessage(message) ||
-    messageIsInterrupted(message) ||
+    !(extractTextCached(message)?.trim() || extractMessageMediaText(message)) ||
+    assistantMessageIsInterrupted(message) ||
     phase === "commentary" ||
     stopReason === "toolUse" ||
     stopReason === "error" ||
-    metadata?.runtimeActivityKind === "context_compaction" ||
     (metadata?.mirrorOrigin === "codex-app-server" && metadata.runTerminal !== true)
   ) {
     return false;
@@ -149,7 +138,7 @@ function completedFrameActionOwner(
   parts: AgentRunFramePart[],
 ): MessageGroup["messages"][number] | null {
   const messages = parts
-    .flatMap(itemGroups)
+    .flatMap(chatItemGroups)
     .flatMap((group) => (group.role === "assistant" ? group.messages : []));
   const explicit = messages.findLast(({ message }) => messageCanOwnCompletedFrame(message, true));
   if (explicit) {
@@ -159,12 +148,8 @@ function completedFrameActionOwner(
   if (lastPart?.kind !== "group" || lastPart.role !== "assistant") {
     return null;
   }
-  const lastMessage = lastPart.messages.at(-1);
-  return lastMessage
-    ? messageCanOwnCompletedFrame(lastMessage.message, false)
-      ? lastMessage
-      : null
-    : null;
+  const last = lastPart.messages.at(-1);
+  return last && messageCanOwnCompletedFrame(last.message, false) ? last : null;
 }
 
 export function agentRunFrameActiveStatusParts(
@@ -203,29 +188,81 @@ export function coalesceAgentRunFrames(
   }
   const result: Array<AgentRunFrameInput | AgentRunFrameRenderItem> = [];
   let boundaryId: string | undefined;
+  let presentationBoundaryKey: string | undefined;
+  const emittedFrameKeys = new Set<string>();
   let segmentId: string | undefined;
   let runId: string | undefined;
   let parts: AgentRunFramePart[] = [];
+  // A run that resumes a handoff continues the open frame: one answer, one
+  // footer. The frame keeps the identity it opened with, so resuming reuses its
+  // row; `resuming` lets exactly the next run in.
+  let opened: { runId: string; boundaryId: string | undefined } | undefined;
+  let resuming = false;
+  // No row marks a handoff, so operations on either side of one are one log.
+  let afterHandoff = false;
+  const addPart = (item: AgentRunFramePart) => {
+    const last = parts.at(-1);
+    const joined = afterHandoff && last ? joinActivityRuns(last, item) : undefined;
+    afterHandoff = false;
+    if (joined) {
+      parts[parts.length - 1] = joined;
+    } else {
+      parts.push(item);
+    }
+  };
   const flush = (failed = false) => {
-    if (!runId || !boundaryId || parts.length === 0) {
+    const frameRunId = opened?.runId ?? runId;
+    const openedBoundaryId = opened ? opened.boundaryId : boundaryId;
+    opened = undefined;
+    resuming = false;
+    afterHandoff = false;
+    if (!runId || !frameRunId || parts.length === 0) {
       return;
     }
+    const active = parts.some(itemIsActive);
+    const actionOwner = active || failed ? null : completedFrameActionOwner(parts);
+    if (!openedBoundaryId && !active && !actionOwner) {
+      result.push(...parts);
+      parts = [];
+      runId = undefined;
+      return;
+    }
+    // A history window can start inside a known run. This frame-local identity
+    // supplies no prompt/recipient facts and must not leak into the next run.
+    const frameBoundaryId = openedBoundaryId ?? `send:${frameRunId}`;
+    const semanticKey = frameKey(frameRunId, frameBoundaryId, frameSegmentId(parts, segmentId));
+    // A peer input can split one causal run into separate presentation rows.
+    // Reopening it must not reuse the earlier row’s DOM or measured height.
+    const key = emittedFrameKeys.has(semanticKey)
+      ? frameKey(
+          frameRunId,
+          frameBoundaryId,
+          JSON.stringify([presentationBoundaryKey, parts[0]!.key]),
+        )
+      : semanticKey;
+    emittedFrameKeys.add(semanticKey);
     result.push({
       kind: "agent-run-frame",
-      key: frameKey(runId, boundaryId, frameSegmentId(parts, segmentId)),
+      key,
       runId,
-      boundaryId,
+      boundaryId: frameBoundaryId,
       outcome: failed
         ? { kind: "failed" }
-        : parts.some(itemIsActive)
+        : active
           ? { kind: "active" }
-          : { kind: "completed", actionOwner: completedFrameActionOwner(parts) },
+          : { kind: "completed", actionOwner },
       parts,
     });
     parts = [];
     runId = undefined;
   };
   for (const item of items) {
+    if (item.kind === "notice" && item.handoffBoundary && runId && parts.length > 0) {
+      opened ??= { runId, boundaryId };
+      resuming = true;
+      afterHandoff = true;
+      continue;
+    }
     if (!isAgentRunFramePart(item)) {
       flush();
       result.push(item);
@@ -233,48 +270,75 @@ export function coalesceAgentRunFrames(
       segmentId = boundaryId ? undefined : item.key;
       continue;
     }
-    const candidate = item;
-    const boundaryGroup = itemBoundaryGroup(candidate);
-    if (boundaryGroup) {
+    const boundaryGroup = chatItemGroups(item)[0];
+    if (boundaryGroup && chatItemStartsDisplayTurn(boundaryGroup)) {
       flush();
+      presentationBoundaryKey = boundaryGroup.key;
       segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
-      if (isExternalBoundary(boundaryGroup) || !nextBoundaryId) {
+      if (boundaryGroup.role === "user" || hasForwardedSource(boundaryGroup) || !nextBoundaryId) {
         result.push(item);
         boundaryId = nextBoundaryId;
         continue;
       }
       boundaryId = nextBoundaryId;
     }
-    const candidateBoundaryId = itemBoundaryId(candidate);
-    if (candidateBoundaryId && candidateBoundaryId !== boundaryId) {
-      flush();
-      boundaryId = candidateBoundaryId;
-    }
-    const candidateRunId = itemRunId(candidate);
-    if (boundaryId && candidateRunId && itemFailsFrame(candidate)) {
-      if (runId && runId !== candidateRunId) {
-        flush();
-      }
-      runId = candidateRunId;
-      parts.push(candidate);
-      flush(true);
-      boundaryId = undefined;
-      segmentId = item.key;
+    const candidateBoundaryId = item.kind === "stream-run" ? item.boundaryId : undefined;
+    const candidateRunId = itemRunId(item);
+    if (resuming && !candidateRunId && item.kind === "stream-run" && !candidateBoundaryId) {
+      // The resumed run can be working before the pane learns its run id. Its
+      // status belongs here already, so the block does not split and rejoin.
+      addPart(item);
       continue;
     }
-    if (!boundaryId || !candidateRunId) {
+    if (resuming && candidateRunId && candidateRunId !== runId) {
+      // Rows the handing-off run recorded after its handoff call still belong to
+      // it. Once the next run arrives, later parts compare against that run.
+      boundaryId = candidateBoundaryId;
+      runId = candidateRunId;
+      resuming = false;
+    }
+    if (candidateBoundaryId) {
+      const effectiveBoundaryId = boundaryId ?? (runId ? `send:${runId}` : undefined);
+      if (candidateBoundaryId !== effectiveBoundaryId) {
+        flush();
+      }
+      boundaryId = candidateBoundaryId;
+    }
+    if (item.kind === "activity-run" && !candidateRunId) {
+      flush();
+      result.push(item);
+      // A mixed-run log owns no frame, but does not end its surrounding turn.
+      // Retain the latest projected boundary for subsequent replies and status.
+      const lastBoundary = item.groups.findLast(chatItemStartsUserTurn);
+      if (lastBoundary) {
+        boundaryId = groupBoundaryId(lastBoundary);
+        presentationBoundaryKey = lastBoundary.key;
+        segmentId = undefined;
+      } else if (item.groups.some((group) => group.runId === undefined)) {
+        boundaryId = undefined;
+        segmentId = item.key;
+      }
+      continue;
+    }
+    if (!candidateRunId) {
       flush();
       result.push(item);
       boundaryId = undefined;
       segmentId = item.key;
       continue;
     }
+    const failed = itemFailsFrame(item);
     if (runId && runId !== candidateRunId) {
       flush();
     }
     runId = candidateRunId;
-    parts.push(candidate);
+    addPart(item);
+    if (failed) {
+      flush(true);
+      boundaryId = undefined;
+      segmentId = item.key;
+    }
   }
   flush();
   return result;

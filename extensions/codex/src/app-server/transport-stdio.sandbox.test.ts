@@ -6,6 +6,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { closeCodexAppServerTransportAndWait } from "./transport.js";
@@ -171,7 +172,7 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
       const lines = createInterface({ input: child.stdout });
       context.onTestFinished(async () => {
         lines.close();
-        expect(await closeCodexAppServerTransportAndWait(child)).toBe(true);
+        expect(await closeCodexAppServerTransportAndWait(child)).toMatchObject({ exited: true });
       });
       const pending = new Map<
         number,
@@ -267,6 +268,7 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
       });
       const params = createCodexUserInputTestParams();
       params.prompt = "Run the deterministic sandbox write probe.";
+      params.hostCapabilities = createCodexTestHostCapabilities();
       const turn = buildTurnStartParams(params, {
         threadId: thread.thread.id,
         cwd,

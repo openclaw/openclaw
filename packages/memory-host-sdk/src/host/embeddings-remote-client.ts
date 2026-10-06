@@ -1,4 +1,3 @@
-// Memory Host SDK module implements embeddings remote client behavior.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
@@ -22,15 +21,14 @@ function resolveOpenClawAttributionHeaders(): Record<string, string> {
 }
 
 function normalizeEmbeddingDestinationKey(baseUrl: string): string | undefined {
-  try {
-    const parsed = new URL(baseUrl);
-    const hostname = parsed.hostname.toLowerCase();
-    const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-    const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
-    return `${parsed.protocol}//${hostname}:${port}${pathname}${parsed.search}`;
-  } catch {
+  const parsed = URL.parse(baseUrl);
+  if (!parsed) {
     return undefined;
   }
+  const hostname = parsed.hostname.toLowerCase();
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
+  return `${parsed.protocol}//${hostname}:${port}${pathname}${parsed.search}`;
 }
 
 /** Whether provider-owned embedding credentials belong to the selected destination. */
@@ -73,19 +71,16 @@ function resolveEmbeddingHeaders(
 
 /** Detect the native OpenAI embeddings API route that accepts attribution headers. */
 function isNativeOpenAIEmbeddingRoute(provider: string, baseUrl: string): boolean {
-  if (provider !== "openai") {
-    return false;
-  }
-  try {
-    return new URL(baseUrl).hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com";
-  } catch {
-    return false;
-  }
+  return (
+    provider === "openai" &&
+    URL.parse(baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com"
+  );
 }
 
 /** Resolve base URL, bearer headers, header overrides, and SSRF policy for remote embeddings. */
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
+  capability?: string;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
 }): Promise<{ baseUrl: string; headers: Record<string, string>; ssrfPolicy?: SsrFPolicy }> {
@@ -121,6 +116,8 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
         ? requireApiKey(
             await resolveApiKeyForProvider({
               provider: params.provider,
+              capability: params.capability,
+              modelBaseUrl: baseUrl,
               cfg: params.options.config,
               agentDir: params.options.agentDir,
             }),

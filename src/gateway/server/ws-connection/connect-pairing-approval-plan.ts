@@ -44,39 +44,29 @@ function resolveTrustedProxyDeviceAutoApproveScopes(params: {
     return configuredScopes;
   }
   const configured = new Set(configuredScopes);
-  const requestedScopes = normalizeSortedUniqueTrimmedStringList(params.requestedScopes);
   // Trusted-proxy Control UI tabs can remain open across upgrades. Grant newly
   // required default UI scopes without widening an explicitly configured cap.
-  if (params.configuredScopes === undefined) {
-    requestedScopes.push("operator.questions");
-  }
-  return normalizeSortedUniqueTrimmedStringList(requestedScopes).filter((scope) =>
-    configured.has(scope),
-  );
+  return normalizeSortedUniqueTrimmedStringList([
+    ...params.requestedScopes,
+    ...(params.configuredScopes === undefined ? ["operator.questions"] : []),
+  ]).filter((scope) => configured.has(scope));
 }
 
 /** One approval lane per pairing request; exactly one wins, "manual" prompts. */
 export type PairingApprovalPlan = {
   /** Request is created silent and immediately self-approved by its lane. */
   silent: boolean;
-  allowSilentLocalPairing: boolean;
+  localApproval: "silent" | "trusted-cidr" | null;
   trustedProxyAutoApproveScopes: string[] | null;
   trustedProxyUser: string | undefined;
   isTrustedProxySameKeyUpgrade: boolean;
   allowSetupCodeHandoffBootstrapPairing: boolean;
-  allowControlUiOwnerBootstrapPairing: boolean;
   bootstrapApprovalProfile: DeviceBootstrapProfile | null;
   bootstrapPairingRoles: string[] | undefined;
   bootstrapPairingScopes: string[] | undefined;
 };
 
-/**
- * Resolve which non-interactive approval lane (if any) may resolve a pairing
- * request before it ever reaches an operator prompt. Keeping every lane's
- * eligibility in one place is what makes a silent policy/caller contradiction
- * (the removed scope-upgrade veto) visible in review.
- */
-export async function resolvePairingApprovalPlan(params: {
+type PairingApprovalPlanParams = {
   reason: ConnectPairingRequiredReason;
   existingPairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null;
   state: AuthenticatedGatewayConnect;
@@ -90,21 +80,37 @@ export async function resolvePairingApprovalPlan(params: {
   scopes: string[];
   hasRequestedScopes: boolean;
   connectionScopeCap: (scopes: string[]) => string[];
-}): Promise<PairingApprovalPlan> {
-  const { reason, existingPairedDevice, state, connectParams, configSnapshot, scopes } = params;
-  const {
-    role,
-    isControlUi,
-    isBrowserOperatorUi,
-    isWebchat,
-    isNativeAppUi,
-    authMethod,
-    authResult,
-    bootstrapTokenCandidate,
-    pairingLocality,
-  } = state;
+};
+
+/** Reused at planning and synchronous approval commit so config changes revoke the same policy. */
+export function resolveLocalPairingApproval(
+  params: Pick<
+    PairingApprovalPlanParams,
+    | "reason"
+    | "existingPairedDevice"
+    | "state"
+    | "configSnapshot"
+    | "scopes"
+    | "hasBrowserOriginHeader"
+    | "reportedClientIpSource"
+    | "reportedClientIp"
+  >,
+): PairingApprovalPlan["localApproval"] {
+  const { reason, existingPairedDevice, state, configSnapshot, scopes } = params;
+  const { role, isControlUi, isWebchat, isNativeAppUi, authMethod, pairingLocality } = state;
+  // Adding a first node role is not a token replacement. Keep real node-token
+  // repairs, scope upgrades, and browser requests on their existing approval path.
+  const addingLocalNodeRole =
+    role === "node" &&
+    reason === "role-upgrade" &&
+    existingPairedDevice?.publicKey === state.devicePublicKey &&
+    !existingPairedDevice?.tokens?.node &&
+    scopes.length === 0 &&
+    !params.hasBrowserOriginHeader &&
+    !isControlUi &&
+    !isWebchat;
   const allowSilentLocalPairing =
-    !(existingPairedDevice && role !== "operator") &&
+    (!existingPairedDevice || role === "operator" || addingLocalNodeRole) &&
     shouldAllowSilentLocalPairing({
       autoApproveLocal: configSnapshot.gateway?.nodes?.pairing?.autoApproveLocal,
       locality: pairingLocality,
@@ -115,7 +121,10 @@ export async function resolvePairingApprovalPlan(params: {
       authMethod,
       reason,
     });
-  const allowSilentTrustedCidrsNodePairing = shouldAutoApproveNodePairingFromTrustedCidrs({
+  if (allowSilentLocalPairing) {
+    return "silent";
+  }
+  return shouldAutoApproveNodePairingFromTrustedCidrs({
     existingPairedDevice: Boolean(existingPairedDevice),
     role,
     reason,
@@ -126,12 +135,31 @@ export async function resolvePairingApprovalPlan(params: {
     reportedClientIpSource: params.reportedClientIpSource,
     reportedClientIp: params.reportedClientIp,
     autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
-  });
+  })
+    ? "trusted-cidr"
+    : null;
+}
+
+export async function resolvePairingApprovalPlan(
+  params: PairingApprovalPlanParams,
+): Promise<PairingApprovalPlan> {
+  const { reason, existingPairedDevice, state, connectParams, configSnapshot, scopes } = params;
+  const {
+    role,
+    isControlUi,
+    isBrowserOperatorUi,
+    isWebchat,
+    isNativeAppUi,
+    authMethod,
+    authResult,
+    bootstrapTokenCandidate,
+  } = state;
+  const localApproval = resolveLocalPairingApproval(params);
   const trustedProxyAutoApproveConfig =
     configSnapshot.gateway?.auth?.trustedProxy?.deviceAutoApprove;
   const trustedProxyUser = authResult.user?.trim();
   // A scope upgrade from a device whose paired public key matches the one
-  // this connect just proved by signature is the same physical browser
+  // this connect just proved by signature is the same physical device
   // behind the SSO proxy — auto-approvable like a first pairing. A key
   // mismatch stays a manual owner decision (possible deviceId squat).
   const isTrustedProxySameKeyUpgrade =
@@ -139,7 +167,7 @@ export async function resolvePairingApprovalPlan(params: {
   const trustedProxyAutoApproveScopes =
     ((reason === "not-paired" && !existingPairedDevice) || isTrustedProxySameKeyUpgrade) &&
     role === "operator" &&
-    (isBrowserOperatorUi || isWebchat) &&
+    (isBrowserOperatorUi || isWebchat || isNativeAppUi) &&
     authMethod === "trusted-proxy" &&
     Boolean(trustedProxyUser) &&
     trustedProxyAutoApproveConfig?.enabled === true
@@ -160,12 +188,9 @@ export async function resolvePairingApprovalPlan(params: {
     clientMode: connectParams.client.mode,
   });
   const allowBoundBootstrapProfileLookup =
-    (reason === "not-paired" &&
-      !existingPairedDevice &&
-      (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator"))) ||
-    (reason === "scope-upgrade" &&
-      Boolean(existingPairedDevice) &&
-      (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator")));
+    ((reason === "not-paired" && !existingPairedDevice) ||
+      (reason === "scope-upgrade" && Boolean(existingPairedDevice))) &&
+    (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator"));
   const boundBootstrapProfile =
     authMethod === "bootstrap-token" && bootstrapTokenCandidate && allowBoundBootstrapProfileLookup
       ? await getBoundDeviceBootstrapProfile({
@@ -230,16 +255,14 @@ export async function resolvePairingApprovalPlan(params: {
     // stay a durable cap while owner-credentialed local clients widen
     // without a prompt they could bypass with a fresh identity anyway.
     silent:
-      allowSilentLocalPairing ||
-      allowSilentTrustedCidrsNodePairing ||
+      localApproval !== null ||
       allowSetupCodeHandoffBootstrapPairing ||
       allowControlUiOperatorBootstrapPairing,
-    allowSilentLocalPairing,
+    localApproval,
     trustedProxyAutoApproveScopes,
     trustedProxyUser,
     isTrustedProxySameKeyUpgrade,
     allowSetupCodeHandoffBootstrapPairing,
-    allowControlUiOwnerBootstrapPairing,
     bootstrapApprovalProfile: setupCodeHandoffBootstrapProfile ?? controlUiOperatorBootstrapProfile,
     bootstrapPairingRoles,
     bootstrapPairingScopes,

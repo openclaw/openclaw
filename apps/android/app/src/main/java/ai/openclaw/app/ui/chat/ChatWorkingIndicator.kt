@@ -37,12 +37,6 @@ import java.util.Locale
 import kotlin.math.roundToLong
 import kotlin.random.Random
 
-private const val DEFAULT_CLAW_CYCLE_MS = 2_400L
-private const val DRUMMER_CLAW_CYCLE_MS = 1_200L
-private const val FLURRY_CLAW_CYCLE_MS = 1_300L
-private const val NODOFF_CLAW_CYCLE_MS = 3_600L
-private const val SPIN_CLAW_CYCLE_MS = 3_600L
-private const val ZEN_CLAW_CYCLE_MS = 6_000L
 internal const val WORKING_PHRASE_SHOW_AFTER_MS = 30_000L
 internal const val WORKING_PHRASE_ROTATE_EVERY_MS = 45_000L
 
@@ -63,38 +57,25 @@ private val clawJawPath by lazy {
     ).toPath()
 }
 
-internal enum class WorkingClawStance {
-  Default,
-  Southpaw,
-  Flurry,
-  Spin,
-  Shadowbox,
-  Backflip,
-  Zen,
-  Drummer,
-  Peekaboo,
-  NodOff,
-  Curious,
-  OmNom,
-  FakeOut,
+internal enum class WorkingClawStance(
+  val weight: Int,
+  val cycleMs: Long = 2_400L,
+) {
+  Default(55),
+  Southpaw(18),
+  Flurry(5, 1_300L),
+  Spin(4, 3_600L),
+  Shadowbox(3),
+  Backflip(2),
+  Zen(2, 6_000L),
+  Drummer(2, 1_200L),
+  Peekaboo(2),
+  NodOff(2, 3_600L),
+  Curious(2),
+  OmNom(2),
+  FakeOut(1),
 }
 
-private val stanceWeights =
-  listOf(
-    WorkingClawStance.Default to 55,
-    WorkingClawStance.Southpaw to 18,
-    WorkingClawStance.Flurry to 5,
-    WorkingClawStance.Spin to 4,
-    WorkingClawStance.Shadowbox to 3,
-    WorkingClawStance.Backflip to 2,
-    WorkingClawStance.Zen to 2,
-    WorkingClawStance.Drummer to 2,
-    WorkingClawStance.Peekaboo to 2,
-    WorkingClawStance.NodOff to 2,
-    WorkingClawStance.Curious to 2,
-    WorkingClawStance.OmNom to 2,
-    WorkingClawStance.FakeOut to 1,
-  )
 private val processStanceSalt = Random.nextInt()
 
 internal fun workingClawHash(value: String): Int {
@@ -110,8 +91,8 @@ internal fun pickWorkingClawStance(
   salt: Int = processStanceSalt,
 ): WorkingClawStance {
   var roll = ((workingClawHash(runKey) xor salt).toUInt().toLong() % 1_000L).toInt()
-  stanceWeights.forEach { (stance, weight) ->
-    val buckets = weight * 10
+  WorkingClawStance.entries.forEach { stance ->
+    val buckets = stance.weight * 10
     if (roll < buckets) return stance
     roll -= buckets
   }
@@ -195,12 +176,14 @@ internal fun workingClawPose(
   phase: Float,
 ): WorkingClawPose =
   when (stance) {
-    WorkingClawStance.Spin ->
+    WorkingClawStance.Spin -> {
       WorkingClawPose(
         rotationY = phase * 360f,
         jawRotation = sampleFrames(snipFrames, phase),
       )
-    WorkingClawStance.Shadowbox ->
+    }
+
+    WorkingClawStance.Shadowbox -> {
       WorkingClawPose(
         rotationZ = sampleFrames(comboRotationFrames, phase),
         translationXDp = sampleFrames(comboXFrames, phase),
@@ -208,67 +191,76 @@ internal fun workingClawPose(
         powAlpha = sampleFrames(powAlphaFrames, phase),
         powScale = sampleFrames(powScaleFrames, phase),
       )
-    WorkingClawStance.Backflip ->
+    }
+
+    WorkingClawStance.Backflip -> {
       WorkingClawPose(
         rotationZ = sampleFrames(backflipRotationFrames, phase),
         translationYDp = sampleFrames(backflipYFrames, phase),
         jawRotation = sampleFrames(snipFrames, phase),
       )
-    WorkingClawStance.Zen ->
+    }
+
+    WorkingClawStance.Zen -> {
       WorkingClawPose(
         scale = sampleFrames(zenScaleFrames, phase, easeInOut),
         jawRotation = sampleFrames(zenJawFrames, phase),
       )
-    WorkingClawStance.Drummer ->
+    }
+
+    WorkingClawStance.Drummer -> {
       WorkingClawPose(
         rotationZ = sampleFrames(drummerRotationFrames, phase),
         jawRotation = sampleFrames(drummerJawFrames, phase),
       )
-    WorkingClawStance.Peekaboo ->
+    }
+
+    WorkingClawStance.Peekaboo -> {
       WorkingClawPose(
         translationYDp = sampleFrames(peekabooYFrames, phase),
         scale = sampleFrames(peekabooScaleFrames, phase),
         jawRotation = sampleFrames(peekabooJawFrames, phase),
       )
-    WorkingClawStance.NodOff ->
+    }
+
+    WorkingClawStance.NodOff -> {
       WorkingClawPose(
         rotationZ = sampleFrames(nodOffRotationFrames, phase),
         translationYDp = sampleFrames(nodOffYFrames, phase),
         jawRotation = sampleFrames(nodOffJawFrames, phase),
       )
-    WorkingClawStance.Curious ->
+    }
+
+    WorkingClawStance.Curious -> {
       WorkingClawPose(
         rotationZ = sampleFrames(curiousRotationFrames, phase),
         jawRotation = sampleFrames(curiousJawFrames, phase),
       )
-    WorkingClawStance.OmNom ->
+    }
+
+    WorkingClawStance.OmNom -> {
       WorkingClawPose(
         translationXDp = sampleFrames(omNomXFrames, phase),
         jawRotation = sampleFrames(omNomJawFrames, phase),
       )
-    WorkingClawStance.FakeOut ->
+    }
+
+    WorkingClawStance.FakeOut -> {
       WorkingClawPose(
         rotationZ = sampleFrames(fakeOutRotationFrames, phase),
         jawRotation = sampleFrames(fakeOutJawFrames, phase),
       )
+    }
+
     WorkingClawStance.Default,
     WorkingClawStance.Southpaw,
     WorkingClawStance.Flurry,
-    ->
+    -> {
       WorkingClawPose(
         rotationZ = sampleFrames(flexFrames, phase),
         jawRotation = sampleFrames(snipFrames, phase),
       )
-  }
-
-internal fun workingClawCycleMs(stance: WorkingClawStance): Long =
-  when (stance) {
-    WorkingClawStance.Drummer -> DRUMMER_CLAW_CYCLE_MS
-    WorkingClawStance.Flurry -> FLURRY_CLAW_CYCLE_MS
-    WorkingClawStance.NodOff -> NODOFF_CLAW_CYCLE_MS
-    WorkingClawStance.Spin -> SPIN_CLAW_CYCLE_MS
-    WorkingClawStance.Zen -> ZEN_CLAW_CYCLE_MS
-    else -> DEFAULT_CLAW_CYCLE_MS
+    }
   }
 
 @Composable
@@ -281,7 +273,7 @@ internal fun WorkingClawIcon(
   val stance = remember(runKey, parked) { if (parked) WorkingClawStance.Default else pickWorkingClawStance(runKey) }
   val density = LocalDensity.current
   val animationsEnabled = rememberSystemAnimationsEnabled() && !parked
-  val cycleMs = workingClawCycleMs(stance)
+  val cycleMs = stance.cycleMs
   var phase by remember(runKey) { mutableFloatStateOf(0f) }
   LaunchedEffect(animationsEnabled, runKey, cycleMs) {
     if (!animationsEnabled) {
@@ -427,22 +419,10 @@ internal fun formatChatDurationFull(
 internal fun formatLocalizedChatDurationCompact(durationMs: Long): String =
   formatChatDurationCompact(durationMs) { count, unit ->
     when (unit) {
-      ChatDurationUnit.Day -> {
-        val days = count
-        nativeString("\${days}d", days)
-      }
-      ChatDurationUnit.Hour -> {
-        val hours = count
-        nativeString("\${hours}h", hours)
-      }
-      ChatDurationUnit.Minute -> {
-        val minutes = count
-        nativeString("\${minutes}m", minutes)
-      }
-      ChatDurationUnit.Second -> {
-        val seconds = count
-        nativeString("\${seconds}s", seconds)
-      }
+      ChatDurationUnit.Day -> nativeString("\${days}d", count)
+      ChatDurationUnit.Hour -> nativeString("\${hours}h", count)
+      ChatDurationUnit.Minute -> nativeString("\${minutes}m", count)
+      ChatDurationUnit.Second -> nativeString("\${seconds}s", count)
     }
   }
 

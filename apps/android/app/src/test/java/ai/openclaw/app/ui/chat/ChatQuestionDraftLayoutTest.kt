@@ -7,19 +7,32 @@ import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.bindNodeRuntimeTestFixture
+import ai.openclaw.app.chat.AndroidClientDatabases
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatQuestionStatus
+import ai.openclaw.app.closeNodeRuntimeTestFixture
+import ai.openclaw.app.drainWithMainLooper
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
+import ai.openclaw.app.gateway.QuestionSecretStore
+import ai.openclaw.app.gateway.QuestionSecretStoreExisting
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import android.os.Looper
 import android.provider.Settings
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.InterceptPlatformTextInput
+import androidx.compose.ui.platform.PlatformTextInputInterceptor
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -35,6 +48,8 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
@@ -42,6 +57,7 @@ import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -57,7 +73,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w360dp-h800dp-420dpi")
@@ -77,11 +95,16 @@ class ChatQuestionDraftLayoutTest {
   @Before
   fun setUp() {
     app = RuntimeEnvironment.getApplication() as NodeApp
+    originalAnimatorScale = Settings.Global.getString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE)
     prefs = SecurePrefs(app, app.getSharedPreferences("chat-question-${UUID.randomUUID()}", Context.MODE_PRIVATE))
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Chat)
     runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     originalRuntime = app.peekRuntime()
-    setApplicationRuntime(runtime)
+    bindNodeRuntimeTestFixture(app, runtime)
+    // Construct the real backing stores before testing question interactions, not cold startup.
+    drainWithMainLooper {
+      ReflectionHelpers.getField<AndroidClientDatabases>(runtime, "clientDatabases").clientStateDatabase()
+    }
     controller =
       NodeRuntime::class.java
         .getDeclaredField("chat")
@@ -94,19 +117,82 @@ class ChatQuestionDraftLayoutTest {
         .apply { isAccessible = true }
         .get(controller) as suspend (String, String?) -> String
     question = runBlocking { Json.decodeFromString<QuestionListResult>(request("question.list", "{}")).questions.single() }
-    originalAnimatorScale = Settings.Global.getString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE)
     Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
   }
 
   @After
   fun tearDown() {
-    runtime.disconnect()
-    composeRule.waitForIdle()
-    viewModelStore.clear()
-    setApplicationRuntime(originalRuntime)
-    AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
-    Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
-    shadowOf(Looper.getMainLooper()).idle()
+    try {
+      viewModelStore.clear()
+    } finally {
+      try {
+        closeNodeRuntimeTestFixture(runtime)
+      } finally {
+        bindNodeRuntimeTestFixture(app, originalRuntime)
+        AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
+        Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
+        shadowOf(Looper.getMainLooper()).idle()
+      }
+    }
+  }
+
+  @Test
+  fun credentialCardShowsConsentAndKeepsEditedInput() {
+    val secret =
+      question.questions.first().copy(
+        options = emptyList(),
+        isSecret = true,
+        secretStore = QuestionSecretStore("TASK_TOKEN", "secret", listOf("api.example.test"), "Deploy the approved change"),
+        secretStoreExisting = QuestionSecretStoreExisting(1_000, "operator"),
+      )
+    var prompt by mutableStateOf(ChatQuestionPrompt(question.copy(questions = listOf(secret), agentId = "requester", sessionKey = "agent:requester:main")))
+    var submitted: Map<String, List<String>>? = null
+    val editorInfo = AtomicReference<EditorInfo>()
+    val interceptor =
+      PlatformTextInputInterceptor { request, _ ->
+        val info = EditorInfo()
+        val connection = request.createInputConnection(info)
+        editorInfo.set(info)
+        try {
+          awaitCancellation()
+        } finally {
+          connection.closeConnection()
+        }
+      }
+    composeRule.setContent {
+      ClawDesignTheme {
+        InterceptPlatformTextInput(interceptor) {
+          ChatQuestionCard(
+            prompt = prompt,
+            onDraftChanged = { _, update -> prompt = prompt.copy(draft = update(prompt.draft)) },
+            onSubmit = { _, answers -> submitted = answers },
+            onSkip = {},
+          )
+        }
+      }
+    }
+    composeRule.onNodeWithText("Requested by requester", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("agent:requester:main", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Stores TASK_TOKEN as Protected secret").assertIsDisplayed()
+    composeRule.onNodeWithText("Deploy the approved change").assertIsDisplayed()
+    composeRule.onNodeWithText("Replaces TASK_TOKEN", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Updated by operator").assertIsDisplayed()
+    val hosts = composeRule.onNode(hasSetTextAction() and hasText("Allowed HTTPS hosts"))
+    hosts.assertTextContains("api.example.test").performTextReplacement("uploads.example.test, api.example.test")
+    hosts.assertTextContains("uploads.example.test, api.example.test")
+    val secretInput = composeRule.onNode(hasSetTextAction() and hasText("Secret value"))
+    secretInput.performClick()
+    composeRule.waitUntil {
+      editorInfo.get()?.inputType?.and(InputType.TYPE_MASK_VARIATION) == InputType.TYPE_TEXT_VARIATION_PASSWORD
+    }
+    assertEquals(
+      "Secret replies must not request autocorrection",
+      0,
+      editorInfo.get().inputType and InputType.TYPE_TEXT_FLAG_AUTO_CORRECT,
+    )
+    secretInput.performTextReplacement("  synthetic-value  ")
+    composeRule.onNodeWithText("Submit").performClick()
+    assertEquals(mapOf(secret.questionId to listOf("  synthetic-value  ")), submitted)
   }
 
   @Test
@@ -117,6 +203,14 @@ class ChatQuestionDraftLayoutTest {
     answer.assertTextContains("Mention the keyboard fix")
     composeRule.onNodeWithText("Submit").assertIsEnabled()
     composeRule.onNode(hasSetTextAction() and hasText("Other answer").not()).performClick()
+    assertQuestionUnchanged()
+
+    val worked = hasText("Worked", substring = true) and hasClickAction()
+    history.performScrollToNode(worked)
+    composeRule.onNode(worked).performClick()
+    history.performScrollToIndex(0)
+    repeat(3) { history.performTouchInput { swipeUp(durationMillis = 500) } }
+    answer.assertIsDisplayed().assertTextContains("Mention the keyboard fix")
     assertQuestionUnchanged()
 
     val visitedMessages = mutableSetOf<String>()
@@ -208,22 +302,24 @@ class ChatQuestionDraftLayoutTest {
             showSidebarButton = true,
             onOpenSidebar = {},
             onToggleTalk = {},
-            onOpenSessions = {},
             onOpenDashboard = {},
             onOpenGatewaySettings = {},
           )
         }
       }
     }
-    composeRule.waitUntil { viewModel.chatMessages.value.size >= 24 }
+    // ViewModel bridge updates need the Android main queue, not just Compose clock advancement.
+    composeRule.waitUntil { composeRule.runOnIdle { viewModel.chatMessages.value.size >= 24 } }
     composeRule.waitForIdle()
     assertTrue(viewModel.chatQuestions.value.isEmpty())
     composeRule.onNodeWithText("Draft a short status update for the team.").assertIsDisplayed()
     controller.handleGatewayEvent("question.requested", Json.encodeToString(question))
     composeRule.waitUntil {
-      viewModel.chatQuestions.value
-        .singleOrNull()
-        ?.record == question
+      composeRule.runOnIdle {
+        viewModel.chatQuestions.value
+          .singleOrNull()
+          ?.record == question
+      }
     }
     val history = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
     repeat(3) { history.performTouchInput { swipeUp(durationMillis = 500) } }
@@ -235,12 +331,5 @@ class ChatQuestionDraftLayoutTest {
     assertEquals("Scrolling must not replace or remove the pending question", question, prompt.record)
     assertEquals(ChatQuestionStatus.Pending, prompt.status())
     assertTrue("Fixture must remain within the real pending question lifetime", System.currentTimeMillis() < question.expiresAtMs)
-  }
-
-  private fun setApplicationRuntime(value: NodeRuntime?) {
-    NodeApp::class.java
-      .getDeclaredField("runtimeInstance")
-      .apply { isAccessible = true }
-      .set(app, value)
   }
 }

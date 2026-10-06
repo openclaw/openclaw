@@ -1,326 +1,289 @@
-/**
- * Tests OAuth refresh failure hints.
- * Verifies typed and message-based classification plus sanitized login command
- * generation.
- */
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { FailoverError } from "../failover-error.js";
+import { createOAuthRefreshCredential as credential } from "./credential-fixtures.test-support.js";
 import {
   buildAuthProfileUnusableHint,
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
+  OAuthManagerRefreshError,
   OAuthRefreshFailureError,
 } from "./oauth-refresh-failure.js";
+import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-describe("buildAuthProfileUnusableHint", () => {
-  it.each(["auth", "auth_permanent"] as const)(
-    "gives re-authentication guidance for canonical %s cooldowns",
-    (reason) => {
-      expect(
-        buildAuthProfileUnusableHint({
-          kind: "cooldown",
-          reason,
-          provider: "openai",
-          profileId: "openai:default",
-        }),
-      ).toContain(
-        "Re-authenticate with `openclaw models auth login --provider openai --profile-id 'openai:default'`.",
-      );
+const refreshProfileId = "openai:oauth";
+const stored = credential({
+  access: "store-access",
+  refresh: "store-refresh",
+  idToken: "store-id-token",
+});
+const presentation = {
+  errorType: "invalid_request_error",
+  reason: "refresh_token_reused",
+  status: 401,
+  summary: "refresh rejected error-access",
+};
+const access = "sk-oauthreviewredaction1234567890zzzz";
+const refresh = "ya29.oauthreviewredaction1234567890yyyy";
+
+describe("OAuthManagerRefreshError", () => {
+  it.each<{
+    name: string;
+    cred: OAuthCredential;
+    profiles: AuthProfileStore["profiles"];
+    cause: Error;
+    forbidden: string[];
+    redactions: number;
+  }>([
+    {
+      name: "stored and attempted secrets with structured diagnostics",
+      cred: credential({
+        access: "error-access",
+        refresh: "error-refresh",
+        idToken: "error-id-token",
+      }),
+      profiles: { [refreshProfileId]: stored },
+      cause: Object.assign(
+        new Error(
+          "refresh rejected error-access error-refresh error-id-token store-access store-refresh store-id-token",
+        ),
+        { oauthRefreshFailure: presentation },
+      ),
+      forbidden: [
+        "error-access",
+        "error-refresh",
+        "error-id-token",
+        "store-access",
+        "store-refresh",
+        "store-id-token",
+      ],
+      redactions: 6,
+    },
+    {
+      name: "token-shaped secrets before generic masking, including nested causes",
+      cred: credential({ access, refresh }),
+      profiles: {},
+      cause: new Error(`refresh rejected ${access} ${refresh}`, {
+        cause: new Error(`nested failure ${access}`),
+      }),
+      forbidden: [access, refresh, "sk-oau", "zzzz", "ya29.o", "yyyy"],
+      redactions: 3,
+    },
+    {
+      name: "overlapping secrets longest first",
+      cred: credential({ access: "abc123", refresh: "abc123456" }),
+      profiles: {},
+      cause: new Error("refresh rejected abc123 abc123456"),
+      forbidden: ["abc123", "abc123456", "[redacted]456"],
+      redactions: 2,
+    },
+  ])(
+    "redacts $name from public errors and serialization",
+    ({ cred, profiles, cause, forbidden, redactions }) => {
+      const error = new OAuthManagerRefreshError({
+        credential: cred,
+        profileId: refreshProfileId,
+        refreshedStore: { version: 1, profiles },
+        cause,
+      });
+      const serialized = JSON.stringify(error);
+      expect(serialized).toContain("openai");
+      expect(serialized).toContain(refreshProfileId);
+      for (const message of [error.message, formatErrorMessage(error.cause), serialized]) {
+        expect(message).toContain("refresh rejected");
+        for (const secret of forbidden) {
+          expect(message).not.toContain(secret);
+        }
+        expect(message.match(/\[redacted\]/g)?.length).toBe(redactions);
+      }
+      if ("oauthRefreshFailure" in cause) {
+        expect(error).toMatchObject({ ...presentation, summary: "refresh rejected [redacted]" });
+      }
     },
   );
 
-  it("keeps Claude subscription and Anthropic API-key recovery distinct", () => {
-    expect(
-      buildAuthProfileUnusableHint({
-        kind: "cooldown",
-        reason: "session_expired",
-        provider: "claude-cli",
-        profileId: "anthropic:claude-cli",
-      }),
-    ).toContain(
-      "claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'",
-    );
-    expect(
-      buildAuthProfileUnusableHint({
-        kind: "cooldown",
-        reason: "auth",
-        provider: "anthropic",
-        profileId: "anthropic:api-key",
-      }),
-    ).toContain("openclaw models auth login --provider anthropic --profile-id 'anthropic:api-key'");
-    expect(
-      buildAuthProfileUnusableHint({
-        kind: "cooldown",
-        reason: "auth",
-        provider: "anthropic",
-        profileId: "anthropic:api-key",
-      }),
-    ).not.toContain("claude auth login");
-  });
-
-  it("routes legacy Gemini CLI profiles to supported Google API-key setup", () => {
-    const hint = buildAuthProfileUnusableHint({
-      kind: "cooldown",
-      reason: "session_expired",
-      provider: "google-gemini-cli",
-      profileId: "google-gemini-cli:legacy",
+  it("formats an undefined refresh failure without throwing", () => {
+    const error = new OAuthManagerRefreshError({
+      credential: credential({ access: "sk-nonjsonredaction1234567890zzzz" }),
+      profileId: refreshProfileId,
+      refreshedStore: { version: 1, profiles: {} },
+      cause: undefined,
     });
-
-    expect(hint).toBe(
-      "Gemini CLI OAuth cannot be repaired by OpenClaw. Connect Google with an AI Studio API key using `openclaw models auth login --provider google`, then select that Google profile for the Gemini CLI runtime.",
-    );
-    expect(hint).not.toContain("--provider google-gemini-cli");
+    expect(error.message).toContain("OAuth token refresh failed");
   });
 });
 
-describe("oauth refresh failure hints", () => {
-  it("builds OpenAI refresh-failure login hints", () => {
-    expect(
-      classifyOAuthRefreshFailure("OAuth token refresh failed for openai: invalid_grant"),
-    ).toEqual({
-      provider: "openai",
-      reason: "invalid_grant",
-    });
-    expect(buildOAuthRefreshFailureLoginCommand("openai")).toBe(
-      "openclaw models auth login --provider openai",
+it.each([
+  [
+    "openai",
+    "auth",
+    "openai:default",
+    "Re-authenticate with `openclaw models auth login --provider openai --profile-id 'openai:default'`.",
+  ],
+  [
+    "openai",
+    "auth_permanent",
+    "openai:default",
+    "Re-authenticate with `openclaw models auth login --provider openai --profile-id 'openai:default'`.",
+  ],
+  [
+    "claude-cli",
+    "session_expired",
+    "anthropic:claude-cli",
+    "Re-authenticate with `claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'`.",
+  ],
+  [
+    "anthropic",
+    "auth",
+    "anthropic:api-key",
+    "Re-authenticate with `openclaw models auth login --provider anthropic --profile-id 'anthropic:api-key'`.",
+  ],
+  [
+    "google-gemini-cli",
+    "session_expired",
+    "google-gemini-cli:legacy",
+    "Gemini CLI OAuth cannot be repaired by OpenClaw. Connect Google with an AI Studio API key using `openclaw models auth login --provider google`, then select that Google profile for the Gemini CLI runtime.",
+  ],
+] as const)(
+  "gives provider-specific recovery guidance for %s / %s",
+  (provider, reason, profileId, expected) => {
+    expect(buildAuthProfileUnusableHint({ kind: "cooldown", reason, provider, profileId })).toBe(
+      expected,
     );
-  });
+  },
+);
 
-  it("includes the profile id in refresh-failure login hints when known", () => {
-    expect(
-      buildOAuthRefreshFailureLoginCommand("openai", {
-        profileId: "Work Profile",
-      }),
-    ).toBe("openclaw models auth login --provider openai --profile-id 'Work Profile'");
-  });
-
-  it("renders login commands containing backticks as valid Markdown code spans", () => {
-    const command = buildOAuthRefreshFailureLoginCommand("openai", {
-      profileId: "openai:work`slot",
-    });
-
+it.each([
+  [
+    "openai",
+    "Work Profile",
+    "openclaw models auth login --provider openai --profile-id 'Work Profile'",
+  ],
+  [
+    "openai",
+    "openai:work`slot",
+    "openclaw models auth login --provider openai --profile-id 'openai:work`slot'",
+  ],
+] as const)("quotes recovery commands for %s / %s", (provider, profileId, expected) => {
+  const command = buildOAuthRefreshFailureLoginCommand(provider, { profileId });
+  expect(command).toBe(expected);
+  if (profileId === "openai:work`slot") {
     expect(formatOAuthRefreshFailureLoginCommandMarkdown(command)).toBe(
       "``openclaw models auth login --provider openai --profile-id 'openai:work`slot'``",
     );
-  });
-
-  it("classifies typed refresh failures without parsing the display message", () => {
-    expect(
-      classifyOAuthRefreshFailureError(
-        new OAuthRefreshFailureError({
-          provider: "openai",
-          profileId: "openai:user@example.com",
-          message: "invalid_grant",
-        }),
-      ),
-    ).toEqual({
-      provider: "openai",
-      profileId: "openai:user@example.com",
-      reason: "invalid_grant",
-    });
-  });
-
-  it("classifies typed refresh failures through wrapper causes", () => {
-    const refreshError = new OAuthRefreshFailureError({
-      provider: "openai",
-      profileId: "openai:user@example.com",
-      message: "invalid_grant",
-    });
-
-    expect(classifyOAuthRefreshFailureError(new Error("wrapped", { cause: refreshError }))).toEqual(
-      {
-        provider: "openai",
-        profileId: "openai:user@example.com",
-        reason: "invalid_grant",
-      },
-    );
-  });
-
-  it("classifies token invalidation refresh failures", () => {
-    expect(
-      classifyOAuthRefreshFailure(
-        "OAuth token refresh failed for openai: token_invalidated. Please sign in again.",
-      ),
-    ).toEqual({
-      provider: "openai",
-      reason: "token_invalidated",
-    });
-  });
-
-  it("classifies provider requests to log in again", () => {
-    expect(
-      classifyOAuthRefreshFailure(
-        "OAuth token refresh failed for openai: Your session ended. Please log in again.",
-      ),
-    ).toEqual({
-      provider: "openai",
-      reason: "sign_in_again",
-    });
-  });
-
-  it("classifies refresh failures preserved in failover raw error metadata", () => {
-    expect(
-      classifyOAuthRefreshFailureError(
-        new FailoverError("Authentication refresh failed", {
-          reason: "auth_permanent",
-          provider: "openai",
-          profileId: "openai:work",
-          rawError: "OAuth token refresh failed for openai: refresh_token_invalidated",
-        }),
-      ),
-    ).toEqual({
-      provider: "openai",
-      profileId: "openai:work",
-      reason: "token_invalidated",
-    });
-  });
-
-  it("classifies claude-cli subprocess 401 OAuth expiry as a provider refresh failure", () => {
-    // Error message format emitted by the claude subprocess when its stored
-    // OAuth token has expired, forwarded through the FailoverError message.
-    const claudeCliFailureMessage =
-      "Provider claude-cli failed: Failed to authenticate. API Error: 401 Invalid authentication credentials";
-    expect(classifyOAuthRefreshFailure(claudeCliFailureMessage)).toEqual({
-      provider: "claude-cli",
-      reason: "revoked",
-    });
-    expect(buildOAuthRefreshFailureLoginCommand("claude-cli")).toBe(
-      "claude auth login && openclaw models auth login --provider anthropic --method cli",
-    );
-  });
-
-  it("classifies structured claude-cli 401 failures even when the display message omits the provider", () => {
-    const error = new FailoverError(
-      "Failed to authenticate. API Error: 401 Invalid authentication credentials",
-      {
-        reason: "auth",
-        provider: "claude-cli",
-        model: "claude-sonnet-4-20250514",
-        status: 401,
-      },
-    );
-
-    expect(classifyOAuthRefreshFailureError(error)).toEqual({
-      provider: "claude-cli",
-      reason: "revoked",
-    });
-  });
-
-  it("classifies structured claude-cli logged-out failures without the provider prefix in the message", () => {
-    const error = new FailoverError("Not logged in \u00b7 Please run /login", {
-      reason: "auth",
-      provider: "claude-cli",
-      model: "claude-sonnet-4-20250514",
-      status: 401,
-    });
-
-    expect(classifyOAuthRefreshFailureError(error)).toEqual({
-      provider: "claude-cli",
-      reason: "sign_in_again",
-    });
-  });
-
-  it("does not classify a 401 auth failure without claude-cli prefix as a refresh failure", () => {
-    // A generic 401 from another provider should NOT be treated as an OAuth
-    // refresh failure — it lacks the "claude-cli" provider prefix.
-    const otherProviderMessage =
-      "Provider openai failed: Failed to authenticate. API Error: 401 Unauthorized";
-    expect(classifyOAuthRefreshFailure(otherProviderMessage)).toBeNull();
-  });
+  }
 });
 
-type LoopbackHandler = (request: IncomingMessage, response: ServerResponse) => void;
-
-async function withLoopbackServer<T>(
-  handler: LoopbackHandler,
-  run: (baseUrl: string) => Promise<T>,
-): Promise<T> {
-  const server = createServer(handler);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const { port } = server.address() as AddressInfo;
-  try {
-    return await run(`http://127.0.0.1:${port}`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
+it.each([
+  [
+    "OAuth token refresh failed for openai: invalid_grant",
+    { provider: "openai", reason: "invalid_grant" },
+    "openclaw models auth login --provider openai",
+  ],
+  [
+    "OAuth token refresh failed for openai: token_invalidated. Please sign in again.",
+    { provider: "openai", reason: "token_invalidated" },
+    undefined,
+  ],
+  [
+    "OAuth token refresh failed for openai: Your session ended. Please log in again.",
+    { provider: "openai", reason: "sign_in_again" },
+    undefined,
+  ],
+  [
+    "Provider claude-cli failed: Failed to authenticate. API Error: 401 Invalid authentication credentials",
+    { provider: "claude-cli", reason: "revoked" },
+    "claude auth login && openclaw models auth login --provider anthropic --method cli",
+  ],
+  ["Provider openai failed: Failed to authenticate. API Error: 401 Unauthorized", null, undefined],
+] as const)("classifies only OAuth refresh display messages: %s", (message, expected, login) => {
+  expect(classifyOAuthRefreshFailure(message)).toEqual(expected);
+  if (login) {
+    expect(buildOAuthRefreshFailureLoginCommand(expected?.provider)).toBe(login);
   }
-}
+});
 
-async function fetchClaudeCliOAuthProbe(baseUrl: string): Promise<{ ok: true; body: unknown }> {
-  const response = await fetch(`${baseUrl}/oauth-expiry`);
-  const body = await response.text();
-  if (!response.ok) {
-    const rawError = body.trim() || `HTTP ${response.status}`;
-    const failure = new FailoverError(rawError, {
-      reason: "auth",
-      provider: "claude-cli",
-      model: "claude-sonnet-4-20250514",
-      status: response.status,
-      rawError,
-    });
-    const oauthFailure =
-      classifyOAuthRefreshFailureError(failure) ?? classifyOAuthRefreshFailure(failure.message);
-    if (oauthFailure?.reason) {
-      const command = buildOAuthRefreshFailureLoginCommand(oauthFailure.provider);
-      throw new Error(
-        `Model login expired on the gateway for ${oauthFailure.provider}. Re-auth with \`${command}\`, then try again.`,
-        { cause: failure },
-      );
-    }
-    throw failure;
-  }
-  return { ok: true, body: JSON.parse(body) };
-}
+const typedFailure = {
+  provider: "openai",
+  profileId: "openai:user@example.com",
+  message: "invalid_grant",
+};
+const diagnostics = {
+  errorType: "invalid_grant",
+  reason: "invalid_grant" as const,
+  status: 401,
+  summary: "Please sign in again.",
+};
+const cliFailure = {
+  reason: "auth" as const,
+  provider: "claude-cli",
+  model: "claude-sonnet-4-20250514",
+  status: 401,
+};
 
-describe("claude-cli oauth-expiry — real HTTP server (no fetch mock)", () => {
-  it("throws a re-auth hint when the server returns 401", async () => {
-    await withLoopbackServer(
-      (_request, response) => {
-        response.writeHead(401, { "content-type": "text/plain" });
-        response.end("Failed to authenticate. API Error: 401 Invalid authentication credentials");
-      },
-      async (baseUrl) => {
-        const error = await fetchClaudeCliOAuthProbe(baseUrl).then(
-          () => undefined,
-          (caught: unknown) => (caught instanceof Error ? caught : new Error(String(caught))),
-        );
-        expect(error?.message).toContain(
-          "Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli`",
-        );
-        console.log(
-          `[claude-cli-oauth-proof] server=401 → re-auth hint surfaced: ${error?.message}`,
-        );
-      },
-    );
-  });
-
-  it("works normally when the server returns 200", async () => {
-    await withLoopbackServer(
-      (_request, response) => {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ provider: "claude-cli", ok: true }));
-      },
-      async (baseUrl) => {
-        await expect(fetchClaudeCliOAuthProbe(baseUrl)).resolves.toEqual({
-          ok: true,
-          body: { provider: "claude-cli", ok: true },
-        });
-        console.log("[claude-cli-oauth-proof] server=200 → normal response returned");
-      },
-    );
-  });
+it.each([
+  {
+    name: "typed metadata without display-message parsing",
+    error: new OAuthRefreshFailureError({ ...typedFailure, ...diagnostics }),
+    expected: {
+      provider: typedFailure.provider,
+      profileId: typedFailure.profileId,
+      ...diagnostics,
+    },
+  },
+  {
+    name: "typed metadata through a wrapper cause",
+    error: new Error("wrapped", { cause: new OAuthRefreshFailureError(typedFailure) }),
+    expected: {
+      provider: typedFailure.provider,
+      profileId: typedFailure.profileId,
+      reason: "invalid_grant",
+    },
+  },
+  {
+    name: "failover raw-error fallback",
+    error: new FailoverError("Authentication refresh failed", {
+      reason: "auth_permanent",
+      provider: "openai",
+      profileId: "openai:work",
+      rawError: "OAuth token refresh failed for openai: refresh_token_invalidated",
+    }),
+    expected: { provider: "openai", profileId: "openai:work", reason: "token_invalidated" },
+  },
+  {
+    name: "structured cause precedence over raw text",
+    error: new FailoverError("Authentication refresh failed", {
+      reason: "auth_permanent",
+      provider: "openai",
+      rawError: "OAuth token refresh failed for openai: refresh_token_reused",
+      cause: new OAuthRefreshFailureError({
+        provider: "openai",
+        message: "wrapped provider failure",
+        reason: "refresh_token_reused",
+        summary: "Please sign in again.",
+      }),
+    }),
+    expected: {
+      provider: "openai",
+      reason: "refresh_token_reused",
+      summary: "Please sign in again.",
+    },
+  },
+  {
+    name: "structured Claude CLI 401 without a provider prefix",
+    error: new FailoverError(
+      "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      cliFailure,
+    ),
+    expected: { provider: "claude-cli", reason: "revoked" },
+  },
+  {
+    name: "structured Claude CLI logout without a provider prefix",
+    error: new FailoverError("Not logged in · Please run /login", cliFailure),
+    expected: { provider: "claude-cli", reason: "sign_in_again" },
+  },
+])("classifies $name", ({ error, expected }) => {
+  expect(classifyOAuthRefreshFailureError(error)).toEqual(expected);
 });

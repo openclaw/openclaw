@@ -9,11 +9,6 @@ describe("OpenAI Responses compact threshold", () => {
       expected: 190_400,
     },
     {
-      name: "uses the active runtime cap when the window is only modestly larger",
-      model: { contextWindow: 372_000, contextTokens: 272_000 },
-      expected: 190_400,
-    },
-    {
       name: "keeps window-only behavior",
       model: { contextWindow: 400_000 },
       expected: 280_000,
@@ -27,6 +22,30 @@ describe("OpenAI Responses compact threshold", () => {
     {
       name: "uses the fallback without a known budget",
       model: {},
+      expected: 80_000,
+    },
+    {
+      name: "floors a positive numeric threshold",
+      model: {},
+      extraParams: { responsesCompactThreshold: 123_456.9 },
+      expected: 123_456,
+    },
+    {
+      name: "accepts a strict positive integer string threshold",
+      model: {},
+      extraParams: { responsesCompactThreshold: "123456" },
+      expected: 123_456,
+    },
+    {
+      name: "rejects a fractional string threshold",
+      model: {},
+      extraParams: { responsesCompactThreshold: "123456.9" },
+      expected: 80_000,
+    },
+    {
+      name: "rejects a nonfinite threshold",
+      model: {},
+      extraParams: { responsesCompactThreshold: Number.POSITIVE_INFINITY },
       expected: 80_000,
     },
   ])("$name", ({ model, extraParams, expected }) => {

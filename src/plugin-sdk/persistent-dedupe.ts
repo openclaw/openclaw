@@ -1,19 +1,21 @@
 // Persistent dedupe helpers give plugins bounded replay protection across process restarts.
-import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import { resolveNonNegativeIntegerOption } from "../../packages/normalization-core/src/number-coercion.js";
 import { createDedupeCache } from "../infra/dedupe.js";
-import {
-  createCorePluginStateSyncKeyedStore,
-  createPluginStateSyncKeyedStore,
-} from "../plugin-state/plugin-state-store.js";
-import type { PluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.types.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   createChannelReplayGuardWithDedupe,
   type ChannelReplayGuard,
   type ChannelReplayClaimHandle,
   type ChannelReplayGuardParams,
 } from "./channel-replay-guard.js";
+import { KeyedAsyncQueue } from "./keyed-async-queue.js";
+import {
+  createPersistentStoreResolver,
+  hasPluginStateOptions,
+  resolveEntryKey,
+  resolveNamespace,
+  resolveScopedKey,
+} from "./persistent-dedupe-store.js";
 import type {
   ClaimableDedupe,
   ClaimableDedupeClaimResult,
@@ -22,12 +24,12 @@ import type {
   PersistentDedupeCheckOptions,
   PersistentDedupeLegacyPathOptions,
   PersistentDedupeOptions,
-  PersistentDedupePluginStateOptions,
 } from "./persistent-dedupe.types.js";
 
-const LEGACY_PATH_OWNER_ID = "core:persistent-dedupe";
-const DEFAULT_NAMESPACE_PREFIX = "persistent-dedupe";
-
+export {
+  createPersistentDedupeImportEntry,
+  resolvePersistentDedupePluginStateNamespace,
+} from "./persistent-dedupe-store.js";
 export type { ChannelReplayClaimHandle };
 export type {
   ClaimableDedupe,
@@ -37,57 +39,13 @@ export type {
   PersistentDedupeCheckOptions,
   PersistentDedupeLegacyPathOptions,
   PersistentDedupeOptions,
+  PersistentDedupeEntry,
+  PersistentDedupeLegacyJsonImportEntry,
   PersistentDedupePluginStateOptions,
 } from "./persistent-dedupe.types.js";
 
-export type PersistentDedupeEntry = {
-  key: string;
-  seenAt: number;
-};
-
-export type PersistentDedupeLegacyJsonMigrationResult = {
-  imported: number;
-  skippedExpired: number;
-  skippedInvalid: number;
-  skippedExisting: number;
-  removed: boolean;
-};
-
-export type PersistentDedupeLegacyJsonMigrationOptions = PersistentDedupePluginStateOptions & {
-  filePath: string;
-  namespace: string;
-  now?: number;
-  removeFile?: boolean;
-};
-
-export type PersistentDedupeLegacyJsonImportEntry = {
-  key: string;
-  value: PersistentDedupeEntry;
-  ttlMs?: number;
-};
-
-type PersistentDedupeLegacyJsonEntriesResult = {
-  entries: PersistentDedupeLegacyJsonImportEntry[];
-  skippedExpired: number;
-  skippedInvalid: number;
-};
-
-function resolveNamespace(namespace?: string): string {
-  return namespace?.trim() || "global";
-}
-
-function resolveScopedKey(namespace: string, key: string): string {
-  return `${namespace}:${key}`;
-}
-
 function isRecentTimestamp(seenAt: number | undefined, ttlMs: number, now: number): boolean {
   return seenAt != null && (ttlMs <= 0 || now - seenAt < ttlMs);
-}
-
-function resolveEntrySeenAt(entry: PersistentDedupeEntry | undefined): number | undefined {
-  return typeof entry?.seenAt === "number" && Number.isFinite(entry.seenAt)
-    ? entry.seenAt
-    : undefined;
 }
 
 function resolveUnknownEntrySeenAt(value: unknown): number | undefined {
@@ -99,190 +57,10 @@ function resolveUnknownEntrySeenAt(value: unknown): number | undefined {
     : undefined;
 }
 
-function shortHash(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 32);
-}
-
-function resolveEntryKey(key: string): string {
-  return `k.${shortHash(key)}`;
-}
-
-export function createPersistentDedupeImportEntry(params: {
-  key: string;
-  seenAt: number;
-  ttlMs?: number;
-}): PersistentDedupeLegacyJsonImportEntry {
-  return {
-    key: resolveEntryKey(params.key),
-    value: { key: params.key, seenAt: params.seenAt },
-    ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
-  };
-}
-
-function resolveRemainingTtlMs(
-  seenAt: number,
-  ttlMs: number,
-  now: number,
-): { ttlMs: number } | undefined | null {
-  if (ttlMs <= 0) {
-    return undefined;
-  }
-  const remaining = ttlMs - (now - seenAt);
-  return remaining > 0 ? { ttlMs: Math.max(1, Math.floor(remaining)) } : null;
-}
-
-function normalizeNamespacePrefix(value: string | undefined): string {
-  const normalized = (value ?? DEFAULT_NAMESPACE_PREFIX)
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[._-]+|[._-]+$/g, "")
-    .slice(0, 48);
-  return normalized || DEFAULT_NAMESPACE_PREFIX;
-}
-
-function resolveStateNamespace(prefix: string, namespace: string): string {
-  return `${prefix}.${shortHash(namespace)}`;
-}
-
-export function resolvePersistentDedupePluginStateNamespace(options: {
-  namespace: string;
-  namespacePrefix?: string;
-}): string {
-  return resolveStateNamespace(
-    normalizeNamespacePrefix(options.namespacePrefix),
-    resolveNamespace(options.namespace),
-  );
-}
-
-function hasPluginStateOptions(
-  options: ClaimableDedupeOptions | PersistentDedupeOptions,
-): options is PersistentDedupePluginStateOptions {
-  return typeof options.pluginId === "string";
-}
-
 function hasLegacyPathOptions(
   options: ClaimableDedupeOptions | PersistentDedupeOptions,
 ): options is PersistentDedupeLegacyPathOptions {
   return typeof options.resolveFilePath === "function";
-}
-
-function resolveStateMaxEntries(options: PersistentDedupeOptions): number {
-  const maxEntries = hasPluginStateOptions(options)
-    ? options.stateMaxEntries
-    : options.fileMaxEntries;
-  return Math.max(1, resolveNonNegativeIntegerOption(maxEntries, 1));
-}
-
-function resolvePersistentStoreCacheKey(pluginId: string, namespace: string): string {
-  return `${pluginId}\0${namespace}`;
-}
-
-function createPersistentStoreResolver(
-  options: PersistentDedupeOptions,
-): (namespace: string) => PluginStateSyncKeyedStore<PersistentDedupeEntry> {
-  const maxEntries = resolveStateMaxEntries(options);
-  const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
-  const defaultTtlMs = ttlMs > 0 ? ttlMs : undefined;
-  const stores = new Map<string, PluginStateSyncKeyedStore<PersistentDedupeEntry>>();
-
-  if (hasPluginStateOptions(options)) {
-    const pluginId = options.pluginId;
-    const prefix = normalizeNamespacePrefix(options.namespacePrefix);
-    return (namespace) => {
-      const stateNamespace = resolveStateNamespace(prefix, namespace);
-      const cacheKey = resolvePersistentStoreCacheKey(pluginId, stateNamespace);
-      const existing = stores.get(cacheKey);
-      if (existing) {
-        return existing;
-      }
-      const store = createPluginStateSyncKeyedStore<PersistentDedupeEntry>(pluginId, {
-        namespace: stateNamespace,
-        maxEntries,
-        ...(defaultTtlMs != null ? { defaultTtlMs } : {}),
-        ...(options.env ? { env: options.env } : {}),
-      });
-      stores.set(cacheKey, store);
-      return store;
-    };
-  }
-
-  const prefix = normalizeNamespacePrefix("legacy-path");
-  return (namespace) => {
-    const legacyPath = options.resolveFilePath(namespace);
-    const stateNamespace = resolveStateNamespace(prefix, legacyPath);
-    const cacheKey = resolvePersistentStoreCacheKey(LEGACY_PATH_OWNER_ID, stateNamespace);
-    const existing = stores.get(cacheKey);
-    if (existing) {
-      return existing;
-    }
-    const store = createCorePluginStateSyncKeyedStore<PersistentDedupeEntry>({
-      ownerId: LEGACY_PATH_OWNER_ID,
-      namespace: stateNamespace,
-      maxEntries,
-      ...(defaultTtlMs != null ? { defaultTtlMs } : {}),
-      ...(options.env ? { env: options.env } : {}),
-    });
-    stores.set(cacheKey, store);
-    return store;
-  };
-}
-
-function parseLegacyDedupeData(raw: string): {
-  data: Record<string, number>;
-  invalidCount: number;
-} {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    return { data: {}, invalidCount: 0 };
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { data: {}, invalidCount: 0 };
-  }
-  const data: Record<string, number> = {};
-  let invalidCount = 0;
-  for (const [key, seenAt] of Object.entries(parsed)) {
-    if (typeof seenAt === "number" && Number.isFinite(seenAt) && seenAt > 0) {
-      data[key] = seenAt;
-    } else {
-      invalidCount++;
-    }
-  }
-  return { data, invalidCount };
-}
-
-async function readPersistentDedupeLegacyJsonFileEntries(options: {
-  filePath: string;
-  ttlMs: number;
-  now?: number;
-}): Promise<PersistentDedupeLegacyJsonEntriesResult> {
-  const raw = await fs.readFile(options.filePath, "utf8");
-  const { data, invalidCount } = parseLegacyDedupeData(raw);
-  const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
-  const now = options.now ?? Date.now();
-  const entries: PersistentDedupeLegacyJsonImportEntry[] = [];
-  let skippedExpired = 0;
-
-  for (const [key, seenAt] of Object.entries(data)) {
-    const ttlOption = resolveRemainingTtlMs(seenAt, ttlMs, now);
-    if (ttlOption === null) {
-      skippedExpired++;
-      continue;
-    }
-    entries.push(createPersistentDedupeImportEntry({ key, seenAt, ...ttlOption }));
-  }
-
-  return { entries, skippedExpired, skippedInvalid: invalidCount };
-}
-
-export async function listPersistentDedupeLegacyJsonFileEntries(options: {
-  filePath: string;
-  ttlMs: number;
-  now?: number;
-}): Promise<PersistentDedupeLegacyJsonImportEntry[]> {
-  return (await readPersistentDedupeLegacyJsonFileEntries(options)).entries;
 }
 
 export function shouldReplacePersistentDedupeEntry(params: {
@@ -296,139 +74,45 @@ export function shouldReplacePersistentDedupeEntry(params: {
   );
 }
 
-/** Import one retired JSON dedupe cache file into plugin-state SQLite during doctor repair. */
-export async function migratePersistentDedupeLegacyJsonFile(
-  options: PersistentDedupeLegacyJsonMigrationOptions,
-): Promise<PersistentDedupeLegacyJsonMigrationResult> {
-  const legacy = await readPersistentDedupeLegacyJsonFileEntries(options);
-  const store = createPersistentStoreResolver(options)(resolveNamespace(options.namespace));
-  const result: PersistentDedupeLegacyJsonMigrationResult = {
-    imported: 0,
-    skippedExpired: legacy.skippedExpired,
-    skippedInvalid: legacy.skippedInvalid,
-    skippedExisting: 0,
-    removed: false,
-  };
-
-  for (const entry of legacy.entries) {
-    const changed = store.update?.(
-      entry.key,
-      (current) => {
-        const currentSeenAt = resolveEntrySeenAt(current);
-        if (currentSeenAt != null && currentSeenAt >= entry.value.seenAt) {
-          return undefined;
-        }
-        return entry.value;
-      },
-      entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
-    );
-    if (changed) {
-      result.imported++;
-    } else {
-      result.skippedExisting++;
-    }
-  }
-
-  if (options.removeFile !== false) {
-    await fs.rm(options.filePath, { force: true });
-    result.removed = true;
-  }
-  return result;
-}
-
 /** Create a dedupe helper that combines in-memory fast checks with SQLite-backed state. */
 export function createPersistentDedupe(options: PersistentDedupeOptions): PersistentDedupe {
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
   const memoryMaxSize = resolveNonNegativeIntegerOption(options.memoryMaxSize, 0);
-  const getStore = createPersistentStoreResolver(options);
+  const captureStore = createPersistentStoreResolver(options);
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
   const inflight = new Map<string, Promise<boolean>>();
-
-  async function checkAndRecordInner(
-    key: string,
-    namespace: string,
-    scopedKey: string,
-    now: number,
-    onDiskError?: (error: unknown) => void,
-  ): Promise<boolean> {
-    if (memory.check(scopedKey, now)) {
-      return false;
-    }
-
-    try {
-      const entryKey = resolveEntryKey(key);
-      const store = getStore(namespace);
-      let duplicateSeenAt: number | undefined;
-      store.update?.(
-        entryKey,
-        (entry) => {
-          const seenAt = resolveEntrySeenAt(entry);
-          if (isRecentTimestamp(seenAt, ttlMs, now)) {
-            duplicateSeenAt = seenAt;
-            return undefined;
-          }
-          return { key, seenAt: now };
-        },
-        ttlMs > 0 ? { ttlMs } : undefined,
-      );
-      if (duplicateSeenAt != null) {
-        memory.check(scopedKey, duplicateSeenAt);
-        return false;
-      }
-      memory.check(scopedKey, now);
-      return true;
-    } catch (error) {
-      onDiskError?.(error);
-      memory.check(scopedKey, now);
-      return true;
-    }
-  }
-
-  async function hasRecentInner(
-    key: string,
-    namespace: string,
-    scopedKey: string,
-    now: number,
-    onDiskError?: (error: unknown) => void,
-  ): Promise<boolean> {
-    if (memory.peek(scopedKey, now)) {
-      return true;
-    }
-
-    try {
-      const seenAt = resolveEntrySeenAt(getStore(namespace).lookup(resolveEntryKey(key)));
-      if (!isRecentTimestamp(seenAt, ttlMs, now)) {
-        return false;
-      }
-      memory.check(scopedKey, seenAt);
-      return true;
-    } catch (error) {
-      onDiskError?.(error);
-      return memory.peek(scopedKey, now);
-    }
-  }
+  // Namespace ordering keeps a queued forget after earlier writes and warmup reads.
+  const operations = new KeyedAsyncQueue();
+  // A synchronous clear/forget must fence memory publication from older worker results.
+  let memoryGeneration = 0;
 
   async function warmup(namespace = "global", onError?: (error: unknown) => void): Promise<number> {
     const now = Date.now();
-    try {
-      let loaded = 0;
-      for (const entry of getStore(resolveNamespace(namespace)).entries()) {
-        const ts = resolveEntrySeenAt(entry.value);
-        if (ts == null) {
-          continue;
+    const normalizedNamespace = resolveNamespace(namespace);
+    const generation = memoryGeneration;
+    const store = captureStore(normalizedNamespace);
+    return operations.enqueue(store.namespace, async () => {
+      try {
+        let loaded = 0;
+        for (const entry of await store.get().entries()) {
+          const ts = resolveUnknownEntrySeenAt(entry.value);
+          if (ts == null) {
+            continue;
+          }
+          if (ttlMs > 0 && now - ts >= ttlMs) {
+            continue;
+          }
+          if (generation === memoryGeneration) {
+            memory.check(resolveScopedKey(normalizedNamespace, entry.value.key), ts);
+            loaded++;
+          }
         }
-        if (ttlMs > 0 && now - ts >= ttlMs) {
-          continue;
-        }
-        const scopedKey = `${resolveNamespace(namespace)}:${entry.value.key}`;
-        memory.check(scopedKey, ts);
-        loaded++;
+        return loaded;
+      } catch (error) {
+        onError?.(error);
+        return 0;
       }
-      return loaded;
-    } catch (error) {
-      onError?.(error);
-      return 0;
-    }
+    });
   }
 
   async function checkAndRecord(
@@ -447,12 +131,59 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
 
     const onDiskError = dedupeOptions?.onDiskError ?? options.onDiskError;
     const now = dedupeOptions?.now ?? Date.now();
-    const work = checkAndRecordInner(trimmed, namespace, scopedKey, now, onDiskError);
+    const generation = memoryGeneration;
+    const store = captureStore(namespace);
+    const work = operations.enqueue(store.namespace, async () => {
+      const cached = memory.peek(scopedKey, now);
+      if (generation === memoryGeneration) {
+        memory.check(scopedKey, now);
+      }
+      if (cached) {
+        return false;
+      }
+
+      try {
+        const entryKey = resolveEntryKey(trimmed);
+        let observed = await store.get().observe(entryKey);
+        for (;;) {
+          const seenAt = resolveUnknownEntrySeenAt(observed.value);
+          const duplicate = isRecentTimestamp(seenAt, ttlMs, now);
+          const outcome = await store.get().compareAndApply(
+            entryKey,
+            observed.comparison,
+            duplicate
+              ? { operation: "update", action: "keep" }
+              : {
+                  operation: "update",
+                  action: "set",
+                  value: { key: trimmed, seenAt: now },
+                  ...(ttlMs > 0 ? { ttlMs } : {}),
+                },
+          );
+          if (outcome.status === "conflict") {
+            observed = outcome.current;
+            continue;
+          }
+          if (generation === memoryGeneration) {
+            memory.check(scopedKey, duplicate ? seenAt : now);
+          }
+          return !duplicate;
+        }
+      } catch (error) {
+        onDiskError?.(error);
+        if (generation === memoryGeneration) {
+          memory.check(scopedKey, now);
+        }
+        return true;
+      }
+    });
     inflight.set(scopedKey, work);
     try {
       return await work;
     } finally {
-      inflight.delete(scopedKey);
+      if (inflight.get(scopedKey) === work) {
+        inflight.delete(scopedKey);
+      }
     }
   }
 
@@ -468,7 +199,29 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     const scopedKey = resolveScopedKey(namespace, trimmed);
     const onDiskError = dedupeOptions?.onDiskError ?? options.onDiskError;
     const now = dedupeOptions?.now ?? Date.now();
-    return hasRecentInner(trimmed, namespace, scopedKey, now, onDiskError);
+    const generation = memoryGeneration;
+    const store = captureStore(namespace);
+    return operations.enqueue(store.namespace, async () => {
+      if (memory.peek(scopedKey, now)) {
+        return true;
+      }
+
+      try {
+        const seenAt = resolveUnknownEntrySeenAt(
+          await store.get().lookup(resolveEntryKey(trimmed)),
+        );
+        if (!isRecentTimestamp(seenAt, ttlMs, now)) {
+          return false;
+        }
+        if (generation === memoryGeneration) {
+          memory.check(scopedKey, seenAt);
+        }
+        return true;
+      } catch (error) {
+        onDiskError?.(error);
+        return memory.peek(scopedKey, now);
+      }
+    });
   }
 
   async function forget(
@@ -481,14 +234,18 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     }
     const namespace = resolveNamespace(dedupeOptions?.namespace);
     const scopedKey = resolveScopedKey(namespace, trimmed);
+    memoryGeneration++;
     memory.delete(scopedKey);
-
-    try {
-      return getStore(namespace).delete(resolveEntryKey(trimmed));
-    } catch (error) {
-      (dedupeOptions?.onDiskError ?? options.onDiskError)?.(error);
-      return false;
-    }
+    inflight.delete(scopedKey);
+    const store = captureStore(namespace);
+    return operations.enqueue(store.namespace, async () => {
+      try {
+        return await store.get().delete(resolveEntryKey(trimmed));
+      } catch (error) {
+        (dedupeOptions?.onDiskError ?? options.onDiskError)?.(error);
+        return false;
+      }
+    });
   }
 
   return {
@@ -496,7 +253,10 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     hasRecent,
     forget,
     warmup,
-    clearMemory: () => memory.clear(),
+    clearMemory: () => {
+      memoryGeneration++;
+      memory.clear();
+    },
     memorySize: () => memory.size(),
   };
 }
@@ -537,37 +297,12 @@ export function createClaimableDedupe(
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
   const memoryMaxSize = resolveNonNegativeIntegerOption(options.memoryMaxSize, 0);
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
-  let persistent: PersistentDedupe | null = null;
-  if (hasPluginStateOptions(options)) {
-    persistent = createPersistentDedupe({
-      ttlMs,
-      memoryMaxSize,
-      pluginId: options.pluginId,
-      stateMaxEntries: Math.max(1, resolveNonNegativeIntegerOption(options.stateMaxEntries, 1)),
-      ...(options.namespacePrefix ? { namespacePrefix: options.namespacePrefix } : {}),
-      ...(options.env ? { env: options.env } : {}),
-      ...(options.onDiskError ? { onDiskError: options.onDiskError } : {}),
-    });
-  } else if (hasLegacyPathOptions(options)) {
-    persistent = createPersistentDedupe({
-      ttlMs,
-      memoryMaxSize,
-      fileMaxEntries: Math.max(1, resolveNonNegativeIntegerOption(options.fileMaxEntries, 1)),
-      resolveFilePath: options.resolveFilePath,
-      ...(options.env ? { env: options.env } : {}),
-      ...(options.lockOptions ? { lockOptions: options.lockOptions } : {}),
-      ...(options.onDiskError ? { onDiskError: options.onDiskError } : {}),
-    });
-  }
+  const persistent =
+    hasPluginStateOptions(options) || hasLegacyPathOptions(options)
+      ? createPersistentDedupe({ ...options, ttlMs, memoryMaxSize })
+      : null;
 
-  const inflight = new Map<
-    string,
-    {
-      promise: Promise<boolean>;
-      resolve: (result: boolean) => void;
-      reject: (error: unknown) => void;
-    }
-  >();
+  const inflight = new Map<string, Deferred<boolean>>();
 
   async function hasRecent(
     key: string,
@@ -620,22 +355,28 @@ export function createClaimableDedupe(
       return { kind: "inflight", pending: existing.promise };
     }
 
-    let resolve!: (result: boolean) => void;
-    let reject!: (error: unknown) => void;
-    const promise = new Promise<boolean>((resolvePromise, rejectPromise) => {
-      resolve = resolvePromise;
-      reject = rejectPromise;
-    });
+    const { promise, resolve, reject } = createDeferredCore<boolean>();
     void promise.catch(() => {});
-    inflight.set(scopedKey, { promise, resolve, reject });
+    const claimValue = { promise, resolve, reject };
+    inflight.set(scopedKey, claimValue);
     try {
-      if (await hasRecent(trimmed, dedupeOptions)) {
+      const recent = await hasRecent(trimmed, dedupeOptions);
+      if (inflight.get(scopedKey) !== claimValue) {
+        // Release/forget can replace this owner during the read. Preserve its settlement error.
+        await promise;
+        return { kind: "duplicate" };
+      }
+      if (recent) {
         resolve(false);
         inflight.delete(scopedKey);
         return { kind: "duplicate" };
       }
       return { kind: "claimed" };
     } catch (error) {
+      if (inflight.get(scopedKey) !== claimValue) {
+        await promise;
+        return { kind: "duplicate" };
+      }
       reject(error);
       inflight.delete(scopedKey);
       throw error;
@@ -663,7 +404,9 @@ export function createClaimableDedupe(
       claimValue?.reject(error);
       throw error;
     } finally {
-      inflight.delete(scopedKey);
+      if (inflight.get(scopedKey) === claimValue) {
+        inflight.delete(scopedKey);
+      }
     }
   }
 

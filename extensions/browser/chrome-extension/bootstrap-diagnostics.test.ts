@@ -17,7 +17,7 @@ function observerFixture() {
       reply = socket.send;
       return {
         onMessage: receive,
-        onClose: () => {
+        onClose: async () => {
           count--;
           socket.close();
         },
@@ -50,7 +50,6 @@ describe("bootstrap diagnostic observation", () => {
       JSON.stringify({ method: "Runtime.consoleAPICalled", params: { args: ["private-content"] } }),
     );
     callbacks.onMessage("private-malformed");
-    diagnostic.peer({ name: "private-peer", version: "private-version" });
     diagnostic.flush();
     expect(receive.mock.calls[0]).toEqual([command]);
     expect(receive).toHaveBeenCalledTimes(2);
@@ -65,7 +64,7 @@ describe("bootstrap diagnostic observation", () => {
     expect(bridge.attachCdpClientSocket).toBe(original);
   });
 
-  it("caps flood output but retains the action outcome and teardown", () => {
+  it("caps flood output but retains the action outcome and teardown", async () => {
     const output = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const diagnostic = createBootstrapDiagnostic();
     const { bridge, reply } = observerFixture();
@@ -82,7 +81,7 @@ describe("bootstrap diagnostic observation", () => {
     }
     diagnostic.mark("navigate.status", 500);
     diagnostic.flush();
-    callbacks.onClose();
+    await callbacks.onClose();
     diagnostic.mark("relay.closed", true);
     diagnostic.flush();
     diagnostic.flush();

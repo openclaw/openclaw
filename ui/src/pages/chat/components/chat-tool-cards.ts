@@ -1,255 +1,138 @@
-// Control UI chat module implements tool cards behavior.
-import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ProgressCardStep } from "@openclaw/gateway-protocol";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
+import { styleMap } from "lit/directives/style-map.js";
+import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import {
+  browserRouteKey,
   browserTabKey,
   type BrowserTabSelection,
 } from "../../../components/browser/browser-target.ts";
-import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
-import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
-import "../../../components/tooltip.ts";
-import { syncTabGroupLabel } from "../../../components/web-awesome-tabs.ts";
 import { t } from "../../../i18n/index.ts";
 import { browserTabCardRevision } from "../../../lib/chat/browser-tab-preview.ts";
-import type {
-  MessageGroup,
-  ToolApprovalReview,
-  ToolCard,
-  ToolCardOutcome,
-} from "../../../lib/chat/chat-types.ts";
+import type { MessageGroup, ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
-import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   extractToolCardsCached,
   formatDistinctCollapsedToolSummaryText as distinctSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
-  isToolCardError,
   resolveCollapsedToolArgumentPreview as toolArgumentPreview,
+  resolveToolCardDisplay,
   resolveToolCardOutcome,
-  type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { formatDurationCompact } from "../../../lib/format-duration.ts";
+import { pathDisplayName } from "../../../lib/path-display.ts";
+import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
+import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
+import type { WorkGroupRenderItem } from "../chat-thread-grouping.ts";
+import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
+import { renderHighlightedCommand } from "./chat-command-highlight.ts";
+import { renderDiffStatChips } from "./chat-diff-render.ts";
 import {
-  formatToolDetail,
-  resolveToolDisplay,
-  type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
-import { getToolCallTitle } from "../tool-titles.ts";
-import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+  renderExpandedToolCardContent,
+  toolWorkspacePath,
+  type ToolRenderOptions,
+} from "./chat-tool-content.ts";
+import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
 import { renderToolPreview } from "./widget-card.ts";
-
-export {
-  renderToolPreview,
-  WIDGET_PROMPT_EVENT,
-  type WidgetPromptEventDetail,
-} from "./widget-card.ts";
 
 export function renderBrowserTabPreviews(
   groups: readonly MessageGroup[],
   options: { sessionKey?: string; latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection> },
+  placePreview?: (groupKey: string, content: unknown) => void,
 ) {
   const cards = groups.flatMap((group) =>
-    group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key)),
+    group.messages.flatMap((item) =>
+      extractToolCardsCached(item.message)
+        .filter((card) => card.browserTab)
+        .map((card) => ({ card, groupKey: group.key })),
+    ),
   );
-  // One card per tab per rendered group: open/navigate/screenshot in a single
-  // turn all describe the same tab, and stacked near-identical cards are noise.
-  const lastCardForTab = new Map<string, (typeof cards)[number]>();
-  for (const card of cards) {
-    if (
-      card.preview?.kind === "browser-tab" &&
-      resolveToolCardOutcome(card, false) === "succeeded"
-    ) {
-      lastCardForTab.set(browserTabKey(card.preview), card);
-    }
-  }
-  return [...lastCardForTab.values()].map((card) => {
-    const preview = card.preview;
-    if (preview?.kind !== "browser-tab") {
-      return nothing;
-    }
-    const revision = browserTabCardRevision(card);
-    return renderToolPreview(preview, "chat_tool", {
-      browserTabRevision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
-      browserTabLatest: Boolean(
-        revision && options.latestBrowserTabs?.get(browserTabKey(preview))?.revision === revision,
-      ),
+  // Select each tab's final state before collapsing reopened pages. A newer
+  // blank/non-web result must still retire that tab's older web preview.
+  const seenTabs = new Set<string>();
+  const seenPages = new Set<string>();
+  return cards
+    .toReversed()
+    .flatMap(({ card, groupKey }) => {
+      if (!card.browserTab || resolveToolCardOutcome(card, false) !== "succeeded") {
+        return [];
+      }
+      const tabKey = browserTabKey(card.browserTab);
+      if (seenTabs.has(tabKey)) {
+        return [];
+      }
+      seenTabs.add(tabKey);
+      const preview = card.preview;
+      if (preview?.kind !== "browser-tab") {
+        return [];
+      }
+      // Browser/history descriptors cap URLs at 2,048 UTF-16 units, or 2,047
+      // when a surrogate pair straddles the cut. Keep ambiguous prefixes per tab.
+      const pageKey =
+        preview.url.length < 2_047
+          ? JSON.stringify([browserRouteKey(preview), preview.url])
+          : tabKey;
+      if (seenPages.has(pageKey)) {
+        return [];
+      }
+      seenPages.add(pageKey);
+      return [{ card, groupKey, preview }];
+    })
+    .toReversed()
+    .map(({ card, groupKey, preview }) => {
+      const revision = browserTabCardRevision(card);
+      const content = renderToolPreview(preview, "chat_tool", {
+        browserTabRevision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
+        browserTabLatest: Boolean(
+          revision && options.latestBrowserTabs?.get(browserTabKey(preview))?.revision === revision,
+        ),
+      });
+      placePreview?.(groupKey, content);
+      return content;
     });
-  });
 }
 
-export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
-  if (event.detail === 0) {
-    return true;
+export function renderWorkGroupBrowserTabPreviews(
+  items: readonly WorkGroupRenderItem[],
+  options: Parameters<typeof renderBrowserTabPreviews>[1],
+) {
+  const byAnchor = new Map<string, unknown[]>();
+  // Deduplicate the whole turn before placing previews, so later blank tabs or
+  // repeated page opens cannot resurrect an earlier preview across an answer.
+  for (const item of items) {
+    renderBrowserTabPreviews(item.groups, options, (groupKey, content) => {
+      const anchor = item.previewAfterGroup?.get(groupKey) ?? item.key;
+      const previews = byAnchor.get(anchor) ?? [];
+      previews.push(content);
+      byAnchor.set(anchor, previews);
+    });
   }
-  const target = event.currentTarget;
-  const selection = window.getSelection();
-  if (!(target instanceof Node) || !selection || selection.isCollapsed) {
-    return true;
-  }
-  return ![selection.anchorNode, selection.focusNode].some(
-    (node) => node !== null && target.contains(node),
-  );
+  return byAnchor;
 }
 
-function formatToolOutputForSidebar(text: string): string {
-  if (isMarkdownBlockArtText(text)) {
-    return "```\n" + text + "\n```";
+export function renderToolIcon(
+  name: string,
+  tool?: { toolName: string; pluginToolIcons?: PluginToolIcons },
+) {
+  const activityIcon = tool?.pluginToolIcons?.get(tool.toolName);
+  if (activityIcon) {
+    return html`<span
+      class="chat-tool-activity-icon"
+      aria-hidden="true"
+      style=${styleMap({ maskImage: `url("${activityIcon.url}")` })}
+    >
+      <img hidden src=${activityIcon.url} alt="" @error=${activityIcon.onError} />
+    </span>`;
   }
-
-  const trimmed = text.trim();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try {
-      JSON.parse(trimmed);
-      // Keep the source literal: reserialization can change numbers, escapes, and duplicate keys.
-      return "```json\n" + trimmed + "\n```";
-    } catch {
-      return text;
-    }
-  }
-  return text;
-}
-
-function renderToolIcon(name: string) {
+  // SAFETY: Unknown display icon names produce undefined and use the fallback.
   return icons[name as IconName] ?? icons.puzzle;
 }
-
-function formatPayloadForSidebar(
-  text: string | undefined,
-  language: "json" | "text" = "text",
-): string {
-  if (!text?.trim()) {
-    return "";
-  }
-  if (language === "json") {
-    return `\`\`\`json
-${text}
-\`\`\``;
-  }
-  const formatted = formatToolOutputForSidebar(text);
-  if (formatted.includes("```")) {
-    return formatted;
-  }
-  return `\`\`\`text
-${text}
-\`\`\``;
-}
-
-function buildToolCardSidebarContent(card: ToolCard): string {
-  const display = resolveToolDisplay({ name: card.name, args: card.args });
-  const detail = formatToolDetail(display);
-  const isError = isToolCardError(card);
-  const outcome = resolveToolCardOutcome(card, false);
-  const sections = [`## ${display.label}`, `**${t("chat.toolCards.tool")}:** \`${display.name}\``];
-
-  if (detail) {
-    sections.push(`**${t("chat.toolCards.summary")}:** ${detail}`);
-  }
-
-  if (card.inputText?.trim()) {
-    const inputIsJson = typeof card.args === "object" && card.args !== null;
-    sections.push(
-      `### ${t("chat.toolCards.toolInput")}\n${formatPayloadForSidebar(card.inputText, inputIsJson ? "json" : "text")}`,
-    );
-  }
-
-  if (card.outputText?.trim()) {
-    sections.push(
-      `### ${t(isError ? "chat.toolCards.toolError" : "chat.toolCards.toolOutput")}\n${formatToolOutputForSidebar(card.outputText)}`,
-    );
-  } else {
-    sections.push(
-      isError
-        ? `### ${t("chat.toolCards.toolError")}\n*${t("chat.toolCards.noOutputFailed")}*`
-        : outcome === "succeeded"
-          ? `### ${t("chat.toolCards.toolOutput")}\n*${t("chat.toolCards.noOutputSucceeded")}*`
-          : `### ${t("chat.toolCards.toolOutput")}\n*${t("chat.toolCards.noResult")}*`,
-    );
-  }
-
-  return sections.join("\n\n");
-}
-
-function handleRawDetailsToggle(event: Event) {
-  const button = event.currentTarget as HTMLButtonElement | null;
-  const root = button?.closest(".chat-tool-card__raw");
-  const body = root?.querySelector<HTMLElement>(".chat-tool-card__raw-body");
-  if (!button || !body) {
-    return;
-  }
-  const expanded = button.getAttribute("aria-expanded") === "true";
-  button.setAttribute("aria-expanded", String(!expanded));
-  body.hidden = expanded;
-}
-
-function buildSidebarContent(value: string, options?: { rawText?: string | null }): SidebarContent {
-  return {
-    kind: "markdown",
-    content: value,
-    ...(options?.rawText ? { rawText: options.rawText } : {}),
-  };
-}
-
-function buildPreviewSidebarContent(
-  preview: ToolPreview,
-  rawText?: string | null,
-): SidebarContent | null {
-  if (preview.kind !== "canvas" || preview.render !== "url" || !preview.viewId || !preview.url) {
-    return null;
-  }
-  return {
-    kind: "canvas",
-    docId: preview.viewId,
-    entryUrl: preview.url,
-    ...(preview.title ? { title: preview.title } : {}),
-    ...(preview.preferredHeight ? { preferredHeight: preview.preferredHeight } : {}),
-    // The per-preview sandbox ceiling must survive the sidebar conversion, or a
-    // trusted global embed mode would re-grant same-origin to widget script.
-    ...(preview.sandbox ? { sandbox: preview.sandbox } : {}),
-    ...(rawText ? { rawText } : {}),
-  };
-}
-
-export function renderRawOutputToggle(text: string) {
-  return html`
-    <div class="chat-tool-card__raw">
-      <button
-        class="chat-inline-disclosure chat-tool-card__raw-toggle"
-        type="button"
-        aria-expanded="false"
-        @click=${handleRawDetailsToggle}
-      >
-        <span>${t("chat.toolCards.rawDetails")}</span>
-        <span class="chat-inline-disclosure__chevron" aria-hidden="true">${icons.chevronDown}</span>
-      </button>
-      <div class="chat-tool-card__raw-body" hidden>${renderToolDataBlock({ text })}</div>
-    </div>
-  `;
-}
-
-// Plain tool output is the block's default content, so it carries no header;
-// only input/error blocks need a label to stay distinguishable.
-function renderToolDataBlock(params: { label?: string; text: string }) {
-  const { label, text } = params;
-  const codeClass = isMarkdownBlockArtText(text) ? "markdown-block-art" : "";
-  return html`
-    <div class="chat-tool-card__block">
-      ${label
-        ? html`<div class="chat-tool-card__block-header">
-            <span class="chat-tool-card__block-icon">${icons.zap}</span>
-            <span class="chat-tool-card__block-label">${label}</span>
-          </div>`
-        : nothing}
-      <pre class="chat-tool-card__block-content"><code class=${codeClass}>${text}</code></pre>
-    </div>
-  `;
-}
-
-// ── Kind-aware tool rows (command / read / edit / write / search / fetch) ──
 
 const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
   read: "chat.toolCards.verbs.read",
@@ -258,31 +141,11 @@ const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
 };
 
 const MUTATION_VERB_KEYS = {
-  update: {
-    running: "chat.toolCards.verbs.editing",
-    succeeded: "chat.toolCards.verbs.edited",
-    fallback: "chat.toolCards.verbs.edit",
-  },
-  add: {
-    running: "chat.toolCards.verbs.creating",
-    succeeded: "chat.toolCards.verbs.created",
-    fallback: "chat.toolCards.verbs.create",
-  },
-  delete: {
-    running: "chat.toolCards.verbs.deleting",
-    succeeded: "chat.toolCards.verbs.deleted",
-    fallback: "chat.toolCards.verbs.delete",
-  },
-  mixed: {
-    running: "chat.toolCards.verbs.changing",
-    succeeded: "chat.toolCards.verbs.changed",
-    fallback: "chat.toolCards.verbs.change",
-  },
-  write: {
-    running: "chat.toolCards.verbs.writing",
-    succeeded: "chat.toolCards.verbs.wrote",
-    fallback: "chat.toolCards.verbs.write",
-  },
+  update: ["editing", "edited", "edit"],
+  add: ["creating", "created", "create"],
+  delete: ["deleting", "deleted", "delete"],
+  mixed: ["changing", "changed", "change"],
+  write: ["writing", "wrote", "write"],
 } as const;
 
 function resolveMutationVerbKind(view: ToolCallView): keyof typeof MUTATION_VERB_KEYS | undefined {
@@ -299,14 +162,10 @@ function resolveMutationVerbKind(view: ToolCallView): keyof typeof MUTATION_VERB
 function resolveToolRowVerb(view: ToolCallView, outcome: ToolCardOutcome): string | undefined {
   const mutation = resolveMutationVerbKind(view);
   if (mutation) {
-    const keys = MUTATION_VERB_KEYS[mutation];
-    const key =
-      outcome === "running"
-        ? keys.running
-        : outcome === "succeeded"
-          ? keys.succeeded
-          : keys.fallback;
-    return t(key);
+    const [running, succeeded, fallback] = MUTATION_VERB_KEYS[mutation];
+    return t(
+      `chat.toolCards.verbs.${outcome === "running" ? running : outcome === "succeeded" ? succeeded : fallback}`,
+    );
   }
   const key = TOOL_ROW_VERB_KEYS[view.kind];
   return key ? t(key) : undefined;
@@ -321,15 +180,11 @@ const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
   fetch: "globe",
 };
 
-function firstCommandLine(command: string): string {
-  return command.split("\n")[0]?.trim() ?? "";
-}
-
-function compactToolTarget(target: string, kind: ToolCallView["kind"]): string {
-  if (kind !== "edit" && kind !== "write") {
-    return target;
-  }
-  return target.split(/[\\/]/u).findLast(Boolean) ?? target;
+function commandPreview(command: string): string {
+  return truncateUtf16Safe(
+    (stripShellPreamble(command).command || command).replace(/\s+/gu, " ").trim(),
+    200,
+  );
 }
 
 export function syncToolDisclosureOverflow(event: Event): void {
@@ -344,17 +199,31 @@ export function syncToolDisclosureOverflow(event: Event): void {
   );
 }
 
-function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
+function renderToolRowContent(
+  card: ToolCard,
+  view: ToolCallView,
+  outcome: ToolCardOutcome,
+  toolLabel: string,
+  workspaceFilePath: string | null,
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
+) {
+  if (view.title) {
+    return html`<span class="chat-tool-row__title">${view.title}</span>`;
+  }
+
   if (view.kind === "command" && view.command) {
-    const commandPreview = firstCommandLine(view.command);
     return html`
       <span class="chat-tool-row__prompt" aria-hidden="true">$</span>
-      <code class="chat-tool-row__cmd">${renderHighlightedCommand(commandPreview)}</code>
+      <code class="chat-tool-row__cmd"
+        >${renderHighlightedCommand(commandPreview(view.command))}</code
+      >
     `;
   }
 
   const verb = resolveToolRowVerb(view, outcome);
   if (verb && view.target) {
+    const target =
+      view.kind === "edit" || view.kind === "write" ? pathDisplayName(view.target) : view.target;
     const stat =
       outcome === "succeeded"
         ? view.stat
@@ -363,44 +232,85 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
           : undefined;
     return html`
       <span class="chat-tool-row__verb">${verb}</span>
-      <span class="chat-tool-row__target">${compactToolTarget(view.target, view.kind)}</span>
+      ${
+        workspaceFilePath && onOpenWorkspaceFile
+          ? html`<button
+              class="chat-tool-row__file-link"
+              type="button"
+              title=${t("chat.toolCards.openFile")}
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                onOpenWorkspaceFile({ path: workspaceFilePath });
+              }}
+            >
+              ${target}
+            </button>`
+          : html`<span class="chat-tool-row__target">${target}</span>`
+      }
       ${stat ? renderDiffStatChips(stat) : nothing}
-      ${view.targetDetail && view.kind !== "edit" && view.kind !== "write"
-        ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
-        : nothing}
+      ${
+        !workspaceFilePath && view.targetDetail && view.kind !== "edit" && view.kind !== "write"
+          ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
+          : nothing
+      }
     `;
   }
 
-  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const summary = resolveCollapsedToolSummaryParts({
-    card,
-    displayLabel: display.label,
-    displayDetail: display.detail,
-  });
+  const summary = resolveCollapsedToolSummaryParts(card);
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
-  const argumentPreview = toolArgumentPreview(card.args);
-  const displayName = distinctSummaryText(argumentPreview ?? summary.name, displayLabel);
-  const aiTitle = getToolCallTitle(card.name, card.args);
-  if (aiTitle) {
-    return html`
-      <span class="chat-tool-row__title">${aiTitle}</span>
-      <span class="chat-tool-row__detail">${argumentPreview ?? displayLabel}</span>
-    `;
-  }
+  const displayName = distinctSummaryText(summary.name, displayLabel);
   return html`
-    <span class="chat-tool-msg-summary__label">${displayLabel}</span>
-    ${displayName
-      ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
-      : nothing}
+    ${!displayName || summary.label !== toolLabel ? html`<span class="chat-tool-msg-summary__label">${displayLabel}</span>` : nothing}
+    ${
+      displayName ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>` : nothing
+    }
   `;
 }
 
-type ProgressReceiptStep = {
-  step: string;
-  status: "pending" | "in_progress" | "completed";
-};
+/**
+ * A launched subagent reads as its name, not its assignment, with how long it
+ * took once it is done. The name opens its session when the pane holds it.
+ */
+function renderSubagentRowContent(subagent: SpawnedSubagent, onOpen: (() => void) | undefined) {
+  const session = subagent.session;
+  // How it ended matters more than how long it took.
+  const state = session?.running
+    ? t("chat.toolCards.subagentRunning")
+    : session?.ended === "failed"
+      ? t("chat.toolCards.failed")
+      : session?.ended === "stopped"
+        ? t("chat.toolCards.subagentStopped")
+        : formatDurationCompact(session?.runtimeMs);
+  return html`
+    ${
+      onOpen
+        ? html`<button
+            class="chat-tool-row__subagent-link"
+            type="button"
+            title=${t("chat.toolCards.openSubagent")}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              onOpen();
+            }}
+          >
+            ${subagent.label}
+          </button>`
+        : html`<span class="chat-tool-row__title">${subagent.label}</span>`
+    }
+    ${
+      state
+        ? html`<span
+            class="chat-tool-row__subagent-state ${
+              session?.ended === "failed" ? "chat-tool-row__subagent-state--failed" : ""
+            }"
+            >${state}</span
+          >`
+        : nothing
+    }
+  `;
+}
 
-function progressReceiptSteps(value: unknown): ProgressReceiptStep[] {
+function progressReceiptSteps(value: unknown): ProgressCardStep[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -429,389 +339,70 @@ function renderProgressCardReceipt(card: ToolCard, outcome: ToolCardOutcome) {
     steps.find((step) => step.status === "pending") ??
     steps.findLast((step) => step.status === "completed");
   const label =
-    outcome === "failed"
-      ? t("sessionProgressCard.receipt.failed")
-      : outcome === "running"
-        ? t("sessionProgressCard.receipt.updating")
-        : steps.length > 0
-          ? t("sessionProgressCard.receipt.updated", {
-              completed: String(completed),
-              current: current?.step ?? "",
-              total: String(steps.length),
-            })
-          : markdown
-            ? t("sessionProgressCard.receipt.noteUpdated")
-            : t("sessionProgressCard.receipt.cleared");
+    outcome === "skipped"
+      ? t("sessionProgressCard.receipt.skipped")
+      : outcome === "failed"
+        ? t("sessionProgressCard.receipt.failed")
+        : outcome === "running"
+          ? t("sessionProgressCard.receipt.updating")
+          : steps.length > 0
+            ? t("sessionProgressCard.receipt.updated", {
+                completed: String(completed),
+                current: current?.step ?? "",
+                total: String(steps.length),
+              })
+            : markdown
+              ? t("sessionProgressCard.receipt.noteUpdated")
+              : t("sessionProgressCard.receipt.cleared");
   // The label already names the running/failed state, so the row stays neutral
   // like every other transcript activity row instead of adding its own chrome.
   return html`<div class="chat-tool-msg-collapse chat-progress-card-receipt">
     <div class="chat-tool-msg-summary chat-tool-row" role="status">
       <span class="chat-tool-msg-summary__icon">${renderToolIcon("listChecks")}</span>
-      <span class="chat-tool-msg-summary__label">${label}</span>
+      <span class="chat-progress-card-receipt__text">${label}</span>
     </div>
   </div>`;
 }
 
-function renderFileToolRowContent(
-  card: ToolCard,
-  view: ToolCallView,
-  outcome: ToolCardOutcome,
-  workspaceFilePath: string | null,
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
-) {
-  const verb = resolveToolRowVerb(view, outcome);
-  if (!verb || !view.target) {
-    return renderToolRowContent(card, view, outcome);
-  }
-  const stat =
-    outcome === "succeeded"
-      ? view.stat
-      : outcome === "running" && (view.kind === "edit" || view.kind === "write")
-        ? card.liveDiffStat
-        : undefined;
-  const filename = compactToolTarget(view.target, view.kind);
-  return html`
-    <span class="chat-tool-row__verb">${verb}</span>
-    ${workspaceFilePath && onOpenWorkspaceFile
-      ? html`<button
-          class="chat-tool-row__file-link"
-          type="button"
-          title=${t("chat.toolCards.openFile")}
-          @click=${(event: MouseEvent) => {
-            event.stopPropagation();
-            onOpenWorkspaceFile({ path: workspaceFilePath });
-          }}
-        >
-          ${filename}
-        </button>`
-      : html`<span class="chat-tool-row__target">${filename}</span>`}
-    ${stat ? renderDiffStatChips(stat) : nothing}
-  `;
-}
-
-// ── Command syntax highlighting ──
-
-type CommandToken = { text: string; cls: "name" | "flag" | "str" | "num" | "op" | "plain" | "ws" };
-
-const COMMAND_HIGHLIGHT_MAX_CHARS = 2_000;
-const COMMAND_OP_CHARS = new Set(["|", ";", "&", "<", ">"]);
-
-/** Small shell-ish tokenizer for display colors only; never used for execution. */
-function tokenizeCommand(command: string): CommandToken[] {
-  const tokens: CommandToken[] = [];
-  let index = 0;
-  let expectName = true;
-  while (index < command.length) {
-    const char = command.charAt(index);
-    if (/\s/.test(char)) {
-      let end = index;
-      while (end < command.length && /\s/.test(command.charAt(end))) {
-        end++;
-      }
-      tokens.push({ text: command.slice(index, end), cls: "ws" });
-      index = end;
-      continue;
-    }
-    if (char === "'" || char === '"') {
-      let end = index + 1;
-      while (end < command.length && command.charAt(end) !== char) {
-        end += command.charAt(end) === "\\" ? 2 : 1;
-      }
-      end = Math.min(end + 1, command.length);
-      tokens.push({ text: command.slice(index, end), cls: "str" });
-      index = end;
-      expectName = false;
-      continue;
-    }
-    if (COMMAND_OP_CHARS.has(char)) {
-      let end = index;
-      while (end < command.length && COMMAND_OP_CHARS.has(command.charAt(end))) {
-        end++;
-      }
-      tokens.push({ text: command.slice(index, end), cls: "op" });
-      index = end;
-      expectName = true;
-      continue;
-    }
-    let end = index;
-    while (
-      end < command.length &&
-      !/\s/.test(command.charAt(end)) &&
-      !COMMAND_OP_CHARS.has(command.charAt(end)) &&
-      command.charAt(end) !== "'" &&
-      command.charAt(end) !== '"'
-    ) {
-      end++;
-    }
-    const word = command.slice(index, end);
-    const cls = expectName
-      ? "name"
-      : word.startsWith("-")
-        ? "flag"
-        : /^\d+(?:[.,]\d+)?$/.test(word)
-          ? "num"
-          : "plain";
-    tokens.push({ text: word, cls });
-    index = end;
-    expectName = false;
-  }
-  return tokens;
-}
-
-function renderHighlightedCommand(command: string) {
-  if (command.length > COMMAND_HIGHLIGHT_MAX_CHARS) {
-    return html`${command}`;
-  }
-  return html`${tokenizeCommand(command).map((token) =>
-    token.cls === "ws" || token.cls === "plain"
-      ? html`${token.text}`
-      : html`<span class="chat-cmd--${token.cls}">${token.text}</span>`,
-  )}`;
-}
-
-// ── Key-value args display (generic tools) ──
-
-const KV_MAX_KEYS = 12;
-const KV_MAX_VALUE_CHARS = 400;
-
-function formatKeyValue(value: unknown): string {
-  if (typeof value === "string") {
-    return truncateUtf16Safe(value, KV_MAX_VALUE_CHARS);
-  }
-  if (value === null || value === undefined) {
-    return String(value);
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  try {
-    return truncateUtf16Safe(JSON.stringify(value), KV_MAX_VALUE_CHARS);
-  } catch {
-    return Object.prototype.toString.call(value);
-  }
-}
-
-function renderArgsKeyValueList(args: Record<string, unknown>) {
-  return html`
-    <div class="chat-tool-kv">
-      ${Object.entries(args).map(
-        ([key, value]) => html`
-          <div class="chat-tool-kv__row">
-            <span class="chat-tool-kv__key">${key}:</span>
-            <span class="chat-tool-kv__value">${formatKeyValue(value)}</span>
-          </div>
-        `,
-      )}
-    </div>
-  `;
-}
-
-function canRenderArgsAsKeyValue(args: unknown): args is Record<string, unknown> {
-  if (!isRecord(args)) {
-    return false;
-  }
-  const keys = Object.keys(args);
-  return keys.length > 0 && keys.length <= KV_MAX_KEYS;
-}
-
-// Args already represented in the collapsed row / header detail for kinds that
-// summarize their primary target; everything else stays auditable on expand.
-const ROW_SUMMARIZED_ARG_KEYS: Partial<Record<ToolCallView["kind"], ReadonlySet<string>>> = {
-  read: new Set(["path", "file_path", "filePath", "notebook_path"]),
-  search: new Set(["pattern", "query", "glob", "path"]),
-  fetch: new Set(["url"]),
-};
-
-function extraArgsBeyondRowTarget(
-  args: unknown,
-  kind: ToolCallView["kind"],
-): Record<string, unknown> | null {
-  if (!isRecord(args)) {
-    return null;
-  }
-  const summarized = ROW_SUMMARIZED_ARG_KEYS[kind];
-  if (!summarized) {
-    return args;
-  }
-  const extras = Object.fromEntries(Object.entries(args).filter(([key]) => !summarized.has(key)));
-  return Object.keys(extras).length > 0 ? extras : null;
-}
-
-function resolveToolWorkspaceFilePath(card: ToolCard, view: ToolCallView): string | null {
-  const singleOperation = view.fileOperations?.length === 1 ? view.fileOperations[0] : undefined;
-  // A delete removes its own target, so the workspace loader would always
-  // report "Failed to load"; the row keeps its disclosure but no file action.
-  if (singleOperation?.operation === "delete") {
-    return null;
-  }
-  const args = asNullableRecord(card.args);
-  if (args) {
-    for (const key of ["path", "file_path", "filePath", "notebook_path"]) {
-      const value = args[key];
-      if (typeof value === "string" && value.trim()) {
-        return value;
-      }
-    }
-  }
-  const fallback = `${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}`;
-  const fallbackPath = fallback.trim();
-  // Aggregate patch labels ("2 files", "a.ts → b.ts") name no single file, so
-  // only a recorded operation matching the rendered path stays navigable.
-  if (view.fileOperations) {
-    return singleOperation?.path === fallbackPath ? singleOperation.path : null;
-  }
-  return fallbackPath || null;
-}
-
-function renderToolWorkspaceFilePath(
-  label: string,
-  path: string | null,
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
-) {
-  return path && onOpenWorkspaceFile
-    ? html`
-        <button
-          class="chat-tool-card__detail chat-tool-card__detail-link"
-          type="button"
-          title=${t("chat.toolCards.openFile")}
-          @click=${() => onOpenWorkspaceFile({ path })}
-        >
-          ${label}
-        </button>
-      `
-    : html`<div class="chat-tool-card__detail">${label}</div>`;
-}
-
-/** Neutral end-state line every expanded tool surface closes with. */
-export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
-  const label =
-    outcome === "failed"
-      ? exitCode === undefined
-        ? t("chat.toolCards.failed")
-        : t("chat.toolCards.exitCode", { code: String(exitCode) })
-      : outcome === "running"
-        ? t("chat.toolCards.running")
-        : outcome === "succeeded"
-          ? t("chat.toolCards.completed")
-          : null;
-  return label ? html`<div class="chat-tool-card__outcome">${label}</div>` : nothing;
-}
-
-function renderTerminalBlock(command: string, output: string | undefined) {
-  return html`
-    <div class="chat-tool-term">
-      <div class="chat-tool-term__cmd">
-        <span class="chat-tool-term__prompt">$</span
-        ><code>${renderHighlightedCommand(command)}</code>
-      </div>
-      ${output?.trim()
-        ? html`<pre class="chat-tool-term__out"><code>${output}</code></pre>`
-        : nothing}
-    </div>
-  `;
-}
-
-function renderToolCardModes(
-  card: ToolCard,
-  diff: NonNullable<ToolCallView["diff"]>,
-  outcome: ToolCardOutcome,
-  isError: boolean,
-  file: DiffFilePaths,
-) {
-  const active = isError ? "raw" : "diff";
-  const modeLabel = t("chat.toolCards.viewMode");
-  return html`
-    <wa-tab-group
-      class="chat-tool-card__modes"
-      aria-label=${modeLabel}
-      .active=${active}
-      activation="auto"
-      without-scroll-controls
-      ${ref((element) => syncTabGroupLabel(element, modeLabel))}
-    >
-      <wa-tab slot="nav" id=${`${card.id}-diff-tab`} panel="diff" ?active=${active === "diff"}>
-        ${t("chat.toolCards.diff")}
-      </wa-tab>
-      <wa-tab slot="nav" id=${`${card.id}-raw-tab`} panel="raw" ?active=${active === "raw"}>
-        ${t("chat.toolCards.raw")}
-      </wa-tab>
-      <wa-tab-panel id=${`${card.id}-diff-panel`} name="diff" ?active=${active === "diff"}>
-        ${renderDiffBlock(diff, outcome, undefined, file)}
-      </wa-tab-panel>
-      <wa-tab-panel id=${`${card.id}-raw-panel`} name="raw" ?active=${active === "raw"}>
-        ${renderToolDataBlock({
-          ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
-          text: card.outputText!,
-        })}
-      </wa-tab-panel>
-    </wa-tab-group>
-  `;
-}
-
-function serializeDiff(lines: readonly { kind: string; text: string }[]): string {
-  return lines
-    .map((line) => `${line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}${line.text}`)
-    .join("\n");
-}
-
 export function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string | undefined) {
-  const directDetail = displayDetail?.trim();
-  if (directDetail) {
+  if (displayDetail?.trim()) {
     return displayDetail;
   }
-  if (typeof card.args !== "string") {
-    return undefined;
-  }
-  const inputText = card.inputText?.trim() ? card.inputText : card.args;
-  return formatCollapsedToolPreviewText(inputText);
+  return typeof card.args === "string"
+    ? formatCollapsedToolPreviewText(card.inputText?.trim() ? card.inputText : card.args)
+    : undefined;
 }
 
-function resolveCollapsedToolSummaryParts(params: {
-  card: ToolCard;
-  displayLabel: string;
-  displayDetail: string | undefined;
-}): { label: string; name?: string } {
-  const displayDetail = params.displayDetail?.trim();
-  if (displayDetail) {
-    return { label: params.displayLabel, name: displayDetail };
+function resolveCollapsedToolSummaryParts(card: ToolCard): { label: string; name?: string } {
+  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
+  const displayDetail = display.detail?.trim();
+  // Message captions belong to the canonical publication, not the original tool input.
+  if (card.name.trim().toLowerCase() === "message") {
+    return { label: display.label, name: displayDetail || undefined };
+  }
+  const name = toolArgumentPreview(card.args) || displayDetail;
+  if (name) {
+    return { label: display.label, name };
   }
 
   return {
-    label:
-      typeof params.card.args === "string"
-        ? (resolveCollapsedToolDetail(params.card, undefined) ?? params.displayLabel)
-        : params.displayLabel,
+    label: resolveCollapsedToolDetail(card, undefined) ?? display.label,
   };
 }
 
-export function isRunningToolCard(card: ToolCard, runActive: boolean | undefined): boolean {
-  // Only live tool-stream cards can be running; historical transcript calls
-  // without results (aborted runs) must stay inert during later runs. The
-  // result event ends the running state — partial streamed output does not.
-  return resolveToolCardOutcome(card, runActive) === "running";
-}
-
-export function resolveToolRowText(card: ToolCard, runActive?: boolean): string {
-  const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
-  if (view.kind === "command" && view.command) {
-    return `$ ${firstCommandLine(view.command)}`;
+function resolveToolRowText(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome): string {
+  if (view.title) {
+    return view.title;
   }
-  const verb = resolveToolRowVerb(view, resolveToolCardOutcome(card, runActive));
+  if (view.kind === "command" && view.command) {
+    return `$ ${commandPreview(view.command)}`;
+  }
+  const verb = resolveToolRowVerb(view, outcome);
   if (verb && view.target) {
     return `${verb} ${view.target}`;
   }
-  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  return [display.label, toolArgumentPreview(card.args)].filter(Boolean).join(" ");
-}
-
-function toolReviewLabel(review: ToolApprovalReview): string {
-  const key =
-    review.status === "in_progress"
-      ? "reviewing"
-      : review.status === "timed_out"
-        ? "timedOut"
-        : review.status;
-  return t(`chat.toolCards.review.${key}`, { reviewer: review.label });
+  const summary = resolveCollapsedToolSummaryParts(card);
+  return [summary.label, summary.name].filter(Boolean).join(" ");
 }
 
 export function renderToolApprovalReviews(card: ToolCard) {
@@ -823,31 +414,39 @@ export function renderToolApprovalReviews(card: ToolCard) {
     <div class="chat-tool-reviews">
       ${reviews.map((review) => {
         const adverse = ["denied", "timed_out", "aborted"].includes(review.status);
+        const key =
+          review.status === "in_progress"
+            ? "reviewing"
+            : review.status === "timed_out"
+              ? "timedOut"
+              : review.status;
         return html`
           <div class="chat-tool-review" data-review-status=${review.status}>
             <div class="chat-tool-review__header">
               <span class="chat-tool-review__icon"
                 >${adverse ? icons.shieldX : icons.shieldCheck}</span
               >
-              <span class="chat-tool-review__label">${toolReviewLabel(review)}</span>
-              ${review.riskLevel
-                ? html`<span class="chat-tool-review__chip"
-                    >${t("chat.toolCards.review.risk", { level: review.riskLevel })}</span
-                  >`
-                : nothing}
-              ${review.userAuthorization
-                ? html`<span class="chat-tool-review__chip"
-                    >${t("chat.toolCards.review.authorization", {
-                      level: review.userAuthorization,
-                    })}</span
-                  >`
-                : nothing}
+              <span class="chat-tool-review__label"
+                >${t(`chat.toolCards.review.${key}`, { reviewer: review.label })}</span
+              >
+              ${[
+                { kind: "risk", level: review.riskLevel },
+                { kind: "authorization", level: review.userAuthorization },
+              ].map(({ kind, level }) =>
+                level
+                  ? html`<span class="chat-tool-review__chip"
+                      >${t(`chat.toolCards.review.${kind}`, { level })}</span
+                    >`
+                  : nothing,
+              )}
             </div>
-            ${review.status === "in_progress"
-              ? nothing
-              : html`<div class="chat-tool-review__rationale">
-                  ${review.rationale ?? t("chat.toolCards.review.noRationale")}
-                </div>`}
+            ${
+              review.status === "in_progress"
+                ? nothing
+                : html`<div class="chat-tool-review__rationale">
+                    ${review.rationale ?? t("chat.toolCards.review.noRationale")}
+                  </div>`
+            }
           </div>
         `;
       })}
@@ -856,259 +455,157 @@ export function renderToolApprovalReviews(card: ToolCard) {
 }
 
 export function renderToolCard(
-  card: ToolCard,
-  opts: {
+  originalCard: ToolCard,
+  opts: ToolRenderOptions & {
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
-    runActive?: boolean;
-    sessionKey?: string;
-    agentId?: string;
-    onOpenSidebar?: (content: SidebarContent) => void;
-    onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
-    canvasPluginSurfaceUrl?: string | null;
-    embedSandboxMode?: EmbedSandboxMode;
-    allowExternalEmbedUrls?: boolean;
     showApprovalReviews?: boolean;
+    children?: unknown;
+    activityCards?: readonly ToolCard[];
   },
 ) {
+  const card = resolveToolCardDisplay(originalCard);
   const outcome = resolveToolCardOutcome(card, opts.runActive);
   const progressReceipt = renderProgressCardReceipt(card, outcome);
-  if (progressReceipt) {
-    return progressReceipt;
+  if (progressReceipt && !opts.children) {
+    return renderPluginToolResult(originalCard, opts, progressReceipt);
   }
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const isRunning = outcome === "running";
+  const activityCards = opts.activityCards ?? [card];
+  const isRunning = activityCards.some(
+    (item) => resolveToolCardOutcome(item, opts.runActive) === "running",
+  );
   const expanded = opts.expanded;
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
-  const workspaceFilePath =
-    view.kind === "read" || view.kind === "edit" || view.kind === "write"
-      ? resolveToolWorkspaceFilePath(card, view)
-      : null;
+  const workspaceFilePath = toolWorkspacePath(card, view);
   const isFileRow = Boolean(workspaceFilePath);
-
-  return html`
-    <div class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded ? "is-open" : ""}">
-      ${isFileRow
-        ? html`<div
-            class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--file ${isRunning
-              ? "chat-tool-row--running"
-              : ""}"
-            @pointerenter=${syncToolDisclosureOverflow}
-            @focusin=${syncToolDisclosureOverflow}
-          >
-            <button
-              class="chat-tool-row__toggle"
-              type="button"
-              aria-expanded=${String(expanded)}
-              aria-label=${resolveToolRowText(card, opts.runActive)}
-              @click=${() => opts.onToggleExpanded(card.id)}
-            ></button>
-            <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
-            <span class="chat-tool-disclosure__content"
-              >${renderFileToolRowContent(
-                card,
-                view,
-                outcome,
-                workspaceFilePath,
-                opts.onOpenWorkspaceFile,
-              )}</span
-            >
-            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
-          </div>`
-        : html`<button
-            class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${isRunning
-              ? "chat-tool-row--running"
-              : ""}"
-            type="button"
-            aria-expanded=${String(expanded)}
-            @pointerenter=${syncToolDisclosureOverflow}
-            @focus=${syncToolDisclosureOverflow}
-            @click=${(event: MouseEvent) => {
-              if (shouldToggleSelectableDisclosure(event)) {
-                opts.onToggleExpanded(card.id);
-              }
-            }}
-          >
-            <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
-            <span class="chat-tool-disclosure__content"
-              >${renderToolRowContent(card, view, outcome)}</span
-            >
-            <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
-          </button>`}
-      ${expanded
-        ? html`
-            <div class="chat-tool-msg-body">
-              ${renderExpandedToolCardContent(
-                card,
-                opts.sessionKey,
-                opts.onOpenSidebar,
-                opts.canvasPluginSurfaceUrl,
-                opts.embedSandboxMode ?? "scripts",
-                opts.allowExternalEmbedUrls ?? false,
-                opts.runActive,
-                opts.onOpenWorkspaceFile,
-              )}
-            </div>
-          `
-        : nothing}
-      ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
-    </div>
+  const subagent = resolveSpawnedSubagent(card, opts.subagents?.subagentSessions);
+  const subagentSession = subagent?.session;
+  // Only a subagent the panel lists can be shown there; any other opens its session.
+  const onOpenSubagent =
+    (subagentSession?.listed && opts.subagents?.onOpenSubagent) || opts.subagents?.onOpenSession;
+  const openSubagent =
+    subagentSession && onOpenSubagent ? () => onOpenSubagent(subagentSession.key) : undefined;
+  // A link inside the row needs the row's own toggle beside it, not around it.
+  const linkedRow = isFileRow ? "file" : openSubagent ? "subagent" : null;
+  const rowContent = html`
+    <span
+      class="chat-tool-msg-summary__icon"
+      role="img"
+      aria-label=${display.name}
+      title=${display.name}
+      >${renderToolIcon(icon, { toolName: display.name, pluginToolIcons: opts.pluginToolIcons })}</span
+    >
+    <span class="chat-tool-disclosure__content"
+      >${
+        subagent
+          ? renderSubagentRowContent(subagent, openSubagent)
+          : renderToolRowContent(
+              card,
+              view,
+              outcome,
+              display.label,
+              workspaceFilePath,
+              opts.onOpenWorkspaceFile,
+            )
+      }</span
+    >
+    ${expanded ? nothing : renderToolOutcomeSummary(activityCards, Boolean(opts.children))}
+    <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
   `;
+
+  // Plugin replacements receive the raw invocation, paired with its own output.
+  return renderPluginToolResult(
+    originalCard,
+    opts,
+    html`
+      <div
+        class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded ? "is-open" : ""}"
+      >
+        ${
+          linkedRow
+            ? html`<div
+                class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--${linkedRow} ${
+                  isRunning ? "chat-tool-row--running" : ""
+                }"
+                @pointerenter=${syncToolDisclosureOverflow}
+                @focusin=${syncToolDisclosureOverflow}
+              >
+                <button
+                  class="chat-tool-row__toggle"
+                  type="button"
+                  aria-expanded=${String(expanded)}
+                  aria-label=${
+                    subagent
+                      ? `${display.label} ${subagent.label}`
+                      : resolveToolRowText(card, view, outcome)
+                  }
+                  @click=${() => opts.onToggleExpanded(card.id)}
+                ></button>
+                ${rowContent}
+              </div>`
+            : html`<button
+                class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${
+                  isRunning ? "chat-tool-row--running" : ""
+                }"
+                type="button"
+                aria-expanded=${String(expanded)}
+                @pointerenter=${syncToolDisclosureOverflow}
+                @focus=${syncToolDisclosureOverflow}
+                @click=${() => opts.onToggleExpanded(card.id)}
+              >
+                ${rowContent}
+              </button>`
+        }
+        ${
+          expanded
+            ? opts.children
+              ? html`<div class="chat-tool-children">
+                  ${opts.children}
+                  <details class="chat-tool-wrapper-details">
+                    <summary>${t("chat.toolCards.toolInput")}</summary>
+                    <div class="chat-tool-msg-body">
+                      ${renderExpandedToolCardContent(originalCard, opts)}
+                    </div>
+                  </details>
+                </div>`
+              : html`<div class="chat-tool-msg-body">
+                  ${renderExpandedToolCardContent(originalCard, opts)}
+                </div>`
+            : nothing
+        }
+        ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
+      </div>
+    `,
+  );
 }
 
-export function renderExpandedToolCardContent(
-  card: ToolCard,
-  sessionKey?: string,
-  onOpenSidebar?: (content: SidebarContent) => void,
-  canvasPluginSurfaceUrl?: string | null,
-  embedSandboxMode: EmbedSandboxMode = "scripts",
-  allowExternalEmbedUrls = false,
-  runActive?: boolean,
-  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
+export function renderPluginToolResult(
+  card: ToolCard | null | undefined,
+  opts: ToolRenderOptions & { expanded: boolean },
+  defaultView: unknown,
 ) {
-  const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
-  const display = resolveToolDisplay({ name: card.name, args: card.args });
-  // File/search rows already carry their target; the "with …" connector only
-  // reads well for generic tools ("with query …"), not "with from sessions.ts".
-  const detail =
-    view.kind === "read" || view.kind === "search" || view.kind === "fetch"
-      ? display.detail
-      : formatToolDetail(display);
-  const hasOutput = Boolean(card.outputText?.trim());
-  const hasInput = Boolean(card.inputText?.trim());
-  const isError = isToolCardError(card);
-  const outcome = resolveToolCardOutcome(card, runActive);
-  const workspaceFilePath =
-    view.kind === "read" || view.kind === "edit" || view.kind === "write"
-      ? resolveToolWorkspaceFilePath(card, view)
-      : null;
-  const canOpenSidebar = Boolean(onOpenSidebar);
-  const previewSidebarContent =
-    card.preview?.kind === "canvas"
-      ? buildPreviewSidebarContent(card.preview, card.outputText)
-      : null;
-  const sidebarActionContent =
-    previewSidebarContent ??
-    buildSidebarContent(buildToolCardSidebarContent(card), {
-      rawText: card.outputText ?? null,
-    });
-  const visiblePreview =
-    card.preview?.kind === "canvas"
-      ? renderToolPreview(card.preview, "chat_tool", {
-          onOpenSidebar,
-          rawText: card.outputText,
-          canvasPluginSurfaceUrl,
-          embedSandboxMode,
-          allowExternalEmbedUrls,
-          sessionKey,
-        })
-      : nothing;
-  const sidebarAction = canOpenSidebar
-    ? html`
-        <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
-          <button
-            class="chat-tool-card__action-btn"
-            type="button"
-            @click=${() => onOpenSidebar?.(sidebarActionContent)}
-            aria-label=${t("chat.toolCards.openDetails")}
-          >
-            <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
-  const diffCopyAction =
-    view.diff && view.diff.length > 0
-      ? renderCopyButton(serializeDiff(view.diff), t("common.copy"))
-      : nothing;
-
-  // Command calls render terminal-style: `$ command` + raw output. Remaining
-  // args (workdir, timeout, env…) stay visible as key-value rows so identical
-  // commands in different contexts remain distinguishable in the audit trail.
-  if (view.kind === "command" && view.command && !card.preview) {
-    const argsRecord = asNullableRecord(card.args);
-    const extraArgs = Object.fromEntries(
-      Object.entries(argsRecord ?? {}).filter(([key]) => key !== "command"),
-    );
-    return html`
-      <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
-        <div class="chat-tool-card__actions">${sidebarAction}</div>
-        ${renderTerminalBlock(view.command, card.outputText)}
-        ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
-        ${renderToolOutcome(outcome, card.exitCode)}
-      </div>
-    `;
+  if (!card) {
+    return defaultView;
   }
-
-  // Edits and writes with a resolvable diff render it inline. When raw output
-  // also exists, the shared tab primitive owns both views and their semantics.
-  if ((view.kind === "edit" || view.kind === "write") && view.diff && view.diff.length > 0) {
-    const file = view.fileOperations?.[0] ?? { path: view.target ?? "" };
-    return html`
-      <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
-        <div class="chat-tool-card__header">
-          ${renderToolWorkspaceFilePath(
-            workspaceFilePath ?? view.target ?? "",
-            workspaceFilePath,
-            onOpenWorkspaceFile,
-          )}
-          <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
-        </div>
-        ${hasOutput
-          ? renderToolCardModes(card, view.diff, outcome, isError, file)
-          : renderDiffBlock(view.diff, outcome, undefined, file)}
-        ${renderToolOutcome(outcome, card.exitCode)}
-      </div>
-    `;
-  }
-
-  // File reads and searches summarize their primary target in the row, so the
-  // full args JSON is noise — but any remaining args (filters, limits, request
-  // options…) stay visible as key-value rows for auditability.
-  const summarizedKind = view.kind === "read" || view.kind === "search" || view.kind === "fetch";
-  const inputBlockArgs = summarizedKind
-    ? extraArgsBeyondRowTarget(card.args, view.kind)
-    : card.args;
-  const showInputBlock = hasInput && (!summarizedKind || inputBlockArgs !== null);
-
-  return html`
-    <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
-      ${detail || canOpenSidebar
-        ? html`
-            <div class="chat-tool-card__header">
-              ${detail
-                ? view.kind === "read"
-                  ? renderToolWorkspaceFilePath(detail, workspaceFilePath, onOpenWorkspaceFile)
-                  : html`<div class="chat-tool-card__detail">${detail}</div>`
-                : nothing}
-              <div class="chat-tool-card__actions">${sidebarAction}</div>
-            </div>
-          `
-        : nothing}
-      ${showInputBlock
-        ? canRenderArgsAsKeyValue(inputBlockArgs)
-          ? renderArgsKeyValueList(inputBlockArgs)
-          : renderToolDataBlock({
-              label: t("chat.toolCards.toolInput"),
-              text: card.inputText!,
-            })
-        : nothing}
-      ${hasOutput
-        ? card.preview?.kind === "canvas"
-          ? html`${visiblePreview} ${renderRawOutputToggle(card.outputText!)}`
-          : renderToolDataBlock({
-              ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
-              text: card.outputText!,
-            })
-        : isError
-          ? renderToolDataBlock({
-              label: t("chat.toolCards.toolError"),
-              text: t("chat.toolCards.noOutputFailed"),
-            })
-          : nothing}
-      ${renderToolOutcome(outcome, card.exitCode)}
-    </div>
-  `;
+  return renderPluginSurface(
+    "tool-result",
+    {
+      sessionKey: opts.sessionKey ?? "",
+      agentId: opts.agentId,
+      toolName: card.name,
+      toolCallId: card.callId ?? card.id,
+      input: card.args,
+      output: {
+        text: card.outputText,
+        details: card.details,
+        isError: card.isError,
+        completed: card.completed,
+      },
+      expanded: opts.expanded,
+    },
+    defaultView,
+    opts.presented ?? true,
+  );
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

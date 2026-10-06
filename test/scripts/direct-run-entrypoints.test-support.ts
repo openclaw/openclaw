@@ -1,6 +1,7 @@
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import { runNodeScript } from "../helpers/run-node-script.js";
 
@@ -26,8 +27,60 @@ export const TSX_SHIM_WRAPPERS = [
   "scripts/perf/summarize-cpuprofile.mjs",
 ] as const;
 
+export function writeEsmPluginFixture(fixtureRoot: string) {
+  const pluginRoot = path.join(fixtureRoot, "compiled-plugin");
+  const dependencyRoot = path.join(pluginRoot, "node_modules", "import-only");
+  mkdirSync(dependencyRoot, { recursive: true });
+  writeFileSync(path.join(pluginRoot, "package.json"), JSON.stringify({ type: "module" }));
+  writeFileSync(
+    path.join(dependencyRoot, "package.json"),
+    JSON.stringify({ type: "module", exports: { import: "./index.js" } }),
+  );
+  writeFileSync(path.join(dependencyRoot, "index.js"), 'export const value = "import-only";');
+  const pluginPath = path.join(pluginRoot, "index.js");
+  writeFileSync(
+    pluginPath,
+    `export { value } from "import-only";
+globalThis.pluginEvaluations = (globalThis.pluginEvaluations ?? 0) + 1;
+export const instance = {};
+`,
+  );
+  writeFileSync(
+    path.join(pluginRoot, "loader.cjs"),
+    'module.exports = { load: () => require("./index.js") };',
+  );
+  return `
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
+enum Transformed { Value = "transformed" }
+try {
+const require = createRequire(${JSON.stringify(pathToFileURL(pluginPath).href)});
+const loader = require("./loader.cjs");
+const first = loader.load();
+const imported = await import(${JSON.stringify(pathToFileURL(pluginPath).href)});
+assert.strictEqual(loader.load(), first);
+assert.strictEqual(imported.instance, first.instance);
+assert.strictEqual(require("./loader.cjs"), loader);
+assert.strictEqual(require(${JSON.stringify(path.resolve("packages/normalization-core/src/boolean-coercion.ts"))}).parseBoolean, parseBoolean);
+console.log(JSON.stringify({ value: first.value, evaluations: globalThis.pluginEvaluations,
+  transformed: Transformed.Value, sourceAlias: parseBoolean(" TRUE ") }));
+} catch (error) {
+  console.error(error.code + ": " + error.message);
+  process.exitCode = 1;
+}
+`;
+}
+
 export async function withShimFixture<T>(
-  wrapper: (typeof TSX_SHIM_WRAPPERS)[number],
+  wrapper:
+    | (typeof TSX_SHIM_WRAPPERS)[number]
+    | "scripts/check-changed.mjs"
+    | "scripts/run-tsgo.mjs"
+    | "scripts/run-oxlint.mjs"
+    | "scripts/run-tsgo-core-test-shards.mjs"
+    | "scripts/run-node.mjs"
+    | "scripts/crabbox-wrapper.mjs",
   run: (paths: {
     checkoutRoot: string;
     fixtureRoot: string;
@@ -43,7 +96,10 @@ export async function withShimFixture<T>(
   const fixtureRoot = realpathSync(mkdtempSync(path.join(fixtureParent, "openclaw-tsx-cli-shim-")));
   const checkoutRoot = path.join(fixtureRoot, "checkout");
   const wrapperPath = path.join(checkoutRoot, wrapper);
-  const implementationPath = wrapperPath.replace(/\.mjs$/u, ".mts");
+  const implementationPath = wrapperPath.replace(
+    /\.mjs$/u,
+    wrapper === "scripts/run-vitest.mjs" ? "-child.mts" : ".mts",
+  );
   const commands: Array<Promise<NodeResult>> = [];
   let outcome: { value: Awaited<T> } | { error: unknown };
   try {
@@ -58,6 +114,10 @@ export async function withShimFixture<T>(
     copyFileSync(
       "scripts/lib/local-check-runtime.mts",
       path.join(checkoutRoot, "scripts", "lib", "local-check-runtime.mts"),
+    );
+    copyFileSync(
+      "scripts/lib/tooling-dependencies.mjs",
+      path.join(checkoutRoot, "scripts", "lib", "tooling-dependencies.mjs"),
     );
     writeFileSync(path.join(checkoutRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
     outcome = {
@@ -84,7 +144,7 @@ export async function withShimFixture<T>(
     const outputPath = path.join(fixtureRoot, "command-output.log");
     writeFileSync(outputPath, results.map(formatShimResult).join("\n\n"));
     throw new Error(
-      `Child cleanup unverified; retained fixture ${fixtureRoot} and output ${outputPath}. Stop remaining writers before removing this directory.`,
+      `${callbackError instanceof Error ? `${callbackError.message}\n` : ""}Child cleanup unverified; retained fixture ${fixtureRoot} and output ${outputPath}. Stop remaining writers before removing this directory.`,
       {
         cause:
           callbackError && callbackError !== unjoined

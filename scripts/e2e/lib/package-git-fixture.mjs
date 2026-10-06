@@ -2,16 +2,14 @@
 // Prepares package-derived Docker E2E fixtures for git-style npm installs.
 import fs from "node:fs";
 import path from "node:path";
+import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../lib/package-lifecycle-marker.mjs";
+import { readJson } from "./fixtures/common.mjs";
 
 const [command, rootArg] = process.argv.slice(2);
 
 function usage() {
   console.error("usage: package-git-fixture.mjs prepare <fixture-root>");
   process.exit(2);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function writeJson(file, value) {
@@ -30,7 +28,16 @@ function ensureDependencyIgnores(root) {
   const gitignorePath = path.join(root, ".gitignore");
   const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
   const lines = new Set(existing.split(/\r?\n/u));
-  const required = ["node_modules", "**/node_modules/", "pnpm-lock.yaml"];
+  const required = [
+    "node_modules",
+    "**/node_modules/",
+    "pnpm-lock.yaml",
+    // Match source checkouts while the updater holds its runtime artifact owner.
+    ".artifacts/",
+    // Runtime promotion stages destination siblings before its final clean check.
+    "*.openclaw-update-*.tmp/",
+    PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+  ];
   const missing = required.filter((entry) => !lines.has(entry));
   if (missing.length === 0) {
     return;
@@ -41,6 +48,12 @@ function ensureDependencyIgnores(root) {
 
 function prepare(root) {
   ensureDependencyIgnores(root);
+  // Preserve source-checkout identity through preflight clones and global links;
+  // packaged postinstall cleanup would otherwise delete the fixture's build stamps.
+  for (const directory of ["src", "extensions"]) {
+    fs.mkdirSync(path.join(root, directory), { recursive: true });
+    fs.writeFileSync(path.join(root, directory, ".gitkeep"), "");
+  }
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
   // npm still resolves omitted dev dependencies; this fixture runs the packed runtime.

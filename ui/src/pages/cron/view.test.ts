@@ -1,48 +1,64 @@
 // Control UI tests cover the Automations (cron) list pane and select controls.
 import { describe, expect, it, vi } from "vitest";
+import { updatePickers } from "../../test-helpers/select-picker.ts";
 import {
   createCronViewJob as createJob,
   getElement,
   renderCronView as renderView,
-  selectSegmented,
 } from "./view.test-support.ts";
 
 describe("cron view list pane", () => {
-  it.each([
-    { name: "an enabled scheduler", status: { enabled: true }, hasNextWake: true },
-    { name: "a disabled scheduler", status: { enabled: false }, hasNextWake: false },
-    { name: "loading scheduler status", status: null, hasNextWake: true },
-  ])("uses agent-scoped summary values for $name", ({ status, hasNextWake }) => {
+  it("identifies the agent on each job in a mixed-agent list", async () => {
     const container = renderView({
-      agentScoped: true,
-      scopedTotal: 3,
-      scopedNextWakeAtMs: Date.now() + 60_000,
-      status: status ? { ...status, triggersEnabled: true, jobs: 99, nextWakeAtMs: null } : null,
+      jobs: [
+        createJob("home", { agentId: "main" }),
+        createJob("research", { agentId: "research" }),
+      ],
     });
-    const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
-      entry.textContent?.trim(),
-    );
-
-    expect(values[0]).toBe("3");
-    expect(values[2] !== "n/a").toBe(hasNextWake);
+    document.body.append(container);
+    try {
+      await Promise.all(
+        [...container.querySelectorAll("openclaw-agent-row-chip")].map(
+          (chip) => chip.updateComplete,
+        ),
+      );
+      expect(
+        [...container.querySelectorAll(".cron-table__row .agent-row-chip")].map((chip) =>
+          chip.getAttribute("data-agent-id"),
+        ),
+      ).toEqual(["main", "research"]);
+    } finally {
+      container.remove();
+    }
   });
 
-  it("wires the enabled tabs and marks the active one", () => {
+  it("combines status filters and run history in one tab row", () => {
     const onJobsFiltersChange = vi.fn();
-    const container = renderView({ jobsEnabledFilter: "enabled", onJobsFiltersChange });
+    const onListTabChange = vi.fn();
+    const container = renderView({
+      jobsEnabledFilter: "enabled",
+      onJobsFiltersChange,
+      onListTabChange,
+    });
 
-    const active = getElement(
-      container,
-      '[data-test-id="cron-tab-enabled"]',
-      HTMLElement,
-    ) as HTMLElement & { checked: boolean };
-    expect(active.checked).toBe(true);
-    expect(active.closest("wa-radio-group")?.querySelector('[slot="label"]')?.textContent).toBe(
-      "Automation status",
+    const labels = Array.from(container.querySelectorAll(".cron-list-hub-tabs wa-tab"), (tab) =>
+      tab.textContent?.trim(),
     );
+    expect(labels).toEqual(["All", "Active", "Paused", "Run history"]);
 
-    selectSegmented(getElement(container, '[data-test-id="cron-tab-disabled"]', HTMLElement));
+    const active = getElement(container, '[data-test-id="cron-tab-enabled"]', HTMLElement);
+    expect(active.getAttribute("aria-selected")).toBe("true");
+
+    getElement(container, '[data-test-id="cron-tab-disabled"]', HTMLElement).dispatchEvent(
+      new MouseEvent("click", { detail: 1, bubbles: true }),
+    );
+    expect(onListTabChange).toHaveBeenCalledWith("tasks");
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
+
+    getElement(container, '[data-test-id="cron-list-tab-activity"]', HTMLElement).dispatchEvent(
+      new MouseEvent("click", { detail: 1, bubbles: true }),
+    );
+    expect(onListTabChange).toHaveBeenCalledWith("activity");
   });
 
   it("wires search and the advanced jobs filter popover", () => {
@@ -150,53 +166,40 @@ describe("cron view list pane", () => {
     const rows = Array.from(container.querySelectorAll(".cron-table__row"));
     expect(rows).toHaveLength(3);
     expect(rows[0]?.getAttribute("role")).toBeNull();
-    expect(rows[0]?.textContent).toContain("Cron 0 9 * * *");
-    expect(rows[1]?.classList.contains("cron-table__row--paused")).toBe(true);
-    expect(rows[1]?.textContent).toContain("Paused");
-    expect(rows[2]?.querySelector(".cron-table__state--error")?.getAttribute("aria-label")).toBe(
+    expect(rows[0]?.querySelector(".cron-table__state--error")?.getAttribute("aria-label")).toBe(
       "Error",
     );
-    expect(rows[2]?.querySelector(".cron-last-glyph--error")).not.toBeNull();
-    expect(rows[2]?.querySelector(".cron-table__last-run")?.getAttribute("aria-label")).toBe(
+    expect(rows[0]?.querySelector(".cron-last-glyph--error")).not.toBeNull();
+    expect(rows[0]?.querySelector(".cron-table__last-run")?.getAttribute("aria-label")).toBe(
       "Error",
     );
-    expect(rows[0]?.querySelector(".cron-last-glyph--ok")).toBeNull();
-    expect(rows[0]?.textContent).toContain("n/a");
-    expect(rows[0]?.querySelector(".cron-trigger-icon")?.getAttribute("aria-label")).toBe(
+    expect(rows[1]?.textContent).toContain("Cron 0 9 * * *");
+    expect(rows[1]?.querySelector(".cron-last-glyph--ok")).toBeNull();
+    expect(rows[1]?.textContent).toContain("n/a");
+    expect(rows[1]?.querySelector(".cron-trigger-icon")?.getAttribute("aria-label")).toBe(
       "Trigger configured",
     );
+    expect(rows[2]?.classList.contains("cron-table__row--paused")).toBe(true);
+    expect(rows[2]?.textContent).toContain("Paused");
 
-    getElement(rows[1] as Element, ".cron-table__name", HTMLButtonElement).click();
+    getElement(rows[2] as Element, ".cron-table__name", HTMLButtonElement).click();
     expect(onSelectJob).toHaveBeenCalledWith(paused);
   });
 
-  it("keeps inline row actions from selecting the row", () => {
-    const onSelectJob = vi.fn();
-    const onRun = vi.fn();
-    const onToggle = vi.fn();
-    const job = createJob("job-1");
-    const container = renderView({ jobs: [job], onSelectJob, onRun, onToggle });
+  it("floats actionable failures while preserving the selected order within each group", () => {
+    const jobs = [
+      createJob("healthy-a", { name: "Healthy A" }),
+      createJob("failing-a", { name: "Failing A", state: { lastRunStatus: "error" } }),
+      createJob("healthy-b", { name: "Healthy B" }),
+      createJob("failing-b", { name: "Failing B", state: { lastRunStatus: "error" } }),
+    ];
+    const container = renderView({ jobs });
 
-    getElement(container, '[data-test-id="cron-row-run-job-1"]', HTMLButtonElement).click();
-    expect(onRun).toHaveBeenCalledWith(job, "force");
-
-    const toggle = getElement(container, '[data-test-id="cron-row-toggle-job-1"]', HTMLSpanElement);
-    const toggleInput = getElement(toggle, "wa-switch", HTMLElement) as HTMLElement & {
-      checked: boolean;
-    };
-    expect(toggleInput.checked).toBe(true);
-    toggleInput.checked = false;
-    toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onToggle).toHaveBeenCalledWith(job, false);
-
-    const runIfDue = Array.from(
-      container.querySelectorAll(".cron-table__row .cron-job-menu__item"),
-    ).find((item) => item.textContent?.trim() === "Run if due") as HTMLButtonElement;
-    runIfDue
-      .closest("wa-dropdown")
-      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: runIfDue }, bubbles: true }));
-    expect(onRun).toHaveBeenCalledWith(job, "due");
-    expect(onSelectJob).not.toHaveBeenCalled();
+    expect(
+      Array.from(container.querySelectorAll(".cron-table__name-text"), (name) =>
+        name.textContent?.trim(),
+      ),
+    ).toEqual(["Failing A", "Failing B", "Healthy A", "Healthy B"]);
   });
 
   it("opens the create panel from the New task button and suggestions", () => {
@@ -339,7 +342,7 @@ describe("cron view list pane", () => {
     });
     const banner = getElement(off, '[data-test-id="cron-scheduler-banner"]', HTMLDivElement);
     expect(banner.textContent).toContain("Scheduler disabled");
-    expect(getElement(off, ".cron-stats", HTMLDivElement).textContent).not.toContain("Scheduler");
+    expect(off.querySelector(".cron-stats")).toBeNull();
     const footer = getElement(off, ".cron-table__footer", HTMLDivElement);
     expect(footer.textContent).toContain("1 of 2");
 
@@ -347,85 +350,66 @@ describe("cron view list pane", () => {
     expect(on.querySelector('[data-test-id="cron-scheduler-banner"]')).toBeNull();
   });
 
-  it("shows the global failing count and drills into failing run history", () => {
-    const onListTabChange = vi.fn();
-    const onRunsFiltersChange = vi.fn();
-    const container = renderView({ failingCount: 3, onListTabChange, onRunsFiltersChange });
-    const value = getElement(container, ".cron-stat__value--danger", HTMLSpanElement);
-    expect(value.textContent?.trim()).toBe("3");
-    getElement(container, '[data-test-id="cron-stat-failing"]', HTMLButtonElement).click();
-    expect(onListTabChange).toHaveBeenCalledWith("activity");
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["error"] });
-
-    const unknown = renderView({ failingCount: null });
-    expect(unknown.querySelector(".cron-stat__value--danger")).toBeNull();
-    const stats = getElement(unknown, ".cron-stats", HTMLDivElement);
-    expect(stats.textContent).toContain("n/a");
-  });
-
-  it("switches between tasks and run history via the list tabs", () => {
-    const onListTabChange = vi.fn();
-    const tasks = renderView({ onListTabChange });
-    expect(tasks.querySelector(".cron-table")).not.toBeNull();
-    expect(tasks.querySelector(".cron-activity")).toBeNull();
-    tasks
-      .querySelector('[data-test-id="cron-list-tab-activity"]')
-      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-    expect(onListTabChange).toHaveBeenCalledWith("activity");
-
-    const activity = renderView({ listTab: "activity" });
-    expect(activity.querySelector(".cron-table")).toBeNull();
-    expect(activity.querySelector(".cron-activity")).not.toBeNull();
-  });
-
-  it("renders shared manual list tabs with active state and selection", () => {
+  it("switches the default inventory and history panels through accessible manual tabs", () => {
     const onListTabChange = vi.fn();
     const container = renderView({ onListTabChange });
     document.body.append(container);
     const group = getElement(container, ".cron-list-hub-tabs", HTMLElement);
-    const tasks = getElement(container, '[data-test-id="cron-list-tab-tasks"]', HTMLElement);
+    const tasks = getElement(container, '[data-test-id="cron-tab-all"]', HTMLElement);
     const activity = getElement(container, '[data-test-id="cron-list-tab-activity"]', HTMLElement);
 
+    expect(container.querySelector(".cron-table")).not.toBeNull();
+    expect(container.querySelector(".cron-activity")).toBeNull();
     expect(group.getAttribute("activation")).toBe("manual");
     expect(tasks.getAttribute("aria-selected")).toBe("true");
     expect(activity.getAttribute("aria-selected")).toBe("false");
     activity.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-
     expect(onListTabChange).toHaveBeenCalledWith("activity");
     expect(activity.getAttribute("aria-controls")).toBe("cron-list-panel");
     container.remove();
+
+    const history = renderView({ listTab: "activity" });
+    expect(history.querySelector(".cron-table")).toBeNull();
+    expect(history.querySelector(".cron-activity")).not.toBeNull();
   });
 });
 
 describe("cron view selects", () => {
-  it("shows authoritative form values instead of first options in the create form", () => {
+  it("shows authoritative form values instead of first options in the create form", async () => {
     const container = renderView({ createOpen: true });
+    await updatePickers(container);
     const action = getElement(
       container,
-      "wa-select#cron-payload-kind",
+      "openclaw-select-picker:has(#cron-payload-kind)",
       HTMLElement,
-    ) as HTMLElement & {
-      value: string;
-    };
-    expect(action.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("agentTurn");
+    );
+    expect(
+      action.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("agentTurn");
     const runsIn = getElement(
       container,
-      "wa-select#cron-session-target",
+      "openclaw-select-picker:has(#cron-session-target)",
       HTMLElement,
-    ) as HTMLElement & { value: string };
-    expect(runsIn.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("isolated");
-    const unit = Array.from(
-      container.querySelectorAll<HTMLElement & { value: string }>("wa-select"),
-    ).find((select) => select.querySelector('[slot="label"]')?.textContent === "Unit");
-    expect(unit?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("minutes");
+    );
+    expect(
+      runsIn.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("isolated");
+    const unit = Array.from(container.querySelectorAll<HTMLElement>("openclaw-select-picker")).find(
+      (select) => select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Unit",
+    );
+    expect(
+      unit?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("minutes");
     // The targetless create form keeps delivery internal until the operator
     // explicitly selects a channel delivery mode.
     const delivery = getElement(
       container,
-      "wa-select#cron-delivery-mode",
+      "openclaw-select-picker:has(#cron-delivery-mode)",
       HTMLElement,
-    ) as HTMLElement & { value: string };
-    expect(delivery.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("none");
+    );
+    expect(
+      delivery.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("none");
   });
 
   it("shows persisted non-first values in jobs filters and runs sort", () => {

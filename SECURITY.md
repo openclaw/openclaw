@@ -156,6 +156,18 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 - Plugin behavior such as reading env/files or running host commands is expected inside this trust boundary.
 - Security reports must show a boundary bypass (for example unauthenticated plugin load, allowlist/policy bypass, or sandbox/path-safety bypass), not only malicious behavior from a trusted-installed plugin.
 
+### Code Mode Executors
+
+When global `tools.codeMode` is absent, OpenClaw uses automatic per-model activation. Explicit `false` disables it, and an authored object without `enabled` remains off. When engaged, its default `node` executor runs JavaScript with Node.js `node:vm` in a worker thread. **`node:vm` is not a security boundary.** The worker keeps guest computation off the Gateway event loop, but it runs with the Gateway process's OS privileges. Node Code Mode is a trusted-host execution choice.
+
+The intended guest API omits filesystem, network, subprocess, environment, and module-loading APIs. Its limited globals and module guards are programming constraints, not containment against hostile JavaScript. Tool policy, approvals, hooks, and session ownership still apply to calls made through the shared tool bridge; they cannot contain code that escapes the Node VM context. Agent sandbox settings for nested tools do not turn this Gateway worker into an OS sandbox.
+
+Select `tools.codeMode.executor: "quickjs"` for the bundled hardened executor. It runs QuickJS-WASI in a separate WASM guest, exposes only the controlled bridge, and applies guest memory and execution limits. Its tool capabilities still come from the effective OpenClaw tool policy. For stronger host isolation, use a separate OS user, container, or host with appropriate credentials and tool grants.
+
+Executor selection stays fixed throughout a cell's `exec`/`wait` lifecycle. If the selected executor is unavailable, execution fails rather than falling back to Node. Node's live worker context and QuickJS's serialized snapshots are transient state and are released on completion, cancellation, expiry, or Gateway shutdown.
+
+Reports must identify the selected executor and the boundary crossed. Node VM escape alone is not a sandbox bypass under this documented trusted-execution mode; authentication, tool-bridge authorization, QuickJS isolation, and separately configured OS sandbox boundaries remain in scope. See [Code Mode executors](https://docs.openclaw.ai/tools/code-mode/executors).
+
 ### Out of Scope
 
 - Public Internet Exposure
@@ -322,15 +334,12 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 
 ### Node.js Version
 
-OpenClaw requires **Node.js 22.22.3+, Node.js 24.15+, or Node.js 25.9+**. Node 24 is the recommended default runtime for new installs. These minimum versions include the upstream SQLite WAL-reset corruption fix; Node 23 is unsupported. The minimum supported Node 22 version also includes important security patches:
-
-- CVE-2025-59466: async_hooks DoS vulnerability
-- CVE-2026-21636: Permission model bypass vulnerability
+OpenClaw requires **Node.js 24.16+ or Node.js 26.1+**. Node 26 is recommended; Node 24 is the supported LTS line. These minimum versions include the upstream SQLite WAL-reset corruption fix and preserve embedded NUL characters in SQLite TEXT reads. Node 22, 23, and 25 are unsupported.
 
 Verify your Node.js version:
 
 ```bash
-node --version  # Should be v22.22.3+, v24.15+, or v25.9+
+node --version  # Should be v24.16+ or v26.1+
 ```
 
 ### Docker Security
@@ -355,12 +364,12 @@ OpenClaw uses several security and release-validation layers. No single scanner 
 
 ### Secret Detection
 
-OpenClaw runs the pre-commit `detect-private-key` hook in CI and keeps secret-resolution behavior covered by the dedicated secrets test surface.
+OpenClaw runs the in-repo `scripts/detect-private-keys.mts` scanner in CI (the same private-key marker set as the pre-commit-hooks `detect-private-key` hook, with no hook-repo fetches, package installs, or third-party hook execution in the scan's path) over every tracked regular file except colocated `*.test.ts` fixtures and the iOS Fastfile; pull requests run the base branch's copy of the scanner and fail if the base branch lacks it. The local `detect-private-key` pre-commit hook runs the same scanner over the text files pre-commit hands it. Secret-resolution behavior stays covered by the dedicated secrets test surface.
 
 Run the key scan locally:
 
 ```bash
-pre-commit run --all-files detect-private-key
+node scripts/detect-private-keys.mts
 ```
 
 ### Static Analysis

@@ -4,7 +4,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { expectRequestCountStable } from "./chat-flow.test-support.ts";
+import { captureUiProof, expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,6 +15,122 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("embeds only the requested existing browser tab and retains its identity across resize", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 180, width: 400 } },
+      async ({ page }) => {
+        await page.route("**/__openclaw__/assistant-media**", (route) =>
+          route.fulfill({
+            contentType: "image/png",
+            body: Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+              "base64",
+            ),
+          }),
+        );
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["browser.request"],
+          operatorScopes: ["operator.admin"],
+          methodResponses: {
+            "browser.request": {
+              cases: [
+                {
+                  match: { path: "/tabs" },
+                  response: {
+                    running: true,
+                    tabs: [
+                      {
+                        targetId: "unrelated",
+                        title: "Other session",
+                        url: "https://other.example/",
+                      },
+                      {
+                        targetId: "existing",
+                        title: "Selected page",
+                        url: "https://selected.example/",
+                      },
+                    ],
+                  },
+                },
+                {
+                  match: { path: "/screencast" },
+                  response: {
+                    __mockError: { code: "UNAVAILABLE", message: "Screencast unavailable" },
+                  },
+                },
+                {
+                  match: { path: "/screenshot" },
+                  response: {
+                    targetId: "existing",
+                    path: "/proof/selected.png",
+                    url: "https://selected.example/",
+                  },
+                },
+                {
+                  match: { path: "/act" },
+                  response: {
+                    result: {
+                      cssWidth: 100,
+                      cssHeight: 100,
+                      title: "Selected page",
+                      url: "https://selected.example/",
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(
+          `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=node&node=worker-a&profile=work&targetId=existing`,
+        );
+        const panel = page.locator("openclaw-browser-panel");
+        await panel.locator('.bp-shot[alt="Selected page"]').waitFor();
+        expect(await page.locator("openclaw-app-shell, openclaw-desktop-panel").count()).toBe(0);
+        expect(await panel.getByRole("button", { name: "New tab", exact: true }).count()).toBe(0);
+        await page.setViewportSize({ width: 400, height: 400 });
+        await panel.locator(".bp-input").click({ position: { x: 20, y: 20 } });
+        await panel.locator(".bp-input").press("Enter");
+        await gateway.waitForRequest("browser.request", {
+          match: { path: "/act", body: { kind: "press", targetId: "existing", key: "Enter" } },
+        });
+        const requests = await gateway.getRequests("browser.request");
+        for (const request of requests) {
+          expect(request.params).toMatchObject({
+            target: "node",
+            node: "worker-a",
+            query: { profile: "work" },
+          });
+          const envelope = asNullableRecord(request.params);
+          expect(["/start", "/tabs/open", "/tabs/focus"]).not.toContain(envelope?.path);
+          const targetId = asNullableRecord(envelope?.body)?.targetId;
+          if (targetId !== undefined) {
+            expect(targetId).toBe("existing");
+          }
+        }
+      },
+    );
+  });
+
+  it("shows browser access unavailability without opening another surface", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["browser.request"],
+        operatorScopes: ["operator.read", "operator.sessions.write"],
+      });
+      await page.goto(
+        `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=existing`,
+      );
+      await page
+        .getByText(
+          "Browser control is unavailable for this connection. Reconnect with browser access.",
+        )
+        .waitFor();
+      expect(await gateway.getRequests("browser.request")).toEqual([]);
+      expect(await page.locator("openclaw-app-shell, openclaw-desktop-panel").count()).toBe(0);
+    });
+  });
+
   it.each([true, false])(
     "keeps non-browser metadata inert (history: %s) with browser access enabled",
     async (includeHistory) => {
@@ -97,6 +213,16 @@ suite.define(() => {
                     },
                   },
                   {
+                    match: { path: "/screencast" },
+                    response: {
+                      __mockError: {
+                        code: "UNAVAILABLE",
+                        message: "Browser screencast requires Playwright in this gateway build.",
+                        details: { code: "SCREENCAST_UNSUPPORTED", reason: "playwright" },
+                      },
+                    },
+                  },
+                  {
                     match: { path: "/screenshot" },
                     response: { path: "/proof/default.png", targetId: "default-tab" },
                   },
@@ -115,7 +241,7 @@ suite.define(() => {
               },
             },
           });
-          const expandTools = async () => {
+          const expandHistoryTools = async () => {
             for (const summary of await page.locator(".chat-activity-group__summary").all()) {
               if ((await summary.getAttribute("aria-expanded")) !== "true") {
                 await summary.click();
@@ -131,7 +257,7 @@ suite.define(() => {
           await page.getByText("History is ready.", { exact: true }).waitFor();
           await expectRequestCountStable(gateway, "browser.request", 0);
           expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
-          await expandTools();
+          await expandHistoryTools();
           if (includeHistory) {
             for (const output of [
               "Standalone ordinary output 0",
@@ -147,7 +273,7 @@ suite.define(() => {
           await page.getByRole("button", { name: "Send message" }).click();
           const send = await gateway.waitForRequest("chat.send");
           const runId = asNullableRecord(send.params)?.idempotencyKey;
-          expect(typeof runId).toBe("string");
+          expect.assert(typeof runId === "string");
           await page.getByRole("button", { name: "Stop generating" }).waitFor();
           let seq = 0;
           const emitTool = (data: Record<string, unknown>) =>
@@ -171,20 +297,51 @@ suite.define(() => {
               },
             });
           }
-          // History disclosures can collapse when a new turn starts. Wait for
-          // the consumed live output, not a count of currently mounted rows.
-          const expectToolOutput = async (text: string) => {
-            await expect
-              .poll(async () => {
-                await expandTools();
-                return page.getByText(text, { exact: true }).isVisible();
-              })
-              .toBe(true);
+          const liveTurn = page.locator(`.chat-group[data-chat-row-key*="${runId}"]`);
+          const expectToolOutput = async (toolCallId: string, text: string) => {
+            // Keep the former poll's overall budget; every native action owns only
+            // the remaining time. Never pass zero: Playwright treats it as unlimited.
+            const deadline = performance.now() + 15_000;
+            const remainingTimeout = () => {
+              const remaining = deadline - performance.now();
+              if (remaining <= 0) {
+                throw new Error(`Timed out waiting for live tool output: ${toolCallId}`);
+              }
+              return remaining;
+            };
+            // Live calls can regroup and unmount individual rows on the next frame.
+            // Wait for this run's disclosure, then act on the exact tool identity.
+            const activity = liveTurn.locator(".chat-activity-group__summary");
+            await activity.waitFor({ timeout: remainingTimeout() });
+            const activityExpanded = await activity.getAttribute("aria-expanded", {
+              timeout: remainingTimeout(),
+            });
+            if (activityExpanded !== "true") {
+              await activity.click({ timeout: remainingTimeout() });
+            }
+            const tool = liveTurn.locator(`[data-message-id^="tool:assistant:${toolCallId}:"]`);
+            const summary = tool.locator(".chat-tool-msg-summary");
+            const toolExpanded = await summary.getAttribute("aria-expanded", {
+              timeout: remainingTimeout(),
+            });
+            if (toolExpanded !== "true") {
+              await summary.click({ timeout: remainingTimeout() });
+            }
+            const output = tool.getByText(text, { exact: true });
+            await output.waitFor({ timeout: remainingTimeout() });
+            await output.scrollIntoViewIfNeeded({ timeout: remainingTimeout() });
+            remainingTimeout();
           };
-          await expectToolOutput("Live ordinary output 0");
-          await expectToolOutput("Live ordinary output 1");
+          await expectToolOutput("live-0", "Live ordinary output 0");
+          await expectToolOutput("live-1", "Live ordinary output 1");
           await expectRequestCountStable(gateway, "browser.request", 0);
           expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
+          await captureUiProof(
+            suite,
+            page,
+            "browser-route-handoff",
+            `history-${includeHistory}-live.png`,
+          );
 
           await openChatSidePanelType(page, "Browser");
           const panel = page.locator("section.bp");
@@ -199,7 +356,7 @@ suite.define(() => {
               details,
             },
           });
-          await expectToolOutput("Live output after opening Browser");
+          await expectToolOutput("live-after-open", "Live output after opening Browser");
           expect(await page.locator("openclaw-browser-tab-card").count()).toBe(0);
           expect(await panel.locator('.bp-shot[alt="Configured default"]').isVisible()).toBe(true);
           const requests = await gateway.getRequests("browser.request");
@@ -213,7 +370,17 @@ suite.define(() => {
             expect(asNullableRecord(request.params)?.path).not.toBe("/tabs/focus");
           }
 
+          await captureUiProof(
+            suite,
+            page,
+            "browser-route-handoff",
+            `history-${includeHistory}-panel.png`,
+          );
+
           // The same live transport must still carry actionable browser results.
+          const focusCountBeforeBrowserResult = requests.filter(
+            (request) => asNullableRecord(request.params)?.path === "/tabs/focus",
+          ).length;
           await emitTool({
             phase: "start",
             toolCallId: "browser-control",
@@ -227,7 +394,12 @@ suite.define(() => {
             result: {
               content: [{ type: "text", text: "Browser control output" }],
               details: {
-                browserTab: { target: "host", profile: "managed", targetId: "default-tab" },
+                browserTab: {
+                  target: "host",
+                  profile: "managed",
+                  targetId: "default-tab",
+                  url: "https://default.example/",
+                },
               },
             },
           });
@@ -245,13 +417,18 @@ suite.define(() => {
               }),
             )
             .toBe(true);
+          expect(
+            (await gateway.getRequests("browser.request")).filter(
+              (request) => asNullableRecord(request.params)?.path === "/tabs/focus",
+            ),
+          ).toHaveLength(focusCountBeforeBrowserResult);
         },
       );
     },
   );
 
   it.each(["panel", "older card"])(
-    "preserves browser routes when first opened through %s",
+    "preserves browser routes after automatic reveal through %s",
     async (firstOpen) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
@@ -358,14 +535,15 @@ suite.define(() => {
           const hostCard = page
             .locator("openclaw-browser-tab-card")
             .filter({ hasText: "Managed tab" });
-          // Card thumbnails legitimately capture both routes before the panel opens.
+          // Thumbnails may capture both routes; automatic reveal follows only the latest live result.
           await hostCard.locator(".shot img").waitFor();
           await page
             .locator("openclaw-browser-tab-card")
             .filter({ hasText: "Node tab" })
             .locator(".shot img")
             .waitFor();
-          expect(await page.locator("section.bp").count()).toBe(0);
+          await page.locator('section.bp .bp-shot[alt="Node tab"]').waitFor();
+          expect(await page.locator("section.bp").count()).toBe(1);
           expect(
             (await gateway.getRequests("browser.request")).some(
               (request) => asNullableRecord(request.params)?.path === "/tabs/focus",
@@ -373,21 +551,20 @@ suite.define(() => {
           ).toBe(false);
           const panel = page.locator("section.bp");
           if (firstOpen === "panel") {
-            await openChatSidePanelType(page, "Browser");
+            await page.locator(".chat-side-panel-toggle").click();
+            await panel.waitFor({ state: "hidden" });
+            const beforePanelOpen = (await gateway.getRequests("browser.request")).length;
+            await page.locator(".chat-side-panel-toggle").click();
             await panel.locator('.bp-shot[alt="Node tab"]').waitFor();
             expect(await panel.locator(".bp-profile").textContent()).toBe("work");
-            await expect
-              .poll(async () =>
-                (await gateway.getRequests("browser.request")).map((request) => request.params),
-              )
-              .toContainEqual({
-                method: "POST",
-                path: "/tabs/focus",
-                target: "node",
-                node: "node-a",
-                query: { profile: "work" },
-                body: { targetId: "t1" },
-              });
+            const panelOpenRequests = (await gateway.getRequests("browser.request")).slice(
+              beforePanelOpen,
+            );
+            expect(
+              panelOpenRequests.some(
+                (request) => asNullableRecord(request.params)?.path === "/tabs/focus",
+              ),
+            ).toBe(false);
           }
           const beforeHostOpen = (await gateway.getRequests("browser.request")).length;
           await hostCard.getByRole("button", { name: "Open", exact: true }).click();
@@ -403,8 +580,18 @@ suite.define(() => {
               target: "host",
               query: { profile: "managed" },
               body: { targetId: "t1", type: "png" },
+              tabScope: { sessionKey: "agent:main:main" },
             });
-          const hostRequests = (await gateway.getRequests("browser.request")).slice(beforeHostOpen);
+          const afterHostOpen = (await gateway.getRequests("browser.request")).slice(
+            beforeHostOpen,
+          );
+          // The old view can resize while Playwright delivers the click. Selection
+          // starts with /tabs; validate its route and every request after it.
+          const selectionStart = afterHostOpen.findIndex(
+            (request) => asNullableRecord(request.params)?.path === "/tabs",
+          );
+          expect(selectionStart).toBeGreaterThanOrEqual(0);
+          const hostRequests = afterHostOpen.slice(selectionStart);
           expect(hostRequests.map((request) => asNullableRecord(request.params)?.path)).toEqual(
             expect.arrayContaining(["/tabs", "/tabs/focus", "/screenshot", "/act"]),
           );

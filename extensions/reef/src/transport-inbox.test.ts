@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReefInboxConnection, ReefInboxEntryParkedError, type WebSocketLike } from "./transport.js";
 import {
@@ -12,34 +13,79 @@ afterEach(() => {
 });
 
 describe("ReefInboxConnection recovery", () => {
-  it("starts REST catch-up at the durable cursor and advances only processed entries", async () => {
+  it("keeps the highest cursor when direct drains finish persistence out of order", async () => {
     const requestedAfter: number[] = [];
-    const persisted: number[] = [];
-    const processed: number[] = [];
+    const lowerPersistence = createDeferred<void>();
+    const lowerStarted = createDeferred<void>();
     const client = createClient(async (input) => {
-      const after = Number(parseRequestUrl(input).searchParams.get("after"));
-      requestedAfter.push(after);
-      return after === 7
-        ? Response.json({ entries: [receiptEntry(8)], cursor: 8 })
-        : Response.json({ entries: [], cursor: after });
+      requestedAfter.push(Number(parseRequestUrl(input).searchParams.get("after")));
+      return Response.json({ entries: [], cursor: requestedAfter.length === 1 ? 10 : 20 });
     });
     const inbox = new ReefInboxConnection(
       client,
-      async (entries) => {
-        processed.push(...entries.map((entry) => entry.seq));
+      async () => {},
+      () => new ControlledSocket() as unknown as WebSocketLike,
+      {
+        persistCursor: async (cursor) => {
+          if (cursor === 10) {
+            lowerStarted.resolve();
+            await lowerPersistence.promise;
+          }
+        },
       },
-      () => {
-        throw new Error("socket should not open during direct drain");
-      },
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
     );
-
+    const lower = inbox.drain();
+    try {
+      await lowerStarted.promise;
+      await inbox.drain();
+    } finally {
+      lowerPersistence.resolve();
+      await lower;
+    }
     await inbox.drain();
-
-    expect(requestedAfter).toEqual([7, 8]);
-    expect(processed).toEqual([8]);
-    expect(persisted).toEqual([8]);
+    expect(requestedAfter).toEqual([0, 0, 20]);
   });
+
+  it.each([false, true])(
+    "retains the previous cursor when asynchronous persistence fails (empty page: %s)",
+    async (empty) => {
+      const requestedAfter: number[] = [];
+      const persistence = createDeferred<void>();
+      const started = createDeferred<void>();
+      const failure = new Error("cursor persistence failed");
+      let fail = true;
+      const client = createClient(async (input) => {
+        const after = Number(parseRequestUrl(input).searchParams.get("after"));
+        requestedAfter.push(after);
+        return Response.json({
+          entries: !empty && after === 7 ? [receiptEntry(8)] : [],
+          cursor: 8,
+        });
+      });
+      const inbox = new ReefInboxConnection(
+        client,
+        async () => {},
+        () => new ControlledSocket() as unknown as WebSocketLike,
+        {
+          initialCursor: 7,
+          persistCursor: async () => {
+            started.resolve();
+            if (fail) {
+              await persistence.promise;
+            }
+          },
+        },
+      );
+      const first = expect(inbox.drain()).rejects.toBe(failure);
+      await started.promise;
+      expect(requestedAfter).toEqual([7]);
+      persistence.reject(failure);
+      await first;
+      fail = false;
+      await inbox.drain();
+      expect(requestedAfter).toEqual(empty ? [7, 7] : [7, 7, 8]);
+    },
+  );
 
   it("does not advance past an entry that failed processing", async () => {
     const persisted: number[] = [];
@@ -63,19 +109,23 @@ describe("ReefInboxConnection recovery", () => {
     expect(persisted).toEqual([8]);
   });
 
-  it("parks an entry without advancing the cursor and completes later entries", async () => {
+  it("retries a parked live entry after a later separate frame completes", async () => {
+    vi.useFakeTimers();
+    const socket = new ControlledSocket();
+    const errors: string[] = [];
+    const retainedEntries: ReturnType<typeof receiptEntry>[] = [];
+    const requestedAfter: number[] = [];
     const persisted: number[] = [];
     const attempts: number[] = [];
+    const completed: number[] = [];
     let parked = true;
     const client = createClient(async (input) => {
       const after = Number(parseRequestUrl(input).searchParams.get("after"));
-      return after === 7
-        ? Response.json({
-            entries: [receiptEntry(8), receiptEntry(9), receiptEntry(10)],
-            cursor: 10,
-          })
-        : Response.json({ entries: [], cursor: after });
+      requestedAfter.push(after);
+      const entries = retainedEntries.filter((entry) => entry.seq > after);
+      return Response.json({ entries, cursor: entries.at(-1)?.seq ?? after });
     });
+    const abort = new AbortController();
     const inbox = new ReefInboxConnection(
       client,
       async ([entry]) => {
@@ -83,59 +133,56 @@ describe("ReefInboxConnection recovery", () => {
         if (entry!.seq === 8 && parked) {
           throw new ReefInboxEntryParkedError("review approval pending");
         }
-      },
-      () => {
-        throw new Error("socket should not open during direct drain");
-      },
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    // First drain: entry 8 parks, 9 and 10 still complete, durable cursor holds.
-    await inbox.drain();
-    expect(attempts).toEqual([8, 9, 10]);
-    expect(persisted).toEqual([]);
-
-    // Re-poll while parked: only the parked entry is re-attempted.
-    await inbox.poll();
-    expect(attempts).toEqual([8, 9, 10, 8]);
-    expect(persisted).toEqual([]);
-
-    // Owner decision resolves the park; the cursor folds through the entries
-    // that already completed above it.
-    parked = false;
-    await inbox.poll();
-    expect(attempts).toEqual([8, 9, 10, 8, 8]);
-    expect(persisted).toEqual([8, 9, 10]);
-  });
-
-  it("keeps the live socket up while an entry stays parked", async () => {
-    const socket = new ControlledSocket();
-    const errors: string[] = [];
-    const client = createClient(async () =>
-      Response.json({ entries: [receiptEntry(8)], cursor: 8 }),
-    );
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {
-        throw new ReefInboxEntryParkedError("review approval pending");
+        completed.push(entry!.seq);
       },
       () => socket as unknown as WebSocketLike,
-      { initialCursor: 7, onError: (error) => errors.push(error.message) },
+      {
+        initialCursor: 7,
+        persistCursor: (cursor) => persisted.push(cursor),
+        onError: (error) => errors.push(error.message),
+      },
     );
+
     const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(socket.closed).toBe(false));
-    // Give catch-up a macrotask to finish; a parked entry is a waiting state,
-    // not a connection failure, so nothing may close or report.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    expect(errors).toEqual([]);
-    expect(socket.closed).toBe(false);
-    abort.abort();
-    socket.emit("close");
-    await running;
+    try {
+      socket.emit("open");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requestedAfter).toEqual([7]);
+      expect(attempts).toEqual([]);
+
+      // The relay retains each entry before pushing its live notification.
+      retainedEntries.push(receiptEntry(8));
+      socket.emit("message", {
+        data: JSON.stringify({ type: "entry", entry: retainedEntries[0] }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toEqual([8]);
+      expect(persisted).toEqual([]);
+
+      retainedEntries.push(receiptEntry(9));
+      socket.emit("message", {
+        data: JSON.stringify({ type: "entry", entry: retainedEntries[1] }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(completed).toEqual([9]);
+      expect(socket.closed).toBe(false);
+      expect(errors).toEqual([]);
+      // Continue through recovery even if the earlier frame's cursor barrier was lost.
+      expect.soft(persisted).toEqual([]);
+
+      parked = false;
+      const recoveryPullIndex = requestedAfter.length;
+      const recoveryAttemptIndex = attempts.length;
+      await inbox.poll(abort.signal);
+      expect.soft(requestedAfter[recoveryPullIndex]).toBe(7);
+      expect.soft(attempts.slice(recoveryAttemptIndex)).toEqual([8]);
+      expect.soft(completed).toEqual([9, 8]);
+      expect(persisted.at(-1)).toBe(9);
+    } finally {
+      abort.abort();
+      await running;
+      vi.useRealTimers();
+    }
   });
 
   it("sends keepalive pings, absorbs pongs, and reconnects on a dead link", async () => {
@@ -221,50 +268,15 @@ describe("ReefInboxConnection recovery", () => {
     expect(persisted).toEqual([12]);
   });
 
-  it("reports connected before a slow REST catch-up completes", async () => {
-    const socket = new ControlledSocket();
-    const states: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
-    const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
-      return Response.json({ entries: [], cursor: 0 });
-    });
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      { onState: (state) => states.push(state) },
-    );
-
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    expect(states).toEqual(["connected"]);
-
-    releasePull();
-    abort.abort();
-    await running;
-    expect(states).toEqual(["connected", "disconnected"]);
-  });
-
   it("serializes socket frames behind catch-up and skips pull/socket duplicates", async () => {
     const socket = new ControlledSocket();
     const processed: number[] = [];
     const persisted: number[] = [];
-    let releaseFirstPull!: () => void;
-    const firstPullGate = new Promise<void>((resolve) => {
-      releaseFirstPull = resolve;
-    });
+    const firstPullGate = createDeferred<void>();
     const client = createClient(async (input) => {
       const after = Number(parseRequestUrl(input).searchParams.get("after"));
       if (after === 0) {
-        await firstPullGate;
+        await firstPullGate.promise;
         return Response.json({ entries: [receiptEntry(1), receiptEntry(2)], cursor: 2 });
       }
       return Response.json({ entries: [], cursor: after });
@@ -280,28 +292,29 @@ describe("ReefInboxConnection recovery", () => {
     );
 
     const running = inbox.start(abort.signal);
-    socket.emit("open");
-    socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(2) }) });
-    socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(3) }) });
-    releaseFirstPull();
-    await vi.waitFor(() => expect(processed).toEqual([1, 2, 3]));
+    try {
+      socket.emit("open");
+      socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(2) }) });
+      socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(3) }) });
+      firstPullGate.resolve();
+      await vi.waitFor(() => expect(processed).toEqual([1, 2, 3]));
 
-    expect(persisted).toEqual([1, 2, 3]);
-    abort.abort();
-    await running;
+      expect(persisted).toEqual([1, 2, 3]);
+    } finally {
+      firstPullGate.resolve();
+      abort.abort();
+      await running;
+    }
   });
 
   it("reports a socket close immediately while catch-up is still pending", async () => {
     const socket = new ControlledSocket();
     const states: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
+    const pullGate = createDeferred<void>();
+    const pullStarted = createDeferred<void>();
     const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
+      pullStarted.resolve();
+      await pullGate.promise;
       return Response.json({ entries: [], cursor: 0 });
     });
     const abort = new AbortController();
@@ -313,14 +326,17 @@ describe("ReefInboxConnection recovery", () => {
     );
 
     const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    socket.emit("close");
-    await vi.waitFor(() => expect(states).toEqual(["connected", "disconnected"]));
-
-    abort.abort();
-    releasePull();
-    await running;
+    try {
+      socket.emit("open");
+      await vi.waitFor(() => pullStarted.promise);
+      expect(states).toEqual(["connected"]);
+      socket.emit("close");
+      await vi.waitFor(() => expect(states).toEqual(["connected", "disconnected"]));
+    } finally {
+      abort.abort();
+      pullGate.resolve();
+      await running;
+    }
   });
 
   it("reports unexpected socket close details before retrying", async () => {
@@ -397,14 +413,13 @@ describe("ReefInboxConnection recovery", () => {
     await running;
   });
 
-  it("waits for an in-flight handler before completing channel abort", async () => {
+  it("waits for an in-flight handler and its cursor write before completing channel abort", async () => {
     const socket = new ControlledSocket();
     const persisted: number[] = [];
-    let releaseHandler!: () => void;
-    const handlerGate = new Promise<void>((resolve) => {
-      releaseHandler = resolve;
-    });
-    let handlerStarted = false;
+    const handlerGate = createDeferred<void>();
+    const handlerStarted = createDeferred<void>();
+    const persistence = createDeferred<void>();
+    const persistenceStarted = createDeferred<void>();
     const client = createClient(async () =>
       Response.json({ entries: [receiptEntry(1)], cursor: 1 }),
     );
@@ -412,39 +427,53 @@ describe("ReefInboxConnection recovery", () => {
     const inbox = new ReefInboxConnection(
       client,
       async () => {
-        handlerStarted = true;
-        await handlerGate;
+        handlerStarted.resolve();
+        await handlerGate.promise;
       },
       () => socket as unknown as WebSocketLike,
-      { persistCursor: (cursor) => persisted.push(cursor) },
+      {
+        persistCursor: async (cursor) => {
+          persistenceStarted.resolve();
+          await persistence.promise;
+          persisted.push(cursor);
+        },
+      },
     );
 
     let finished = false;
     const running = inbox.start(abort.signal).then(() => {
       finished = true;
     });
-    socket.emit("open");
-    await vi.waitFor(() => expect(handlerStarted).toBe(true));
-    abort.abort();
-    await Promise.resolve();
-    expect(finished).toBe(false);
-
-    releaseHandler();
-    await running;
+    try {
+      socket.emit("open");
+      await vi.waitFor(() => handlerStarted.promise);
+      abort.abort();
+      await Promise.resolve();
+      expect(finished).toBe(false);
+      handlerGate.resolve();
+      await persistenceStarted.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(finished).toBe(false);
+      expect(persisted).toEqual([]);
+    } finally {
+      handlerGate.resolve();
+      persistence.resolve();
+      abort.abort();
+      await running;
+    }
     expect(persisted).toEqual([1]);
   });
 
   it("bounds live frames during catch-up and reconnects through REST on overflow", async () => {
     const socket = new ControlledSocket();
     const errors: string[] = [];
-    let releasePull!: () => void;
-    const pullGate = new Promise<void>((resolve) => {
-      releasePull = resolve;
-    });
-    let pullStarted = false;
+    const pullGate = createDeferred<void>();
+    const pullStarted = createDeferred<void>();
     const client = createClient(async () => {
-      pullStarted = true;
-      await pullGate;
+      pullStarted.resolve();
+      await pullGate.promise;
       return Response.json({ entries: [], cursor: 0 });
     });
     const abort = new AbortController();
@@ -461,17 +490,23 @@ describe("ReefInboxConnection recovery", () => {
     );
 
     const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(pullStarted).toBe(true));
-    for (let seq = 1; seq <= 257; seq += 1) {
-      socket.emit("message", {
-        data: JSON.stringify({ type: "entry", entry: receiptEntry(seq) }),
-      });
-    }
-    releasePull();
-    await running;
+    try {
+      socket.emit("open");
+      await vi.waitFor(() => pullStarted.promise);
+      for (let seq = 1; seq <= 257; seq += 1) {
+        socket.emit("message", {
+          data: JSON.stringify({ type: "entry", entry: receiptEntry(seq) }),
+        });
+      }
+      pullGate.resolve();
+      await running;
 
-    expect(errors).toEqual(["Reef inbox live buffer overflow; reconnecting for REST recovery"]);
+      expect(errors).toEqual(["Reef inbox live buffer overflow; reconnecting for REST recovery"]);
+    } finally {
+      pullGate.resolve();
+      abort.abort();
+      await running;
+    }
   });
 
   it("surfaces catch-up failures to channel diagnostics", async () => {

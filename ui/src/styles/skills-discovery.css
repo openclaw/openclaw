@@ -1,0 +1,16 @@
+.skill-discovery-card__open {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.skill-discovery-card__notice {
+  font-size: var(--control-ui-text-xs);
+}
+
+.skill-discovery .plugin-card-author {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

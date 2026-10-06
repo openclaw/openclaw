@@ -5,6 +5,7 @@ import { testing } from "../../openai-transport-stream.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
   prepareEmbeddedAttemptPromptPreflight,
@@ -12,6 +13,7 @@ import {
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   estimateLlmBoundaryTokenPressure,
+  estimateToolSchemaTokenPressure,
 } from "./preemptive-compaction.js";
 
 const attempt = {
@@ -70,12 +72,22 @@ describe("attempt prompt preflight", () => {
     "discarded-invalid",
     "fitting-with-raw-overflow",
     "fitting-with-discarded-invalid",
+    "fitting-with-tool-output-schema",
   ] as const)(
     "handles a %s checkpoint when a context engine owns ordinary compaction",
     async (variant) => {
       const discarded = variant === "discarded" || variant === "discarded-invalid";
       const fitting = variant.startsWith("fitting-");
       const unwindowed = variant === "unwindowed" || variant === "unwindowed-tools";
+      const toolWithOutputSchema = {
+        name: "lookup",
+        description: "Look up a record.",
+        parameters: { type: "object" },
+        outputSchema: {
+          type: "string",
+          description: "result documentation ".repeat(4_000),
+        },
+      };
       const owner = makeAgentAssistantMessage({
         content: [{ type: "text", text: "covered" }],
         model: attempt.model.id,
@@ -156,6 +168,11 @@ describe("attempt prompt preflight", () => {
         sessionMessageCount: 1,
         systemPrompt: "",
         toolResultMaxChars: 1_000,
+        ...(variant === "fitting-with-tool-output-schema"
+          ? {
+              toolSchemaTokens: estimateToolSchemaTokenPressure([toolWithOutputSchema]),
+            }
+          : {}),
         state: {
           contextBudgetStatus: undefined,
           preflightRecovery: undefined,
@@ -198,8 +215,9 @@ describe("attempt prompt preflight", () => {
     },
   );
 
-  it("routes a mid-turn compaction request with its measured budget", () => {
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+  it("routes a mid-turn compaction request with its measured budget", async () => {
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request,
       sessionAgentId: "test",
@@ -220,12 +238,13 @@ describe("attempt prompt preflight", () => {
     });
   });
 
-  it("admits a retry without changing history when persisted truncation cannot help", () => {
+  it("admits a retry without changing history when persisted truncation cannot help", async () => {
     const toolResult = makeToolResultMessage("already capped tool output");
     const sessionManager = createSessionManagerWithMessage(toolResult);
     const messagesBefore = sessionManager.buildSessionContext().messages;
     const replaceSessionMessages = vi.fn();
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request: { ...request, route: "truncate_tool_results_only" },
       sessionAgentId: "test",
@@ -247,8 +266,9 @@ describe("attempt prompt preflight", () => {
     expect(sessionManager.buildSessionContext().messages).toEqual(messagesBefore);
   });
 
-  it("keeps the compaction fallback when persisted truncation cannot inspect history", () => {
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+  it("keeps the compaction fallback when persisted truncation cannot inspect history", async () => {
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request: { ...request, route: "truncate_tool_results_only" },
       sessionAgentId: "test",
@@ -261,12 +281,13 @@ describe("attempt prompt preflight", () => {
     expect(outcome.promptError?.message).toBe(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
   });
 
-  it("handles successful mid-turn tool-result truncation without a prompt error", () => {
+  it("handles successful mid-turn tool-result truncation without a prompt error", async () => {
     const sessionManager = createSessionManagerWithMessage(
       makeToolResultMessage("large tool output ".repeat(5_000)),
     );
     const replaceSessionMessages = vi.fn();
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt: { ...attempt, contextTokenBudget: 100 },
       request: { ...request, route: "truncate_tool_results_only" },
       sessionAgentId: "test",

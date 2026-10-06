@@ -1,16 +1,15 @@
 import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
+import { composedParent } from "../lib/navigation-click.ts";
 
 export type HovercardBootstrapTrigger = "focus" | "pointer";
 
-export class LazyHovercardBootstrap<TElement extends HTMLElement, TProperties> {
+export class LazyHovercardBootstrap<TElement extends HTMLElement> {
   private stopListeners: (() => void) | null = null;
 
   constructor(
     private readonly params: {
       tag: string;
       load: () => Promise<CustomElementConstructor>;
-      snapshot: (element: TElement) => TProperties;
-      restore: (element: TElement, properties: TProperties) => void;
       onDefined?: () => void;
     },
   ) {}
@@ -22,24 +21,23 @@ export class LazyHovercardBootstrap<TElement extends HTMLElement, TProperties> {
   }
 
   providerFor(target: Element): TElement | null {
-    return target.closest<TElement>(this.params.tag);
+    let element: Element | null = target;
+    while (element) {
+      const owner = element.closest<TElement>(this.params.tag);
+      if (owner) {
+        return owner;
+      }
+      element = composedParent(element);
+    }
+    return null;
   }
 
   async define(): Promise<void> {
-    const pending = new Map(
-      [...document.querySelectorAll<TElement>(this.params.tag)].map((element) => [
-        element,
-        this.params.snapshot(element),
-      ]),
-    );
     await ensureCustomElementDefined(this.params.tag, async () => {
       const provider = await this.params.load();
-      // Non-isolated test modules can share one document and element registry.
+      // Another loader may register the tag while this import is pending.
       if (!customElements.get(this.params.tag)) {
         customElements.define(this.params.tag, provider);
-      }
-      for (const [element, properties] of pending) {
-        this.params.restore(element, properties);
       }
     });
     this.stopListeners?.();
@@ -73,7 +71,7 @@ export function hovercardBootstrapIntentActive(
   }
   return focusWithin
     ? document.activeElement instanceof Node && target.contains(document.activeElement)
-    : document.activeElement === target;
+    : target.matches(":focus");
 }
 
 export function remainingHovercardOpenDelay(startedAt: number, openDelayMs: number): number {

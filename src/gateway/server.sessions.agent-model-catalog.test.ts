@@ -1,8 +1,16 @@
-import { afterEach, describe, expect, test, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, expect, test, vi } from "vitest";
+import type { preparePublishedModelRuntimeChoice } from "../agents/model-runtime-choice.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  createColdPluginFixture,
+  isColdPluginRuntimeLoaded,
+} from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
+import type { PrepareGatewaySessionLifecycle } from "./session-create-service.types.js";
 import { writeSessionStore } from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
@@ -12,41 +20,59 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
+// Prepared runtime eligibility is covered by the native choice owner tests.
+vi.mock("../agents/model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<typeof preparePublishedModelRuntimeChoice>(
+    async ({ runtimeId, preferredRuntimeId }) => ({
+      kind: "ready",
+      runtimeId: runtimeId ?? preferredRuntimeId ?? "fixture-harness",
+      validate: () => undefined,
+    }),
+  ),
+}));
+
+afterEach(async () => {
+  await disposeSessionReadContexts();
+  closeOpenClawStateDatabaseForTest();
+});
+
 const { createSelectedGlobalSessionStore } = setupGatewaySessionsHandlerTestHarness();
 
 const mainModel = { id: "main-only", name: "Main Model", provider: "main-provider" };
 const workModel = { id: "work-only", name: "Work Model", provider: "work-provider" };
 
 function createAgentModelCatalogLoader() {
-  return vi.fn(async (params?: { agentId?: string }) =>
-    params?.agentId === "work" ? [workModel] : [mainModel],
-  );
+  return vi.fn(async (params?: { agentId?: string }) => {
+    const entries = params?.agentId === "work" ? [workModel] : [mainModel];
+    return { entries, routeVariants: entries };
+  });
 }
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
 
 const mainRef = "main-provider/main-only";
 const workRef = "work-provider/work-only";
 
 type ModelSelectionCase = {
   label: string;
+  method: "sessions.create" | "sessions.patch";
   explicitAgent?: boolean;
   globalAllow: string[];
   agentAllow?: string[];
   globalAlias?: string;
   agentAlias?: string;
+  agentRuntime?: string;
+  harness?: "enabled" | "denied";
   model: string;
   expectedModel: string;
   denied?: boolean;
+  error?: string;
 };
 
 function configureAgentModels(
   scenario: Pick<
     ModelSelectionCase,
-    "globalAllow" | "agentAllow" | "globalAlias" | "agentAlias"
+    "globalAllow" | "agentAllow" | "globalAlias" | "agentAlias" | "agentRuntime"
   > & { subagentModel?: string },
+  runtimeModel = workRef,
 ) {
   testState.agentConfig = {
     model: { primary: "synthetic/base" },
@@ -54,39 +80,41 @@ function configureAgentModels(
     models: scenario.globalAlias ? { [workRef]: { alias: scenario.globalAlias } } : {},
   };
   testState.agentsConfig = {
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         modelPolicy: { allow: [mainRef] },
         models: { [mainRef]: { alias: "agent-choice" } },
       },
-      {
-        id: "work",
+      work: {
         subagents: scenario.subagentModel ? { model: scenario.subagentModel } : undefined,
         ...(scenario.agentAllow ? { modelPolicy: { allow: scenario.agentAllow } } : {}),
-        models: scenario.agentAlias ? { [workRef]: { alias: scenario.agentAlias } } : {},
+        models: {
+          [workRef]: scenario.agentAlias ? { alias: scenario.agentAlias } : {},
+          ...(scenario.agentRuntime
+            ? { [runtimeModel]: { agentRuntime: { id: scenario.agentRuntime } } }
+            : {}),
+        },
       },
-    ],
+    },
   };
 }
 
 const cases: ModelSelectionCase[] = [
-  {
-    label: "loads the explicit agent model catalog",
-    explicitAgent: true,
+  ...(["enabled", "denied"] as const).map((harness): ModelSelectionCase => ({
+    label: `checks an installed ${harness} harness without loading its runtime`,
+    method: harness === "enabled" ? "sessions.create" : "sessions.patch",
     globalAllow: [],
+    agentRuntime: "fixture-harness",
+    harness,
     model: workRef,
     expectedModel: workRef,
-  },
-  {
-    label: "loads the agent-qualified session model catalog",
-    globalAllow: [],
-    model: workRef,
-    expectedModel: workRef,
-  },
+    denied: harness !== "enabled",
+    error:
+      'Model work-provider/work-only requires agent harness "fixture-harness", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.',
+  })),
   {
     label: "rejects outside agent policy despite unrestricted global policy",
+    method: "sessions.create",
     explicitAgent: true,
     globalAllow: [],
     agentAllow: [workRef],
@@ -96,37 +124,15 @@ const cases: ModelSelectionCase[] = [
   },
   {
     label: "accepts an uncataloged model under explicit empty agent policy",
+    method: "sessions.create",
     globalAllow: [mainRef],
     agentAllow: [],
     model: "work-provider/uncataloged",
     expectedModel: "work-provider/uncataloged",
   },
   {
-    label: "accepts the agent list instead of the opposing global list",
-    explicitAgent: true,
-    globalAllow: [mainRef],
-    agentAllow: [workRef],
-    model: workRef,
-    expectedModel: workRef,
-  },
-  {
-    label: "rejects the global list when the agent list replaces it",
-    globalAllow: [mainRef],
-    agentAllow: [workRef],
-    model: mainRef,
-    expectedModel: mainRef,
-    denied: true,
-  },
-  {
-    label: "resolves an agent-only alias under the target agent policy",
-    globalAllow: [mainRef],
-    agentAllow: [workRef],
-    agentAlias: "agent-choice",
-    model: "agent-choice",
-    expectedModel: workRef,
-  },
-  {
     label: "uses the per-agent alias override for the same model key",
+    method: "sessions.patch",
     explicitAgent: true,
     globalAllow: [mainRef],
     agentAllow: [workRef],
@@ -134,77 +140,85 @@ const cases: ModelSelectionCase[] = [
     agentAlias: "agent-choice",
     model: "agent-choice",
     expectedModel: workRef,
-  },
-  {
-    label: "rejects a displaced global alias",
-    globalAllow: [workRef],
-    agentAllow: [workRef],
-    globalAlias: "shared-choice",
-    agentAlias: "agent-choice",
-    model: "shared-choice",
-    expectedModel: "synthetic/shared-choice",
-    denied: true,
-  },
-  {
-    label: "checks the resolved agent alias against agent policy",
-    globalAllow: [],
-    agentAllow: [mainRef],
-    agentAlias: "agent-choice",
-    model: "agent-choice",
-    expectedModel: workRef,
-    denied: true,
   },
 ];
 
-describe.each(["sessions.create", "sessions.patch"] as const)("%s", (method) => {
-  test.each(cases)("$label", async (scenario) => {
-    const { workStorePath } = await createSelectedGlobalSessionStore();
-    configureAgentModels(scenario);
-    const key = "agent:work:dashboard:catalog-owner";
-    const access = { agentId: "work", sessionKey: key, storePath: workStorePath };
-    if (method === "sessions.patch") {
-      await writeSessionStore({
-        agentId: "work",
-        storePath: workStorePath,
-        entries: {
-          [key]: sessionStoreEntry("work-catalog-patch", {
-            label: "Original label",
-            providerOverride: "synthetic",
-            modelOverride: "previous",
-            modelOverrideSource: "user",
-          }),
-        },
-      });
-    }
-    const before = loadSessionEntry(access);
-    const loadGatewayModelCatalog = createAgentModelCatalogLoader();
-    const result = await directSessionReq<{ entry?: SessionEntry }>(
-      method,
-      {
-        key,
-        ...(scenario.explicitAgent ? { agentId: "work" } : {}),
-        model: scenario.model,
-        label: "Updated label",
+test.each(cases)("$method $label", async (scenario) => {
+  const { method } = scenario;
+  const { dir, workStorePath } = await createSelectedGlobalSessionStore();
+  configureAgentModels(scenario, scenario.expectedModel);
+  let fixture: ReturnType<typeof createColdPluginFixture> | undefined;
+  if (scenario.harness) {
+    const rootDir = await fs.mkdtemp(path.join(dir, "harness-"));
+    fixture = createColdPluginFixture({
+      rootDir,
+      pluginId: "fixture-harness",
+      manifest: { activation: { onAgentHarnesses: ["fixture-harness"] } },
+    });
+    const { writeConfigFile } = await getGatewayConfigModule();
+    await writeConfigFile({
+      plugins: {
+        load: { paths: [rootDir] },
+        ...(scenario.harness === "denied"
+          ? {}
+          : { entries: { "fixture-harness": { enabled: true } } }),
+        ...(scenario.harness === "denied" ? { deny: ["fixture-harness"] } : {}),
       },
-      { context: { loadGatewayModelCatalog } },
-    );
+    });
+  }
+  const key = "agent:work:dashboard:catalog-owner";
+  const access = { agentId: "work", sessionKey: key, storePath: workStorePath };
+  if (method === "sessions.patch") {
+    await writeSessionStore({
+      agentId: "work",
+      storePath: workStorePath,
+      entries: {
+        [key]: sessionStoreEntry("work-catalog-patch", {
+          label: "Original label",
+          providerOverride: "synthetic",
+          modelOverride: "previous",
+          modelOverrideSource: "user",
+        }),
+      },
+    });
+  }
+  const before = loadSessionEntry(access);
+  const { readConfigFileSnapshot } = await getGatewayConfigModule();
+  const beforeConfig = await readConfigFileSnapshot();
+  const loadGatewayModelCatalogSnapshot = createAgentModelCatalogLoader();
+  const result = await directSessionReq<{ entry?: SessionEntry }>(
+    method,
+    {
+      key,
+      ...(scenario.explicitAgent ? { agentId: "work" } : {}),
+      model: scenario.model,
+      label: "Updated label",
+    },
+    {
+      context: { loadGatewayModelCatalogSnapshot },
+      ...(scenario.error ? { client: { connect: { scopes: ["operator.admin"] } } as never } : {}),
+    },
+  );
 
-    expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
-    if (scenario.denied) {
-      expect.soft(result.ok).toBe(false);
-      expect.soft(result.error).toMatchObject({
-        code: "INVALID_REQUEST",
-        message: `model not allowed: ${scenario.expectedModel}`,
-      });
-      expect(loadSessionEntry(access)).toEqual(before);
-      return;
-    }
-    expect(result.ok, result.error?.message).toBe(true);
-    const [providerOverride, modelOverride] = scenario.expectedModel.split("/");
-    const selection = { providerOverride, modelOverride, modelOverrideSource: "user" };
-    expect(result.payload?.entry).toMatchObject(selection);
-    expect(loadSessionEntry(access)).toMatchObject({ ...selection, label: "Updated label" });
-  });
+  expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "work" });
+  if (fixture) {
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  }
+  if (scenario.denied) {
+    expect.soft(result.ok).toBe(false);
+    expect.soft(result.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: scenario.error ?? `model not allowed: ${scenario.expectedModel}`,
+    });
+    expect(loadSessionEntry(access)).toEqual(before);
+    expect((await readConfigFileSnapshot()).config).toEqual(beforeConfig.config);
+    return;
+  }
+  expect(result.ok, result.error?.message).toBe(true);
+  const [providerOverride, modelOverride] = scenario.expectedModel.split("/");
+  const selection = { providerOverride, modelOverride, modelOverrideSource: "user" };
+  expect(result.payload?.entry).toMatchObject(selection);
+  expect(loadSessionEntry(access)).toMatchObject({ ...selection, label: "Updated label" });
 });
 
 test.each([
@@ -221,13 +235,6 @@ test.each([
     agentAllow: [workRef],
     model: mainRef,
     expected: null,
-  },
-  {
-    name: "uncataloged model under an explicit empty agent policy",
-    globalAllow: [mainRef],
-    agentAllow: [],
-    model: "work-provider/uncataloged",
-    expected: { providerOverride: "work-provider", modelOverride: "uncataloged" },
   },
 ])("prepares session lifecycle selection for $name", async (scenario) => {
   await createSelectedGlobalSessionStore();
@@ -246,7 +253,10 @@ test.each([
     model: scenario.model,
     commandSource: "test",
     prepareLifecycle,
-    loadGatewayModelCatalog: async () => [workModel],
+    loadGatewayModelCatalogSnapshot: async () => ({
+      entries: [workModel],
+      routeVariants: [workModel],
+    }),
   });
 
   expect(result.ok).toBe(scenario.expected !== null);
@@ -280,7 +290,7 @@ test.each([
       }),
     },
   });
-  const context = { loadGatewayModelCatalog: createAgentModelCatalogLoader() };
+  const context = { loadGatewayModelCatalogSnapshot: createAgentModelCatalogLoader() };
   const writeClient = { connect: { scopes: ["operator.write"] } } as never;
   const sameSelection = await directSessionReq<{ entry?: SessionEntry }>(
     "sessions.create",

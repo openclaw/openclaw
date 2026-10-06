@@ -11,8 +11,12 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
+import { createToolPolicyMatcher, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import {
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  expandShippedCoreToolPolicyNames,
+  readToolAllowlistIntersection,
+} from "./tool-policy.js";
 import {
   hasSnapshotCapabilityAvailability,
   hasSnapshotCapabilityProviderAvailability,
@@ -20,9 +24,6 @@ import {
   loadCapabilityMetadataSnapshot,
 } from "./tools/manifest-capability-availability.js";
 
-/**
- * Plans optional media-tool factory registration from config, policy, capabilities, and auth.
- */
 type OptionalMediaToolFactoryPlan = {
   imageGenerate: boolean;
   videoGenerate: boolean;
@@ -30,59 +31,31 @@ type OptionalMediaToolFactoryPlan = {
   pdf: boolean;
 };
 
-type ToolModelConfig = { primary?: string; fallbacks?: string[] };
-
-function coerceFactoryToolModelConfig(model?: AgentModelConfig): ToolModelConfig {
-  const primary = resolveAgentModelPrimaryValue(model);
-  const fallbacks = resolveAgentModelFallbackValues(model);
-  return {
-    ...(primary?.trim() ? { primary: primary.trim() } : {}),
-    ...(fallbacks.length > 0 ? { fallbacks } : {}),
-  };
-}
-
-function hasToolModelConfig(model: ToolModelConfig | undefined): boolean {
+function hasExplicitToolModelConfig(model: AgentModelConfig | undefined): boolean {
   return Boolean(
-    model?.primary?.trim() || (model?.fallbacks ?? []).some((entry) => entry.trim().length > 0),
+    resolveAgentModelPrimaryValue(model)?.trim() ||
+    resolveAgentModelFallbackValues(model).some((entry) => entry.trim().length > 0),
   );
 }
 
-function hasExplicitToolModelConfig(modelConfig: AgentModelConfig | undefined): boolean {
-  return hasToolModelConfig(coerceFactoryToolModelConfig(modelConfig));
-}
-
-function hasExplicitImageModelConfig(config: OpenClawConfig | undefined): boolean {
-  return hasExplicitToolModelConfig(config?.agents?.defaults?.imageModel);
-}
-
-function hasExplicitPdfModelConfig(config: OpenClawConfig | undefined): boolean {
-  return (
-    hasExplicitToolModelConfig(config?.agents?.defaults?.pdfModel) ||
-    hasExplicitImageModelConfig(config)
-  );
-}
-
-function isToolAllowedByFactoryPolicy(params: {
-  toolName: string;
-  allowlist?: string[];
-  denylist?: string[];
-}): boolean {
-  return isToolAllowedByPolicyName(params.toolName, {
-    allow: params.allowlist,
-    deny: params.denylist,
-  });
-}
-
-/** Returns true only when an allowlist explicitly enables the requested tool. */
 export function isToolExplicitlyAllowedByFactoryPolicy(params: {
   toolName: string;
   allowlist?: string[];
   denylist?: string[];
 }): boolean {
-  if (!params.allowlist?.some((entry) => typeof entry === "string" && entry.trim().length > 0)) {
+  if (!params.allowlist) {
     return false;
   }
-  return isToolAllowedByFactoryPolicy(params);
+  const restrictions = readToolAllowlistIntersection(params.allowlist) ?? [params.allowlist];
+  const deny = expandShippedCoreToolPolicyNames(params.denylist);
+  return restrictions.every(
+    (allow) =>
+      allow.some((entry) => typeof entry === "string" && entry.trim().length > 0) &&
+      isToolAllowedByPolicyName(params.toolName, {
+        allow: expandShippedCoreToolPolicyNames(allow),
+        deny,
+      }),
+  );
 }
 
 /** Merges factory policy lists while preserving stable unique entries. */
@@ -108,7 +81,6 @@ function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): st
   return uniqueStrings(["*", ...withoutDefaultPluginMarker]);
 }
 
-/** Returns whether the image understanding tool can be constructed for this agent context. */
 export function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -120,7 +92,10 @@ export function resolveImageToolFactoryAvailable(params: {
   if (!params.agentDir?.trim()) {
     return false;
   }
-  if (params.modelHasVision || hasExplicitImageModelConfig(params.config)) {
+  if (
+    params.modelHasVision ||
+    hasExplicitToolModelConfig(params.config?.agents?.defaults?.imageModel)
+  ) {
     return true;
   }
   const snapshot =
@@ -214,7 +189,6 @@ function hasConfiguredVisionModelAuthSignal(params: {
   return false;
 }
 
-/** Resolves which optional media tools should be created for the current tool factory call. */
 export function resolveOptionalMediaToolFactoryPlan(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -229,30 +203,11 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
     params.toolAllowlist,
   );
   const toolDenylist = mergeFactoryPolicyList(params.config?.tools?.deny, params.toolDenylist);
-  const allowImageGenerate = isToolAllowedByFactoryPolicy({
-    toolName: "image_generate",
-    allowlist: toolAllowlist,
-    denylist: toolDenylist,
-  });
-  const allowVideoGenerate = isToolAllowedByFactoryPolicy({
-    toolName: "video_generate",
-    allowlist: toolAllowlist,
-    denylist: toolDenylist,
-  });
-  const allowMusicGenerate = isToolAllowedByFactoryPolicy({
-    toolName: "music_generate",
-    allowlist: toolAllowlist,
-    denylist: toolDenylist,
-  });
-  const allowPdf = isToolAllowedByFactoryPolicy({
-    toolName: "pdf",
-    allowlist: toolAllowlist,
-    denylist: toolDenylist,
-  });
-  const explicitImageGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.image);
-  const explicitVideoGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.video);
-  const explicitMusicGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.music);
-  const explicitPdf = hasExplicitPdfModelConfig(params.config);
+  const matches = createToolPolicyMatcher({ allow: toolAllowlist, deny: toolDenylist });
+  const allowPdf = matches("pdf");
+  const explicitPdf =
+    hasExplicitToolModelConfig(defaults?.pdfModel) ||
+    hasExplicitToolModelConfig(defaults?.imageModel);
   if (params.config?.plugins?.enabled === false) {
     // Optional media tools are plugin/capability backed. Disabling plugins shuts them off even when
     // stale defaults or env availability would otherwise appear to make a tool available.
@@ -270,39 +225,25 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     });
   const preparedProviders = params.preparedModelRuntime?.mediaCapabilityProviders;
-  const preparedFamilyAvailable = (providers: readonly unknown[] | undefined) =>
-    providers === undefined || providers.length > 0;
+  const generationAvailable = (kind: "image" | "video" | "music") => {
+    const key = `${kind}GenerationProviders` as const;
+    const providers = preparedProviders?.[key];
+    return (
+      matches(`${kind}_generate`) &&
+      (providers === undefined || providers.length > 0) &&
+      (hasExplicitToolModelConfig(defaults?.mediaModels?.[kind]) ||
+        hasSnapshotCapabilityAvailability({
+          snapshot,
+          authStore: params.authStore,
+          key,
+          config: params.config,
+        }))
+    );
+  };
   return {
-    imageGenerate:
-      allowImageGenerate &&
-      preparedFamilyAvailable(preparedProviders?.imageGenerationProviders) &&
-      (explicitImageGeneration ||
-        hasSnapshotCapabilityAvailability({
-          snapshot,
-          authStore: params.authStore,
-          key: "imageGenerationProviders",
-          config: params.config,
-        })),
-    videoGenerate:
-      allowVideoGenerate &&
-      preparedFamilyAvailable(preparedProviders?.videoGenerationProviders) &&
-      (explicitVideoGeneration ||
-        hasSnapshotCapabilityAvailability({
-          snapshot,
-          authStore: params.authStore,
-          key: "videoGenerationProviders",
-          config: params.config,
-        })),
-    musicGenerate:
-      allowMusicGenerate &&
-      preparedFamilyAvailable(preparedProviders?.musicGenerationProviders) &&
-      (explicitMusicGeneration ||
-        hasSnapshotCapabilityAvailability({
-          snapshot,
-          authStore: params.authStore,
-          key: "musicGenerationProviders",
-          config: params.config,
-        })),
+    imageGenerate: generationAvailable("image"),
+    videoGenerate: generationAvailable("video"),
+    musicGenerate: generationAvailable("music"),
     pdf:
       allowPdf &&
       (explicitPdf ||

@@ -1,7 +1,7 @@
-// Discord helper module supports message handler.preflight helpers behavior.
 import {
   implicitMentionKindWhen,
   matchesMentionWithExplicit,
+  normalizeMentionText,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
@@ -137,14 +137,35 @@ export function hasRawDiscordUserMention(text: string, userId?: string): boolean
   return false;
 }
 
-export function resolvePreflightMentionRequirement(params: {
-  shouldRequireMention: boolean;
-  bypassMentionRequirement: boolean;
-}): boolean {
-  if (!params.shouldRequireMention) {
+export function matchesActiveDiscordMentionPatterns(
+  text: string,
+  mentionRegexes: RegExp[],
+): boolean {
+  if (mentionRegexes.length === 0) {
     return false;
   }
-  return !params.bypassMentionRequirement;
+  const cleaned = normalizeMentionText(text);
+  // Keep raw Markdown ownership, then project offsets through the same normalization.
+  // The final NUL prevents prefix trimEnd from moving a boundary across whitespace.
+  const normalizedOffset = (offset: number) =>
+    Math.min(cleaned.length, normalizeMentionText(`${text.slice(0, offset)}\0`).length - 1);
+  const codeRegions = findCodeRegions(text).map(({ start, end }) => ({
+    start: normalizedOffset(start),
+    end: normalizedOffset(end),
+  }));
+  for (const regex of mentionRegexes) {
+    // Match whole documents so anchors and lookarounds keep their original context.
+    for (const match of cleaned.matchAll(new RegExp(regex.source, `${regex.flags}g`))) {
+      const overlapsCode = codeRegions.some(
+        ({ start, end }) =>
+          match.index < end && (match.index >= start || match.index + match[0].length > start),
+      );
+      if (!overlapsCode) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function shouldIgnoreBoundThreadWebhookMessage(params: {
@@ -164,11 +185,5 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
     return true;
   }
   const threadId = normalizeOptionalString(params.threadId) ?? "";
-  if (!threadId) {
-    return false;
-  }
-  if (params.threadBinding) {
-    return true;
-  }
-  return false;
+  return Boolean(threadId && params.threadBinding);
 }

@@ -1,7 +1,4 @@
-/** Last path segment for the folder trigger label; preserves filesystem roots. */
-export function folderDisplayName(path: string): string {
-  return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? path;
-}
+import { pathDisplayName } from "../../lib/path-display.ts";
 
 export function parentFolderDisplayName(path: string): string | undefined {
   const trimmed = path.replace(/[\\/]+$/u, "");
@@ -10,7 +7,7 @@ export function parentFolderDisplayName(path: string): string | undefined {
     return undefined;
   }
   const parent = separator === 0 ? trimmed.slice(0, 1) : trimmed.slice(0, separator);
-  return folderDisplayName(parent) || undefined;
+  return pathDisplayName(parent) || undefined;
 }
 
 export function isAbsolutePath(path: string): boolean {
@@ -40,6 +37,11 @@ function comparableAbsolutePath(value: string): string | null {
   const prefix = path.startsWith("//") ? "//" : path.startsWith("/") ? "/" : "";
   const normalized = `${prefix}${parts.join("/")}`.replace(/\/+$/u, "") || "/";
   return windows ? normalized.toLowerCase() : normalized;
+}
+
+export function sameAbsolutePath(a: string, b: string): boolean {
+  const path = comparableAbsolutePath(a);
+  return path !== null && path === comparableAbsolutePath(b);
 }
 
 /** Client-side affordance check; the Gateway remains the realpath authority. */

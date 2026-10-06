@@ -87,14 +87,14 @@ When your token is valid, OpenClaw also discovers any other model from **GET** `
   <Accordion title="Model discovery and onboarding dropdown">
     OpenClaw discovers models with:
 
-    ```bash
+    ```http
     GET https://router.huggingface.co/v1/models
     Authorization: Bearer $HUGGINGFACE_HUB_TOKEN   # or $HF_TOKEN
     ```
 
     The response is OpenAI-style: `{ "object": "list", "data": [ { "id": "Qwen/Qwen3-8B", "owned_by": "Qwen", ... }, ... ] }`.
 
-    With a configured key (onboarding, `HUGGINGFACE_HUB_TOKEN`, or `HF_TOKEN`), the **Default Hugging Face model** dropdown during interactive setup is populated from this endpoint. Gateway startup repeats the same call to refresh the catalog. Discovered models are merged with the built-in catalog above (used for metadata like context window and cost when an id matches). If the request fails, returns no data, or no key is set, OpenClaw falls back to the built-in catalog only.
+    With a configured key (onboarding, `HUGGINGFACE_HUB_TOKEN`, or `HF_TOKEN`), the **Default Hugging Face model** dropdown during interactive setup is populated from this endpoint. Gateway startup repeats the same call to refresh the catalog. Matching built-in models supply metadata such as context window and cost. Failed discovery produces a catalog failure outcome; a successful empty response stays empty. Without a key, the static catalog remains available without starting discovery.
 
     Disable discovery without removing the provider:
 
@@ -197,7 +197,7 @@ When your token is valid, OpenClaw also discovers any other model from **GET** `
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Overview of all providers, model refs, and failover behavior.
   </Card>
-  <Card title="Model selection" href="/concepts/models" icon="brain">
+  <Card title="Models" href="/concepts/models" icon="brain">
     How to choose and configure models.
   </Card>
   <Card title="Inference Providers docs" href="https://huggingface.co/docs/inference-providers" icon="book">

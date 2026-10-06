@@ -5,8 +5,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveHooksConfig } from "../hooks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -25,14 +26,17 @@ vi.mock("../../cron/isolated-agent.js", () => ({
 vi.mock("../../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: mocks.requestHeartbeat,
 }));
-vi.mock("../../infra/system-events.js", () => ({
+vi.mock("../../infra/system-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
   enqueueSystemEvent: mocks.enqueueSystemEvent,
+  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
+    mocks.enqueueSystemEvent(...args) ? () => true : null,
 }));
 
 const { createGatewayHooksRequestHandler } = await import("./hooks.js");
 
 const config: OpenClawConfig = {
-  agents: { entries: { main: { default: true } } },
+  agents: { entries: { main: {} } },
   hooks: {
     enabled: true,
     token: "hook-secret",
@@ -49,6 +53,7 @@ function createHandler(admissionTimeoutMs: number) {
     throw new Error("expected resolved hooks config");
   }
   return createGatewayHooksRequestHandler({
+    scheduler: createTestGatewayScheduler("fake-timers"),
     deps: {} as never,
     getHooksConfig: () => hooksConfig,
     getClientIpConfig: () => ({}),
@@ -88,6 +93,10 @@ async function post(
 }
 
 describe("hook background admission", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("admits slow fan-out items past the bounded deadline instead of canceling them", async () => {
     mocks.getRuntimeConfig.mockReturnValue(config);
     // Execution starts well after the 20ms bounded admission deadline,
@@ -115,6 +124,70 @@ describe("hook background admission", () => {
     expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(2);
   });
 
+  it("announces a pre-execution fan-out failure once across producer redeliveries", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockResolvedValue({
+      status: "skipped" as const,
+      error: "model provider unavailable",
+      admissionDisposition: "rejected" as const,
+    });
+    const handler = createHandler(100);
+    const redelivered = { messages: [{ id: "alert1", from: "a@example.com", subject: "Alert" }] };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await post(handler, "/hooks/gmail", redelivered);
+      expect(response.res.statusCode).toBe(502);
+    }
+    await post(handler, "/hooks/gmail", {
+      messages: [{ id: "alert2", from: "b@example.com", subject: "Other" }],
+    });
+
+    expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(4);
+    expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+      "Hook Gmail (skipped): model provider unavailable",
+      "Hook Gmail (skipped): model provider unavailable",
+    ]);
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5 * 60_000 + 1);
+    try {
+      expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
+      expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledTimes(5);
+      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (skipped): model provider unavailable",
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("announces an execution failure after an earlier redelivery failed admission", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn
+      .mockResolvedValueOnce({
+        status: "skipped" as const,
+        error: "model provider unavailable",
+        admissionDisposition: "rejected" as const,
+      })
+      .mockImplementationOnce(async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return { status: "error" as const, error: "execution failed" };
+      });
+    const handler = createHandler(100);
+    const redelivered = { messages: [{ id: "alert3", from: "c@example.com", subject: "Alert" }] };
+
+    expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(502);
+    expect((await post(handler, "/hooks/gmail", redelivered)).res.statusCode).toBe(200);
+
+    await vi.waitFor(() =>
+      expect(mocks.enqueueSystemEvent.mock.calls.map(([text]) => text)).toEqual([
+        "Hook Gmail (skipped): model provider unavailable",
+        "Hook Gmail (error): execution failed",
+      ]),
+    );
+  });
+
   it("keeps the bounded admission cancel for direct agent hooks", async () => {
     mocks.getRuntimeConfig.mockReturnValue(config);
     let sawAbort = false;
@@ -136,5 +209,214 @@ describe("hook background admission", () => {
     // The canceled run must not proceed after the 503.
     await delay(80);
     expect(sawAbort).toBe(true);
+  });
+
+  it.each([
+    { deliverySuppressionReason: "empty", replyDisposition: "empty" },
+    { deliverySuppressionReason: "silent", replyDisposition: "silent" },
+    { deliverySuppressionReason: "heartbeat", replyDisposition: "empty" },
+    { deliverySuppressionReason: "channel_transform", replyDisposition: "visible" },
+  ] as const)(
+    "returns the $deliverySuppressionReason terminal suppression reason to an explicit waiter",
+    async ({ deliverySuppressionReason, replyDisposition }) => {
+      mocks.getRuntimeConfig.mockReturnValue(config);
+      mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+        async (params: { onExecutionStarted?: () => void }) => {
+          params.onExecutionStarted?.();
+          return {
+            status: "ok" as const,
+            delivered: false,
+            deliveryAttempted: true,
+            deliverySuppressionReason,
+            replyDisposition,
+            outputText: "private output",
+            summary: "private summary",
+            sessionId: "private-session",
+            sessionKey: "private-session-key",
+          };
+        },
+      );
+      const handler = createHandler(100);
+
+      const response = await post(handler, "/hooks/agent", {
+        message: "Direct",
+        name: "Observed",
+        waitForCompletion: true,
+      });
+
+      expect(response.res.statusCode).toBe(200);
+      expect(JSON.parse(response.body())).toEqual({
+        ok: true,
+        runId: expect.any(String),
+        completion: {
+          status: "ok",
+          replyDisposition,
+          delivered: false,
+          deliveryAttempted: true,
+          deliverySuppressionReason,
+        },
+      });
+    },
+  );
+
+  it("returns categorical delivery failure without private run data", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    const secret = "fake-secret-value-that-must-not-leak";
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return {
+          status: "ok" as const,
+          replyDisposition: "visible" as const,
+          delivered: false,
+          deliveryAttempted: true,
+          deliveryError: `line\nAuthorization: Bearer ${secret}\n${"x".repeat(600)} tail`,
+          outputText: "private output",
+          summary: "private summary",
+          sessionId: "private-session",
+          sessionKey: "private-session-key",
+        };
+      },
+    );
+    const handler = createHandler(100);
+
+    const response = await post(handler, "/hooks/agent", {
+      message: "Direct",
+      name: "Observed",
+      waitForCompletion: true,
+    });
+
+    const body = JSON.parse(response.body()) as {
+      completion: { deliveryError: string };
+    };
+    expect(response.res.statusCode).toBe(200);
+    expect(body).toMatchObject({
+      completion: {
+        status: "ok",
+        replyDisposition: "visible",
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryError: "delivery-failed",
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(
+      /Authorization|fake-secret-value|private output|private summary|private-session|x{20}/,
+    );
+  });
+
+  it("preserves an attempted delivery with unknown acknowledgment", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return {
+          status: "ok" as const,
+          replyDisposition: "empty" as const,
+          delivered: false,
+          deliveryAttempted: true,
+        };
+      },
+    );
+    const handler = createHandler(100);
+
+    const response = await post(handler, "/hooks/agent", {
+      message: "Direct",
+      name: "Observed",
+      waitForCompletion: true,
+    });
+
+    expect(JSON.parse(response.body())).toEqual({
+      ok: true,
+      runId: expect.any(String),
+      completion: {
+        status: "ok",
+        replyDisposition: "empty",
+        delivered: false,
+        deliveryAttempted: true,
+      },
+    });
+  });
+
+  it("settles an admitted waiter when the isolated runner throws", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        throw new Error("private execution diagnostic");
+      },
+    );
+    const handler = createHandler(100);
+
+    const response = await post(handler, "/hooks/agent", {
+      message: "Direct",
+      name: "Observed",
+      waitForCompletion: true,
+    });
+
+    expect(response.res.statusCode).toBe(200);
+    expect(JSON.parse(response.body())).toEqual({
+      ok: true,
+      runId: expect.any(String),
+      completion: { status: "error", replyDisposition: "empty" },
+    });
+  });
+
+  it.each([
+    {
+      name: "verified message-tool delivery",
+      result: {
+        status: "ok" as const,
+        replyDisposition: "silent" as const,
+        delivered: true,
+        deliveryAttempted: true,
+      },
+    },
+    {
+      name: "silent model reply",
+      result: {
+        status: "ok" as const,
+        replyDisposition: "silent" as const,
+        delivered: false,
+        deliveryAttempted: false,
+      },
+    },
+    {
+      name: "private visible model reply",
+      result: {
+        status: "ok" as const,
+        replyDisposition: "visible" as const,
+        delivered: false,
+        deliveryAttempted: false,
+        outputText: "private visible final",
+      },
+    },
+  ])("returns bounded evidence for deliver:false + $name", async ({ result }) => {
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        return result;
+      },
+    );
+    const handler = createHandler(100);
+
+    const response = await post(handler, "/hooks/agent", {
+      message: "Direct",
+      name: "Observed",
+      deliver: false,
+      waitForCompletion: true,
+    });
+
+    expect(response.res.statusCode).toBe(200);
+    const body = JSON.parse(response.body()) as {
+      completion: Record<string, unknown>;
+    };
+    expect(body.completion).toMatchObject({
+      status: result.status,
+      replyDisposition: result.replyDisposition,
+      delivered: result.delivered,
+      deliveryAttempted: result.deliveryAttempted,
+    });
+    expect(JSON.stringify(body)).not.toContain("private visible final");
   });
 });

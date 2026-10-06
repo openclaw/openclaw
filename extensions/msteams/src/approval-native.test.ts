@@ -72,10 +72,10 @@ const activeExecApprovalHint: ChannelOutboundPayloadHint = {
 };
 
 describe("Microsoft Teams native approval capability", () => {
-  it("subscribes to exec and plugin approvals for a configured bot and approver", () => {
+  it("subscribes to exec, plugin, and system-agent approvals for a configured bot and approver", () => {
     const runtime = msTeamsApprovalCapability.nativeRuntime;
 
-    expect(runtime?.eventKinds).toEqual(["exec", "plugin"]);
+    expect(runtime?.eventKinds).toEqual(["exec", "plugin", "system-agent"]);
     expect(runtime?.availability.isConfigured({ cfg: createConfig() })).toBe(true);
     expect(
       runtime?.availability.isConfigured({
@@ -299,6 +299,8 @@ describe("Microsoft Teams native approval capability", () => {
     });
 
     expect(guidance).toContain("`channels.msteams.allowFrom`");
+    expect(guidance).toContain("Approve it from the Web UI for now.");
+    expect(guidance).not.toMatch(/terminal UI|\bTUI\b/i);
     expect(guidance).toContain("`channels.msteams.defaultTo`");
   });
 });

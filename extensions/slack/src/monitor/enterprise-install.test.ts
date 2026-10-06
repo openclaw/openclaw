@@ -38,6 +38,18 @@ describe("resolveSlackInstallationIdentity", () => {
     ).toEqual({ kind: "workspace", teamId: "T123" });
   });
 
+  it("uses the Socket Mode app id for a workspace installation when auth.test omits app_id", () => {
+    expect(
+      resolveSlackInstallationIdentity({
+        auth: {
+          team_id: "T123",
+          is_enterprise_install: false,
+        },
+        transportApiAppId: "A123",
+      }),
+    ).toEqual({ kind: "workspace", teamId: "T123", apiAppId: "A123" });
+  });
+
   it("preserves the human workspace name from auth.test", () => {
     expect(
       resolveSlackInstallationIdentity({
@@ -116,9 +128,11 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
                 "team:T01234567:user:U01234567",
               ],
               toolsBySender: {
-                U01234567: {},
+                "id:U01234567": {},
                 "id:W01234567": {},
+                "id:B01234567": {},
                 "channel:slack:U12345678": {},
+                "channel:slack:B12345678": {},
                 "*": {},
               },
             },
@@ -206,8 +220,8 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
     },
   );
 
-  it.each(["slack:U01234567", "user:U01234567"])(
-    "fails closed on unsupported toolsBySender alias %s before permissive wildcard fallback",
+  it.each(["slack:U01234567", "user:U01234567", "U01234567", "B01234567"])(
+    "fails closed on noncanonical toolsBySender key %s before permissive wildcard fallback",
     (entry) => {
       expect(() =>
         assertEnterpriseSlackPolicyConfig({

@@ -1,4 +1,3 @@
-// Discord plugin module implements native command agent reply behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   hasVisibleInboundReplyDispatch,
@@ -11,11 +10,9 @@ import {
   PLUGIN_COMMAND_DISPATCH,
   type PluginCommandCatalogDecision,
 } from "openclaw/plugin-sdk/plugin-command-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import type {
   ButtonInteraction,
   CommandInteraction,
@@ -26,6 +23,7 @@ import type { buildDiscordNativeCommandContext } from "./native-command-context.
 import {
   DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
+  resolveDiscordInteractionReplyOptions,
   safeDiscordInteractionCall,
   settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
@@ -38,17 +36,12 @@ type NativeCommandEffectiveRoute = {
   sessionKey: string;
 };
 
-type DispatchDiscordNativeAgentReplyResult = {
-  dispatched: boolean;
-  hiddenFinalReply?: ReplyPayload;
-};
-
 export async function dispatchDiscordNativeAgentReply(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
-  ctxPayload: ReturnType<typeof buildDiscordNativeCommandContext>;
+  ctxPayload: Awaited<ReturnType<typeof buildDiscordNativeCommandContext>>;
   effectiveRoute: NativeCommandEffectiveRoute;
   channelConfig: DiscordChannelConfigResolved | null;
   mediaLocalRoots: ReturnType<typeof getAgentScopedMediaLocalRoots>;
@@ -58,7 +51,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
   log: ReturnType<typeof createSubsystemLogger>;
   pluginCommandDispatch: PluginCommandCatalogDecision;
-}): Promise<DispatchDiscordNativeAgentReplyResult> {
+}) {
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig);
 
   let didReply = false;
@@ -79,24 +72,22 @@ export async function dispatchDiscordNativeAgentReply(params: {
         if (params.suppressReplies) {
           return {
             visibleReplySent: false,
-            suppression: { reason: "no_visible_result" as const },
+            suppression: { reason: "channel_transform" as const },
           };
         }
         const payloadDelivered = await deliverDiscordInteractionReply({
           interaction: params.interaction,
           payload,
+          componentRoute: {
+            accountId: params.effectiveRoute.accountId,
+            agentId: params.effectiveRoute.agentId,
+            sessionKey:
+              params.ctxPayload.CommandTargetSessionKey ?? params.effectiveRoute.sessionKey,
+          },
           mediaLocalRoots: params.mediaLocalRoots,
-          textLimit: resolveTextChunkLimit(params.cfg, "discord", params.accountId, {
-            fallbackLimit: 2000,
-          }),
-          maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
-            cfg: params.cfg,
-            discordConfig: params.discordConfig,
-            accountId: params.accountId,
-          }),
+          ...resolveDiscordInteractionReplyOptions(params),
           preferFollowUp: params.preferFollowUp || didReply,
           responseEphemeral: params.responseEphemeral,
-          chunkMode: resolveChunkMode(params.cfg, "discord", params.accountId),
         });
         didReply ||= payloadDelivered;
         return payloadDelivered
@@ -111,7 +102,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
         if (
           params.suppressReplies &&
           info.kind === "final" &&
-          result?.suppression?.reason === "no_visible_result" &&
+          result?.suppression?.reason === "channel_transform" &&
           payload.text?.trim()
         ) {
           hiddenFinalReply = payload;
@@ -178,11 +169,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
       content: DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
       ephemeral: true,
     };
-    if (params.preferFollowUp) {
-      await params.interaction.followUp(payload);
-      return;
-    }
-    await params.interaction.reply(payload);
+    await params.interaction[params.preferFollowUp ? "followUp" : "reply"](payload);
   });
   return dispatchResult;
 }

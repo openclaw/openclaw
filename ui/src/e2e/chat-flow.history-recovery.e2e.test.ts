@@ -1,7 +1,10 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -10,23 +13,21 @@ import {
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
+  readOutboxPayloadAttachments,
   requireString,
   scrollChatThreadToTop,
   visibleChatBubbleTexts,
   waitForChatScrollIdle,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 type ChatFlowTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
   it("keeps an unrelated retained transcript after another tab deletes a session", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionA = "agent:main:session-a";
     const sessionB = "agent:main:session-b";
@@ -52,8 +53,8 @@ suite.define(() => {
       ],
     };
     const sessionListResponse = chatSessionListResponse([
-      { key: sessionA, kind: "direct", label: "Session A", updatedAt: 3 },
-      { key: sessionB, kind: "direct", label: "Session B", updatedAt: 2 },
+      { key: sessionA, sessionId: "session-a", kind: "direct", label: "Session A", updatedAt: 3 },
+      { key: sessionB, sessionId: "session-b", kind: "direct", label: "Session B", updatedAt: 2 },
       { key: deletedSession, kind: "direct", label: "Session C", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
@@ -132,10 +133,10 @@ suite.define(() => {
   });
 
   it("restores reasoning and tool activity after navigating away from a session", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await mkdir(artifactDir, { recursive: true });
-    }
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.history-recovery", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir
@@ -202,16 +203,18 @@ suite.define(() => {
         "sessions.list": chatSessionListResponse([
           {
             key: sessionA,
+            sessionId: "current-session",
             kind: "direct",
             label: "Session A",
-            reasoningLevel: "high",
+            reasoningLevel: "on",
             updatedAt: 2,
           },
           {
             key: sessionB,
+            sessionId: "trace-session",
             kind: "direct",
             label: "Session B",
-            reasoningLevel: "high",
+            reasoningLevel: "on",
             updatedAt: 1,
           },
         ]),
@@ -220,7 +223,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
       await page.getByText("Current session placeholder.").waitFor({ timeout: 10_000 });
 
       const sessionLink = (sessionKey: string) =>
@@ -238,10 +241,12 @@ suite.define(() => {
       await sessionLink(sessionB).click();
       await expectTrace();
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "trace-after-first-navigation.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "trace-after-first-navigation.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText(visibleAnswer, { exact: true }),
+          ]),
+        );
       }
 
       await sessionLink(sessionA).click();
@@ -251,10 +256,12 @@ suite.define(() => {
       await expectTrace();
       expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "trace-after-return.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "trace-after-return.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText(visibleAnswer, { exact: true }),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -262,11 +269,7 @@ suite.define(() => {
   });
 
   it("keeps valid assistant history visible after a malformed transcript block", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const visibleAnswer = "The valid assistant answer remains visible.";
     const gateway = await installMockGateway(page, {
@@ -291,62 +294,60 @@ suite.define(() => {
   });
 
   it("shows persisted user messages after opening History and scrolling mixed history", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const baseTs = Date.now() - 100_000;
-    const currentSessionMessages = [
-      {
-        content: [{ text: "Current session placeholder", type: "text" }],
-        role: "assistant",
-        timestamp: baseTs - 1,
-      },
-    ];
-    const historyMessages = Array.from({ length: 70 }, (_, index) => ({
-      content: [
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const baseTs = Date.now() - 100_000;
+      const currentSessionMessages = [
         {
-          text: `${index % 2 === 0 ? "User history question" : "Assistant history answer"} ${index}\n${"history detail line\n".repeat(4)}`,
-          type: index % 2 === 0 ? "input_text" : "output_text",
+          content: [{ text: "Current session placeholder", type: "text" }],
+          role: "assistant",
+          timestamp: baseTs - 1,
         },
-      ],
-      role: index % 2 === 0 ? "user" : "assistant",
-      timestamp: baseTs + index,
-    }));
-    const gateway = await installMockGateway(page, {
-      historyMessages: currentSessionMessages,
-      methodResponses: {
-        "chat.startup": {
-          cases: [
+      ];
+      const historyMessages = Array.from({ length: 70 }, (_, index) => ({
+        content: [
+          {
+            text: `${index % 2 === 0 ? "User history question" : "Assistant history answer"} ${index}\n${"history detail line\n".repeat(4)}`,
+            type: index % 2 === 0 ? "input_text" : "output_text",
+          },
+        ],
+        role: index % 2 === 0 ? "user" : "assistant",
+        timestamp: baseTs + index,
+      }));
+      const gateway = await installMockGateway(page, {
+        // A stays fixed while B's shared history/startup snapshot grows below.
+        historyMessages: currentSessionMessages,
+        sessionTranscripts: {
+          "agent:main:session-a": { messages: currentSessionMessages },
+        },
+        deferredMethods: ["chat.history"],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([
             {
-              match: { sessionKey: "agent:main:session-b" },
-              response: {
-                messages: historyMessages,
-                sessionId: "control-ui-e2e-history-session-b",
-                thinkingLevel: null,
-              },
+              key: "agent:main:session-a",
+              sessionId: "control-ui-e2e-history-session-a",
+              kind: "direct",
+              label: "Session A",
+              updatedAt: 2,
             },
             {
-              match: { sessionKey: "agent:main:session-a" },
-              response: {
-                messages: currentSessionMessages,
-                sessionId: "control-ui-e2e-history-session-a",
-                thinkingLevel: null,
-              },
+              key: "agent:main:session-b",
+              sessionId: "control-ui-e2e-history-session-b",
+              kind: "direct",
+              label: "Session B",
+              updatedAt: 1,
             },
-          ],
+          ]),
         },
-        "sessions.list": chatSessionListResponse(),
-      },
-      sessionKey: "agent:main:session-a",
-    });
+        sessionKey: "agent:main:session-a",
+      });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
 
+      // Settle the short prefetched snapshot before startup expands the transcript.
+      await waitForRequests(gateway, "chat.history", 1, { sessionKey: "agent:main:session-b" });
+      await gateway.resolveDeferred("chat.history");
+      await gateway.deferNext("chat.startup", { sessionKey: "agent:main:session-b" });
       const startupCountBeforeSwitch = (await gateway.getRequests("chat.startup")).length;
       await page
         .locator(
@@ -363,6 +364,9 @@ suite.define(() => {
         sessionKey: "agent:main:session-b",
       });
       const activeThread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      await activeThread.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
+      await gateway.setHistoryMessages(historyMessages);
+      await gateway.resolveDeferred("chat.startup");
       await activeThread.getByText("User history question 68").waitFor({
         timeout: 10_000,
       });
@@ -400,13 +404,14 @@ suite.define(() => {
           { timeout: 10_000 },
         )
         .toBe(true);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("keeps evicted paginated history stable when returning to a session", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.history-recovery", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir
@@ -420,10 +425,12 @@ suite.define(() => {
       if (!artifactDir) {
         return;
       }
-      await page.screenshot({
-        path: path.join(artifactDir, `${name}.png`),
-        fullPage: true,
-      });
+      await writeFile(
+        path.join(artifactDir, `${name}.png`),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-thread'),
+        ]),
+      );
       // Keep post-assertion route states legible in the optional proof recording.
       await page.waitForTimeout(300);
     };
@@ -526,14 +533,16 @@ suite.define(() => {
           ],
         },
         "sessions.list": chatSessionListResponse([
-          ...shortSessions.map(({ key, label, updatedAt }) => ({
+          ...shortSessions.map(({ key, label, updatedAt, sessionId }) => ({
             key,
+            sessionId,
             kind: "direct",
             label,
             updatedAt,
           })),
           {
             key: "agent:main:session-b",
+            sessionId: "retained-history-session",
             kind: "direct",
             label: "Session B",
             updatedAt: 3,
@@ -544,7 +553,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText(/^short session 2\n/).waitFor({ timeout: 10_000 });
 
       const sessionB = page.locator(
@@ -564,6 +573,7 @@ suite.define(() => {
       const activePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const thread = activePane.locator(".chat-thread");
       await thread.hover();
+      const previousScrollHeight = await thread.evaluate((element) => element.scrollHeight);
       await page.mouse.wheel(0, -1_000_000);
       await expect
         .poll(() =>
@@ -574,6 +584,16 @@ suite.define(() => {
           ),
         )
         .toBe(140);
+      await expect
+        .poll(() =>
+          thread.evaluate(
+            (element, previousHeight) =>
+              element.scrollHeight > previousHeight && element.scrollTop > 0,
+            previousScrollHeight,
+          ),
+        )
+        .toBe(true);
+      await waitForChatScrollIdle(page);
       // Prepending preserves the visible anchor. A renewed upward gesture
       // reaches the newly loaded start instead of teleporting the reader.
       await page.mouse.wheel(0, -1_000_000);
@@ -663,158 +683,12 @@ suite.define(() => {
       expect(returnedSamples.every((sample) => !sample.loading)).toBe(true);
       await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn);
       if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/retained-history-return.png`,
-          fullPage: true,
-        });
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("parks an ACK-lost send for review before a same-key manual retry", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "chat.history": {
-          messages: [],
-          sessionId: "control-ui-e2e-session",
-          sessionInfo: { hasActiveRun: false, status: "done" },
-          thinkingLevel: null,
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.deferNext("chat.send");
-
-      const prompt = "retry with the same key";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      const firstRequest = await gateway.waitForRequest("chat.send");
-      const firstParams = requireRecord(firstRequest.params);
-      const runId = requireString(firstParams.idempotencyKey, "first idempotency key");
-
-      await gateway.closeLatest(1006, "lost ack");
-
-      const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
-      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
-      expect(await page.locator(".chat-queue").count()).toBe(0);
-      await page.locator(".chat-group.user").getByText(prompt, { exact: true }).waitFor();
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      await deliveryStatus.getByRole("button", { name: "Retry queued message" }).click();
-
-      const sends = await waitForRequests(gateway, "chat.send", 2);
-      const secondParams = requireRecord(sends[1]?.params);
-      expect(secondParams.idempotencyKey).toBe(runId);
-      expect(secondParams.message).toBe(prompt);
-      await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("clears inline delivery uncertainty after exact authoritative history proof", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-        : {}),
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "chat.history": {
-          messages: [],
-          sessionId: "control-ui-e2e-session",
-          sessionInfo: { hasActiveRun: false, status: "done" },
-          thinkingLevel: null,
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.deferNext("chat.send");
-
-      const prompt = "already accepted after the reconnect";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-
-      const firstRequest = await gateway.waitForRequest("chat.send");
-      const runId = requireString(
-        requireRecord(firstRequest.params).idempotencyKey,
-        "first idempotency key",
-      );
-      await gateway.closeLatest(1006, "lost ack");
-
-      const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
-      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
-      expect(await page.locator(".chat-queue").count()).toBe(0);
-      const userBubble = page.locator(".chat-group.user").getByText(prompt, { exact: true });
-      await userBubble.waitFor();
-      if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/01-delivery-uncertain.png`, fullPage: true });
-      }
-
-      await gateway.setHistoryMessages([
-        {
-          content: "different delivered turn",
-          idempotencyKey: "different-run:user",
-          role: "user",
-          timestamp: Date.now(),
-        },
-      ]);
-      await gateway.emitGatewayEvent("session.message", {
-        hasActiveRun: false,
-        messageId: "different-history-turn",
-        messageSeq: 1,
-        sessionKey: "main",
-        status: "done",
-      });
-      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/02-different-key-still-uncertain.png`,
-          fullPage: true,
-        });
-      }
-
-      await gateway.setHistoryMessages([
-        {
-          content: prompt,
-          idempotencyKey: `${runId}:user`,
-          role: "user",
-          timestamp: Date.now(),
-        },
-      ]);
-      await gateway.emitGatewayEvent("session.message", {
-        clientRunId: runId,
-        hasActiveRun: true,
-        messageId: "accepted-history-turn",
-        messageSeq: 2,
-        sessionKey: "main",
-        status: "running",
-      });
-
-      await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
-      await userBubble.waitFor({ timeout: 10_000 });
-      expect(await userBubble.count()).toBe(1);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/03-delivery-proven.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/retained-history-return.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText(/^older retained message 1\n/),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -822,7 +696,10 @@ suite.define(() => {
   });
 
   it("stores new input while offline and sends it after reconnect", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.history-recovery", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       ...(artifactDir
@@ -833,10 +710,12 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      sessionScope: "global",
+      mainSessionKey: "global",
       methodResponses: {
         "chat.history": {
           messages: [],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:global",
           sessionInfo: { hasActiveRun: false, status: "done" },
           thinkingLevel: null,
         },
@@ -849,11 +728,7 @@ suite.define(() => {
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
       await gateway.setOnline(false);
-      await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
-        .waitFor({ timeout: 10_000 });
+      await page.locator(".agent-chat__input--offline").waitFor({ timeout: 10_000 });
 
       const prompt = "send this when the Gateway returns";
       const attachmentName = "offline-proof.txt";
@@ -882,60 +757,38 @@ suite.define(() => {
       await queue.getByText(prompt).waitFor({ timeout: 10_000 });
       const requestsBeforeReconnect = await gateway.getRequests("chat.send");
       expect(requestsBeforeReconnect).toHaveLength(0);
-      const readStoredProof = () =>
-        page.evaluate(
-          ({ expectedAttachmentName, expectedAttachmentDataUrl, expectedPrompt }) => {
-            const storedValues = Object.entries(sessionStorage)
-              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v2:"))
-              .map(([, value]) => value);
-            const stored = storedValues.join("\n");
-            let runId: string | null = null;
-            for (const value of storedValues) {
-              try {
+      const readStoredProof = async () => {
+        const item = await page.evaluate(
+          (expectedPrompt) =>
+            Object.entries(sessionStorage)
+              .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v4:"))
+              .flatMap(([, value]) => {
                 const parsed = JSON.parse(value) as {
-                  sessions?: Record<
-                    string,
-                    {
-                      queue?: Array<{
-                        attachments?: Array<{ dataUrl?: unknown; fileName?: unknown }>;
-                        sendRunId?: unknown;
-                        text?: unknown;
-                      }>;
-                    }
-                  >;
+                  sessions: Record<string, { queue?: ChatQueueItem[] }>;
                 };
-                const item = Object.values(parsed.sessions ?? {})
-                  .flatMap((session) => session.queue ?? [])
-                  .find((entry) => entry.text === expectedPrompt);
-                if (typeof item?.sendRunId === "string") {
-                  runId = item.sendRunId;
-                  const attachment = item.attachments?.find(
-                    (entry) => entry.fileName === expectedAttachmentName,
-                  );
-                  return {
-                    attachment: attachment?.dataUrl === expectedAttachmentDataUrl,
-                    prompt: true,
-                    runId,
-                    waitingReconnect: value.includes('"sendState":"waiting-reconnect"'),
-                  };
-                }
-              } catch {
-                // Ignore unrelated malformed session storage in this focused proof.
-              }
-            }
-            return {
-              attachment: false,
-              prompt: stored.includes(expectedPrompt),
-              runId,
-              waitingReconnect: stored.includes('"sendState":"waiting-reconnect"'),
-            };
-          },
-          {
-            expectedAttachmentDataUrl: attachmentDataUrl,
-            expectedAttachmentName: attachmentName,
-            expectedPrompt: prompt,
-          },
+                return Object.values(parsed.sessions).flatMap((session) => session.queue ?? []);
+              })
+              .find((entry) => entry.text === expectedPrompt),
+          prompt,
         );
+        const attachment = item?.attachments?.find((entry) => entry.fileName === attachmentName);
+        const payload = item?.attachmentPayload
+          ? await readOutboxPayloadAttachments(page, item.attachmentPayload.key)
+          : null;
+        const storedAttachment = payload?.find((entry) => entry.fileName === attachmentName);
+        return {
+          attachment: Boolean(
+            attachment &&
+            storedAttachment &&
+            attachment.dataUrl === undefined &&
+            `data:${storedAttachment.mimeType};base64,${storedAttachment.base64}` ===
+              attachmentDataUrl,
+          ),
+          prompt: item !== undefined,
+          runId: item?.sendRunId ?? null,
+          waitingReconnect: item?.sendState === "waiting-reconnect",
+        };
+      };
       await expect.poll(readStoredProof).toEqual({
         attachment: true,
         prompt: true,
@@ -945,7 +798,10 @@ suite.define(() => {
       const storedProof = await readStoredProof();
       const storedRunId = requireString(storedProof.runId, "stored offline send idempotency key");
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/01-offline-queued.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/01-offline-queued.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [queue]),
+        );
       }
 
       await page.reload();
@@ -971,6 +827,7 @@ suite.define(() => {
         {
           content: attachmentBase64,
           fileName: attachmentName,
+          origin: "file",
           mimeType: attachmentMimeType,
           type: "file",
         },
@@ -978,16 +835,15 @@ suite.define(() => {
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/02-reconnected-active.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/02-reconnected-active.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-thread").getByText(prompt),
+          ]),
+        );
       }
       await expectRequestCountStable(gateway, "chat.send", 1);
       const requestsAfterReconnect = await gateway.getRequests("chat.send");
-      await gateway.setHistoryMessages([
-        {
-          role: "user",
-          __openclaw: { idempotencyKey: `${runId}:user` },
-        },
-      ]);
       await gateway.emitChatFinal({ runId, text: "Delivered after reconnect." });
       await queue.waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
@@ -997,14 +853,15 @@ suite.define(() => {
           return proof.attachment || proof.prompt || proof.runId === runId;
         })
         .toBe(false);
-      await page
-        .locator(
-          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
-        )
-        .waitFor({ state: "detached" });
+      await page.locator(".agent-chat__input--offline").waitFor({ state: "detached" });
       await expectRequestCountStable(gateway, "chat.send", 1);
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/03-online-delivered.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/03-online-delivered.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-thread").getByText(prompt),
+          ]),
+        );
       }
       if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
         process.stdout.write(

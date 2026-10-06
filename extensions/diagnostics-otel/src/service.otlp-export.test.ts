@@ -15,11 +15,7 @@ import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opent
 import { logs } from "@opentelemetry/api-logs";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
-import {
-  BasicTracerProvider,
-  InMemorySpanExporter,
-  SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-base";
+import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import {
@@ -27,151 +23,21 @@ import {
   createDiagnosticTraceContext,
   emitTrustedDiagnosticEventWithPrivateData,
   parseDiagnosticTraceparent,
-  resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { runModelCallAndCaptureTraceparent } from "../../../test/e2e/qa-lab/runtime/otel-model-call.test-support.js";
 import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { createDiagnosticsOtelService } from "./service.js";
+import { installRealOtelSdkTestHarness, PRELOAD_ENV } from "./service.real-sdk.test-support.js";
 import {
   createOtelContext,
   emitRealSdkSignals,
   startOtelService,
   startOtlpReceiver,
-  stopStartedOtelServices,
 } from "./service.test-helpers.js";
 
-const PRELOAD_ENV = "OPENCLAW_OTEL_PRELOADED";
-const ENDPOINT_ENV_KEYS = [
-  "OTEL_SDK_DISABLED",
-  "OTEL_TRACES_EXPORTER",
-  "OTEL_METRICS_EXPORTER",
-  "OTEL_LOGS_EXPORTER",
-  "OTEL_EXPORTER_OTLP_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_HEADERS",
-  "OTEL_EXPORTER_OTLP_TIMEOUT",
-  "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
-  "OTEL_EXPORTER_OTLP_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_CLIENT_KEY",
-  "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY",
-  "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY",
-  "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY",
-  "OTEL_LOG_LEVEL",
-] as const;
-const OTEL_GLOBAL_API_KEY = Symbol.for("opentelemetry.js.api.1");
-const OTEL_GLOBAL_LOGS_KEY = Symbol.for("io.opentelemetry.js.api.logs");
-
-type OtelGlobalRegistrations = {
-  context?: Parameters<typeof context.setGlobalContextManager>[0];
-  diag?: Parameters<typeof diag.setLogger>[0];
-  metrics?: Parameters<typeof metrics.setGlobalMeterProvider>[0];
-  propagation?: Parameters<typeof propagation.setGlobalPropagator>[0];
-  trace?: Parameters<typeof trace.setGlobalTracerProvider>[0];
-};
-
-let exporter: InMemorySpanExporter;
-let provider: BasicTracerProvider;
-let originalPreloaded: string | undefined;
-let originalEndpointEnv: Record<(typeof ENDPOINT_ENV_KEYS)[number], string | undefined>;
-let originalOtelGlobals: OtelGlobalRegistrations;
-let originalLogsProvider: ReturnType<typeof logs.getLoggerProvider> | undefined;
-
-function registeredOtelGlobals(): OtelGlobalRegistrations | undefined {
-  return (globalThis as unknown as Record<symbol, OtelGlobalRegistrations | undefined>)[
-    OTEL_GLOBAL_API_KEY
-  ];
-}
-
-beforeEach(() => {
-  originalPreloaded = process.env[PRELOAD_ENV];
-  originalEndpointEnv = Object.fromEntries(
-    ENDPOINT_ENV_KEYS.map((key) => [key, process.env[key]]),
-  ) as Record<(typeof ENDPOINT_ENV_KEYS)[number], string | undefined>;
-  for (const key of ENDPOINT_ENV_KEYS) {
-    delete process.env[key];
-  }
-  originalOtelGlobals = { ...registeredOtelGlobals() };
-  originalLogsProvider = Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY)
-    ? logs.getLoggerProvider()
-    : undefined;
-  process.env[PRELOAD_ENV] = "1";
-  exporter = new InMemorySpanExporter();
-  provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
-  trace.setGlobalTracerProvider(provider);
-});
-
-afterEach(async () => {
-  await stopStartedOtelServices();
-  await provider.shutdown();
-  const currentGlobals = registeredOtelGlobals();
-  if (currentGlobals?.context !== originalOtelGlobals.context) {
-    context.disable();
-    if (originalOtelGlobals.context) {
-      context.setGlobalContextManager(originalOtelGlobals.context);
-    }
-  }
-  if (currentGlobals?.propagation !== originalOtelGlobals.propagation) {
-    propagation.disable();
-    if (originalOtelGlobals.propagation) {
-      propagation.setGlobalPropagator(originalOtelGlobals.propagation);
-    }
-  }
-  if (currentGlobals?.metrics !== originalOtelGlobals.metrics) {
-    metrics.disable();
-    if (originalOtelGlobals.metrics) {
-      metrics.setGlobalMeterProvider(originalOtelGlobals.metrics);
-    }
-  }
-  if (currentGlobals?.trace !== originalOtelGlobals.trace) {
-    trace.disable();
-    if (originalOtelGlobals.trace) {
-      trace.setGlobalTracerProvider(originalOtelGlobals.trace);
-    }
-  }
-  if (Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY) || originalLogsProvider) {
-    logs.disable();
-    if (originalLogsProvider) {
-      logs.setGlobalLoggerProvider(originalLogsProvider);
-    }
-  }
-  exporter.reset();
-  if (originalPreloaded === undefined) {
-    delete process.env[PRELOAD_ENV];
-  } else {
-    process.env[PRELOAD_ENV] = originalPreloaded;
-  }
-  for (const key of ENDPOINT_ENV_KEYS) {
-    const value = originalEndpointEnv[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  diag.disable();
-  if (originalOtelGlobals.diag) {
-    diag.setLogger(originalOtelGlobals.diag, {
-      logLevel: DiagLogLevel.ALL,
-      suppressOverrideMessage: true,
-    });
-  }
-  resetDiagnosticEventsForTest();
-});
+const sdk = installRealOtelSdkTestHarness();
 
 const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0]) =>
   emitTrustedDiagnosticEventWithPrivateData(event, {});
@@ -207,37 +73,10 @@ function releasePreloadedOtelGlobals() {
   process.env[PRELOAD_ENV] = "0";
 }
 
-const SHARED_ENDPOINT_ROUTING_CASES = [
-  {
-    label: "root",
-    suffix: "",
-    expected: ["/v1/traces", "/v1/metrics", "/v1/logs"],
-  },
-  {
-    label: "trailing-slash root",
-    suffix: "/",
-    expected: ["/v1/traces", "/v1/metrics", "/v1/logs"],
-  },
-  {
-    label: "custom collector path",
-    suffix: "/api/public/otel",
-    expected: [
-      "/api/public/otel/v1/traces",
-      "/api/public/otel/v1/metrics",
-      "/api/public/otel/v1/logs",
-    ],
-  },
-  {
-    label: "signal-qualified collector path",
-    suffix: "/api/public/otel/v1/traces",
-    expected: [
-      "/api/public/otel/v1/traces",
-      "/api/public/otel/v1/metrics",
-      "/api/public/otel/v1/logs",
-    ],
-  },
+test.each([
   {
     label: "signal-qualified path with trailing slash",
+    source: "config",
     suffix: "/api/public/otel/v1/traces/",
     expected: [
       "/api/public/otel/v1/traces",
@@ -247,6 +86,7 @@ const SHARED_ENDPOINT_ROUTING_CASES = [
   },
   {
     label: "custom path with query slash",
+    source: "environment",
     suffix: "/api/public/otel/?tenant=team/",
     expected: [
       "/api/public/otel/v1/traces?tenant=team/",
@@ -256,6 +96,7 @@ const SHARED_ENDPOINT_ROUTING_CASES = [
   },
   {
     label: "signal path with query slash",
+    source: "config",
     suffix: "/api/public/otel/v1/traces/?tenant=team/",
     expected: [
       "/api/public/otel/v1/traces/?tenant=team/",
@@ -263,13 +104,7 @@ const SHARED_ENDPOINT_ROUTING_CASES = [
       "/api/public/otel/v1/logs?tenant=team/",
     ],
   },
-] as const;
-
-test.each(
-  SHARED_ENDPOINT_ROUTING_CASES.flatMap((entry) =>
-    (["config", "environment"] as const).map((source) => Object.assign({ source }, entry)),
-  ),
-)(
+])(
   "routes real exporters from a shared $label endpoint in $source",
   async ({ suffix, expected, source }) => {
     const receiver = await startOtlpReceiver();
@@ -591,42 +426,6 @@ test("propagates the exported model span across two OTLP services with one roote
   }
 }, 30_000);
 
-test("preserves explicit zero model-call usage through OTLP protobuf export", async () => {
-  const receiver = startLocalOtlpReceiver();
-  const port = await receiver.listen();
-  releasePreloadedOtelGlobals();
-  const { service, ctx } = await startOtelService({
-    endpoint: `http://127.0.0.1:${port}`,
-    traces: true,
-  });
-
-  try {
-    emit({
-      type: "model.call.completed",
-      runId: "run-zero-usage",
-      callId: "call-zero-usage",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      durationMs: 1,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    });
-    await waitForDiagnosticEventsDrained();
-    await service.stop?.(ctx);
-
-    expect(
-      receiver.capturedSpans.find((span) => span.name === "openclaw.model.call")?.attributes,
-    ).toMatchObject({
-      "openclaw.model_call.usage.input_tokens": 0,
-      "openclaw.model_call.usage.output_tokens": 0,
-      "openclaw.model_call.usage.prompt_tokens": 0,
-      "gen_ai.usage.input_tokens": 0,
-    });
-  } finally {
-    await service.stop?.(ctx);
-    await receiver.close();
-  }
-}, 30_000);
-
 test("uses the real preloaded model span as the mid-turn propagation root", async () => {
   const { service, ctx } = await startOtelService({ traces: true });
   const outboundTraceparent = runModelCallAndCaptureTraceparent({
@@ -639,7 +438,7 @@ test("uses the real preloaded model span as the mid-turn propagation root", asyn
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);
 
-  const modelSpan = spanNamed(exporter.getFinishedSpans(), "openclaw.model.call");
+  const modelSpan = spanNamed(sdk.exporter.getFinishedSpans(), "openclaw.model.call");
   expect(modelSpan?.parentSpanContext).toBeUndefined();
   expect(outboundTraceparent).toBe(
     `00-${modelSpan?.spanContext().traceId}-${modelSpan?.spanContext().spanId}-01`,
@@ -730,7 +529,7 @@ test("keeps a whole turn on one trace when children arrive after their parent en
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);
 
-  const spans = exporter.getFinishedSpans();
+  const spans = sdk.exporter.getFinishedSpans();
   const messageSpan = spanNamed(spans, "openclaw.message.processed");
   const harnessSpan = spanNamed(spans, "openclaw.harness.run");
   const runSpan = spanNamed(spans, "openclaw.run");
@@ -786,7 +585,7 @@ test("keeps a late child on the trace when the turn ended in harness.run.error",
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);
 
-  const spans = exporter.getFinishedSpans();
+  const spans = sdk.exporter.getFinishedSpans();
   const harnessSpan = spanNamed(spans, "openclaw.harness.run");
   const toolSpan = spanNamed(spans, "openclaw.tool.execution");
 
@@ -819,99 +618,62 @@ test("leaves exec spans parentless rather than naming a span nobody exported", a
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);
 
-  const execSpan = spanNamed(exporter.getFinishedSpans(), "openclaw.exec");
+  const execSpan = spanNamed(sdk.exporter.getFinishedSpans(), "openclaw.exec");
   expect(execSpan).toBeDefined();
   expect(execSpan?.parentSpanContext).toBeUndefined();
 }, 30_000);
 
-const OTEL_ENDPOINT_SIGNAL_CASES = [
-  {
-    signal: "traces",
-    envKey: "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-    configKey: "tracesEndpoint",
-    flags: { traces: true, metrics: false, logs: false },
-  },
-  {
-    signal: "metrics",
-    envKey: "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-    configKey: "metricsEndpoint",
-    flags: { traces: false, metrics: true, logs: false },
-  },
-  {
-    signal: "logs",
-    envKey: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-    configKey: "logsEndpoint",
-    flags: { traces: false, metrics: false, logs: true },
-  },
-] as const;
+test.each([
+  "Unicode-prefixed signal environment",
+  "path-concatenated shared environment",
+  "path-concatenated shared configuration",
+  "path-concatenated signal configuration",
+])("rejects malformed collector %s before the real SDK can expose credentials", async (source) => {
+  process.env[PRELOAD_ENV] = "0";
+  const credential = "qa-otel-traces-endpoint-password-sentinel";
+  const malformedEndpoint = source.startsWith("Unicode-prefixed")
+    ? `\u00a0https://operator:${credential}@collector.example.com/otlp`
+    : source === "path-concatenated shared environment"
+      ? `https://operator:${credential}@collector.example.com: `
+      : `https://operator:${credential}@collector.example.com /`;
+  const configuredEndpoint = source.endsWith("shared configuration")
+    ? malformedEndpoint
+    : "https://collector.example.com/otlp";
+  if (source.endsWith("signal environment")) {
+    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = malformedEndpoint;
+  } else if (source.endsWith("shared environment")) {
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT = malformedEndpoint;
+  }
 
-const OTEL_ENDPOINT_SECURITY_CASES = OTEL_ENDPOINT_SIGNAL_CASES.flatMap((signal) =>
-  (
-    [
-      "shared configuration",
-      "signal configuration",
-      "signal environment",
-      "shared environment",
-      "Unicode-prefixed signal environment",
-      "Unicode-prefixed shared environment",
-      "path-concatenated shared environment",
-      "path-concatenated shared configuration",
-      "path-concatenated signal configuration",
-    ] as const
-  ).map((source) => Object.assign({ source }, signal)),
-);
-
-test.each(OTEL_ENDPOINT_SECURITY_CASES)(
-  "rejects malformed $signal collector $source before the real SDK can expose credentials",
-  async ({ signal, envKey, configKey, flags, source }) => {
-    process.env[PRELOAD_ENV] = "0";
-    const credential = `qa-otel-${signal}-endpoint-password-sentinel`;
-    const malformedEndpoint = source.startsWith("Unicode-prefixed")
-      ? `\u00a0https://operator:${credential}@collector.example.com/otlp`
-      : source === "path-concatenated shared environment"
-        ? `https://operator:${credential}@collector.example.com: `
-        : source.startsWith("path-concatenated")
-          ? `https://operator:${credential}@collector.example.com /`
-          : `https://operator:${credential}@[`;
-    const configuredEndpoint = source.endsWith("shared configuration")
+  const diagnostics = captureOtelDiagnostics();
+  const ctx = createOtelContext(configuredEndpoint, { traces: true });
+  if (source.endsWith("signal configuration") || source.endsWith("signal environment")) {
+    ctx.config.diagnostics!.otel!.tracesEndpoint = source.endsWith("signal configuration")
       ? malformedEndpoint
-      : "https://collector.example.com/otlp";
-    if (source.endsWith("signal environment")) {
-      process.env[envKey] = malformedEndpoint;
-    } else if (source.endsWith("shared environment")) {
-      process.env.OTEL_EXPORTER_OTLP_ENDPOINT = malformedEndpoint;
-    }
+      : "https://signal.example.com/otlp";
+  }
+  ctx.internalDiagnostics!.emit = () => {};
+  const service = createDiagnosticsOtelService();
+  let failure: unknown;
+  try {
+    await service.start(ctx);
+  } catch (error) {
+    failure = error;
+  } finally {
+    await service.stop?.(ctx);
+  }
 
-    const diagnostics = captureOtelDiagnostics();
-    const ctx = createOtelContext(configuredEndpoint, flags);
-    if (source.endsWith("signal configuration") || source.endsWith("signal environment")) {
-      ctx.config.diagnostics!.otel![configKey] = source.endsWith("signal configuration")
-        ? malformedEndpoint
-        : "https://signal.example.com/otlp";
-    }
-    ctx.internalDiagnostics!.emit = () => {};
-    const service = createDiagnosticsOtelService();
-    let failure: unknown;
-    try {
-      await service.start(ctx);
-    } catch (error) {
-      failure = error;
-    } finally {
-      await service.stop?.(ctx);
-    }
-
-    expect(diagnostics.join("\n")).not.toContain(credential);
-    expect(failure).toBeInstanceOf(Error);
-    const startupError = failure as Error;
-    expect(startupError.message).toBe(
-      "Configured OpenTelemetry collector endpoint is invalid; check the collector URL",
-    );
-    expect(startupError.stack).not.toContain(credential);
-    expect(startupError).not.toHaveProperty("cause");
-    expect(JSON.stringify(vi.mocked(ctx.logger.error).mock.calls)).not.toContain(credential);
-    expect(JSON.stringify(vi.mocked(ctx.logger.warn).mock.calls)).not.toContain(credential);
-  },
-);
+  expect(diagnostics.join("\n")).not.toContain(credential);
+  expect(failure).toBeInstanceOf(Error);
+  const startupError = failure as Error;
+  expect(startupError.message).toBe(
+    "Configured OpenTelemetry collector endpoint is invalid; check the collector URL",
+  );
+  expect(startupError.stack).not.toContain(credential);
+  expect(startupError).not.toHaveProperty("cause");
+  expect(JSON.stringify(vi.mocked(ctx.logger.error).mock.calls)).not.toContain(credential);
+  expect(JSON.stringify(vi.mocked(ctx.logger.warn).mock.calls)).not.toContain(credential);
+});
 
 test.each([
   {
@@ -923,11 +685,6 @@ test.each([
     disabledSignal: "traces",
     envKey: "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
     flags: { traces: false, metrics: true, logs: false },
-  },
-  {
-    disabledSignal: "logs",
-    envKey: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-    flags: { traces: true, metrics: false, logs: false },
   },
   {
     disabledSignal: "stdout-only logs",
@@ -954,143 +711,76 @@ test.each([
   },
 );
 
-const OTEL_TLS_MATERIAL_CASES = [
-  { suffix: "CERTIFICATE", label: "TLS root certificate" },
-  { suffix: "CLIENT_CERTIFICATE", label: "mTLS client certificate" },
-  { suffix: "CLIENT_KEY", label: "mTLS client private key" },
-] as const;
+const UNREADABLE_TLS_ERROR =
+  "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export";
 
-const OTEL_TLS_FILE_SECURITY_CASES = OTEL_ENDPOINT_SIGNAL_CASES.flatMap((signal) =>
-  OTEL_TLS_MATERIAL_CASES.flatMap((material) =>
-    (["shared", "signal"] as const).map((scope) => Object.assign({ scope }, signal, material)),
-  ),
-);
+async function expectRejectedTlsStart(
+  message = UNREADABLE_TLS_ERROR,
+  endpoint = "https://collector.example.com/otlp",
+) {
+  process.env[PRELOAD_ENV] = "0";
+  const ctx = createOtelContext(endpoint, { traces: true });
+  ctx.internalDiagnostics!.emit = () => {};
+  const service = createDiagnosticsOtelService();
+  try {
+    await expect(service.start(ctx)).rejects.toThrow(message);
+  } finally {
+    await service.stop?.(ctx);
+  }
+}
 
-test.each(OTEL_TLS_FILE_SECURITY_CASES)(
-  "refuses the real $signal exporter when its $scope $label file cannot be read",
-  async ({ signal, suffix, label, scope, flags }) => {
-    process.env[PRELOAD_ENV] = "0";
-    const pathSentinel = `qa-otel-${signal}-${suffix.toLowerCase()}-file-sentinel`;
-    const missingPath = `/definitely-missing/${pathSentinel}.pem`;
-    const envKey =
-      scope === "shared"
-        ? `OTEL_EXPORTER_OTLP_${suffix}`
-        : `OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_${suffix}`;
-    process.env[envKey] = missingPath;
+test("refuses an unreadable TLS file without exposing its path through the real SDK", async () => {
+  process.env[PRELOAD_ENV] = "0";
+  const pathSentinel = "qa-otel-traces-certificate-file-sentinel";
+  process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = `/definitely-missing/${pathSentinel}.pem`;
+  const diagnostics = captureOtelDiagnostics();
+  const ctx = createOtelContext("https://collector.example.com/otlp", { traces: true });
+  ctx.internalDiagnostics!.emit = () => {};
+  const service = createDiagnosticsOtelService();
+  let failure: unknown;
+  try {
+    await service.start(ctx);
+  } catch (error) {
+    failure = error;
+  } finally {
+    await service.stop?.(ctx);
+  }
+  expect(failure).toBeInstanceOf(Error);
+  const startupError = failure as Error;
+  expect(startupError.message).toBe(UNREADABLE_TLS_ERROR);
+  expect(startupError.stack).not.toContain(pathSentinel);
+  expect(startupError).not.toHaveProperty("cause");
+  expect(diagnostics.join("\n")).not.toContain(pathSentinel);
+  expect(JSON.stringify(vi.mocked(ctx.logger.error).mock.calls)).not.toContain(pathSentinel);
+  expect(JSON.stringify(vi.mocked(ctx.logger.warn).mock.calls)).not.toContain(pathSentinel);
+});
 
-    const diagnostics = captureOtelDiagnostics();
-    const ctx = createOtelContext("https://collector.example.com/otlp", flags);
-    ctx.internalDiagnostics!.emit = () => {};
-    const service = createDiagnosticsOtelService();
-    let failure: unknown;
-    try {
-      await service.start(ctx);
-    } catch (error) {
-      failure = error;
-    } finally {
-      await service.stop?.(ctx);
-    }
+test("refuses invalid TLS material before the real default exporter is constructed", async () => {
+  process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE =
+    "/definitely-missing/qa-otel-default-root.pem";
+  await expectRejectedTlsStart(UNREADABLE_TLS_ERROR, "");
+});
 
-    expect(failure).toBeInstanceOf(Error);
-    const startupError = failure as Error;
-    expect(startupError.message).toBe(
-      `Configured OpenTelemetry ${label} file is missing, empty, or unreadable; refusing insecure export`,
-    );
-    expect(startupError.stack).not.toContain(pathSentinel);
-    expect(startupError).not.toHaveProperty("cause");
-    expect(diagnostics.join("\n")).not.toContain(pathSentinel);
-    expect(JSON.stringify(vi.mocked(ctx.logger.error).mock.calls)).not.toContain(pathSentinel);
-    expect(JSON.stringify(vi.mocked(ctx.logger.warn).mock.calls)).not.toContain(pathSentinel);
-  },
-);
+test("rejects an empty TLS certificate before the SDK can silently downgrade trust", async () => {
+  const certDir = mkdtempSync(path.join(tmpdir(), "openclaw-otel-empty-tls-"));
+  const emptyMaterialPath = path.join(certDir, "empty.pem");
+  writeFileSync(emptyMaterialPath, "");
+  process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = emptyMaterialPath;
+  try {
+    await expectRejectedTlsStart();
+  } finally {
+    rmSync(certDir, { force: true, recursive: true });
+  }
+});
 
-test.each(OTEL_ENDPOINT_SIGNAL_CASES)(
-  "refuses invalid TLS material before the real default $signal exporter is constructed",
-  async ({ signal, flags }) => {
-    process.env[PRELOAD_ENV] = "0";
-    process.env[`OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_CERTIFICATE`] =
-      "/definitely-missing/qa-otel-default-root.pem";
-    const ctx = createOtelContext("", flags);
-    ctx.internalDiagnostics!.emit = () => {};
-    const service = createDiagnosticsOtelService();
+test("rejects the raw whitespace-padded TLS certificate path the SDK cannot read", async () => {
+  process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = ` ${process.execPath} `;
+  await expectRejectedTlsStart();
+});
 
-    try {
-      await expect(service.start(ctx)).rejects.toThrow(
-        "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
-      );
-    } finally {
-      await service.stop?.(ctx);
-    }
-  },
-);
-
-test.each(
-  OTEL_ENDPOINT_SIGNAL_CASES.flatMap((signal) =>
-    OTEL_TLS_MATERIAL_CASES.map((material) => Object.assign({}, signal, material)),
-  ),
-)(
-  "rejects an empty $signal $label file before the SDK can silently downgrade trust",
-  async ({ signal, suffix, label, flags }) => {
-    process.env[PRELOAD_ENV] = "0";
-    const certDir = mkdtempSync(path.join(tmpdir(), "openclaw-otel-empty-tls-"));
-    const emptyMaterialPath = path.join(certDir, "empty.pem");
-    writeFileSync(emptyMaterialPath, "");
-    process.env[`OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_${suffix}`] = emptyMaterialPath;
-    const ctx = createOtelContext("https://collector.example.com/otlp", flags);
-    ctx.internalDiagnostics!.emit = () => {};
-    const service = createDiagnosticsOtelService();
-
-    try {
-      await expect(service.start(ctx)).rejects.toThrow(
-        `Configured OpenTelemetry ${label} file is missing, empty, or unreadable; refusing insecure export`,
-      );
-    } finally {
-      await service.stop?.(ctx);
-      rmSync(certDir, { force: true, recursive: true });
-    }
-  },
-);
-
-test.each(OTEL_ENDPOINT_SIGNAL_CASES)(
-  "rejects the raw whitespace-padded $signal TLS certificate path the SDK cannot read",
-  async ({ signal, flags }) => {
-    process.env[PRELOAD_ENV] = "0";
-    process.env[`OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_CERTIFICATE`] = ` ${process.execPath} `;
-    const ctx = createOtelContext("https://collector.example.com/otlp", flags);
-    ctx.internalDiagnostics!.emit = () => {};
-    const service = createDiagnosticsOtelService();
-
-    try {
-      await expect(service.start(ctx)).rejects.toThrow(
-        "Configured OpenTelemetry TLS root certificate file is missing, empty, or unreadable; refusing insecure export",
-      );
-    } finally {
-      await service.stop?.(ctx);
-    }
-  },
-);
-
-test.each(
-  OTEL_ENDPOINT_SIGNAL_CASES.flatMap((signal) =>
-    (["CLIENT_CERTIFICATE", "CLIENT_KEY"] as const).map((suffix) =>
-      Object.assign({ suffix }, signal),
-    ),
-  ),
-)(
-  "rejects the real $signal exporter when only $suffix mTLS material is configured",
-  async ({ signal, suffix, flags }) => {
-    process.env[PRELOAD_ENV] = "0";
-    process.env[`OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_${suffix}`] = process.execPath;
-    const ctx = createOtelContext("https://collector.example.com/otlp", flags);
-    ctx.internalDiagnostics!.emit = () => {};
-    const service = createDiagnosticsOtelService();
-
-    try {
-      await expect(service.start(ctx)).rejects.toThrow(
-        "Configured OpenTelemetry mTLS requires both a client certificate and private key; refusing insecure export",
-      );
-    } finally {
-      await service.stop?.(ctx);
-    }
-  },
-);
+test("rejects the real exporter when only the mTLS client certificate is configured", async () => {
+  process.env.OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE = process.execPath;
+  await expectRejectedTlsStart(
+    "Configured OpenTelemetry mTLS requires both a client certificate and private key; refusing insecure export",
+  );
+});

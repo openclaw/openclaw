@@ -1,4 +1,4 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { jsonResult } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
@@ -62,7 +62,8 @@ export async function executeMemoryReadResult(
       return jsonResult({
         path: params.relPath,
         text: "",
-        disabled: true,
+        status: "error",
+        code: extractErrorCode(error) ?? "MEMORY_READ_FAILED",
         error: formatErrorMessage(error),
       });
     }
@@ -73,9 +74,7 @@ export async function executeMemoryReadResult(
     run: async (signal) => {
       const [memory, wiki] = await Promise.all([
         attemptMemoryCorpus({
-          corpus: "memory",
           signal,
-          unavailableValue: null,
           run: params.read,
         }),
         readWiki(params, signal),
@@ -88,7 +87,7 @@ export async function executeMemoryReadResult(
           : (wikiResult ??
             (memory.outcome === "ok" || wiki.outcome === "ok"
               ? { status: "not_found" as const, path: params.relPath, text: "" as const }
-              : { path: params.relPath, text: "", disabled: true }));
+              : { status: "error", path: params.relPath, text: "" }));
       return jsonResult({ ...result, ...composeMemoryCorpusMetadata([memory, wiki]) });
     },
   });

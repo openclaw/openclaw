@@ -59,10 +59,6 @@ enum OpenClawType {
         scaledBody(weight: Body.regular, size: 13, relativeTo: .footnote)
     }
 
-    static var footnoteMedium: Font {
-        scaledBody(weight: Body.medium, size: 13, relativeTo: .footnote)
-    }
-
     static var footnoteSemiBold: Font {
         scaledBody(weight: Body.semiBold, size: 13, relativeTo: .footnote)
     }
@@ -110,23 +106,19 @@ enum OpenClawType {
     // MARK: - Mono — JetBrains Mono
 
     static var mono: Font {
-        scaledMono(name: Mono.regular, size: 14, relativeTo: .body)
+        scaledFont(name: Mono.regular, size: 14, relativeTo: .body)
     }
 
     static var monoSmall: Font {
-        scaledMono(name: Mono.regular, size: 12, relativeTo: .caption1)
+        scaledFont(name: Mono.regular, size: 12, relativeTo: .caption1)
     }
 
     static var monoSmallMedium: Font {
-        scaledMono(name: Mono.medium, size: 12, relativeTo: .caption1)
-    }
-
-    static var monoCaption2: Font {
-        scaledMono(name: Mono.regular, size: 11, relativeTo: .caption2)
+        scaledFont(name: Mono.medium, size: 12, relativeTo: .caption1)
     }
 
     static var monoFootnote: Font {
-        scaledMono(name: Mono.regular, size: 13, relativeTo: .footnote)
+        scaledFont(name: Mono.regular, size: 13, relativeTo: .footnote)
     }
 
     /// PostScript names for bundled fonts. Keep aligned with `UIAppFonts` in `project.yml`.
@@ -358,14 +350,6 @@ enum OpenClawType {
                 weight: weight,
                 size: size,
                 relativeTo: textStyle))
-    }
-
-    private static func scaledMono(
-        name: String,
-        size: CGFloat,
-        relativeTo textStyle: UIFont.TextStyle) -> Font
-    {
-        self.scaledFont(name: name, size: size, relativeTo: textStyle)
     }
 
     private static func scaledDisplayUIFont(

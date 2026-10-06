@@ -259,6 +259,36 @@ describe("normalizeMessageActionInput", () => {
       input: {
         action: "read",
         args: {
+          channel: "pinboard",
+          messageId: "msg_123",
+        },
+        toolContext: { currentChannelId: "channel:C1" },
+        targetAliasSpec: null,
+      },
+      expectedFields: { target: "channel:C1", to: "channel:C1", messageId: "msg_123" },
+    },
+    {
+      input: {
+        action: "poll",
+        args: { channel: "imessage", chatGuid: "bundled-target" },
+        toolContext: { currentChannelId: "selected-target" },
+        targetAliasSpec: null,
+      },
+      expectedFields: { target: "selected-target", to: "selected-target" },
+    },
+    {
+      input: {
+        action: "edit",
+        args: { channel: "imessage", messageId: "msg_123" },
+        targetAliasSpec: null,
+      },
+      expectedFields: { messageId: "msg_123" },
+      absentFields: ["target", "to"],
+    },
+    {
+      input: {
+        action: "read",
+        args: {
           channel: "workspace",
           messageId: "123.456",
         },
@@ -468,13 +498,47 @@ describe("normalizeMessageActionInput", () => {
     expect(
       normalizeMessageActionInput({
         action: "unpin",
-        args: { channel: "pinboard", messageId: "om_123" },
+        args: { channel: "pinboard", postId: "post_123" },
         targetAliasSpec: {
-          aliases: ["messageId", "chatId"],
-          deliveryTargetAliases: ["chatId"],
+          aliases: ["postId", "roomId"],
+          deliveryTargetAliases: ["roomId"],
         },
         allowResourceOnly: true,
       }),
-    ).toEqual({ channel: "pinboard", messageId: "om_123" });
+    ).toEqual({ channel: "pinboard", postId: "post_123" });
+  });
+
+  it.each([
+    { target: "channel:parent" },
+    { to: "channel:parent" },
+    { channelId: "channel:parent" },
+  ])("preserves a parent target when a thread alias defers to it", (args) => {
+    const normalized = normalizeMessageActionInput({
+      action: "thread-reply",
+      args: {
+        channel: "forum",
+        threadId: "thread-1",
+        ...args,
+      },
+      targetAliasSpec: {
+        aliases: ["threadId"],
+        deliveryTargetAliases: ["threadId"],
+        resolveDeliveryTarget: ({ args: actionArgs }) => {
+          if (actionArgs.target || actionArgs.to || actionArgs.channelId) {
+            return undefined;
+          }
+          return typeof actionArgs.threadId === "string"
+            ? `channel:${actionArgs.threadId}`
+            : undefined;
+        },
+      },
+    });
+
+    expect(normalized).toMatchObject({
+      channel: "forum",
+      target: "channel:parent",
+      to: "channel:parent",
+      threadId: "thread-1",
+    });
   });
 });

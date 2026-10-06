@@ -1,112 +1,55 @@
 /**
- * Tests single-row session cache behavior in gateway session utilities.
+ * Tests fresh child state in exact session-row Gateway projections.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
-import { replaceSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
-import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-
-const subagentRegistryReadMock = vi.hoisted(() => {
-  let runsByChildSessionKey = new Map<string, Record<string, unknown>>();
-  const buildSubagentSessionListReadIndex = vi.fn(() => {
-    const runsByControllerSessionKey = new Map<string, Record<string, unknown>[]>();
-    for (const entry of runsByChildSessionKey.values()) {
-      const controllerSessionKey =
-        typeof entry.controllerSessionKey === "string"
-          ? entry.controllerSessionKey
-          : typeof entry.requesterSessionKey === "string"
-            ? entry.requesterSessionKey
-            : undefined;
-      if (!controllerSessionKey) {
-        continue;
-      }
-      const runs = runsByControllerSessionKey.get(controllerSessionKey) ?? [];
-      runs.push(entry);
-      runsByControllerSessionKey.set(controllerSessionKey, runs);
-    }
-    return {
-      runsByControllerSessionKey,
-      getDisplaySubagentRun: vi.fn(
-        (childSessionKey: string) => runsByChildSessionKey.get(childSessionKey) ?? null,
-      ),
-      countActiveDescendantRuns: vi.fn(() => 0),
-    };
-  });
-  return {
-    buildSubagentSessionListReadIndex,
-    countActiveDescendantRuns: vi.fn(() => 0),
-    getSessionDisplaySubagentRunByChildSessionKey: vi.fn(
-      (childSessionKey: string) => runsByChildSessionKey.get(childSessionKey) ?? null,
-    ),
-    getSubagentSessionRuntimeMs: vi.fn(() => undefined),
-    getSubagentSessionStartedAt: vi.fn(() => undefined),
-    isSubagentRunLive: vi.fn(() => false),
-    listSubagentRunsForController: vi.fn((controllerSessionKey: string) =>
-      [...runsByChildSessionKey.values()].filter((entry) => {
-        const controller =
-          typeof entry.controllerSessionKey === "string"
-            ? entry.controllerSessionKey
-            : typeof entry.requesterSessionKey === "string"
-              ? entry.requesterSessionKey
-              : undefined;
-        return controller === controllerSessionKey;
-      }),
-    ),
-    resolveSubagentSessionStatus: vi.fn(() => undefined),
-    setSubagentRunsForTest: (runs: Record<string, unknown>[]) => {
-      runsByChildSessionKey = new Map(
-        runs
-          .filter((entry) => typeof entry.childSessionKey === "string")
-          .map((entry) => [entry.childSessionKey as string, entry]),
-      );
-    },
-  };
-});
-
-vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => subagentRegistryReadMock);
-
+import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import {
-  listSessionsFromStore,
-  listSessionsFromStoreAsync,
-  loadGatewaySessionRow,
-} from "./session-utils.js";
+  deleteSessionEntryLifecycle,
+  loadExactSessionEntryReadOnly,
+  replaceSessionEntry,
+  updateSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { createResidentSessionRowReader } from "./session-row-projection.test-support.js";
+
+const rowReader = createResidentSessionRowReader();
+async function withStateDirEnv<T>(
+  prefix: string,
+  fn: (context: { tempRoot: string; stateDir: string }) => Promise<T>,
+) {
+  return withRawStateDirEnv(prefix, async (context) => {
+    try {
+      return await fn(context);
+    } finally {
+      await rowReader.dispose();
+    }
+  });
+}
+
+import { loadGatewaySessionEntryReadOnly, loadSessionEntry } from "./session-utils.js";
 
 const MAIN_AGENT_ID = "main";
 const TEST_MODEL = "openai/gpt-5.4";
 
-type SingleRowCacheContext = {
-  now: number;
-  storePath: string;
-};
-
-type MovingChildFixture = {
-  oldParent: string;
-  newParent: string;
-  child: string;
-  store: Record<string, SessionEntry>;
-};
-
 async function withSingleRowCacheStore(
-  statePrefix: string,
-  workspace: string,
-  run: (context: SingleRowCacheContext) => Promise<void>,
+  run: (context: { now: number; storePath: string }) => Promise<void>,
 ): Promise<void> {
-  await withStateDirEnv(statePrefix, async () => {
+  await withStateDirEnv("openclaw-single-row-", async () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          {
-            id: MAIN_AGENT_ID,
-            default: true,
-            workspace,
-          },
-        ],
+        entries: { [MAIN_AGENT_ID]: { workspace: "/tmp/openclaw-single-row" } },
         defaults: { model: { primary: TEST_MODEL } },
       },
-    } as OpenClawConfig;
+    };
     setRuntimeConfigSnapshot(cfg, cfg);
     await run({
       now: Math.floor(Date.now() / 1_000) * 1_000 + 100,
@@ -115,38 +58,32 @@ async function withSingleRowCacheStore(
   });
 }
 
-function parentSession(sessionId: string, now: number): SessionEntry {
+function retainedDetails(
+  now: number,
+  prompt: string,
+): Pick<SessionEntry, "skillsSnapshot" | "systemPromptReport"> {
   return {
-    sessionId,
-    updatedAt: now,
+    skillsSnapshot: { prompt, skills: [] },
+    systemPromptReport: {
+      source: "run",
+      generatedAt: now,
+      systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: prompt.length, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+    },
   };
 }
 
-function runningChildSession(
-  sessionId: string,
-  parentSessionKey: string,
-  now: number,
-): SessionEntry {
+function parentSession(sessionId: string, now: number): SessionEntry {
+  return { sessionId, updatedAt: now };
+}
+
+function childSession(sessionId: string, parentSessionKey: string, now: number): SessionEntry {
   return {
     sessionId,
     parentSessionKey,
     updatedAt: now,
-    status: "running",
-  };
-}
-
-function runningControlledChildSession(
-  sessionId: string,
-  spawnedBy: string,
-  now: number,
-  parentSessionKey?: string,
-): SessionEntry {
-  return {
-    sessionId,
-    spawnedBy,
-    ...(parentSessionKey ? { parentSessionKey } : {}),
-    updatedAt: now,
-    status: "running",
   };
 }
 
@@ -159,217 +96,319 @@ async function seedSessionEntries(
   }
 }
 
-function setSubagentControllerRun(
+async function setSubagentControllerRun(
   childSessionKey: string,
   controllerSessionKey: string,
   createdAt: number,
-): void {
-  subagentRegistryReadMock.setSubagentRunsForTest([
-    {
-      childSessionKey,
-      controllerSessionKey,
-      requesterSessionKey: controllerSessionKey,
-      createdAt,
-      execution: { status: "running", startedAt: createdAt },
-    },
-  ]);
+): Promise<void> {
+  await addSubagentRunForTests({
+    runId: childSessionKey,
+    childSessionKey,
+    controllerSessionKey,
+    requesterSessionKey: controllerSessionKey,
+    requesterDisplayKey: controllerSessionKey,
+    task: "Synthetic child",
+    cleanup: "keep",
+    createdAt,
+    startedAt: createdAt,
+  });
+  subagentRuns.commitOwnership(subagentRuns.get(childSessionKey)!);
 }
 
-function createMovingChildFixture(now: number): MovingChildFixture {
-  const oldParent = "agent:main:subagent:parent-old";
-  const newParent = "agent:main:subagent:parent-new";
-  const child = "agent:main:subagent:child";
-  return {
-    oldParent,
-    newParent,
-    child,
-    store: {
-      [oldParent]: parentSession("parent-old", now),
-      [newParent]: parentSession("parent-new", now),
-      [child]: runningChildSession("child", oldParent, now),
-    },
-  };
-}
-
-function expectChildMovedToNewParent(fixture: MovingChildFixture, now: number): void {
-  expect(
-    loadGatewaySessionRow(fixture.oldParent, { now: now + 50 })?.childSessions,
-  ).toBeUndefined();
-  expect(loadGatewaySessionRow(fixture.newParent, { now: now + 50 })?.childSessions).toEqual([
-    fixture.child,
-  ]);
-  expect(subagentRegistryReadMock.buildSubagentSessionListReadIndex).not.toHaveBeenCalled();
-}
-
-describe("single gateway session row child-session cache", () => {
-  afterEach(() => {
+describe("single gateway session row child projections", () => {
+  afterEach(async () => {
     resetConfigRuntimeState();
     resetPluginRuntimeStateForTest();
-    subagentRegistryReadMock.setSubagentRunsForTest([]);
+    await resetSubagentRegistryForTests({ persist: false });
     vi.clearAllMocks();
   });
 
-  test("shares the child-session index across repeated single-row loads for the same store", async () => {
-    await withSingleRowCacheStore(
-      "openclaw-single-row-cache-",
-      "/tmp/openclaw-single-row-cache",
-      async ({ now, storePath }) => {
-        const store: Record<string, SessionEntry> = {
-          "agent:main:subagent:parent-a": parentSession("parent-a", now),
-          "agent:main:subagent:child-a": runningChildSession(
-            "child-a",
-            "agent:main:subagent:parent-a",
-            now,
-          ),
-          "agent:main:subagent:parent-b": parentSession("parent-b", now),
-          "agent:main:subagent:child-b": runningChildSession(
-            "child-b",
-            "agent:main:subagent:parent-b",
-            now,
-          ),
-        };
-        await seedSessionEntries(storePath, store);
-
-        const rowA = loadGatewaySessionRow("agent:main:subagent:parent-a", { now });
-        const rowB = loadGatewaySessionRow("agent:main:subagent:parent-b", { now: now + 50 });
-        const rowAAfterWindow = loadGatewaySessionRow("agent:main:subagent:parent-a", {
-          now: now + 1_500,
-        });
-
-        expect(rowA?.childSessions).toEqual(["agent:main:subagent:child-a"]);
-        expect(rowB?.childSessions).toEqual(["agent:main:subagent:child-b"]);
-        expect(rowAAfterWindow?.childSessions).toEqual(["agent:main:subagent:child-a"]);
-        expect(subagentRegistryReadMock.buildSubagentSessionListReadIndex).not.toHaveBeenCalled();
-      },
-    );
-  });
-
-  test("refreshes subagent registry state while reusing store child candidates", async () => {
-    await withSingleRowCacheStore(
-      "openclaw-single-row-cache-fresh-registry-",
-      "/tmp/openclaw-single-row-cache-fresh-registry",
-      async ({ now, storePath }) => {
-        const fixture = createMovingChildFixture(now);
-        // This fixture moves runtime control only; an explicit parent would
-        // instead declare durable navigation lineage that must remain linked.
-        fixture.store[fixture.child] = runningControlledChildSession(
-          "child",
-          fixture.oldParent,
-          now,
-        );
-        await seedSessionEntries(storePath, fixture.store);
-
-        setSubagentControllerRun(fixture.child, fixture.oldParent, now);
-        expect(loadGatewaySessionRow(fixture.oldParent, { now })?.childSessions).toEqual([
-          fixture.child,
-        ]);
-
-        setSubagentControllerRun(fixture.child, fixture.newParent, now + 25);
-        expectChildMovedToNewParent(fixture, now);
-      },
-    );
-  });
-
-  test("keeps independent navigation lineage while cached runtime control moves", async () => {
-    await withSingleRowCacheStore(
-      "openclaw-single-row-cache-navigation-owner-",
-      "/tmp/openclaw-single-row-cache-navigation-owner",
-      async ({ now, storePath }) => {
-        const fixture = createMovingChildFixture(now);
-        const navigationParent = "agent:main:dashboard:navigation-parent";
-        fixture.store[navigationParent] = parentSession("navigation-parent", now);
-        fixture.store[fixture.child] = runningControlledChildSession(
-          "child",
-          fixture.oldParent,
-          now,
-          navigationParent,
-        );
-        await seedSessionEntries(storePath, fixture.store);
-
-        setSubagentControllerRun(fixture.child, fixture.oldParent, now);
-        expect(loadGatewaySessionRow(navigationParent, { now })?.childSessions).toEqual([
-          fixture.child,
-        ]);
-
-        setSubagentControllerRun(fixture.child, fixture.newParent, now + 25);
-        expect(loadGatewaySessionRow(navigationParent, { now: now + 50 })?.childSessions).toEqual([
-          fixture.child,
-        ]);
-        expectChildMovedToNewParent(fixture, now);
-      },
-    );
-  });
-
-  test("builds shared subagent metadata context for single-row session lists", async () => {
-    await withSingleRowCacheStore(
-      "openclaw-single-row-list-context-",
-      "/tmp/openclaw-single-row-list-context",
-      async ({ now, storePath }) => {
-        const store: Record<string, SessionEntry> = {
-          "agent:main:discord:channel:parent": parentSession("parent", now),
-        };
-        const cfg: OpenClawConfig = {
-          agents: {
-            list: [
-              {
-                id: MAIN_AGENT_ID,
-                default: true,
-                workspace: "/tmp/openclaw-single-row-list-context",
-              },
-            ],
-            defaults: { model: { primary: TEST_MODEL } },
+  test("retains the loaded owner after a qualified main alias becomes global", async () => {
+    await withStateDirEnv("openclaw-single-row-global-owner-", async () => {
+      const cfg: OpenClawConfig = {
+        session: { scope: "global" },
+        agents: {
+          entries: {
+            main: { model: { primary: "openai/gpt-5.4" } },
+            research: { model: { primary: "openai/gpt-5.5" } },
           },
-        } as OpenClawConfig;
-
-        const syncListed = listSessionsFromStore({
-          cfg,
-          storePath,
-          store,
-          opts: { agentId: MAIN_AGENT_ID, limit: 1 },
-        });
-
-        expect(syncListed.sessions).toHaveLength(1);
-        expect(subagentRegistryReadMock.buildSubagentSessionListReadIndex).toHaveBeenCalledTimes(1);
-        expect(
-          subagentRegistryReadMock.getSessionDisplaySubagentRunByChildSessionKey,
-        ).not.toHaveBeenCalled();
-
-        vi.clearAllMocks();
-
-        const asyncListed = await listSessionsFromStoreAsync({
-          cfg,
-          storePath,
-          store,
-          opts: { agentId: MAIN_AGENT_ID, limit: 1 },
-        });
-
-        expect(asyncListed.sessions).toHaveLength(1);
-        expect(subagentRegistryReadMock.buildSubagentSessionListReadIndex).toHaveBeenCalledTimes(1);
-        expect(
-          subagentRegistryReadMock.getSessionDisplaySubagentRunByChildSessionKey,
-        ).not.toHaveBeenCalled();
-      },
-    );
+        },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      await replaceSessionEntry(
+        { agentId: "research", sessionKey: "global" },
+        { sessionId: "research-main", updatedAt: 42 },
+      );
+      const key = "agent:research:main";
+      expect(loadGatewaySessionEntryReadOnly(key)).toMatchObject({
+        agentId: "research",
+        canonicalKey: "global",
+        entry: { sessionId: "research-main" },
+      });
+      expect.soft((await rowReader.snapshot(key)).row).toMatchObject({
+        key: "global",
+        sessionId: "research-main",
+        agentId: "research",
+        model: "gpt-5.5",
+      });
+      expect(await rowReader.row(key, { agentId: "research" })).toMatchObject({
+        key: "global",
+        agentId: "research",
+        model: "gpt-5.5",
+      });
+    });
   });
 
-  test("rebuilds store child candidates after same-object session store writes", async () => {
-    await withSingleRowCacheStore(
-      "openclaw-single-row-cache-write-version-",
-      "/tmp/openclaw-single-row-cache-write-version",
-      async ({ now, storePath }) => {
-        const fixture = createMovingChildFixture(now);
-        await seedSessionEntries(storePath, fixture.store);
+  test.each([false])(
+    "reads only the selected session while preserving projections and hidden effects (clone: %s)",
+    async (clone) => {
+      await withSingleRowCacheStore(async ({ now, storePath }) => {
+        const hidden = resolveInternalSessionEffectsIdentity({
+          agentId: MAIN_AGENT_ID,
+          runId: "suppressed-effects",
+        });
+        const sessionKey = "agent:main:main";
+        const visible: SessionEntry = {
+          ...parentSession("visible-session", now),
+          ...retainedDetails(now, "saved skill prompt"),
+        };
+        await seedSessionEntries(storePath, {
+          [sessionKey]: visible,
+          [hidden.sessionKey]: parentSession(hidden.sessionId, now),
+          ...Object.fromEntries(
+            Array.from({ length: 24 }, (_, index) => [
+              `agent:main:unrelated-${index}`,
+              { ...visible, sessionId: `unrelated-session-${index}` },
+            ]),
+          ),
+        });
 
-        expect(loadGatewaySessionRow(fixture.oldParent, { now })?.childSessions).toEqual([
-          fixture.child,
-        ]);
-        await updateSessionEntry({ sessionKey: fixture.child, storePath }, () => ({
-          parentSessionKey: fixture.newParent,
-          updatedAt: now + 25,
-        }));
+        // The canonical store scan belongs to handle admission, before repeated row lookups.
+        expect(loadExactSessionEntryReadOnly({ sessionKey, storePath })?.entry.sessionId).toBe(
+          visible.sessionId,
+        );
+        const parse = vi.spyOn(JSON, "parse");
+        try {
+          const metadata = loadSessionEntry("main", {
+            agentId: MAIN_AGENT_ID,
+            clone,
+            projection: "list",
+          });
+          expect(metadata).toMatchObject({
+            agentId: MAIN_AGENT_ID,
+            canonicalKey: sessionKey,
+            storePath,
+            entry: parentSession(visible.sessionId, now),
+          });
+          expect(metadata.entry?.skillsSnapshot).toBeUndefined();
+          expect(metadata.entry?.systemPromptReport).toBeUndefined();
+          expect(parse.mock.calls.some(([value]) => value.includes("saved skill prompt"))).toBe(
+            false,
+          );
+          expect(loadSessionEntry("main", { agentId: MAIN_AGENT_ID, clone })).toMatchObject({
+            agentId: metadata.agentId,
+            canonicalKey: metadata.canonicalKey,
+            storePath: metadata.storePath,
+            entry: visible,
+          });
 
-        expectChildMovedToNewParent(fixture, now);
-      },
-    );
+          expect(loadSessionEntry(hidden.sessionKey, { clone }).entry).toBeUndefined();
+          expect(
+            loadSessionEntry(hidden.sessionKey, { clone, projection: "list" }).entry,
+          ).toBeUndefined();
+          expect(loadGatewaySessionEntryReadOnly(hidden.sessionKey).entry?.sessionId).toBe(
+            hidden.sessionId,
+          );
+          expect(loadExactSessionEntryReadOnly({ ...hidden, storePath })?.entry.sessionId).toBe(
+            hidden.sessionId,
+          );
+          expect(
+            parse.mock.calls.filter(
+              ([value]) => typeof value === "string" && value.includes("unrelated-session-"),
+            ),
+          ).toHaveLength(0);
+        } finally {
+          parse.mockRestore();
+        }
+      });
+    },
+  );
+
+  test("keeps warm child snapshots current and response mutations isolated", async () => {
+    await withSingleRowCacheStore(async ({ now, storePath }) => {
+      const parentA = "agent:main:subagent:parent-a";
+      const parentB = "agent:main:subagent:parent-b";
+      const childA = "agent:main:subagent:child-a";
+      const childB = "agent:main:subagent:child-b";
+      const store: Record<string, SessionEntry> = {
+        [parentA]: {
+          ...parentSession("parent-a", now),
+          ...retainedDetails(now, "parent saved skill prompt"),
+          toolOverrides: { mcpToolsDeny: { synthetic: ["blocked"] } },
+        },
+        [childA]: {
+          ...childSession("child-a", parentA, now),
+          ...retainedDetails(now, "child saved skill prompt"),
+          systemPromptReport: {
+            ...retainedDetails(now, "child saved skill prompt").systemPromptReport!,
+            tools: {
+              listChars: 0,
+              schemaChars: 1,
+              entries: [{ name: "child saved report", summaryChars: 0, schemaChars: 1 }],
+            },
+          },
+        },
+        [parentB]: parentSession("parent-b", now),
+        [childB]: childSession("child-b", parentB, now),
+      };
+      await seedSessionEntries(storePath, store);
+
+      const rowA = await rowReader.row(parentA, { now });
+      const rowB = await rowReader.row(parentB, { now: now + 50 });
+      const rowAAfterWindow = await rowReader.row(parentA, {
+        now: now + 1_500,
+      });
+
+      expect(rowA?.childSessions).toEqual([childA]);
+      expect(rowB?.childSessions).toEqual([childB]);
+      expect(rowAAfterWindow?.childSessions).toEqual([childA]);
+      for (const projection of [undefined, "list"] as const) {
+        const parse = vi.spyOn(JSON, "parse");
+        try {
+          const loaded = loadGatewaySessionEntryReadOnly(parentA, {
+            clone: false,
+            includeStoreChildEntries: true,
+            projection,
+          });
+          if (projection === undefined) {
+            expect(loaded.entry?.skillsSnapshot).toEqual({
+              prompt: "parent saved skill prompt",
+              skills: [],
+            });
+            expect(loaded.entry?.systemPromptReport).toMatchObject({
+              source: "run",
+              generatedAt: now,
+            });
+          }
+          expect(loaded.store[childA]).toMatchObject({
+            sessionId: "child-a",
+            parentSessionKey: parentA,
+          });
+          expect(loaded.store[childA]?.skillsSnapshot).toBeUndefined();
+          expect(loaded.store[childA]?.systemPromptReport).toBeUndefined();
+          expect(
+            parse.mock.calls.some(
+              ([value]) =>
+                value.includes("child saved skill prompt") || value.includes("child saved report"),
+            ),
+          ).toBe(false);
+          const row = await rowReader.row(loaded.canonicalKey, { now });
+          expect(row?.childSessions).toEqual([childA]);
+          parse.mockClear();
+          const lifecycle = await rowReader.snapshot(parentA, { now });
+          expect(lifecycle.row).toEqual(row);
+          expect(
+            parse.mock.calls.some(
+              ([value]) =>
+                value.includes("saved skill prompt") || value.includes('"systemPromptReport"'),
+            ),
+          ).toBe(false);
+          const denied = lifecycle.row?.toolOverrides?.mcpToolsDeny?.synthetic;
+          if (!denied) {
+            throw new Error("expected lifecycle tool overrides");
+          }
+          denied.push("response-only");
+          expect((await rowReader.snapshot(parentA, { now })).row).toEqual(row);
+        } finally {
+          parse.mockRestore();
+        }
+      }
+      await updateSessionEntry({ sessionKey: parentA, storePath }, () => ({
+        label: "fresh lifecycle label",
+        updatedAt: now + 1,
+      }));
+      await updateSessionEntry({ sessionKey: childA, storePath }, () => ({
+        parentSessionKey: parentB,
+        updatedAt: now + 1,
+      }));
+      const fresh = await rowReader.snapshot(parentA, { now });
+      expect(fresh.row?.label).toBe("fresh lifecycle label");
+      expect(fresh.row?.childSessions).toBeUndefined();
+      expect(rowA?.label).toBeUndefined();
+      expect(rowA?.childSessions).toEqual([childA]);
+    });
   });
+
+  test("keeps independent navigation lineage while runtime control moves", async () => {
+    await withSingleRowCacheStore(async ({ now, storePath }) => {
+      const oldParent = "agent:main:subagent:old-parent";
+      const newParent = "agent:main:subagent:new-parent";
+      const child = "agent:main:subagent:child";
+      const navigation = "agent:main:dashboard:navigation";
+      await seedSessionEntries(storePath, {
+        [oldParent]: parentSession("old-parent", now),
+        [newParent]: parentSession("new-parent", now),
+        [navigation]: parentSession("navigation", now),
+        [child]: { ...childSession("child", navigation, now), spawnedBy: oldParent },
+      });
+      await setSubagentControllerRun(child, oldParent, now);
+      expect((await rowReader.row(navigation, { now }))?.childSessions).toEqual([child]);
+      await setSubagentControllerRun(child, newParent, now + 25);
+      expect((await rowReader.row(navigation, { now: now + 50 }))?.childSessions).toEqual([child]);
+      expect((await rowReader.row(oldParent, { now: now + 50 }))?.childSessions).toBeUndefined();
+      expect((await rowReader.row(newParent, { now: now + 50 }))?.childSessions).toEqual([child]);
+    });
+  });
+
+  test.each(["worker"])(
+    "keeps runtime-only child reads compact and removes deleted children (%s)",
+    async (agentId) => {
+      await withSingleRowCacheStore(async ({ now, storePath }) => {
+        const parentKey = "agent:main:parent";
+        const childKey = `agent:${agentId}:subagent:child`;
+        const childStorePath = resolveSessionStorePathCore(undefined, { agentId });
+        const childPrompt = "unused registry child prompt ".repeat(2048);
+        await seedSessionEntries(storePath, { [parentKey]: parentSession("parent", now) });
+        await replaceSessionEntry(
+          { agentId, storePath: childStorePath, sessionKey: childKey },
+          {
+            sessionId: "child",
+            updatedAt: now,
+            ...retainedDetails(now, childPrompt),
+          },
+        );
+        await setSubagentControllerRun(childKey, parentKey, now);
+        const parsed = vi.spyOn(JSON, "parse");
+        try {
+          const loaded = loadGatewaySessionEntryReadOnly(parentKey, {
+            includeStoreChildEntries: true,
+          });
+          expect(loaded.store[childKey]).toMatchObject({ sessionId: "child", updatedAt: now });
+          expect(loaded.store[childKey]?.skillsSnapshot).toBeUndefined();
+          expect(loaded.store[childKey]?.systemPromptReport).toBeUndefined();
+          expect(
+            parsed.mock.calls.some(
+              ([value]) => value.includes(childPrompt) || value.includes('"systemPromptReport"'),
+            ),
+          ).toBe(false);
+        } finally {
+          parsed.mockRestore();
+        }
+        expect((await rowReader.row(parentKey, { now }))?.childSessions).toEqual([childKey]);
+
+        await deleteSessionEntryLifecycle({
+          agentId,
+          storePath: childStorePath,
+          archiveTranscript: false,
+          target: { canonicalKey: childKey, storeKeys: [childKey] },
+        });
+        expect(
+          loadGatewaySessionEntryReadOnly(parentKey, { includeStoreChildEntries: true }).store[
+            childKey
+          ],
+        ).toBeUndefined();
+        expect((await rowReader.row(parentKey, { now }))?.childSessions).toBeUndefined();
+      });
+    },
+  );
 });

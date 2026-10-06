@@ -29,10 +29,8 @@ Good output, one line each:
 - `openclaw status` shows configured channels, no auth errors.
 - `openclaw status --all` produces a full, shareable report.
 - `openclaw gateway probe` shows `Reachable: yes`. `Capability: ...` is the
-  auth level the probe proved; `Read probe: limited - missing scope:
-operator.read` is degraded diagnostics, not a connect failure.
-- `openclaw gateway status` shows `Runtime: running`, `Connectivity probe:
-ok`, and a plausible `Capability: ...`. Add `--require-rpc` to also require
+  auth level the check proved. Missing `operator.read` scope limits read diagnostics; it does not mean the connection failed.
+- `openclaw gateway status` shows `Runtime: running`, a successful connectivity check, and a plausible `Capability: ...`. Add `--require-rpc` to also require
   read-scope RPC proof.
 - `openclaw doctor` reports no blocking config/service errors.
 - `openclaw channels status --probe` returns live per-account transport state
@@ -52,17 +50,20 @@ openclaw doctor
 
 Common causes:
 
-- `tools.profile: "minimal"` allows only `session_status`.
+- `tools.profile: "minimal"` allows `session_status` and update-only `gateway`.
 - `tools.profile: "messaging"` is narrow, for chat-only agents.
-- `tools.profile: "coding"` is the default for new local configs (repo, file,
-  shell, and runtime work).
-- `tools.profile: "full"` removes profile restrictions; limit to trusted
-  operator-controlled agents.
+- `tools.profile: "coding"` selects repo, file, shell, and runtime work.
+- `tools.profile: "full"` is the local onboarding default. It removes core profile
+  filtering and selects optional plugin tools, subject to independent restrictions.
+- An unset profile leaves core tools unfiltered but does not itself select optional
+  plugin tools. Existing configs stay unchanged unless onboarding is run again.
 - Per-agent `agents.entries.*.tools` overrides narrow or expand the root profile
   for one agent.
 
 Change the profile, restart or reload the Gateway, then recheck with
-`openclaw status --all`. Full profile/group table: [Tool profiles](/gateway/config-tools#tool-profiles).
+`openclaw status --all`. Check the chat **Execution permissions** menu separately;
+Full tool selection does not grant Full Access or configure missing plugins.
+Full profile/group table: [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
 
 ## Anthropic long context 429
 
@@ -72,7 +73,7 @@ Change the profile, restart or reload the Gateway, then recheck with
 ## Local OpenAI-compatible backend works directly but fails in OpenClaw
 
 Your local/self-hosted `/v1` backend answers direct `/v1/chat/completions`
-probes but fails on `openclaw infer model run` or normal agent turns:
+checks but fails on `openclaw infer model run` or normal agent turns:
 
 1. Error mentions `messages[].content` expecting a string: set
    `models.providers.<provider>.models[].compat.requiresStringContent: true`.
@@ -80,7 +81,7 @@ probes but fails on `openclaw infer model run` or normal agent turns:
    `models.providers.<provider>.models[].compat.supportsTools: false` and retry.
 3. Tiny direct calls work but larger OpenClaw prompts crash the backend: that
    is an upstream model/server limit, not an OpenClaw bug. Continue in
-   [Local OpenAI-compatible backend passes direct probes but agent runs fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail).
+   [Local OpenAI-compatible backend passes direct checks but agent runs fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail).
 
 ## Plugin install fails with missing openclaw extensions
 
@@ -179,7 +180,7 @@ sudo chown -R root:root /path/to/openclaw-config/npm
 openclaw doctor --fix
 ```
 
-Deeper docs: [Blocked plugin path ownership](/tools/plugin#blocked-plugin-path-ownership), [Docker: Permissions and EACCES](/install/docker#shell-helpers-optional)
+Deeper docs: [Blocked plugin path ownership](/tools/plugin#blocked-plugin-path-ownership), [Docker: Permissions and EACCES](/install/docker#permissions-and-eacces)
 
 ## Decision tree
 
@@ -188,20 +189,15 @@ flowchart TD
   A[OpenClaw is not working] --> B{What breaks first}
   B --> C[No replies]
   B --> D[Dashboard or Control UI will not connect]
-  B --> E[Gateway will not start or service not running]
+  B --> E[Gateway will not start or service installed but not running]
   B --> F[Channel connects but messages do not flow]
   B --> G[Cron or heartbeat did not fire or did not deliver]
-  B --> H[Node is paired but camera canvas screen exec fails]
-  B --> I[Browser tool fails]
-
-  C --> C1[/No replies section/]
-  D --> D1[/Control UI section/]
-  E --> E1[/Gateway section/]
-  F --> F1[/Channel flow section/]
-  G --> G1[/Automation section/]
-  H --> H1[/Node tools section/]
-  I --> I1[/Browser section/]
+  B --> H[Node is paired but tool fails camera canvas screen exec]
+  B --> I[Exec suddenly asks for approval]
+  B --> J[Browser tool fails]
 ```
+
+Each branch is the title of an accordion below.
 
 <AccordionGroup>
   <Accordion title="No replies">
@@ -216,7 +212,7 @@ flowchart TD
     Good output:
 
     - `Runtime: running`
-    - `Connectivity probe: ok`
+    - A successful connectivity check
     - `Capability: read-only`, `write-capable`, or `admin-capable`
     - Channel shows transport connected and, where supported, `works` or
       `audit ok` in `channels status --probe`
@@ -244,7 +240,7 @@ flowchart TD
     Good output:
 
     - `Dashboard: http://...` shown in `openclaw gateway status`
-    - `Connectivity probe: ok`
+    - A successful connectivity check
     - `Capability: read-only`, `write-capable`, or `admin-capable`
     - No auth loop in logs
 
@@ -274,7 +270,7 @@ flowchart TD
 
     - `Service: ... (loaded)`
     - `Runtime: running`
-    - `Connectivity probe: ok`
+    - A successful connectivity check
     - `Capability: read-only`, `write-capable`, or `admin-capable`
 
     Log signatures:
@@ -283,7 +279,7 @@ flowchart TD
     - `refusing to bind gateway ... without auth` → non-loopback bind without a valid auth path (token/password, or trusted-proxy where configured).
     - `another gateway instance is already listening` or `EADDRINUSE` → port already taken.
 
-    Deep pages: [Gateway service not running](/gateway/troubleshooting#gateway-service-not-running), [Background process](/gateway/background-process), [Configuration](/gateway/configuration)
+    Deep pages: [Gateway service not running](/gateway/troubleshooting#gateway-service-not-running), [Supervision and service lifecycle](/gateway#supervision-and-service-lifecycle), [Configuration](/gateway/configuration)
 
   </Accordion>
 
@@ -316,16 +312,16 @@ flowchart TD
     ```bash
     openclaw status
     openclaw gateway status
-    openclaw cron status
-    openclaw cron list
-    openclaw cron runs --id <jobId> --limit 20
+    openclaw automations status
+    openclaw automations list
+    openclaw automations runs <jobId> --limit 20
     openclaw logs --follow
     ```
 
     Good output:
 
-    - `cron status` shows the scheduler enabled with a next wake.
-    - `cron runs` shows recent `ok` entries.
+    - `automations status` shows the scheduler enabled with a next wake.
+    - `automations runs` shows recent `ok` entries.
     - Heartbeat is enabled and inside active hours.
 
     Log signatures:
@@ -408,7 +404,7 @@ flowchart TD
     - `SYSTEM_RUN_DENIED: approval required` → node-host exec approval is pending.
     - `exec host=sandbox requires a sandbox runtime for this session` → implicit/explicit sandbox selection but sandbox mode is off.
 
-    Deep pages: [Exec](/tools/exec), [Exec approvals](/tools/exec-approvals), [Security: What the audit checks](/gateway/security#what-the-audit-checks-high-level)
+    Deep pages: [Exec](/tools/exec), [Exec approvals](/tools/exec-approvals), [Security: What the audit checks](/gateway/security/running-the-audit#what-the-audit-checks-high-level)
 
   </Accordion>
 
@@ -438,7 +434,7 @@ flowchart TD
     - `Browser attachOnly is enabled ... not reachable` → attach-only profile has no live CDP target.
     - Stale viewport/dark-mode/locale/offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the control session and release emulation state without restarting the gateway.
 
-    Deep pages: [Browser tool fails](/gateway/troubleshooting#browser-tool-fails), [Missing browser command or tool](/tools/browser#missing-browser-command-or-tool), [Browser: Linux troubleshooting](/tools/browser-linux-troubleshooting), [Browser: WSL2/Windows remote CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
+    Deep pages: [Browser tool fails](/gateway/troubleshooting#browser-tool-fails), [Missing browser command or tool](/tools/browser/setup#missing-browser-command-or-tool), [Browser: Linux troubleshooting](/tools/browser-linux-troubleshooting), [Browser: WSL2/Windows remote CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
 
   </Accordion>
 

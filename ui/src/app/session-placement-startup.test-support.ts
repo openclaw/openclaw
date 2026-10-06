@@ -5,8 +5,8 @@ import {
   type SessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
+import { createChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import createApplicationPlacementStartupRuntime from "./session-placement-startup.runtime.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 
@@ -61,6 +61,13 @@ export function createPlacementStartupHarness(
     get state() {
       return state;
     },
+    describe: ((params, describeOptions) => {
+      if (!describeOptions?.client) {
+        throw new Error("placement describe requires its captured client");
+      }
+      return describeOptions.client.request("sessions.describe", params);
+    }) satisfies SessionCapability["describe"],
+    invalidate: vi.fn(),
     refresh: vi.fn(async () => undefined),
     subscribe: vi.fn(() => () => undefined),
   } as unknown as SessionCapability;
@@ -77,8 +84,8 @@ export function createPlacementStartupHarness(
   if (options.recoveryBeforeStartup) {
     expect(writeSessionPlacementRecovery(recovery)).toBe(true);
   }
-  const initialUserMessage = createInitialUserMessageHandoff();
-  const dependencies = { gateway, sessions, initialUserMessage };
+  const chatSubmissions = createChatSubmissions();
+  const dependencies = { gateway, sessions, chatSubmissions };
   const startup = createApplicationPlacementStartup(
     dependencies,
     options.loadRuntime ?? (async () => ({ default: createApplicationPlacementStartupRuntime })),
@@ -88,14 +95,30 @@ export function createPlacementStartupHarness(
   }
   return {
     startup,
-    input: { recovery, persistRecovery: true, recovering: false, createdAt: 1_000 },
+    input: { recovery, persistRecovery: true, mode: "dispatch" as const, createdAt: 1_000 },
     client,
     gateway,
     sessions,
     state,
-    initialUserMessage,
+    chatSubmissions,
     dependencies,
   };
+}
+
+export function blockStorageWrites() {
+  const storage = sessionStorage;
+  vi.stubGlobal("sessionStorage", {
+    get length() {
+      return storage.length;
+    },
+    key: storage.key.bind(storage),
+    getItem: storage.getItem.bind(storage),
+    removeItem: storage.removeItem.bind(storage),
+    setItem: () => {
+      throw new Error("quota");
+    },
+  });
+  return storage;
 }
 
 export async function flushStartupMicrotasks() {

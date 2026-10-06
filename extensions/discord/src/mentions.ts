@@ -1,11 +1,13 @@
-// Discord plugin module implements mentions behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-  normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeDiscordHandleKey, resolveDiscordDirectoryUserId } from "./directory-cache.js";
+import {
+  normalizeDiscordHandleKey,
+  normalizeDiscordSnowflake,
+  resolveDiscordDirectoryUserId,
+} from "./directory-cache.js";
 
 type DiscordMentionAliasesConfig = Record<string, string>;
 
@@ -14,38 +16,23 @@ const DISCORD_RESERVED_MENTIONS = new Set(["everyone", "here"]);
 const DISCORD_DISCRIMINATOR_SUFFIX = /#\d{4}$/;
 const DISCORD_BROADCAST_MENTION_PATTERN = /@(everyone|here)\b/;
 
-function normalizeSnowflake(value: string | number | bigint): string | null {
-  const text = normalizeOptionalStringifiedId(value) ?? "";
-  if (!/^\d+$/.test(text)) {
-    return null;
-  }
-  return text;
-}
-
 export function formatMention(params: {
   userId?: string | number | bigint | null;
   roleId?: string | number | bigint | null;
   channelId?: string | number | bigint | null;
 }): string {
-  const userId = params.userId == null ? null : normalizeSnowflake(params.userId);
-  const roleId = params.roleId == null ? null : normalizeSnowflake(params.roleId);
-  const channelId = params.channelId == null ? null : normalizeSnowflake(params.channelId);
-  const values = [
-    userId ? { kind: "user" as const, id: userId } : null,
-    roleId ? { kind: "role" as const, id: roleId } : null,
-    channelId ? { kind: "channel" as const, id: channelId } : null,
-  ].filter((entry): entry is { kind: "user" | "role" | "channel"; id: string } => Boolean(entry));
-  if (values.length !== 1) {
+  const userId = params.userId == null ? null : normalizeDiscordSnowflake(params.userId);
+  const roleId = params.roleId == null ? null : normalizeDiscordSnowflake(params.roleId);
+  const channelId = params.channelId == null ? null : normalizeDiscordSnowflake(params.channelId);
+  const mentions = [
+    userId ? `<@${userId}>` : null,
+    roleId ? `<@&${roleId}>` : null,
+    channelId ? `<#${channelId}>` : null,
+  ].filter((entry): entry is string => Boolean(entry));
+  if (mentions.length !== 1) {
     throw new Error("formatMention requires exactly one of userId, roleId, or channelId");
   }
-  const target = expectDefined(values.at(0), "single Discord mention target");
-  if (target.kind === "user") {
-    return `<@${target.id}>`;
-  }
-  if (target.kind === "role") {
-    return `<@&${target.id}>`;
-  }
-  return `<#${target.id}>`;
+  return expectDefined(mentions.at(0), "single Discord mention target");
 }
 
 function resolveConfiguredMentionAlias(
@@ -70,7 +57,7 @@ function resolveConfiguredMentionAlias(
         aliasWithoutDiscriminator !== alias &&
         aliasWithoutDiscriminator === key)
     ) {
-      const userId = normalizeSnowflake(rawUserId);
+      const userId = normalizeDiscordSnowflake(rawUserId);
       if (userId) {
         return userId;
       }
@@ -119,16 +106,13 @@ function countBacktickRun(text: string, index: number): number {
   return cursor - index;
 }
 
-function findSameLineBacktickRun(
-  text: string,
-  startIndex: number,
-  runLength: number,
-): number | null {
-  const delimiter = "`".repeat(runLength);
-  const newlineIndex = text.indexOf("\n", startIndex);
+function findInlineBacktickRun(text: string, startIndex: number, runLength: number): number | null {
+  // Inline spans can cross soft line breaks; fence-sized runs use the block scanner below.
+  const newlineIndex = runLength >= 3 ? text.indexOf("\n", startIndex) : -1;
   const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
-  const closeIndex = text.indexOf(delimiter, startIndex);
-  return closeIndex !== -1 && closeIndex < lineEnd ? closeIndex + runLength : null;
+  // A longer backtick run is literal code, not a matching inline delimiter.
+  const close = new RegExp("(?<!`)`{" + runLength + "}(?!`)").exec(text.slice(startIndex, lineEnd));
+  return close ? startIndex + close.index + runLength : null;
 }
 
 function findFenceEnd(text: string, startIndex: number, runLength: number): number {
@@ -164,7 +148,7 @@ function findNextMarkdownCodeSegment(
   return {
     startIndex: segmentStart,
     endIndex:
-      findSameLineBacktickRun(text, segmentStart + runLength, runLength) ??
+      findInlineBacktickRun(text, segmentStart + runLength, runLength) ??
       (runLength >= 3 ? findFenceEnd(text, segmentStart, runLength) : text.length),
   };
 }

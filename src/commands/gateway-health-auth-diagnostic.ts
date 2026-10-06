@@ -1,4 +1,4 @@
-/** Gateway health auth diagnostic helpers for reachable-but-unauthenticated probes. */
+import { isGatewayProtocolResponseError } from "../../packages/gateway-client/src/protocol-request.js";
 import {
   classifyGatewayConnectFailure,
   ConnectErrorDetailCodes,
@@ -21,50 +21,28 @@ function gatewayProbeFailureKind(status: GatewayProbeReachabilityEvidence) {
   );
 }
 
-/** Detects the temporary authentication lockout outcome from projected or legacy probe facts. */
 export function gatewayProbeResultWasRateLimited(
   status: GatewayProbeReachabilityEvidence,
 ): boolean {
   return gatewayProbeFailureKind(status) === "rate-limited";
 }
 
-/** Detects a structured or legacy rate-limit connect error before close projection. */
 export function gatewayConnectErrorWasRateLimited(error: unknown): boolean {
-  if (!(error instanceof Error)) {
+  if (!isGatewayProtocolResponseError(error)) {
     return false;
   }
   return (
     classifyGatewayConnectFailure({
-      details: (error as Error & { details?: unknown }).details,
+      details: error.details,
       message: error.message,
     }).kind === "rate-limited"
   );
 }
 
-/**
- * Detects when a daemon probe reached the gateway even if read-scope auth failed.
- */
 export function gatewayProbeResultSawGateway(status: GatewayProbeReachabilityEvidence): boolean {
-  if (status.ok) {
-    return true;
-  }
-  const auth = status.auth;
-  if (auth?.capability && auth.capability !== "unknown") {
-    return true;
-  }
-  if (auth?.role || (auth?.scopes?.length ?? 0) > 0) {
-    return true;
-  }
-  const server = status.server;
-  if (server?.version || server?.connId) {
-    return true;
-  }
-  return gatewayProbeFailureKind(status) !== "unreachable";
+  return status.ok || status.gatewayReached === true;
 }
 
-/**
- * Builds the health diagnostic emitted when the gateway is reachable but credentials are absent.
- */
 export function buildCredentialsRequiredHealthDiagnostic() {
   return {
     ok: false,
@@ -78,7 +56,6 @@ export function buildCredentialsRequiredHealthDiagnostic() {
   };
 }
 
-/** Builds the health diagnostic emitted for a temporary Gateway authentication lockout. */
 export function buildRateLimitedHealthDiagnostic(error?: unknown) {
   const retryAfterCandidate =
     error instanceof Error ? (error as Error & { retryAfterMs?: unknown }).retryAfterMs : undefined;

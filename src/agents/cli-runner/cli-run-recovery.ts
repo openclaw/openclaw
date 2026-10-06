@@ -1,8 +1,7 @@
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { isCliSessionInvalidatingFailoverReason } from "../cli-session.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { type FailoverError, isFailoverError } from "../failover-error.js";
-import { createCliFailoverError } from "./exit-error.js";
 import { cliBackendLog } from "./log.js";
 import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
@@ -39,7 +38,6 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
     case "session_expired":
       return true;
     case "unknown":
-      return params.error.code === "cli_unknown_empty_failure";
     case "empty_response":
       return params.error.code === "cli_unknown_empty_failure";
     case "format":
@@ -53,16 +51,14 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
   }
 }
 
-function shouldRetryForkedCliSessionAfterFailover(error: FailoverError): boolean {
-  return error.reason === "timeout" && error.code === "cli_no_output_timeout";
-}
-
-function isUnsupportedCliResumeAtError(error: unknown, resumeAtArg: string): boolean {
-  const message = formatErrorMessage(error).toLowerCase();
-  return (
-    message.includes(resumeAtArg.toLowerCase()) &&
-    /\b(?:unknown|unexpected|unrecognized)\b|\bnot\s+recognized\b/.test(message)
-  );
+/**
+ * Remaining retry budget measured against the run's monotonic anchor. Elapsed
+ * monotonic time is fractional, so the result is floored to a whole millisecond:
+ * this keeps the retry within the operator-configured budget and satisfies the
+ * paired-node remote decoder's `Number.isInteger` timeout contract.
+ */
+function remainingCliRecoveryBudgetMs(timeoutMs: number, startedMonotonicMs: number): number {
+  return Math.floor(timeoutMs - (performance.now() - startedMonotonicMs));
 }
 
 export async function runCliRecovery<TAttempt>(params: {
@@ -80,6 +76,14 @@ export async function runCliRecovery<TAttempt>(params: {
   const reusableCliSessionId = resolveCliSessionId(context.reusableCliSession);
   const resumeCheckpointId = runParams.cliSessionBinding?.resumeCheckpointId;
   let retryableSessionId = reusableCliSessionId;
+  const failTerminal = async (error: unknown): Promise<never> => {
+    // Record only after every eligible recovery path is exhausted.
+    cliBackendLog.warn(
+      `cli terminal failure: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - context.started} runId=${runParams.runId} error=${formatErrorMessageForDisplay(error)}`,
+    );
+    await params.onTerminalFailure(error);
+    throw error;
+  };
   try {
     return await params.finishAttempt(
       await params.executeAttempt(
@@ -99,29 +103,13 @@ export async function runCliRecovery<TAttempt>(params: {
     if (deliveredFailure) {
       return deliveredFailure;
     }
+    runParams.assertCurrent?.();
     let recoveryError = err;
-    if (
-      runParams.forkCliSessionOnResume &&
-      resumeCheckpointId &&
-      context.preparedBackend.backend.resumeAtArg &&
-      isUnsupportedCliResumeAtError(err, context.preparedBackend.backend.resumeAtArg)
-    ) {
-      recoveryError = createCliFailoverError(
-        "CLI backend cannot resume from the stored checkpoint.",
-        "session_expired",
-        {
-          provider: runParams.provider,
-          model: context.modelId,
-          sessionId: runParams.sessionId,
-          lane: runParams.lane,
-        },
-        { cause: err },
-      );
-    }
     if (isFailoverError(recoveryError)) {
       if (
         !runParams.forkCliSessionOnResume &&
-        shouldRetryForkedCliSessionAfterFailover(recoveryError) &&
+        recoveryError.reason === "timeout" &&
+        recoveryError.code === "cli_no_output_timeout" &&
         retryableSessionId &&
         resumeCheckpointId &&
         runParams.sessionKey &&
@@ -130,7 +118,12 @@ export async function runCliRecovery<TAttempt>(params: {
         runParams.onBeforeForkedCliSessionRetry
       ) {
         try {
-          const retryTimeoutMs = runParams.timeoutMs - (Date.now() - context.started);
+          // Elapsed time is monotonic so a wall-clock step cannot consume or
+          // extend the operator-configured retry budget.
+          const retryTimeoutMs = remainingCliRecoveryBudgetMs(
+            runParams.timeoutMs,
+            context.startedMonotonicMs,
+          );
           if (retryTimeoutMs <= 0) {
             throw recoveryError;
           }
@@ -160,12 +153,11 @@ export async function runCliRecovery<TAttempt>(params: {
           if (deliveredForkFailure) {
             return deliveredForkFailure;
           }
-          recoveryError = isUnsupportedCliResumeAtError(
-            forkError,
-            context.preparedBackend.backend.resumeAtArg,
-          )
-            ? err
-            : forkError;
+          runParams.assertCurrent?.();
+          recoveryError =
+            isFailoverError(forkError) && forkError.code === "cli_resume_at_unsupported"
+              ? err
+              : forkError;
         }
       }
       if (
@@ -179,7 +171,10 @@ export async function runCliRecovery<TAttempt>(params: {
         runParams.sessionKey
       ) {
         try {
-          const retryTimeoutMs = runParams.timeoutMs - (Date.now() - context.started);
+          const retryTimeoutMs = remainingCliRecoveryBudgetMs(
+            runParams.timeoutMs,
+            context.startedMonotonicMs,
+          );
           if (retryTimeoutMs <= 0) {
             throw recoveryError;
           }
@@ -207,12 +202,10 @@ export async function runCliRecovery<TAttempt>(params: {
           if (deliveredRetryFailure) {
             return deliveredRetryFailure;
           }
-          await params.onTerminalFailure(retryErr);
-          throw retryErr;
+          return await failTerminal(retryErr);
         }
       }
     }
-    await params.onTerminalFailure(recoveryError);
-    throw recoveryError;
+    return await failTerminal(recoveryError);
   }
 }

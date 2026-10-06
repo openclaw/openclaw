@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeModeHeadlessResult } from "../agents/code-mode.js";
 import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
 import {
@@ -8,7 +8,8 @@ import {
   loadPreparedInboundPluginRegistry,
 } from "../agents/prepared-model-runtime.inbound-registry.js";
 import { prepareOwnedPluginLoadContext } from "../agents/prepared-model-runtime.plugin-context.js";
-import { resolveToolSearchConfig, ToolSearchRuntime } from "../agents/tool-search.js";
+import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
+import { resolveToolSearchConfig } from "../agents/tool-search.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
@@ -17,6 +18,7 @@ import {
   clearPluginLoaderCache,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -25,9 +27,8 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import { resetPluginToolDescriptorCacheForTest } from "../plugins/tools.test-fixtures.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createCronScriptRuntime } from "./trigger-script.js";
+import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 type HeadlessParams = Parameters<
   NonNullable<Parameters<typeof createCronScriptRuntime>[0]["runHeadless"]>
@@ -100,10 +101,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   clearRuntimeConfigSnapshot();
   clearPluginLoaderCache();
-  resetPluginToolDescriptorCacheForTest();
   clearPluginMetadataLifecycleCaches();
+  // Capture retirement still owns its SQLite token beneath the fixture root.
+  await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
   await state?.cleanup();
 });
 
@@ -138,6 +141,8 @@ describe("cron preparation plugin ownership", () => {
   it.each(["gateway", "standalone"] as const)(
     "preserves %s artifact selection through both real preparation loads",
     async (owner) => {
+      // Artifact selection must not depend on how long cold module loading takes.
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       const metadataSnapshot = loadPluginMetadataSnapshot({
         config,
         workspaceDir: state.workspaceDir,
@@ -167,7 +172,7 @@ describe("cron preparation plugin ownership", () => {
         });
       for (const [jobId, agentId, calls] of [
         ["first", "main", 1],
-        ["first", "main", 2],
+        ["first", "main", 1],
         ["second", "main", 1],
         ["first", "other", 1],
       ] as const) {

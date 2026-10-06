@@ -26,10 +26,10 @@ function createHarness(
       ) => void)
     | undefined;
   let tabsReplacedListener: ((addedTabId: number, removedTabId: number) => void) | undefined;
-  let groupUpdatedListener: (() => void) | undefined;
+  let groupUpdatedListener: ((group?: { id: number; title?: string }) => void) | undefined;
   let revision = 0;
   let accessible = true;
-  const attachments = new Map([[7, { epoch: { revision: 0, tabRevision: 0 } }]]);
+  const attachments = new Map([[7, { epoch: { revision: 0, groupRevision: 0, tabRevision: 0 } }]]);
   const send = vi.fn();
   const policy = {
     mode,
@@ -43,7 +43,7 @@ function createHarness(
     }),
     beginRevocation: vi.fn(() => Symbol("revocation")),
     endRevocation: vi.fn(),
-    capture: vi.fn(() => ({ revision, tabRevision: 0 })),
+    capture: vi.fn(() => ({ revision, groupRevision: 0, tabRevision: 0 })),
     epochIsCurrent: vi.fn(
       (_tabId: number, epoch: { revision: number }) => epoch.revision === revision,
     ),
@@ -55,9 +55,9 @@ function createHarness(
       return undefined;
     }),
     forwardDocumentEvent: vi.fn((event, emit) => emit(event)),
-    invalidateDocumentGroup: vi.fn(),
-    invalidateAll: vi.fn(() => {
+    invalidateGroup: vi.fn(() => {
       revision += 1;
+      return true;
     }),
     inspectTab: vi.fn(async (_tabId: number, epoch: { revision: number }) => ({
       accessible: accessible && epoch.revision === revision,
@@ -99,7 +99,7 @@ function createHarness(
     },
     tabGroups: {
       onUpdated: {
-        addListener: (listener: () => void) => {
+        addListener: (listener: (group?: { id: number; title?: string }) => void) => {
           groupUpdatedListener = listener;
         },
       },
@@ -168,105 +168,65 @@ describe("tab access event epochs", () => {
     expect(harness.policy.endRevocation).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    {
-      label: "all-mode URL",
-      mode: "all",
-      firstChange: { url: "https://one.example" },
-      secondChange: { url: "https://two.example" },
-    },
-    {
-      label: "selected-mode URL",
-      mode: "selected",
-      firstChange: { url: "https://one.example" },
-      secondChange: { url: "https://two.example" },
-    },
-    {
-      label: "selected-mode group",
-      mode: "selected",
-      firstChange: { groupId: 7 },
-      secondChange: { groupId: 7 },
-    },
-  ] as const)(
-    "ignores a stale $label revocation after a newer eligible update",
-    async ({ mode, firstChange, secondChange }) => {
-      const harness = createHarness(mode);
-      const firstInspection = deferred<{ accessible: boolean }>();
-      let firstInspectionResumed = false;
-      harness.policy.inspectTab
-        .mockImplementationOnce(async () => {
-          const state = await firstInspection.promise;
-          firstInspectionResumed = true;
-          return state;
-        })
-        .mockResolvedValueOnce({ accessible: true });
+  it("ignores a stale URL revocation after a newer eligible update", async () => {
+    const harness = createHarness("all");
+    const firstInspection = deferred<{ accessible: boolean }>();
+    let firstInspectionResumed = false;
+    harness.policy.inspectTab
+      .mockImplementationOnce(async () => {
+        const state = await firstInspection.promise;
+        firstInspectionResumed = true;
+        return state;
+      })
+      .mockResolvedValueOnce({ accessible: true });
 
-      harness.tabsUpdatedListener(7, firstChange);
-      await vi.waitFor(() => expect(harness.policy.inspectTab).toHaveBeenCalledTimes(1));
-      harness.tabsUpdatedListener(7, secondChange);
-      await vi.waitFor(() => {
-        expect(harness.attachments.get(7)?.epoch).toEqual({ revision: 2, tabRevision: 0 });
+    harness.tabsUpdatedListener(7, { url: "https://one.example" });
+    await vi.waitFor(() => expect(harness.policy.inspectTab).toHaveBeenCalledTimes(1));
+    harness.tabsUpdatedListener(7, { url: "https://two.example" });
+    await vi.waitFor(() => {
+      expect(harness.attachments.get(7)?.epoch).toEqual({
+        revision: 2,
+        groupRevision: 0,
+        tabRevision: 0,
       });
+    });
 
-      firstInspection.resolve({ accessible: false });
-      await vi.waitFor(() => expect(firstInspectionResumed).toBe(true));
-      await Promise.resolve();
+    firstInspection.resolve({ accessible: false });
+    await vi.waitFor(() => expect(firstInspectionResumed).toBe(true));
+    await Promise.resolve();
 
-      expect(harness.detachDebugger).not.toHaveBeenCalled();
-      harness.debuggerEventListener({ tabId: 7 }, "Runtime.consoleAPICalled", {});
-      expect(harness.send).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "cdpEvent", tabId: 7 }),
-      );
-    },
-  );
+    expect(harness.detachDebugger).not.toHaveBeenCalled();
+    harness.debuggerEventListener({ tabId: 7 }, "Runtime.consoleAPICalled", {});
+    expect(harness.send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "cdpEvent", tabId: 7 }),
+    );
+  });
 
-  it.each([
-    {
-      label: "all-mode URL",
-      mode: "all",
-      firstChange: { url: "https://one.example" },
-      secondChange: { url: "chrome://settings" },
-    },
-    {
-      label: "selected-mode URL",
-      mode: "selected",
-      firstChange: { url: "https://one.example" },
-      secondChange: { url: "chrome://settings" },
-    },
-    {
-      label: "selected-mode group",
-      mode: "selected",
-      firstChange: { groupId: 7 },
-      secondChange: { groupId: -1 },
-    },
-  ] as const)(
-    "lets the current restricted $label update revoke exactly once when an older update resumes",
-    async ({ mode, firstChange, secondChange }) => {
-      const harness = createHarness(mode);
-      const firstInspection = deferred<{ accessible: boolean }>();
-      let firstInspectionResumed = false;
-      harness.policy.inspectTab
-        .mockImplementationOnce(async () => {
-          const state = await firstInspection.promise;
-          firstInspectionResumed = true;
-          return state;
-        })
-        .mockResolvedValueOnce({ accessible: false });
+  it("lets the current restricted URL update revoke exactly once when an older update resumes", async () => {
+    const harness = createHarness("all");
+    const firstInspection = deferred<{ accessible: boolean }>();
+    let firstInspectionResumed = false;
+    harness.policy.inspectTab
+      .mockImplementationOnce(async () => {
+        const state = await firstInspection.promise;
+        firstInspectionResumed = true;
+        return state;
+      })
+      .mockResolvedValueOnce({ accessible: false });
 
-      harness.tabsUpdatedListener(7, firstChange);
-      await vi.waitFor(() => expect(harness.policy.inspectTab).toHaveBeenCalledTimes(1));
-      harness.tabsUpdatedListener(7, secondChange);
-      await vi.waitFor(() => {
-        expect(harness.detachDebugger).toHaveBeenCalledTimes(1);
-      });
-
-      firstInspection.resolve({ accessible: false });
-      await vi.waitFor(() => expect(firstInspectionResumed).toBe(true));
-      await Promise.resolve();
-
+    harness.tabsUpdatedListener(7, { url: "https://one.example" });
+    await vi.waitFor(() => expect(harness.policy.inspectTab).toHaveBeenCalledTimes(1));
+    harness.tabsUpdatedListener(7, { url: "chrome://settings" });
+    await vi.waitFor(() => {
       expect(harness.detachDebugger).toHaveBeenCalledTimes(1);
-    },
-  );
+    });
+
+    firstInspection.resolve({ accessible: false });
+    await vi.waitFor(() => expect(firstInspectionResumed).toBe(true));
+    await Promise.resolve();
+
+    expect(harness.detachDebugger).toHaveBeenCalledTimes(1);
+  });
 
   it("cleans up both tab identities after Chrome replaces a paused tab", async () => {
     const harness = createHarness("all");
@@ -279,28 +239,6 @@ describe("tab access event epochs", () => {
       expect(harness.detachDebugger).toHaveBeenCalledWith(7);
       expect(harness.detachDebugger).toHaveBeenCalledWith(8);
     });
-  });
-
-  it("lets a newer eligible tab event own stale group-wide reconciliation", async () => {
-    const harness = createHarness("selected");
-    const groupInspection = deferred<{ accessible: boolean }>();
-    harness.policy.inspectTab
-      .mockImplementationOnce(async () => await groupInspection.promise)
-      .mockResolvedValueOnce({ accessible: true });
-
-    harness.groupUpdatedListener();
-    harness.debuggerEventListener({ tabId: 7 }, "Page.frameNavigated", {});
-    expect(harness.send).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(harness.policy.inspectTab).toHaveBeenCalledTimes(1));
-
-    harness.tabsUpdatedListener(7, { url: "https://two.example" });
-    await vi.waitFor(() => {
-      expect(harness.attachments.get(7)?.epoch).toEqual({ revision: 2, tabRevision: 0 });
-    });
-    groupInspection.resolve({ accessible: false });
-    await Promise.resolve();
-
-    expect(harness.detachDebugger).not.toHaveBeenCalled();
   });
 
   it("does not refresh epochs from a stale group-wide access snapshot", async () => {

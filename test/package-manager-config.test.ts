@@ -1,12 +1,9 @@
 // Package manager config tests validate workspace package manager settings.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import {
-  mergeOverrides,
-  parsePnpmPackageKey,
-  readNpmLockOverrides,
-} from "../scripts/generate-npm-package-lock.mts";
+import { mergeOverrides, readNpmLockOverrides } from "../scripts/generate-npm-package-lock.mts";
 import { pnpmLockfileDocuments } from "../scripts/lib/pnpm-lockfile-documents.mjs";
 
 type PnpmBuildConfig = {
@@ -17,6 +14,7 @@ type PnpmBuildConfig = {
 };
 
 type RootPackageJson = {
+  dependencies: { tar: string };
   files?: string[];
   pnpm?: PnpmBuildConfig;
 };
@@ -27,31 +25,63 @@ type WorkspaceConfig = PnpmBuildConfig & {
   verifyDepsBeforeRun?: boolean;
 };
 
+type PnpmEnvironmentLock = {
+  importers?: Record<
+    string,
+    {
+      packageManagerDependencies?: Record<string, { version?: string }>;
+    }
+  >;
+  packages?: Record<string, unknown>;
+  snapshots?: Record<string, { optionalDependencies?: Record<string, string> }>;
+};
+
 function readJson(filePath: string): unknown {
   return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
 }
 
-function collectPnpmLockPackages(): Set<string> {
-  const lockfile = parse(
-    pnpmLockfileDocuments(fs.readFileSync("pnpm-lock.yaml", "utf8")).dependencies,
-  ) as {
-    packages?: Record<string, { version?: unknown }>;
-  };
-  const packages = new Set<string>();
-  for (const [packageKey, metadata] of Object.entries(lockfile.packages ?? {})) {
-    const parsed = parsePnpmPackageKey(packageKey);
-    if (!parsed) {
-      continue;
-    }
-    packages.add(`${parsed.name}@${parsed.version}`);
-    if (typeof metadata.version === "string") {
-      packages.add(`${parsed.name}@${metadata.version}`);
-    }
+function readPnpmEnvironmentLock(): PnpmEnvironmentLock {
+  const committedLockfile = execFileSync("git", ["show", "HEAD:pnpm-lock.yaml"], {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const environment = pnpmLockfileDocuments(committedLockfile).environment;
+  if (!environment) {
+    throw new Error("pnpm-lock.yaml is missing its environment document");
   }
-  return packages;
+  return parse(environment) as PnpmEnvironmentLock;
 }
 
 describe("package manager build policy", () => {
+  it("keeps pnpm 12 environment lock portable across platforms", () => {
+    const lockfile = readPnpmEnvironmentLock();
+    const packageManagerDependencies = lockfile.importers?.["."]?.packageManagerDependencies;
+    const pnpmVersion = packageManagerDependencies?.pnpm?.version;
+    if (typeof pnpmVersion !== "string") {
+      throw new Error("pnpm environment lock is missing its package manager version");
+    }
+    if (Number.parseInt(pnpmVersion, 10) < 12) {
+      return;
+    }
+
+    expect(packageManagerDependencies).not.toHaveProperty("@pnpm/exe");
+    expect(
+      Object.keys(lockfile.packages ?? {}).filter((key) => key.startsWith("@pnpm/exe@")),
+    ).toEqual([]);
+    expect(
+      Object.keys(lockfile.snapshots ?? {}).filter((key) => key.startsWith("@pnpm/exe@")),
+    ).toEqual([]);
+
+    const platformExecutables = Object.keys(
+      lockfile.snapshots?.[`pnpm@${pnpmVersion}`]?.optionalDependencies ?? {},
+    ).filter((name) => name.startsWith("@pnpm/exe."));
+    expect(platformExecutables.length).toBeGreaterThan(0);
+    for (const packageName of platformExecutables) {
+      expect(lockfile.packages).toHaveProperty(`${packageName}@${pnpmVersion}`);
+      expect(lockfile.snapshots).toHaveProperty(`${packageName}@${pnpmVersion}`);
+    }
+  });
+
   it("keeps optional native Discord opus builds disabled by default", () => {
     const packageJson = readJson("package.json") as RootPackageJson;
     const workspace = parse(fs.readFileSync("pnpm-workspace.yaml", "utf8")) as WorkspaceConfig;
@@ -87,21 +117,17 @@ describe("package manager build policy", () => {
   });
 
   it("pins forked transitive dependencies with parent-scoped npm-lock overrides", () => {
-    const overrides = readNpmLockOverrides() as Record<string, unknown>;
+    const tarVersion = (readJson("package.json") as RootPackageJson).dependencies.tar;
+    const overrides = readNpmLockOverrides(
+      {
+        dependencies: { minipass: "3.3.6", tar: tarVersion },
+      },
+      process.cwd(),
+    );
 
-    const packages = collectPnpmLockPackages();
-
-    expect(overrides["lru-cache"]).toBeUndefined();
-    expect(overrides["lru-memoizer@2.3.0"]).toMatchObject({
-      "lru-cache": { ".": "6.0.0", yallist: "4.0.0" },
-    });
-    if (packages.has("lru-memoizer@3.0.0")) {
-      const lruCacheVersion = (overrides["lru-memoizer@3.0.0"] as Record<string, string>)[
-        "lru-cache"
-      ];
-      expect(lruCacheVersion).toMatch(/^11\.\d+\.\d+$/u);
-      expect(packages.has(`lru-cache@${lruCacheVersion}`)).toBe(true);
-    }
+    expect(overrides.yallist).toBeUndefined();
+    expect(overrides["minipass@3.3.6"]).toMatchObject({ yallist: "4.0.0" });
+    expect(overrides[`tar@${tarVersion}`]).toMatchObject({ yallist: "5.0.0" });
   });
 
   it("merges exact npm-lock pins with nested lock-derived pins", () => {
@@ -116,24 +142,17 @@ describe("package manager build policy", () => {
     });
   });
 
-  it.each(
-    (
-      [
-        ["package", "workspace"],
-        ["package", "lock"],
-        ["workspace", "lock"],
-      ] as const
-    ).flatMap(([first, second]) =>
-      [false, true].flatMap((childrenFirst) =>
-        ["1.2.3", "npm:@scope/parent@1.2.3"].map((rootSpec) => ({
-          first,
-          second,
-          childrenFirst,
-          rootSpec,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { first: "package", second: "workspace", childrenFirst: false, rootSpec: "1.2.3" },
+    { first: "package", second: "lock", childrenFirst: true, rootSpec: "npm:@scope/parent@1.2.3" },
+    {
+      first: "workspace",
+      second: "lock",
+      childrenFirst: false,
+      rootSpec: "npm:@scope/parent@1.2.3",
+    },
+    { first: "workspace", second: "lock", childrenFirst: true, rootSpec: "1.2.3" },
+  ] as const)(
     "retains child policy and $rootSpec across sources $first/$second (childrenFirst=$childrenFirst)",
     ({ first, second, childrenFirst, rootSpec }) => {
       const sources: Record<"package" | "workspace" | "lock", Record<string, unknown>> = {

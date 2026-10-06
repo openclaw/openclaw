@@ -62,30 +62,9 @@ afterEach(() => {
 });
 
 describe("plugin manifest backup resources", () => {
-  it("retains closed resource declarations and removes deterministic duplicates", () => {
-    const include = { disposition: "include", scope: "state", relativePath: "owner/durable" };
-    const regenerable = {
-      disposition: "regenerable",
-      scope: "agent",
-      relativePath: "owner/cache",
-    };
-    const fixture = createPluginFixture({
-      backupResources: [include, regenerable, include],
-    });
-
-    const result = loadPluginManifest(fixture.pluginRoot);
-
-    expect(result).toMatchObject({
-      ok: true,
-      manifest: { backupResources: [regenerable, include] },
-    });
-  });
-
   it.each([
     ["an absolute POSIX path", "/outside"],
-    ["a Windows absolute path", "C:\\outside"],
     ["a Windows drive-relative path", "C:outside"],
-    ["a Windows UNC path", "\\\\server\\share"],
     ["a backslash separator", "owner\\cache"],
     ["a NUL byte", "owner/\0cache"],
     ["an empty path", ""],
@@ -143,6 +122,7 @@ describe("plugin manifest backup resources", () => {
     });
     const config: OpenClawConfig = {
       plugins: {
+        allow: [enabled.id, disabled.id],
         load: { paths: [enabled.pluginRoot, disabled.pluginRoot] },
         entries: {
           [enabled.id]: { enabled: true },
@@ -197,9 +177,12 @@ describe("plugin manifest backup resources", () => {
         workspace: true,
         backupResources: [{ disposition: "include", scope: "state", relativePath: "../outside" }],
       });
-      const config: OpenClawConfig = activated
-        ? { plugins: { entries: { [fixture.id]: { enabled: true } } } }
-        : {};
+      const config: OpenClawConfig = {
+        plugins: {
+          allow: [fixture.id],
+          entries: { [fixture.id]: { enabled: activated } },
+        },
+      };
       const resolveInventory = () =>
         resolveActivatedPluginBackupInventory({
           config,

@@ -2,9 +2,10 @@
 
 import { describe, expect, it, vi } from "vitest";
 import * as chatThread from "./chat-thread.ts";
-import { projectChatTranscript } from "./components/chat-transcript-projection.ts";
+import { createTestTranscript } from "./chat-view.test-helpers.ts";
+import { renderChatThread } from "./components/chat-thread.ts";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
-import { resolveChatProjectionRunId } from "./tool-stream.ts";
+import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 
 describe("resolveChatProjectionRunId", () => {
   it("restores only an active run proven by the reconnecting outbox", () => {
@@ -42,7 +43,7 @@ describe("transcript run identity", () => {
   it("does not project a session row's first active run without an explicit run id", () => {
     const build = vi.spyOn(chatThread, "buildCachedChatItems").mockReturnValue([]);
 
-    projectChatTranscript(
+    renderChatThread(
       {
         ...threadProps("run-id-projection"),
         sessions: {
@@ -61,10 +62,7 @@ describe("transcript run identity", () => {
           ],
         },
       },
-      {
-        setContentReady: vi.fn(),
-        syncMessageRows: vi.fn(),
-      } as unknown as Parameters<typeof projectChatTranscript>[1],
+      createTestTranscript(),
     );
 
     expect(build).toHaveBeenCalledWith(expect.objectContaining({ runId: null }));

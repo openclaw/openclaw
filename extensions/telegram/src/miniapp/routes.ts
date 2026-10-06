@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
@@ -10,6 +11,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createFixedWindowRateLimiter,
+  resolveRequestClientIp,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -93,8 +95,15 @@ async function handleAuth(
     sendText(res, 415, "Unsupported media type");
     return;
   }
-  const ip = req.socket.remoteAddress ?? "unknown";
-  if (!consumeRateLimit(ip)) {
+  const currentConfig = () => (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+  const requestConfig = currentConfig();
+  const ip =
+    resolveRequestClientIp(
+      req,
+      requestConfig.gateway?.trustedProxies,
+      requestConfig.gateway?.allowRealIpFallback === true,
+    ) ?? "unknown";
+  if (rateLimit.isRateLimited(ip)) {
     sendText(res, 429, "Too many requests");
     return;
   }
@@ -117,7 +126,7 @@ async function handleAuth(
     return;
   }
   const accountId = normalizeAccountId(authBody.accountId ?? DEFAULT_ACCOUNT_ID);
-  const cfg = currentConfig(api);
+  const cfg = currentConfig();
   const account = resolveTelegramAccount({ cfg, accountId });
   const validated = validateTelegramMiniAppInitData({
     initData: authBody.initData,
@@ -139,36 +148,52 @@ async function handleAuth(
     sendText(res, 503, TELEGRAM_MINIAPP_URL_ERROR);
     return;
   }
-  if (
-    !launchTickets.consume({
-      ticket: authBody.launchTicket,
-      accountId,
-      userId: validated.userId,
-    })
-  ) {
-    sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
+  if (!(await isTelegramMiniAppOwner({ cfg, accountId, userId: validated.userId }))) {
+    sendText(res, 403, "Restricted to the bot owner.");
     return;
   }
-  if (!rememberReplay(validated.hash, validated.authDateMs + 300_000)) {
-    sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
-    return;
+  const authorityChanged = new Error("Telegram Mini App owner configuration changed");
+  const assertCurrent = () => {
+    if (currentConfig() !== cfg) {
+      throw authorityChanged;
+    }
+  };
+  try {
+    assertCurrent();
+    if (
+      !launchTickets.consume({
+        ticket: authBody.launchTicket,
+        accountId,
+        userId: validated.userId,
+      })
+    ) {
+      sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
+      return;
+    }
+    if (!rememberReplay(validated.hash, validated.authDateMs + 300_000)) {
+      sendText(res, 401, TELEGRAM_MINIAPP_EXPIRED_MESSAGE);
+      return;
+    }
+    const issued = await issueDeviceBootstrapToken({
+      assertCurrent,
+      profile: {
+        roles: ["operator"],
+        scopes: BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
+        purpose: "control-ui",
+      },
+    });
+    assertCurrent();
+    sendJson(res, 200, {
+      bootstrapToken: issued.token,
+      controlUiUrl: urls.controlUiUrl,
+      gatewayUrl: urls.gatewayUrl,
+    });
+  } catch (error) {
+    if (error !== authorityChanged) {
+      throw error;
+    }
+    sendText(res, 403, "Restricted to the bot owner.");
   }
-  const issued = await issueDeviceBootstrapToken({
-    profile: {
-      roles: ["operator"],
-      scopes: BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
-      purpose: "control-ui",
-    },
-  });
-  sendJson(res, 200, {
-    bootstrapToken: issued.token,
-    controlUiUrl: urls.controlUiUrl,
-    gatewayUrl: urls.gatewayUrl,
-  });
-}
-
-function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
 }
 
 function parseAuthBody(
@@ -187,23 +212,13 @@ function parseAuthBody(
   };
 }
 
-function consumeRateLimit(ip: string): boolean {
-  return !rateLimit.isRateLimited(ip);
-}
-
 function rememberReplay(hash: string, expiresAtMs: number): boolean {
   pruneReplayCache();
   if (replayCache.has(hash)) {
     return false;
   }
   replayCache.set(hash, expiresAtMs);
-  while (replayCache.size > REPLAY_CACHE_LIMIT) {
-    const first = replayCache.keys().next().value;
-    if (!first) {
-      return true;
-    }
-    replayCache.delete(first);
-  }
+  pruneMapToMaxSize(replayCache, REPLAY_CACHE_LIMIT);
   return true;
 }
 

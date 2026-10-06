@@ -4,12 +4,13 @@ import { describe, expect, it } from "vitest";
 import { extractText, extractTextCached, extractThinkingCached } from "./message-extract.ts";
 
 describe("extractTextCached", () => {
-  it("matches extractText output", () => {
-    const message = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello there" }],
-    };
-    expect(extractTextCached(message)).toBe(extractText(message));
+  it("projects the stored subagent envelope only for user text", () => {
+    const text =
+      "[Subagent Context] You are running as a subagent (depth 1/5). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.\n\n[Subagent Task]\n\nInvestigate Side chat.\n\nBegin. Execute the assigned task to completion.";
+    const message = { role: "user", content: [{ type: "text", text }] };
+    expect(extractTextCached(message)).toBe("Investigate Side chat.");
+    expect(message.content).toEqual([{ type: "text", text }]);
+    expect(extractText({ role: "assistant", content: text })).toBe(text);
   });
 
   it("returns consistent text output for repeated calls", () => {
@@ -145,8 +146,28 @@ describe("nullish messages", () => {
     for (const message of [undefined, null]) {
       expect(extractText(message)).toBeNull();
       expect(extractTextCached(message)).toBeNull();
-      expect(extractText(message)).toBeNull();
       expect(extractThinkingCached(message)).toBeNull();
     }
   });
+
+  it.each(["user", "assistant", "toolResult"])(
+    "preserves %s text and thinking around malformed content blocks",
+    (role) => {
+      const message = {
+        role,
+        content: [
+          null,
+          { type: "text", text: "Visible reply" },
+          undefined,
+          { type: "thinking", thinking: "Plan A" },
+          [],
+        ],
+      };
+      expect(extractText(message)).toBe("Visible reply");
+      expect(extractTextCached(message)).toBe("Visible reply");
+      expect(extractThinkingCached(message)).toBe("Plan A");
+      expect(extractText({ role, content: [null], text: "Fallback text" })).toBe("Fallback text");
+      expect(extractText({ role, content: [null] })).toBeNull();
+    },
+  );
 });

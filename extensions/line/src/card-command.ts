@@ -1,5 +1,3 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-// Line plugin module implements card command behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -10,9 +8,9 @@ import {
   createListCard,
 } from "./flex-templates/basic-cards.js";
 import { createReceiptCard } from "./flex-templates/schedule-cards.js";
-import type { CardAction, ListItem } from "./flex-templates/types.js";
+import type { ListItem } from "./flex-templates/types.js";
 import { createFlexMessage } from "./send.js";
-import type { LineChannelData } from "./types.js";
+import type { LineChannelData, LineTemplateActionPayload } from "./types.js";
 
 const CARD_USAGE = `Usage: /card <type> "title" "body" [options]
 
@@ -88,12 +86,12 @@ function splitCardPair(part: string): [string, string | undefined] {
  * Parse action string format: "Label|data,Label2|data2"
  * Data can be a URL (uri action) or plain text (message action) or key=value (postback)
  */
-function parseActions(actionsStr: string | undefined): CardAction[] {
+function parseActions(actionsStr: string | undefined): LineTemplateActionPayload[] {
   if (!actionsStr) {
     return [];
   }
 
-  const results: CardAction[] = [];
+  const results: LineTemplateActionPayload[] = [];
 
   for (const part of splitCardValue(actionsStr, ",")) {
     const [label, data] = splitCardPair(part);
@@ -103,13 +101,13 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
 
     const actionData = data || label;
 
-    const action =
+    results.push(
       actionData.startsWith("http://") || actionData.startsWith("https://")
-        ? { type: "uri" as const, label, uri: actionData }
+        ? { type: "uri", label, uri: actionData }
         : actionData.includes("=")
-          ? { type: "postback" as const, label, data: actionData, displayText: label }
-          : { type: "message" as const, label, text: actionData };
-    results.push({ label, action });
+          ? { type: "postback", label, data: actionData }
+          : { type: "message", label, data: actionData },
+    );
   }
 
   return results;
@@ -149,11 +147,7 @@ function parseReceiptItems(itemsStr: string): Array<{ name: string; value: strin
  * Parse quoted arguments from command string
  * Supports: /card type "arg1" "arg2" "arg3" --flag value
  */
-function parseCardArgs(argsStrInput: string): {
-  type: string;
-  args: Array<string | undefined>;
-  flags: Record<string, string>;
-} {
+function parseCardArgs(argsStrInput: string) {
   let argsStr = argsStrInput;
   const result: { type: string; args: Array<string | undefined>; flags: Record<string, string> } = {
     type: "",
@@ -161,7 +155,6 @@ function parseCardArgs(argsStrInput: string): {
     flags: {},
   };
 
-  // Extract type (first word)
   const typeMatch = argsStr.match(/^(\w+)/);
   if (typeMatch) {
     result.type = normalizeLowercaseStringOrEmpty(typeMatch[1]);
@@ -187,169 +180,142 @@ function parseCardArgs(argsStrInput: string): {
   return result;
 }
 
-export function registerLineCardCommand(api: OpenClawPluginApi): void {
-  api.registerCommand({
-    name: "card",
-    description: "Send a rich card message (LINE).",
-    acceptsArgs: true,
-    requireAuth: false,
-    handler: async (ctx) => {
-      const argsStr = ctx.args?.trim() ?? "";
-      if (!argsStr) {
-        return { text: CARD_USAGE };
+export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPayload> {
+  const argsStr = argsInput?.trim() ?? "";
+  if (!argsStr) {
+    return { text: CARD_USAGE };
+  }
+
+  const parsed = parseCardArgs(argsStr);
+  const { type, args, flags } = parsed;
+
+  if (!type) {
+    return { text: CARD_USAGE };
+  }
+
+  try {
+    switch (type) {
+      case "info": {
+        const [title = "Info", body = "", footer] = args;
+        const bubble = createInfoCard(title, body, footer);
+        return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);
       }
 
-      const parsed = parseCardArgs(argsStr);
-      const { type, args, flags } = parsed;
-
-      if (!type) {
-        return { text: CARD_USAGE };
-      }
-
-      // Only LINE supports rich cards; fallback to text elsewhere.
-      if (ctx.channel !== "line") {
-        const fallbackText = args.join(" - ");
-        return { text: `[${type} card] ${fallbackText}`.trim() };
-      }
-
-      try {
-        switch (type) {
-          case "info": {
-            const [title = "Info", body = "", footer] = args;
-            const bubble = createInfoCard(title, body, footer);
-            return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);
-          }
-
-          case "image": {
-            const [title = "Image", caption = ""] = args;
-            const imageUrl = flags.url || flags.image;
-            if (!imageUrl) {
-              return { text: "Error: Image card requires --url <image-url>" };
-            }
-            const bubble = createImageCard(imageUrl, title, caption);
-            return buildLineFlexReply(`${title}: ${caption}`, bubble);
-          }
-
-          case "action": {
-            const [title = "Actions", body = ""] = args;
-            const actions = parseActions(flags.actions);
-            if (actions.length === 0) {
-              return { text: 'Error: Action card requires --actions "Label1|data1,Label2|data2"' };
-            }
-            const bubble = createActionCard(title, body, actions, {
-              imageUrl: flags.url || flags.image,
-            });
-            return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);
-          }
-
-          case "list": {
-            const [title = "List", itemsStr = ""] = args;
-            const items = parseListItems(itemsStr || flags.items || "");
-            if (items.length === 0) {
-              return {
-                text: 'Error: List card requires items. Usage: /card list "Title" "Item1|Desc1,Item2|Desc2"',
-              };
-            }
-            const bubble = createListCard(title, items);
-            return buildLineFlexReply(
-              `${title}: ${items.map((item) => item.title).join(", ")}`,
-              bubble,
-            );
-          }
-
-          case "receipt": {
-            const [title = "Receipt", itemsStr = ""] = args;
-            const items = parseReceiptItems(itemsStr || flags.items || "");
-            const total = flags.total ? { label: "Total", value: flags.total } : undefined;
-            const footer = flags.footer;
-
-            if (items.length === 0) {
-              return {
-                text: 'Error: Receipt card requires items. Usage: /card receipt "Title" "Item1:$10,Item2:$20" --total "$30"',
-              };
-            }
-
-            const bubble = createReceiptCard({ title, items, total, footer });
-            return buildLineFlexReply(
-              `${title}: ${items.map((item) => `${item.name} ${item.value}`).join(", ")}`,
-              bubble,
-            );
-          }
-
-          case "confirm": {
-            const [question = "Confirm?"] = args;
-            const yesStr = flags.yes || "Yes|yes";
-            const noStr = flags.no || "No|no";
-
-            const [yesLabel, yesData] = splitCardPair(yesStr);
-            const [noLabel, noData] = splitCardPair(noStr);
-
-            return buildLineReply({
-              templateMessage: {
-                type: "confirm",
-                text: question,
-                confirmLabel: yesLabel || "Yes",
-                confirmData: yesData || "yes",
-                cancelLabel: noLabel || "No",
-                cancelData: noData || "no",
-                altText: question,
-              },
-            });
-          }
-
-          case "buttons": {
-            const [title = "Menu", text = "Choose an option"] = args;
-            const actionsStr = flags.actions || "";
-            const actionParts = parseActions(actionsStr);
-
-            if (actionParts.length === 0) {
-              return { text: 'Error: Buttons card requires --actions "Label1|data1,Label2|data2"' };
-            }
-
-            const templateActions: Array<{
-              type: "message" | "uri" | "postback";
-              label: string;
-              data?: string;
-              uri?: string;
-            }> = actionParts.map((a) => {
-              const action = a.action;
-              const label = action.label ?? a.label;
-              if (action.type === "uri") {
-                return { type: "uri" as const, label, uri: (action as { uri: string }).uri };
-              }
-              if (action.type === "postback") {
-                return {
-                  type: "postback" as const,
-                  label,
-                  data: (action as { data: string }).data,
-                };
-              }
-              return {
-                type: "message" as const,
-                label,
-                data: (action as { text: string }).text,
-              };
-            });
-
-            return buildLineReply({
-              templateMessage: {
-                type: "buttons",
-                title,
-                text,
-                thumbnailImageUrl: flags.url || flags.image,
-                actions: templateActions,
-              },
-            });
-          }
-
-          default:
-            return {
-              text: `Unknown card type: "${type}". Available types: info, image, action, list, receipt, confirm, buttons`,
-            };
+      case "image": {
+        const [title = "Image", caption = ""] = args;
+        const imageUrl = flags.url || flags.image;
+        if (!imageUrl) {
+          return { text: "Error: Image card requires --url <image-url>" };
         }
-      } catch (err) {
-        return { text: `Error creating card: ${String(err)}` };
+        const bubble = createImageCard(imageUrl, title, caption);
+        return buildLineFlexReply(`${title}: ${caption}`, bubble);
       }
-    },
-  });
+
+      case "action": {
+        const [title = "Actions", body = ""] = args;
+        const actions = parseActions(flags.actions);
+        if (actions.length === 0) {
+          return { text: 'Error: Action card requires --actions "Label1|data1,Label2|data2"' };
+        }
+        const bubble = createActionCard(
+          title,
+          body,
+          actions.map((action) =>
+            action.type === "uri"
+              ? { type: "uri", label: action.label, uri: action.uri }
+              : action.type === "postback"
+                ? {
+                    type: "postback",
+                    label: action.label,
+                    data: action.data,
+                    displayText: action.label,
+                  }
+                : { type: "message", label: action.label, text: action.data },
+          ),
+          { imageUrl: flags.url || flags.image },
+        );
+        return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);
+      }
+
+      case "list": {
+        const [title = "List", itemsStr = ""] = args;
+        const items = parseListItems(itemsStr || flags.items || "");
+        if (items.length === 0) {
+          return {
+            text: 'Error: List card requires items. Usage: /card list "Title" "Item1|Desc1,Item2|Desc2"',
+          };
+        }
+        const bubble = createListCard(title, items);
+        return buildLineFlexReply(
+          `${title}: ${items.map((item) => item.title).join(", ")}`,
+          bubble,
+        );
+      }
+
+      case "receipt": {
+        const [title = "Receipt", itemsStr = ""] = args;
+        const items = parseReceiptItems(itemsStr || flags.items || "");
+        const total = flags.total ? { label: "Total", value: flags.total } : undefined;
+        const footer = flags.footer;
+
+        if (items.length === 0) {
+          return {
+            text: 'Error: Receipt card requires items. Usage: /card receipt "Title" "Item1:$10,Item2:$20" --total "$30"',
+          };
+        }
+
+        const bubble = createReceiptCard({ title, items, total, footer });
+        return buildLineFlexReply(
+          `${title}: ${items.map((item) => `${item.name} ${item.value}`).join(", ")}`,
+          bubble,
+        );
+      }
+
+      case "confirm": {
+        const [question = "Confirm?"] = args;
+        const yesStr = flags.yes || "Yes|yes";
+        const noStr = flags.no || "No|no";
+
+        const [yesLabel, yesData] = splitCardPair(yesStr);
+        const [noLabel, noData] = splitCardPair(noStr);
+
+        return buildLineReply({
+          templateMessage: {
+            type: "confirm",
+            text: question,
+            confirmLabel: yesLabel || "Yes",
+            confirmData: yesData || "yes",
+            cancelLabel: noLabel || "No",
+            cancelData: noData || "no",
+            altText: question,
+          },
+        });
+      }
+
+      case "buttons": {
+        const [title = "Menu", text = "Choose an option"] = args;
+        const actions = parseActions(flags.actions);
+        if (actions.length === 0) {
+          return { text: 'Error: Buttons card requires --actions "Label1|data1,Label2|data2"' };
+        }
+
+        return buildLineReply({
+          templateMessage: {
+            type: "buttons",
+            title,
+            text,
+            thumbnailImageUrl: flags.url || flags.image,
+            actions,
+          },
+        });
+      }
+
+      default:
+        return {
+          text: `Unknown card type: "${type}". Available types: info, image, action, list, receipt, confirm, buttons`,
+        };
+    }
+  } catch (err) {
+    return { text: `Error creating card: ${String(err)}` };
+  }
 }

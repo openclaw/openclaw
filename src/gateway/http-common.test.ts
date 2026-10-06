@@ -8,16 +8,18 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
   readJsonBodyOrError,
+  retainGatewayHttpResponseWork,
   sendGatewayAuthFailure,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
   sendRateLimited,
-  sendUnauthorized,
   setDefaultSecurityHeaders,
   setSseHeaders,
   watchClientDisconnect,
@@ -46,14 +48,6 @@ function expectHeaderNotSet(setHeader: ReturnType<typeof vi.fn>, name: string): 
   expect(headerNames(setHeader)).not.toContain(name);
 }
 
-function mockCallRecord(mock: ReturnType<typeof vi.fn>, index: number): unknown[] {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  return call;
-}
-
 function expectUnauthorizedPayload(res: ServerResponse, end: ReturnType<typeof vi.fn>): void {
   expect(res.statusCode).toBe(401);
   expect(end).toHaveBeenCalledWith(
@@ -62,31 +56,22 @@ function expectUnauthorizedPayload(res: ServerResponse, end: ReturnType<typeof v
 }
 
 describe("setDefaultSecurityHeaders", () => {
-  it("sets X-Content-Type-Options", () => {
+  it("sets the baseline security headers without enabling HSTS by default", () => {
     const { res, setHeader } = makeMockHttpResponse();
     setDefaultSecurityHeaders(res);
     expect(setHeader).toHaveBeenCalledWith("X-Content-Type-Options", "nosniff");
-  });
-
-  it("sets Referrer-Policy", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    setDefaultSecurityHeaders(res);
     expect(setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
-  });
-
-  it("sets Permissions-Policy that allows microphone for same-origin", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    setDefaultSecurityHeaders(res);
     expect(setHeader).toHaveBeenCalledWith(
       "Permissions-Policy",
       "camera=(), microphone=(self), geolocation=()",
     );
+    expectHeaderNotSet(setHeader, "Strict-Transport-Security");
   });
 
-  it("sets Strict-Transport-Security when provided", () => {
+  it("trims Strict-Transport-Security when provided", () => {
     const { res, setHeader } = makeMockHttpResponse();
     setDefaultSecurityHeaders(res, {
-      strictTransportSecurity: "max-age=63072000; includeSubDomains; preload",
+      strictTransportSecurity: "  max-age=63072000; includeSubDomains; preload  ",
     });
     expect(setHeader).toHaveBeenCalledWith(
       "Strict-Transport-Security",
@@ -94,21 +79,9 @@ describe("setDefaultSecurityHeaders", () => {
     );
   });
 
-  it("does not set Strict-Transport-Security when not provided", () => {
+  it("does not set Strict-Transport-Security for a blank string", () => {
     const { res, setHeader } = makeMockHttpResponse();
-    setDefaultSecurityHeaders(res);
-    expectHeaderNotSet(setHeader, "Strict-Transport-Security");
-  });
-
-  it("does not set Strict-Transport-Security for empty string", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    setDefaultSecurityHeaders(res, { strictTransportSecurity: "" });
-    expectHeaderNotSet(setHeader, "Strict-Transport-Security");
-  });
-
-  it("does not set Strict-Transport-Security when opts is omitted", () => {
-    const { res, setHeader } = makeMockHttpResponse();
-    setDefaultSecurityHeaders(res, undefined);
+    setDefaultSecurityHeaders(res, { strictTransportSecurity: " \t " });
     expectHeaderNotSet(setHeader, "Strict-Transport-Security");
   });
 });
@@ -153,14 +126,6 @@ describe("sendMethodNotAllowed", () => {
     const { res, setHeader } = makeMockHttpResponse();
     sendMethodNotAllowed(res, "GET, POST");
     expect(setHeader).toHaveBeenCalledWith("Allow", "GET, POST");
-  });
-});
-
-describe("sendUnauthorized", () => {
-  it("responds with 401 and a structured unauthorized payload", () => {
-    const { res, end } = makeMockHttpResponse();
-    sendUnauthorized(res);
-    expectUnauthorizedPayload(res, end);
   });
 });
 
@@ -351,6 +316,44 @@ describe("setSseHeaders", () => {
   });
 });
 
+describe("HTTP response root ownership", () => {
+  it("does not retain a response that disconnected during input preparation", async () => {
+    const before = getActiveGatewayRootWorkCount();
+    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+    let release: (() => void) | undefined;
+    try {
+      await runWithGatewayRootWorkAdmissionForTest(async () => {
+        res.destroy();
+        expect(res.destroyed).toBe(true);
+        release = retainGatewayHttpResponseWork(res);
+      });
+      expect(getActiveGatewayRootWorkCount()).toBe(before);
+    } finally {
+      release?.();
+    }
+  });
+
+  it("retains an ended response until its buffered final write finishes", async () => {
+    const before = getActiveGatewayRootWorkCount();
+    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+    let release: (() => void) | undefined;
+    try {
+      await runWithGatewayRootWorkAdmissionForTest(async () => {
+        res.end("final reply");
+        expect(res.writableEnded).toBe(true);
+        expect(res.writableFinished).toBe(false);
+        release = retainGatewayHttpResponseWork(res);
+      });
+      expect(getActiveGatewayRootWorkCount()).toBe(before + 1);
+      res.emit("finish");
+      expect(getActiveGatewayRootWorkCount()).toBe(before);
+    } finally {
+      release?.();
+      res.destroy();
+    }
+  });
+});
+
 describe("watchClientDisconnect", () => {
   it("returns a no-op cleanup when no sockets are available", () => {
     const { req, res } = makeMockHttpReqRes(null, null);
@@ -419,6 +422,21 @@ describe("watchClientDisconnect", () => {
 
     cleanup();
     res.emit("close");
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("aborts when the response closes before the socket close is observable", () => {
+    const socket = new EventEmitter();
+    const { req, res } = makeMockHttpReqRes(socket, socket);
+    const controller = new AbortController();
+    const onDisconnect = vi.fn();
+    watchClientDisconnect(req, res, controller, onDisconnect);
+
+    res.emit("close");
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(socket.listenerCount("close")).toBe(0);
     expect(res.listenerCount("error")).toBe(0);
   });
 
@@ -499,29 +517,40 @@ describe("watchClientDisconnect", () => {
     expect(onSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("registers handlers on distinct request and response sockets", () => {
+  it("releases both socket watchers after one disconnect and notifies once", () => {
     const reqSocket = new EventEmitter();
     const resSocket = new EventEmitter();
-    const reqOn = vi.spyOn(reqSocket, "on");
-    const resOn = vi.spyOn(resSocket, "on");
     const { req, res } = makeMockHttpReqRes(reqSocket, resSocket);
     const controller = new AbortController();
-    watchClientDisconnect(req, res, controller);
-    const reqOnCall = mockCallRecord(reqOn, 0);
-    const resOnCall = mockCallRecord(resOn, 0);
-    expect(reqOnCall[0]).toBe("close");
-    expect(typeof reqOnCall[1]).toBe("function");
-    expect(resOnCall[0]).toBe("close");
-    expect(typeof resOnCall[1]).toBe("function");
+    const onDisconnect = vi.fn();
+    watchClientDisconnect(req, res, controller, onDisconnect);
+    expect(reqSocket.listenerCount("close")).toBe(1);
+    expect(resSocket.listenerCount("close")).toBe(1);
+    reqSocket.emit("close");
+    expect(controller.signal.aborted).toBe(true);
+    expect(reqSocket.listenerCount("close")).toBe(0);
+    expect(resSocket.listenerCount("close")).toBe(0);
+    resSocket.emit("close");
+    expect(onDisconnect).toHaveBeenCalledOnce();
   });
 
-  it("cleanup detaches the close listener from each socket", () => {
-    const socket = new EventEmitter();
-    const { req, res } = makeMockHttpReqRes(socket, null);
-    const controller = new AbortController();
-    const cleanup = watchClientDisconnect(req, res, controller);
-    expect(socket.listenerCount("close")).toBe(1);
-    cleanup();
-    expect(socket.listenerCount("close")).toBe(0);
-  });
+  it.each(["cleanup", "response completion"])(
+    "keeps completed work un-aborted after %s",
+    (phase) => {
+      const socket = new EventEmitter();
+      const { req, res } = makeMockHttpReqRes(socket, null);
+      const controller = new AbortController();
+      const cleanup = watchClientDisconnect(req, res, controller);
+      expect(socket.listenerCount("close")).toBe(1);
+      if (phase === "cleanup") {
+        cleanup();
+      } else {
+        res.emit("finish");
+      }
+      expect(socket.listenerCount("close")).toBe(0);
+      socket.emit("close");
+      expect(controller.signal.aborted).toBe(false);
+      res.emit("close");
+    },
+  );
 });

@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createQaGatewayChild,
   startQaMockOpenAiServer,
@@ -20,54 +19,13 @@ import {
   createChildEnv,
   startHttpFixture,
   stopChild,
+  waitForMcpFixtureGate,
   type GatewayHandle,
   type HttpFixture,
 } from "./gateway-node-mcp.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const GATE_WAIT_TIMEOUT_MS = 30_000;
 const APP_TOOL_NAME = "streamableHttp__parity_app";
 const POST_REVOCATION_MARKER = "post-revocation";
-
-async function waitForFile(filePath: string): Promise<void> {
-  try {
-    await fs.access(filePath);
-    return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      watcher.close();
-      reject(new Error(`timed out waiting for fixture gate: ${path.basename(filePath)}`));
-    }, GATE_WAIT_TIMEOUT_MS);
-    timeout.unref();
-    const finish = (error?: unknown) => {
-      clearTimeout(timeout);
-      watcher.close();
-      error ? reject(error) : resolve();
-    };
-    const inspect = () => {
-      void fs.access(filePath).then(
-        () => finish(),
-        (error: NodeJS.ErrnoException) => {
-          if (error.code !== "ENOENT") {
-            finish(error);
-          }
-        },
-      );
-    };
-    const watcher = watch(path.dirname(filePath), (_event, filename) => {
-      if (!filename || filename.toString() === path.basename(filePath)) {
-        inspect();
-      }
-    });
-    watcher.once("error", finish);
-    inspect();
-  });
-}
 
 function requireMcpAppViewId(messages: unknown[]): string {
   for (const message of messages) {
@@ -160,7 +118,9 @@ describe("Gateway MCP App board grant revalidation", () => {
   it(
     "rejects a standalone tool call revoked during a real catalog refresh",
     { timeout: TEST_TIMEOUT_MS },
-    async () => {
+    async ({ signal, onTestFinished }) => {
+      // Finish hooks run in reverse order: join children before deleting their paths.
+      const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
       const repoRoot = process.cwd();
       const taskRoot = tempDirs.make("openclaw-mcp-app-grant-revalidation-");
       const fixtureRoot = path.join(taskRoot, "fixture");
@@ -177,12 +137,29 @@ describe("Gateway MCP App board grant revalidation", () => {
         "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs",
       );
       let fixture: HttpFixture | undefined;
+      let startingFixture: Promise<HttpFixture> | undefined;
       let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
       const gatewayOwner = createQaGatewayChild();
       let gateway: GatewayHandle | undefined;
       let pendingCall: Promise<Response> | undefined;
       let proofError: unknown;
       const cleanupErrors: unknown[] = [];
+      let cleanupPromise: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPromise ??= (async () => {
+          const acquiredFixture = await startingFixture?.catch(() => undefined);
+          await fs.writeFile(releasePath, "released\n").catch(() => {});
+          await pendingCall?.catch(() => {});
+          const stopped = await Promise.allSettled([
+            stopQaGatewayFixture(gatewayOwner),
+            ...(acquiredFixture ? [stopChild(acquiredFixture)] : []),
+            ...(mock ? [Promise.resolve(mock.stop())] : []),
+          ]);
+          cleanupErrors.push(
+            ...stopped.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+          );
+        })());
+      onTestFinished(cleanup);
 
       try {
         await Promise.all(
@@ -190,8 +167,9 @@ describe("Gateway MCP App board grant revalidation", () => {
             fs.mkdir(directory, { recursive: true }),
           ),
         );
-        fixture = await startHttpFixture({
+        startingFixture = startHttpFixture({
           fixturePath,
+          signal,
           labelPrefix: "session",
           env: createChildEnv({
             home: fixtureHome,
@@ -203,6 +181,7 @@ describe("Gateway MCP App board grant revalidation", () => {
             },
           }),
         });
+        fixture = await startingFixture;
         mock = await startQaMockOpenAiServer();
         const activeFixture = fixture;
         gateway = await gatewayOwner.start({
@@ -298,7 +277,7 @@ describe("Gateway MCP App board grant revalidation", () => {
         expect(notificationCall.status).toBe(200);
 
         pendingCall = postStandalone({ gateway, ticket, marker: POST_REVOCATION_MARKER });
-        await waitForFile(startedPath);
+        await waitForMcpFixtureGate(startedPath, signal);
         await gateway.call("board.update", {
           sessionKey,
           ops: [{ kind: "widget_remove", name: widget.name }],
@@ -328,16 +307,7 @@ describe("Gateway MCP App board grant revalidation", () => {
       } catch (error) {
         proofError = error;
       } finally {
-        await fs.writeFile(releasePath, "released\n").catch(() => {});
-        await pendingCall?.catch(() => {});
-        const stopped = await Promise.allSettled([
-          stopQaGatewayFixture(gatewayOwner),
-          ...(fixture ? [stopChild(fixture)] : []),
-          ...(mock ? [Promise.resolve(mock.stop())] : []),
-        ]);
-        cleanupErrors.push(
-          ...stopped.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-        );
+        await cleanup();
       }
 
       const failures = proofError === undefined ? cleanupErrors : [proofError, ...cleanupErrors];

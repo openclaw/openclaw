@@ -1,18 +1,18 @@
 package ai.openclaw.app.voice
 
-import kotlinx.serialization.json.Json
+import ai.openclaw.app.node.parseJsonParamsObject
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 
-private val directiveJson = Json { ignoreUnknownKeys = true }
-
-/**
- * Optional first-line JSON overrides for one Talk request.
- */
+@Serializable
 data class TalkDirective(
   val voiceId: String? = null,
   val modelId: String? = null,
+  val outputFormat: String? = null,
   val speed: Double? = null,
   val rateWpm: Int? = null,
   val stability: Double? = null,
@@ -22,9 +22,8 @@ data class TalkDirective(
   val seed: Long? = null,
   val normalize: String? = null,
   val language: String? = null,
-  val outputFormat: String? = null,
   val latencyTier: Int? = null,
-  val once: Boolean? = null,
+  @Transient val once: Boolean? = null,
 )
 
 /**
@@ -41,8 +40,6 @@ object TalkDirectiveParser {
   fun parse(text: String): TalkDirectiveParseResult {
     val normalized = text.replace("\r\n", "\n")
     val lines = normalized.split("\n").toMutableList()
-    if (lines.isEmpty()) return TalkDirectiveParseResult(null, text, emptyList())
-
     val firstNonEmpty = lines.indexOfFirst { it.trim().isNotEmpty() }
     if (firstNonEmpty == -1) return TalkDirectiveParseResult(null, text, emptyList())
 
@@ -52,84 +49,41 @@ object TalkDirectiveParser {
       return TalkDirectiveParseResult(null, text, emptyList())
     }
 
-    val obj = parseJsonObject(head) ?: return TalkDirectiveParseResult(null, text, emptyList())
+    val obj = parseJsonParamsObject(head) ?: return TalkDirectiveParseResult(null, text, emptyList())
+    val knownKeys = mutableSetOf<String>()
 
-    val speakerBoost =
-      boolValue(obj, listOf("speaker_boost", "speakerBoost"))
-        ?: boolValue(obj, listOf("no_speaker_boost", "noSpeakerBoost"))?.not()
+    fun <T : Any> readAlias(
+      vararg keys: String,
+      convert: (JsonElement?) -> T?,
+    ): T? {
+      // Parsing and unknown-key reporting share the same case-insensitive aliases.
+      knownKeys += keys.map { it.lowercase() }
+      return keys.firstNotNullOfOrNull { convert(obj.valueForKey(it)) }
+    }
+
+    val speakerBoost = readAlias("speaker_boost", "speakerBoost") { it.asBooleanOrNull() }
+    val noSpeakerBoost = readAlias("no_speaker_boost", "noSpeakerBoost") { it.asBooleanOrNull() }
 
     val directive =
       TalkDirective(
-        voiceId = stringValue(obj, listOf("voice", "voice_id", "voiceId")),
-        modelId = stringValue(obj, listOf("model", "model_id", "modelId")),
-        speed = doubleValue(obj, listOf("speed")),
-        rateWpm = intValue(obj, listOf("rate", "wpm")),
-        stability = doubleValue(obj, listOf("stability")),
-        similarity = doubleValue(obj, listOf("similarity", "similarity_boost", "similarityBoost")),
-        style = doubleValue(obj, listOf("style")),
-        speakerBoost = speakerBoost,
-        seed = longValue(obj, listOf("seed")),
-        normalize = stringValue(obj, listOf("normalize", "apply_text_normalization")),
-        language = stringValue(obj, listOf("lang", "language_code", "language")),
-        outputFormat = stringValue(obj, listOf("output_format", "format")),
-        latencyTier = intValue(obj, listOf("latency", "latency_tier", "latencyTier")),
-        once = boolValue(obj, listOf("once")),
+        voiceId = readAlias("voice", "voice_id", "voiceId") { it.asStringOrNull() },
+        modelId = readAlias("model", "model_id", "modelId") { it.asStringOrNull() },
+        speed = readAlias("speed") { (it as? JsonPrimitive)?.doubleOrNull },
+        rateWpm = readAlias("rate", "wpm") { (it as? JsonPrimitive)?.content?.toIntOrNull() },
+        stability = readAlias("stability") { (it as? JsonPrimitive)?.doubleOrNull },
+        similarity = readAlias("similarity", "similarity_boost", "similarityBoost") { (it as? JsonPrimitive)?.doubleOrNull },
+        style = readAlias("style") { (it as? JsonPrimitive)?.doubleOrNull },
+        speakerBoost = speakerBoost ?: noSpeakerBoost?.not(),
+        seed = readAlias("seed") { (it as? JsonPrimitive)?.content?.toLongOrNull() },
+        normalize = readAlias("normalize", "apply_text_normalization") { it.asStringOrNull() },
+        language = readAlias("lang", "language_code", "language") { it.asStringOrNull() },
+        outputFormat = readAlias("output_format", "format") { it.asStringOrNull() },
+        latencyTier = readAlias("latency", "latency_tier", "latencyTier") { (it as? JsonPrimitive)?.content?.toIntOrNull() },
+        once = readAlias("once") { it.asBooleanOrNull() },
       )
 
-    val hasDirective =
-      listOf(
-        directive.voiceId,
-        directive.modelId,
-        directive.speed,
-        directive.rateWpm,
-        directive.stability,
-        directive.similarity,
-        directive.style,
-        directive.speakerBoost,
-        directive.seed,
-        directive.normalize,
-        directive.language,
-        directive.outputFormat,
-        directive.latencyTier,
-        directive.once,
-      ).any { it != null }
+    if (directive == TalkDirective()) return TalkDirectiveParseResult(null, text, emptyList())
 
-    if (!hasDirective) return TalkDirectiveParseResult(null, text, emptyList())
-
-    // Keep alias matching case-insensitive so dictated JSON can use snake/camel variants.
-    val knownKeys =
-      setOf(
-        "voice",
-        "voice_id",
-        "voiceid",
-        "model",
-        "model_id",
-        "modelid",
-        "speed",
-        "rate",
-        "wpm",
-        "stability",
-        "similarity",
-        "similarity_boost",
-        "similarityboost",
-        "style",
-        "speaker_boost",
-        "speakerboost",
-        "no_speaker_boost",
-        "nospeakerboost",
-        "seed",
-        "normalize",
-        "apply_text_normalization",
-        "lang",
-        "language_code",
-        "language",
-        "output_format",
-        "format",
-        "latency",
-        "latency_tier",
-        "latencytier",
-        "once",
-      )
     val unknownKeys = obj.keys.filter { !knownKeys.contains(it.lowercase()) }.sorted()
 
     lines.removeAt(firstNonEmpty)
@@ -142,87 +96,15 @@ object TalkDirectiveParser {
     return TalkDirectiveParseResult(directive, lines.joinToString("\n"), unknownKeys)
   }
 
-  private fun parseJsonObject(line: String): JsonObject? =
-    try {
-      directiveJson.parseToJsonElement(line) as? JsonObject
-    } catch (_: Throwable) {
-      null
-    }
-
-  private fun stringValue(
-    obj: JsonObject,
-    keys: List<String>,
-  ): String? {
-    for (key in keys) {
-      val value = obj.valueForKey(key).asStringOrNull()?.trim()
-      if (!value.isNullOrEmpty()) return value
-    }
-    return null
-  }
-
-  private fun doubleValue(
-    obj: JsonObject,
-    keys: List<String>,
-  ): Double? {
-    for (key in keys) {
-      val value = obj.valueForKey(key).asDoubleOrNull()
-      if (value != null) return value
-    }
-    return null
-  }
-
-  private fun intValue(
-    obj: JsonObject,
-    keys: List<String>,
-  ): Int? {
-    for (key in keys) {
-      val value = obj.valueForKey(key).asIntOrNull()
-      if (value != null) return value
-    }
-    return null
-  }
-
-  private fun longValue(
-    obj: JsonObject,
-    keys: List<String>,
-  ): Long? {
-    for (key in keys) {
-      val value = obj.valueForKey(key).asLongOrNull()
-      if (value != null) return value
-    }
-    return null
-  }
-
-  private fun boolValue(
-    obj: JsonObject,
-    keys: List<String>,
-  ): Boolean? {
-    for (key in keys) {
-      val value = obj.valueForKey(key).asBooleanOrNull()
-      if (value != null) return value
-    }
-    return null
-  }
-
   private fun JsonObject.valueForKey(key: String): JsonElement? = this[key] ?: entries.firstOrNull { it.key.equals(key, ignoreCase = true) }?.value
 }
 
-private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
-
-private fun JsonElement?.asDoubleOrNull(): Double? {
-  val primitive = this as? JsonPrimitive ?: return null
-  return primitive.content.toDoubleOrNull()
-}
-
-private fun JsonElement?.asIntOrNull(): Int? {
-  val primitive = this as? JsonPrimitive ?: return null
-  return primitive.content.toIntOrNull()
-}
-
-private fun JsonElement?.asLongOrNull(): Long? {
-  val primitive = this as? JsonPrimitive ?: return null
-  return primitive.content.toLongOrNull()
-}
+private fun JsonElement?.asStringOrNull(): String? =
+  (this as? JsonPrimitive)
+    ?.takeIf { it.isString }
+    ?.content
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? {
   val primitive = this as? JsonPrimitive ?: return null

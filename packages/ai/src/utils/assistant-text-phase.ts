@@ -1,8 +1,6 @@
-type AssistantTextPhaseBlock = {
-  type: "text";
-  text: string;
-  textSignature?: string;
-};
+import { randomUUID } from "node:crypto";
+import type { TextContent as AssistantTextPhaseBlock } from "../types.js";
+import { encodeTextSignatureV1 } from "./text-signature.js";
 
 export type PendingCommentaryTags = Map<AssistantTextPhaseBlock, string>;
 
@@ -16,15 +14,11 @@ function isAssistantTextPhaseBlock(block: unknown): block is AssistantTextPhaseB
   return record.type === "text" && typeof record.text === "string";
 }
 
-function encodeAssistantTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
-  return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
-}
-
 function tagUnphasedText(
   content: ReadonlyArray<unknown>,
   phase: "commentary" | "final_answer",
-  idPrefix: string,
 ): PendingCommentaryTags {
+  const idPrefix = phase === "commentary" ? "commentary" : "final-answer";
   const textBlocks = content.filter(isAssistantTextPhaseBlock);
   let phaseIndex = textBlocks.filter((block) => block.textSignature !== undefined).length;
   const tagged: PendingCommentaryTags = new Map();
@@ -32,7 +26,14 @@ function tagUnphasedText(
     if (block.text.trim().length === 0 || block.textSignature !== undefined) {
       continue;
     }
-    const signature = encodeAssistantTextSignatureV1(`${idPrefix}-${phaseIndex}`, phase);
+    // Responses carry no run-scoped identity, so a response-local index aliases
+    // segments across responses (every response's first commentary becomes
+    // `<prefix>-0`) and collapses distinct stream-reconciliation rows. Entropy
+    // keeps each generated identity unique per segment.
+    const signature = encodeTextSignatureV1(
+      `${idPrefix}-${phaseIndex}-${randomUUID().replaceAll("-", "").slice(0, 24)}`,
+      phase,
+    );
     block.textSignature = signature;
     tagged.set(block, signature);
     phaseIndex += 1;
@@ -42,7 +43,7 @@ function tagUnphasedText(
 
 /** Tags unphased narration before a tool-call event becomes consumer-visible. */
 export function tagPendingCommentaryText(content: ReadonlyArray<unknown>): PendingCommentaryTags {
-  return tagUnphasedText(content, "commentary", "commentary");
+  return tagUnphasedText(content, "commentary");
 }
 
 /** Records the confirmed final-answer boundary after reasoning resumes. */
@@ -67,12 +68,10 @@ export function tagInterruptedTextPhases(
   tagUnphasedText(
     content.slice(0, finalAnswerIndex).filter((block) => !preservedVisibleText.has(block)),
     "commentary",
-    "commentary",
   );
   tagUnphasedText(
     content.filter((block, index) => index >= finalAnswerIndex || preservedVisibleText.has(block)),
     "final_answer",
-    "final-answer",
   );
 }
 
@@ -82,7 +81,7 @@ export function tagUnresolvedTextAsCommentary(message: {
   openclawDelivery?: { textPhaseRequiresTerminal?: true };
 }): void {
   if (message.openclawDelivery?.textPhaseRequiresTerminal) {
-    tagUnphasedText(message.content, "commentary", "commentary");
+    tagUnphasedText(message.content, "commentary");
   }
 }
 

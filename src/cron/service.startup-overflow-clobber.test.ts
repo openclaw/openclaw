@@ -1,10 +1,11 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { start } from "./service/ops-lifecycle.js";
 import { status } from "./service/ops-read.js";
-import { createCronServiceState } from "./service/state.js";
+import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { runMissedJobs } from "./service/timer.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
@@ -16,51 +17,95 @@ const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   baseTimeIso: "2025-12-13T17:00:00.000Z",
 });
 
+function makeState(storePath: string, overrides: Partial<CronServiceDeps>) {
+  return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
+    storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    nowMs: () => Date.now(),
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    ...overrides,
+  });
+}
+
 describe("CronService startup catch-up repair scoping", () => {
-  function createDateBoundaryEveryJob(id: string, nextRunAtMs: number): CronJob {
+  function createJob(id: string, nextRunAtMs: number, schedule: CronJob["schedule"]): CronJob {
     return {
       id,
       name: `job-${id}`,
       enabled: true,
       createdAtMs: nextRunAtMs - 60_000,
       updatedAtMs: nextRunAtMs - 60_000,
-      schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 },
+      schedule,
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: `tick-${id}` },
       state: { nextRunAtMs },
     };
   }
+  const createHourlyCronJob = (id: string, next: number) =>
+    createJob(id, next, { kind: "cron", expr: "0 * * * *", tz: "UTC" });
+  const createDailyCronJob = (id: string, next: number) =>
+    createJob(id, next, { kind: "cron", expr: "0 9 * * *", tz: "UTC" });
+  const createDateBoundaryEveryJob = (id: string, next: number) =>
+    createJob(id, next, { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 });
 
-  function createHourlyCronJob(id: string, nextRunAtMs: number): CronJob {
-    return {
-      id,
-      name: `job-${id}`,
-      enabled: true,
-      createdAtMs: nextRunAtMs - 60_000,
-      updatedAtMs: nextRunAtMs - 60_000,
-      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: `tick-${id}` },
-      state: { nextRunAtMs },
+  it("persists skipped recurring slots before the first tick even with an empty startup plan", async () => {
+    const store = await makeStorePath();
+    const now = Date.now();
+    const dueAt = now - 60_000;
+    const tomorrow = Date.parse("2025-12-14T09:00:00.000Z");
+    const daily = createDailyCronJob("missed-daily", dueAt);
+    daily.state.lastRunAtMs = Date.parse("2025-12-12T09:00:00.000Z");
+    const every: CronJob = {
+      ...createHourlyCronJob("missed-every", dueAt),
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: dueAt },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "interval reminder" },
     };
-  }
+    const jobs = [
+      daily,
+      every,
+      { ...daily, id: "history-only-miss", state: { ...daily.state, nextRunAtMs: tomorrow } },
+      createDailyCronJob("future-daily", tomorrow),
+      { ...every, id: "future-every", state: { nextRunAtMs: now + 30_000 } },
+    ];
+    await saveCronStore(store.storePath, { version: 1, jobs });
+    const before = await loadCronStore(store.storePath);
+    const enqueueSystemEvent = vi.fn();
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = makeState(store.storePath, {
+      cronConfig: { skipMissedJobs: true },
+      nowMs: () => now,
+      enqueueSystemEvent,
+      runIsolatedAgentJob,
+    });
 
-  function createDailyCronJob(id: string, nextRunAtMs: number): CronJob {
-    return {
-      id,
-      name: `job-${id}`,
-      enabled: true,
-      createdAtMs: nextRunAtMs - 60_000,
-      updatedAtMs: nextRunAtMs - 60_000,
-      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: `tick-${id}` },
-      state: { nextRunAtMs },
-    };
-  }
+    await runMissedJobs(state, { deferAgentWork: true });
+
+    const persisted = await loadCronStore(store.storePath);
+    for (const job of persisted.jobs) {
+      expect(job.state.nextRunAtMs).toBeGreaterThan(now);
+      expect(job.state.lastRunAtMs).toBe(
+        before.jobs.find((original) => original.id === job.id)?.state.lastRunAtMs,
+      );
+      if (job.id.startsWith("future-")) {
+        expect(job).toEqual(before.jobs.find((original) => original.id === job.id));
+      }
+    }
+    expect(persisted.jobs.find((job) => job.id === daily.id)?.state.nextRunAtMs).toBe(tomorrow);
+    expect(persisted.jobs.find((job) => job.id === every.id)?.state.nextRunAtMs).toBe(now + 60_000);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+
+    // An empty startup plan must still commit, since ticks reload durable schedules.
+    await onTimer(state);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+  });
 
   it("keeps the overflow daily-cron catch-up deferral across a second restart", async () => {
     const store = await makeStorePath();
@@ -81,14 +126,8 @@ describe("CronService startup catch-up repair scoping", () => {
     });
 
     const createState = () =>
-      createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
+      makeState(store.storePath, {
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
     const state = createState();
 
@@ -104,7 +143,7 @@ describe("CronService startup catch-up repair scoping", () => {
     expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
 
     if (state.timer) {
-      clearTimeout(state.timer);
+      state.timer.cancel();
     }
     state.stopped = true;
     now = startNow + 3_000;
@@ -125,41 +164,9 @@ describe("CronService startup catch-up repair scoping", () => {
     expect(completed?.state.startupCatchupAtMs).toBeUndefined();
 
     if (restartedState.timer) {
-      clearTimeout(restartedState.timer);
+      restartedState.timer.cancel();
     }
     restartedState.stopped = true;
-    await store.cleanup();
-  });
-
-  it("still repairs a stale future cron slot on start() when no jobs were deferred", async () => {
-    const store = await makeStorePath();
-    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
-    const staleFutureSlot = Date.parse("2025-12-13T18:00:00.000Z");
-    const naturalSlot = Date.parse("2025-12-14T09:00:00.000Z");
-
-    await saveCronStore(store.storePath, {
-      version: 1,
-      jobs: [createDailyCronJob("daily-stale-future", staleFutureSlot)],
-    });
-
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => startNow,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-
-    await start(state);
-
-    const repaired = state.store?.jobs.find((job) => job.id === "daily-stale-future");
-
-    expect(repaired?.state.nextRunAtMs).toBe(naturalSlot);
-    expect(repaired?.state.nextRunAtMs).not.toBe(staleFutureSlot);
-
-    state.stopped = true;
     await store.cleanup();
   });
 
@@ -213,14 +220,10 @@ describe("CronService startup catch-up repair scoping", () => {
         }
       },
     );
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
+    const state = makeState(store.storePath, {
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeat,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       maxMissedJobsPerRestart: 1,
       missedJobStaggerMs: 5_000,
     });

@@ -77,7 +77,7 @@ describe("workspace setup-only SQLite safety", () => {
     await expect(
       fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
     ).resolves.toBeUndefined();
-    expect(readWorkspaceStateSnapshot(tempDir).setup.setupCompletedAt).toBeUndefined();
+    expect((await readWorkspaceStateSnapshot(tempDir)).setup.setupCompletedAt).toBeUndefined();
   });
 
   it("clears expired state when only one generated bootstrap file survives", async () => {
@@ -103,12 +103,12 @@ describe("workspace setup-only SQLite safety", () => {
     await expect(
       fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
     ).resolves.toBeUndefined();
-    expect(readWorkspaceStateSnapshot(tempDir).setup.setupCompletedAt).toBeUndefined();
+    expect((await readWorkspaceStateSnapshot(tempDir)).setup.setupCompletedAt).toBeUndefined();
   });
 
   it("refuses an empty recent setup-only workspace when bootstrap creation is disabled", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    mergeWorkspaceSetupState(tempDir, {
+    await mergeWorkspaceSetupState(tempDir, {
       bootstrapSeededAt: new Date().toISOString(),
     });
 
@@ -124,7 +124,7 @@ describe("workspace setup-only SQLite safety", () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
     await fs.writeFile(identityPath, "# Existing identity\n");
-    mergeWorkspaceSetupState(tempDir, {
+    await mergeWorkspaceSetupState(tempDir, {
       setupCompletedAt: "2026-07-15T10:01:00.000Z",
     });
 
@@ -137,7 +137,7 @@ describe("workspace setup-only SQLite safety", () => {
   it("does not mistake an old generated template for setup-only customization", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "old generated agents\n");
-    mergeWorkspaceSetupState(tempDir, {
+    await mergeWorkspaceSetupState(tempDir, {
       bootstrapSeededAt: "2026-07-15T10:00:00.000Z",
       setupCompletedAt: "2026-07-15T10:01:00.000Z",
     });
@@ -156,7 +156,7 @@ describe("workspace setup-only SQLite safety", () => {
 
   it("refuses to reseed a missing workspace with recent setup-only state", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
-    mergeWorkspaceSetupState(tempDir, {
+    await mergeWorkspaceSetupState(tempDir, {
       bootstrapSeededAt: new Date().toISOString(),
     });
     await fs.rm(tempDir, { recursive: true, force: true });

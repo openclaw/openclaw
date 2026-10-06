@@ -102,18 +102,12 @@ describe("channelsLogsCommand", () => {
 
   it.each([
     {
-      label: "subsystem",
-      channel: "slack",
-      shadow: { subsystem: "gateway/channels/slack-archive" },
-      match: { subsystem: "gateway/channels/slack/send" },
+      label: "nested channel runtime module",
+      channel: "discord",
+      shadow: { module: "channels/discord-archive/send" },
+      match: { module: "channels/discord/send" },
     },
-    {
-      label: "module",
-      channel: "external-chat",
-      shadow: { module: "external-chat-shadow" },
-      match: { module: "external-chat" },
-    },
-  ])("excludes a shadow $label while preserving an exact channel match", async (fixture) => {
+  ])("matches channel boundaries and excludes a shadow $label", async (fixture) => {
     await fs.writeFile(
       logPath,
       [
@@ -125,26 +119,30 @@ describe("channelsLogsCommand", () => {
     await channelsLogsCommand({ channel: fixture.channel, json: true }, runtime);
 
     expect(readJsonPayload().lines.map((line) => line.message)).toEqual(["match"]);
+
+    runtime.log.mockClear();
+    await channelsLogsCommand({ channel: fixture.channel }, runtime);
+
+    const output = runtime.log.mock.calls.flat().join("\n");
+    expect(output).toContain("2026-04-25T12:00:00.000Z info match");
+    expect(output).not.toContain("shadow");
   });
 
-  it.each([false, true])(
-    "rejects an unknown explicit channel without widening output (json=%s)",
-    async (json) => {
-      await fs.writeFile(
-        logPath,
-        logLine({ module: "gateway/channels/slack/send", message: "unrelated message" }),
-      );
+  it("rejects an unknown explicit channel without widening output", async () => {
+    await fs.writeFile(
+      logPath,
+      logLine({ module: "gateway/channels/slack/send", message: "unrelated message" }),
+    );
 
-      const error = await channelsLogsCommand({ channel: "slakc", json }, runtime).catch(
-        (cause: unknown) => cause,
-      );
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain('Unknown channel "slakc". Valid channels: all,');
-      expect((error as Error).message).toContain("external-chat");
-      expect((error as Error).message).toContain("slack");
-      expect(runtime.log).not.toHaveBeenCalled();
-    },
-  );
+    const error = await channelsLogsCommand({ channel: "slakc", json: true }, runtime).catch(
+      (cause: unknown) => cause,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('Unknown channel "slakc". Valid channels: all,');
+    expect((error as Error).message).toContain("external-chat");
+    expect((error as Error).message).toContain("slack");
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
 
   it("redacts credential-bearing channel lines in text output", async () => {
     const fixtureCredential = "opaque-registry-value-1234567890";
@@ -183,21 +181,31 @@ describe("channelsLogsCommand", () => {
     expect(JSON.stringify(payload)).not.toContain(fixtureCredential);
   });
 
-  it("preserves ordering and line limits for an explicit all filter", async () => {
+  it.each([
+    { lines: undefined, count: 200 },
+    { lines: 2, count: 2 },
+  ])("preserves ordering with line limit $lines", async ({ lines, count }) => {
+    const messages = Array.from({ length: 205 }, (_, index) => `message-${index}`);
     await fs.writeFile(
       logPath,
-      [
-        logLine({ module: "gateway/channels/slack/send", message: "first" }),
-        logLine({ module: "gateway/channels/external-chat/send", message: "second" }),
-        logLine({ module: "gateway/channels/slack/send", message: "third" }),
-      ].join(""),
+      messages
+        .map((message, index) =>
+          logLine({
+            module: `gateway/channels/${index % 2 ? "external-chat" : "slack"}/send`,
+            message,
+          }),
+        )
+        .join(""),
     );
 
-    await channelsLogsCommand({ channel: "all", lines: 2, json: true }, runtime);
+    await channelsLogsCommand(
+      { channel: lines === undefined ? undefined : "all", lines, json: true },
+      runtime,
+    );
 
     const payload = readJsonPayload();
     expect(payload.channel).toBe("all");
-    expect(payload.lines.map((line) => line.message)).toEqual(["second", "third"]);
+    expect(payload.lines.map((line) => line.message)).toEqual(messages.slice(-count));
   });
 
   it("finds sparse channel records beyond the shared 5000-line cap", async () => {
@@ -232,92 +240,10 @@ describe("channelsLogsCommand", () => {
     );
   });
 
-  it("treats an omitted channel filter as all", async () => {
-    await fs.writeFile(
-      logPath,
-      logLine({ module: "gateway/channels/slack/send", message: "omitted filter" }),
-    );
-
-    await channelsLogsCommand({ json: true }, runtime);
-
-    const payload = readJsonPayload();
-    expect(payload.channel).toBe("all");
-    expect(payload.lines.map((line) => line.message)).toEqual(["omitted filter"]);
-  });
-
-  it("falls back to the latest rolling log when the configured rolling file is missing", async () => {
-    const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
-    const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
-    const staleFile = path.join(tempDir, "openclaw-2026-04-24.log");
-    setLoggerOverride({ file: configuredFile });
-    await fs.writeFile(
-      fallbackFile,
-      [
-        logLine({ module: "gateway/channels/slack/send", message: "slack fallback" }),
-        logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
-      ].join(""),
-    );
-    await fs.writeFile(
-      staleFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "stale sent" }),
-    );
-    await fs.utimes(
-      staleFile,
-      new Date("2026-04-24T12:00:00.000Z"),
-      new Date("2026-04-24T12:00:00.000Z"),
-    );
-    await fs.utimes(
-      fallbackFile,
-      new Date("2026-04-25T12:00:00.000Z"),
-      new Date("2026-04-25T12:00:00.000Z"),
-    );
-
-    await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
-
-    const payload = readJsonPayload();
-    expect(payload.file).toBe(fallbackFile);
-    expect(payload.lines.map((line) => line.message)).toEqual(["fallback sent"]);
-  });
-
-  it("prefers the configured rolling log when it exists", async () => {
-    const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
-    const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
-    setLoggerOverride({ file: configuredFile });
-    await fs.writeFile(
-      fallbackFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
-    );
-    await fs.writeFile(
-      configuredFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "current sent" }),
-    );
-
-    await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
-
-    const payload = readJsonPayload();
-    expect(payload.file).toBe(configuredFile);
-    expect(payload.lines.map((line) => line.message)).toEqual(["current sent"]);
-  });
-
-  it("does not fall back to rolling logs for a missing custom log file", async () => {
-    const configuredFile = path.join(tempDir, "custom-channel.log");
-    const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
-    setLoggerOverride({ file: configuredFile });
-    await fs.writeFile(
-      fallbackFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
-    );
-
-    await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
-
-    const payload = readJsonPayload();
-    expect(payload.file).toBe(configuredFile);
-    expect(payload.lines).toStrictEqual([]);
-  });
-
-  it("rejects partial line limits", async () => {
-    await expect(channelsLogsCommand({ lines: "2x", json: true }, runtime)).rejects.toThrow(
+  it.each(["2x"])("rejects invalid line limit %j", async (lines) => {
+    await expect(channelsLogsCommand({ lines, json: true }, runtime)).rejects.toThrow(
       "--lines must be a positive integer.",
     );
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 });

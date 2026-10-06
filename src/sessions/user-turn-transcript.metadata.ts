@@ -16,6 +16,10 @@ const REPLY_PREVIEW_TEXT_MAX_CHARS = 2000;
 const REPLY_PREVIEW_SENDER_MAX_CHARS = 200;
 const STEER_TARGET_RUN_ID_MAX_CHARS = 512;
 
+export function buildRunUserTurnIdempotencyKey(runId: string): string {
+  return `${runId}:user`;
+}
+
 export function normalizePersistedSteerTargetRunId(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
   return normalized && normalized.length <= STEER_TARGET_RUN_ID_MAX_CHARS ? normalized : undefined;
@@ -69,6 +73,10 @@ export function buildPersistedUserTurnMetadata(
     ...(senderName ? { senderName } : {}),
     ...(senderUsername ? { senderUsername } : {}),
     ...(senderIdentity && senderIdentity.id === senderId ? { senderIdentity } : {}),
+    ...(input.workContext ? { workContext: structuredClone(input.workContext) } : {}),
+    ...(input.mentions?.length
+      ? { humanMentions: input.mentions.map((mention) => ({ ...mention })) }
+      : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyPreviewText
       ? {
@@ -85,7 +93,7 @@ export function buildPersistedUserTurnMetadata(
           },
         }
       : {}),
-    ...(input.transport ? { transport: input.transport } : {}),
+    ...(input.transport ? { transport: structuredClone(input.transport) } : {}),
     ...(normalizedMedia.length > 0 ? { media: normalizedMedia } : {}),
     ...(input.mediaImageLayout
       ? {
@@ -126,17 +134,16 @@ export function rewritePersistedSteerTargetRunId(
  * Runtime hooks may rewrite roles and redact display/transport fields. Restore only
  * operational facts here; canonical admission preparation deliberately protects more.
  */
-export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
-  runtimeMessage: AgentMessage;
-  preparedMessage?: PersistedUserTurnMessage;
-}): AgentMessage {
+export function restorePreparedUserTurnOperationalMetaForRuntime<
+  TMessage extends AgentMessage,
+>(params: { runtimeMessage: TMessage; preparedMessage?: PersistedUserTurnMessage }): TMessage {
   if (!params.preparedMessage || params.runtimeMessage.role !== "user") {
     return params.runtimeMessage;
   }
   const preparedMeta = params.preparedMessage["__openclaw"];
   const senderIsOwner = preparedMeta?.senderIsOwner;
   const steerTargetRunId = normalizePersistedSteerTargetRunId(preparedMeta?.steerTargetRunId);
-  const nextMessage: AgentMessage & { display?: false; __openclaw?: Record<string, unknown> } = {
+  const nextMessage: TMessage & { display?: boolean; __openclaw?: Record<string, unknown> } = {
     ...params.runtimeMessage,
   };
   const provenance = normalizeInputProvenance(Reflect.get(params.preparedMessage, "provenance"));
@@ -157,6 +164,19 @@ export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
   }
   if (typeof senderIsOwner === "boolean") {
     runtimeMeta.senderIsOwner = senderIsOwner;
+  }
+  const contentUnchanged = isDeepStrictEqual(
+    params.runtimeMessage.content,
+    params.preparedMessage.content,
+  );
+  // A rewritten runtime input cannot retain an alternate copy of the original words.
+  if (!contentUnchanged) {
+    delete runtimeMeta.workContext;
+  }
+  // Selections belong to the submitted bytes, not a hook's rewritten text.
+  delete runtimeMeta.humanMentions;
+  if (preparedMeta?.humanMentions !== undefined && contentUnchanged) {
+    runtimeMeta.humanMentions = preparedMeta.humanMentions;
   }
   delete nextMessage["__openclaw"];
   if (Object.keys(runtimeMeta).length > 0) {
@@ -205,9 +225,14 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     typeof originalIdempotencyKey === "string" ? originalIdempotencyKey : undefined;
   const provenance = normalizeInputProvenance(Reflect.get(message, "provenance"));
   const originalMeta = message["__openclaw"];
+  const originalContent =
+    originalMeta?.humanMentions === undefined && originalMeta?.workContext === undefined
+      ? undefined
+      : structuredClone(message.content);
+  const workContext = structuredClone(originalMeta?.workContext);
+  const humanMentions = structuredClone(originalMeta?.humanMentions);
   const display = message.display;
-  const intent =
-    originalMeta?.intent === undefined ? undefined : structuredClone(originalMeta.intent);
+  const intent = structuredClone(originalMeta?.intent);
   const senderIsOwner = originalMeta?.senderIsOwner;
   const replyToId = normalizeOptionalString(originalMeta?.replyToId);
   const originalReplyPreview = asOptionalRecord(originalMeta?.replyToPreview);
@@ -224,13 +249,11 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const lateMedia = originalMeta?.lateMedia === true;
   const originalMedia = originalMeta?.media;
   const media = Array.isArray(originalMedia) ? structuredClone(originalMedia) : undefined;
-  const originalMediaImageLayout = originalMeta?.mediaImageLayout;
-  const mediaImageLayout =
-    originalMediaImageLayout === undefined ? undefined : structuredClone(originalMediaImageLayout);
+  const mediaImageLayout = structuredClone(originalMeta?.mediaImageLayout);
   // Hooks receive the original message object and may mutate nested metadata in
   // place. Snapshot transport correlation before handing them that reference.
   const originalTransportRecord = asOptionalRecord(originalTransport);
-  const transport = originalTransportRecord ? { ...originalTransportRecord } : undefined;
+  const transport = originalTransportRecord ? structuredClone(originalTransportRecord) : undefined;
   const nextMessage = applyTranscriptSenderIdentityToWrite(message, () =>
     params.beforeMessageWrite!({
       message,
@@ -258,6 +281,16 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   };
   if (intent === undefined) {
     delete protectedMeta.intent;
+  }
+  // A redacting hook must not leave an alternate copy of the original text visible.
+  const contentUnchanged = isDeepStrictEqual(nextUserMessage.content, originalContent);
+  delete protectedMeta.workContext;
+  if (workContext !== undefined && contentUnchanged) {
+    protectedMeta.workContext = workContext;
+  }
+  delete protectedMeta.humanMentions;
+  if (humanMentions !== undefined && contentUnchanged) {
+    protectedMeta.humanMentions = humanMentions;
   }
   delete protectedMeta.steerTargetRunId;
   if (steerTargetRunId) {

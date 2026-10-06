@@ -2,12 +2,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db-registry.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "./agent-scope.js";
-import {
-  resolveSharedAuthStoreOwnership,
-  type SharedAuthStoreOwnership,
-} from "./auth-profiles/path-resolve.js";
+import { resolveSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import type { SharedAuthStoreOwnership } from "./auth-profiles/types.js";
 import { resolveLegacyInheritedAuthAgentId } from "./legacy-inherited-auth-dir.js";
 import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
 
@@ -48,6 +46,7 @@ export function findOverlappingWorkspaceAgentIds(
   cfg: OpenClawConfig,
   agentId: string,
   workspaceDir: string,
+  env?: NodeJS.ProcessEnv,
 ): string[] {
   const entries = listAgentEntries(cfg);
   const normalizedAgentId = normalizeAgentId(agentId);
@@ -57,7 +56,7 @@ export function findOverlappingWorkspaceAgentIds(
     if (otherAgentId === normalizedAgentId) {
       continue;
     }
-    const otherWorkspace = resolveAgentWorkspaceDir(cfg, otherAgentId);
+    const otherWorkspace = resolveAgentWorkspaceDir(cfg, otherAgentId, env);
     if (workspacePathsOverlap(workspaceDir, otherWorkspace)) {
       overlappingAgentIds.push(otherAgentId);
     }

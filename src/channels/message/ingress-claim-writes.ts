@@ -1,7 +1,8 @@
 /** Bounded claim-token-fenced writes for durable ingress settlement. */
 import { sleepWithAbort } from "@openclaw/retry";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { IngressAdoptionLostError, isIngressAdoptionLostError } from "./ingress-drain-state.js";
-import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.js";
+import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.types.js";
 import {
   DEFAULT_INGRESS_RETRY_BASE_MS,
   DEFAULT_INGRESS_RETRY_MAX_MS,
@@ -37,7 +38,7 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
     label: "tombstone" | "dead-letter" | "release";
     write: () => Promise<boolean>;
     falseMeansReclaimed: boolean;
-  }): Promise<void> => {
+  }): Promise<boolean> => {
     let attempt = 0;
     for (;;) {
       // First write still runs after session abort: terminal complete/release
@@ -48,15 +49,12 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
       }
       try {
         const committed = await params.write();
-        if (!committed) {
-          if (params.falseMeansReclaimed) {
-            throw new IngressAdoptionLostError("reclaimed");
-          }
-          return;
+        if (!committed && params.falseMeansReclaimed) {
+          throw new IngressAdoptionLostError("reclaimed");
         }
-        return;
+        return committed;
       } catch (err) {
-        if (isIngressAdoptionLostError(err)) {
+        if (isIngressAdoptionLostError(err) || hasSqliteWorkerOutcomeUnknown(err)) {
           throw err;
         }
         attempt += 1;
@@ -102,7 +100,7 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
     releaseOptions?: { lastError?: string; recordAttempt?: boolean },
   ) => {
-    await commitClaimWriteWithRetry({
+    return await commitClaimWriteWithRetry({
       claim,
       label: "release",
       write: () => queue.release(claim, { ...releaseOptions, releasedAt: now() }),
@@ -115,7 +113,7 @@ export function createIngressWriter<TPayload, TMetadata, TCompletedMetadata>(
     reason: string,
     message: string,
   ) => {
-    await commitClaimWriteWithRetry({
+    return await commitClaimWriteWithRetry({
       claim,
       label: "dead-letter",
       write: () => queue.fail(claim, { reason, message, failedAt: now() }),

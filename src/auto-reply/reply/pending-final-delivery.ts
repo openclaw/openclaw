@@ -1,17 +1,8 @@
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-completion.js";
+import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-queue-types.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
-import {
-  isSilentReplyPayloadText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
-} from "../tokens.js";
-import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
 
 /** Normalize raw final payloads into the channel-agnostic sendable set recovery can mark. */
 export function normalizePendingFinalDeliveryPayloads(
@@ -62,66 +53,37 @@ export function buildRecoverablePendingFinalDeliveryText(
     return undefined;
   }
 
-  const recoveryPayloads: ReplyPayload[] = [];
+  const recoveryText: string[] = [];
   for (const payload of sendablePayloads) {
     const textAndMedia = [
       payload.text,
-      ...collectDurableMediaDirectives(payload).map((mediaUrl) => `MEDIA:${mediaUrl}`),
+      ...(payload.mediaUrls ?? []).map((mediaUrl) => `MEDIA:${mediaUrl}`),
     ]
       .filter((value): value is string => Boolean(value?.trim()))
       .join("\n");
     if (textAndMedia) {
-      recoveryPayloads.push({
-        ...payload,
-        mediaUrl: undefined,
-        mediaUrls: undefined,
-        text: textAndMedia,
-      });
+      recoveryText.push(textAndMedia);
     }
   }
-  return buildPendingFinalDeliveryText(recoveryPayloads) || undefined;
+  return sanitizePendingFinalDeliveryText(recoveryText.join("\n\n")) || undefined;
 }
-
-/** Build the restart-recovery text represented by one or more final payloads. */
-function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
-  const text = payloads
-    .filter((payload) => payload.isReasoning !== true)
-    .map((payload) => payload.text)
-    .filter((textLocal): textLocal is string => Boolean(textLocal))
-    .join("\n\n");
-  return sanitizePendingFinalDeliveryText(text);
-}
-
-// A delivered or discarded final must lose the whole record. Keeping this list
-// centralized prevents new ownership fields from leaving a phantom pending delivery.
-export const PENDING_FINAL_DELIVERY_CLEAR_PATCH = {
-  pendingFinalDelivery: undefined,
-} as const satisfies Partial<SessionEntry>;
 
 export function resolvePendingFinalDeliveryCompletion(
   payloads: readonly ReplyPayload[] | undefined,
 ): Extract<DurableDeliveryCompletion, { kind: "pending-final" }> | undefined {
-  const completion = payloads
-    ?.map((payload) => getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion)
-    .find(Boolean);
-  return completion ? { kind: "pending-final", ...completion } : undefined;
-}
-
-function collectDurableMediaDirectives(payload: ReplyPayload): string[] {
-  if (payload.sensitiveMedia === true) {
-    return [];
-  }
-  const mediaUrls = [...(payload.mediaUrls ?? []), ...(payload.mediaUrl ? [payload.mediaUrl] : [])];
-  const seen = new Set<string>();
-  return mediaUrls
-    .map((mediaUrl) => mediaUrl.trim())
-    .filter((mediaUrl) => {
-      if (!mediaUrl || seen.has(mediaUrl)) {
-        return false;
+  const metadata = payloads
+    ?.map((payload) => getReplyPayloadMetadata(payload))
+    .find((candidate) => candidate?.pendingFinalDeliveryCompletion);
+  const completion = metadata?.pendingFinalDeliveryCompletion;
+  return completion
+    ? {
+        kind: "pending-final",
+        ...completion,
+        ...(metadata.sessionWriterDeliveryAuthority
+          ? { sessionWriterDeliveryAuthority: metadata.sessionWriterDeliveryAuthority }
+          : {}),
       }
-      seen.add(mediaUrl);
-      return true;
-    });
+    : undefined;
 }
 
 function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
@@ -135,11 +97,7 @@ function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
     payload.delivery !== undefined ||
     payload.channelData !== undefined ||
     payload.location !== undefined ||
-    payload.replyToId !== undefined ||
-    payload.replyToTag === true ||
-    payload.replyToCurrent === true ||
-    payload.audioAsVoice === true ||
-    payload.videoAsNote === true ||
+    hasUnrecoverableNormalizedDeliveryShape(payload) ||
     payload.spokenText !== undefined ||
     payload.ttsSupplement !== undefined ||
     (hasMedia && (payload.isCommentary === true || payload.isStatusNotice === true))
@@ -162,29 +120,4 @@ function hasUnrecoverableNormalizedDeliveryShape(payload: ReplyPayload): boolean
     payload.audioAsVoice === true ||
     payload.videoAsNote === true
   );
-}
-
-/** Sanitizes pending final delivery text before channel-visible output. */
-export function sanitizePendingFinalDeliveryText(text: string): string {
-  let stripped = stripInternalMetadataForDisplay(text).trim();
-  if (isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)) {
-    return "";
-  }
-  if (stripped && !isSilentReplyText(stripped, SILENT_REPLY_TOKEN)) {
-    const hasLeadingSilentToken = startsWithSilentToken(stripped, SILENT_REPLY_TOKEN);
-    if (hasLeadingSilentToken) {
-      stripped = stripLeadingSilentToken(stripped, SILENT_REPLY_TOKEN);
-    }
-    // Remove stray silent tokens only after confirming the payload is not entirely silent.
-    if (
-      hasLeadingSilentToken ||
-      stripped.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())
-    ) {
-      stripped = stripSilentToken(stripped, SILENT_REPLY_TOKEN);
-    }
-  }
-  if (!stripped.trim()) {
-    return "";
-  }
-  return isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN) ? "" : stripped.trim();
 }

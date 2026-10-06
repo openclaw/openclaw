@@ -1,9 +1,21 @@
 // Parses report CLI output arguments and writes optional artifacts.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseFlagArgs, stringFlag } from "./arg-utils.mts";
+import {
+  booleanFlag,
+  classifyBoundedUnsignedDecimal,
+  parseFlagArgs,
+  stringFlag,
+} from "./arg-utils.mts";
 
 type ReportCliArgs = { jsonPath: string | null; markdownPath: string | null; rootDir: string };
+
+export const REPORT_CLI_PARSE_OPTIONS = {
+  duplicateOptionMessage: (flag: string) => `${flag} was provided more than once.`,
+  onUnhandledArg(arg: string) {
+    throw new Error(`Unsupported argument: ${arg}`);
+  },
+};
 
 export function parseReportCliArgs(argv: string[]) {
   const options: ReportCliArgs = {
@@ -23,10 +35,51 @@ export function parseReportCliArgs(argv: string[]) {
       rejectShortOptions: true,
     }),
   );
-  return parseFlagArgs(argv, options, flagSpecs, {
-    duplicateOptionMessage: (flag: string) => `${flag} was provided more than once.`,
-    onUnhandledArg(arg: string) {
-      throw new Error(`Unsupported argument: ${arg}`);
+  return parseFlagArgs(argv, options, flagSpecs, REPORT_CLI_PARSE_OPTIONS);
+}
+
+export function parseInventoryReportCliArgs(
+  argv: string[],
+  options: { allowIncludeAllowed?: boolean } = {},
+) {
+  const args = {
+    help: false,
+    includeAllowed: false,
+    json: false,
+    limit: 120,
+    repoRoot: process.cwd(),
+  };
+  const flags = [
+    booleanFlag<typeof args>("--help", "help", true, { repeatable: true }),
+    booleanFlag<typeof args>("-h", "help", true, { repeatable: true }),
+    booleanFlag<typeof args>("--json", "json", true, { repeatable: true }),
+    stringFlag<typeof args>("--repo-root", "repoRoot", {
+      allowInline: false,
+      repeatable: true,
+      rejectShortOptions: true,
+      missingValueMessage: "--repo-root expects a path",
+    }),
+    stringFlag<typeof args>("--limit", "limit", {
+      allowInline: false,
+      repeatable: true,
+      missingValueMessage: "--limit expects a non-negative integer",
+      transform(raw) {
+        const result = classifyBoundedUnsignedDecimal(raw, 0, Number.MAX_SAFE_INTEGER);
+        if (result.kind !== "value") {
+          throw new Error("--limit expects a non-negative integer");
+        }
+        return result.value;
+      },
+    }),
+  ];
+  if (options.allowIncludeAllowed) {
+    flags.push(
+      booleanFlag<typeof args>("--include-allowed", "includeAllowed", true, { repeatable: true }),
+    );
+  }
+  return parseFlagArgs(argv, args, flags, {
+    onUnhandledArg(arg) {
+      throw new Error(`Unknown argument: ${arg}`);
     },
   });
 }

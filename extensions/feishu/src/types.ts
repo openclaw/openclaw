@@ -1,13 +1,31 @@
 // Feishu type declarations define plugin contracts.
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
-import type { FeishuConfigSchema, FeishuAccountConfigSchema, z } from "./config-schema.js";
+import type {
+  DynamicAgentCreationSchema,
+  FeishuAccountConfigSchema,
+  FeishuConfigSchema,
+  FeishuDomainSchema,
+  FeishuToolsConfigSchema,
+  z,
+} from "./config-schema.js";
 import type { MentionTarget } from "./mention-target.types.js";
 
-export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
-export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
+type LegacyFeishuWebhookConfig = {
+  /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.host. */
+  webhookHost?: string;
+  /** @deprecated Type-only until the next SDK major; Doctor migrates this to legacyWebhook.port. */
+  webhookPort?: number;
+};
 
-export type FeishuDomain = "feishu" | "lark" | (string & {});
+export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema> &
+  LegacyFeishuWebhookConfig;
+export type FeishuConfig = Omit<z.infer<typeof FeishuConfigSchema>, "accounts"> &
+  LegacyFeishuWebhookConfig & {
+    accounts?: Record<string, FeishuAccountConfig | undefined>;
+  };
+
+export type FeishuDomain = "feishu" | "lark" | (z.infer<typeof FeishuDomainSchema> & {});
 
 export type FeishuDefaultAccountSelectionSource =
   | "explicit-default"
@@ -62,6 +80,12 @@ export type FeishuSendResult = {
 
 export type FeishuChatType = "p2p" | "group" | "topic_group" | "private";
 
+export function normalizeFeishuEventChatType(value: unknown): FeishuChatType | undefined {
+  return value === "group" || value === "topic_group" || value === "private" || value === "p2p"
+    ? value
+    : undefined;
+}
+
 export function isFeishuGroupChatType(chatType: FeishuChatType | undefined): boolean {
   return chatType === "group" || chatType === "topic_group";
 }
@@ -94,20 +118,6 @@ export type FeishuMediaInfo = {
   kind: Exclude<import("openclaw/plugin-sdk/media-runtime").MediaKind, "unknown">;
 };
 
-export type FeishuToolsConfig = {
-  doc?: boolean;
-  chat?: boolean;
-  wiki?: boolean;
-  drive?: boolean;
-  perm?: boolean;
-  scopes?: boolean;
-  /** Bitable/Base operations (default: true). */
-  bitable?: boolean;
-};
+export type FeishuToolsConfig = NonNullable<z.infer<typeof FeishuToolsConfigSchema>>;
 
-export type DynamicAgentCreationConfig = {
-  enabled?: boolean;
-  workspaceTemplate?: string;
-  agentDirTemplate?: string;
-  maxAgents?: number;
-};
+export type DynamicAgentCreationConfig = NonNullable<z.infer<typeof DynamicAgentCreationSchema>>;

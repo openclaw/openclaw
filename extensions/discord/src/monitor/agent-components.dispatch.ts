@@ -1,6 +1,6 @@
-// Discord plugin module implements agent componentsispatch behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  createCommandTurnContext,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
   runChannelInboundEvent,
@@ -10,20 +10,23 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import {
+  readSessionUpdatedAtAsync,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
-import {
-  resolveAgentComponentRoute,
-  resolveComponentCommandAuthorized,
-  resolvePinnedMainDmOwnerFromAllowlist,
-  type AgentComponentContext,
-  type AgentComponentInteraction,
-  type ComponentInteractionContext,
-  type DiscordChannelContext,
-} from "./agent-components-helpers.js";
-import { readSessionUpdatedAt, resolveStorePath } from "./agent-components.deps.runtime.js";
+import { resolveAgentComponentRoute } from "./agent-components-context.js";
+import { resolveComponentCommandAuthorized } from "./agent-components-guild-auth.js";
+import type {
+  AgentComponentContext,
+  AgentComponentInteraction,
+  ComponentInteractionContext,
+  DiscordChannelContext,
+} from "./agent-components.types.js";
 import {
   normalizeDiscordAllowList,
   resolveDiscordChannelConfigWithFallback,
@@ -38,9 +41,7 @@ import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { buildDiscordConversationRouteContext } from "./route-resolution.js";
 
-const loadConversationRuntime = createLazyRuntimeModule(
-  () => import("./agent-components.runtime.js"),
-);
+const loadReplyRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/reply-runtime"));
 
 const loadTypingRuntime = createLazyRuntimeModule(() => import("./typing.js"));
 
@@ -72,16 +73,6 @@ function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionCon
   return "channel";
 }
 
-function resolveDiscordComponentOriginatingTo(
-  interactionCtx: Pick<ComponentInteractionContext, "isDirectMessage" | "userId" | "channelId">,
-) {
-  return resolveDiscordConversationIdentity({
-    isDirectMessage: interactionCtx.isDirectMessage,
-    userId: interactionCtx.userId,
-    channelId: interactionCtx.channelId,
-  });
-}
-
 export async function dispatchDiscordComponentEvent(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -89,11 +80,11 @@ export async function dispatchDiscordComponentEvent(params: {
   channelCtx: DiscordChannelContext;
   guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
   eventText: string;
+  commandSource?: "native";
   replyToId?: string;
   routeOverrides?: { sessionKey?: string; agentId?: string; accountId?: string };
 }): Promise<void> {
   const { ctx, interaction, interactionCtx, channelCtx, guildInfo, eventText } = params;
-  const runtime = ctx.runtime ?? createNonExitingRuntime();
   const route = resolveAgentComponentRoute({
     ctx,
     rawGuildId: interactionCtx.rawGuildId,
@@ -107,7 +98,6 @@ export async function dispatchDiscordComponentEvent(params: {
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
   const agentId = params.routeOverrides?.agentId ?? route.agentId;
   const accountId = params.routeOverrides?.accountId ?? route.accountId;
-  const inboundLastRouteSessionKey = sessionKey;
   const fromLabel = buildDiscordComponentConversationLabel({
     interactionCtx,
     interaction,
@@ -161,9 +151,14 @@ export async function dispatchDiscordComponentEvent(params: {
   });
   const storePath = resolveStorePath(ctx.cfg.session?.store, { agentId });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
-  const previousTimestamp = readSessionUpdatedAt({
+  const previousTimestamp = await readSessionUpdatedAtAsync({
     storePath,
     sessionKey,
+  });
+  const originatingTo = resolveDiscordConversationIdentity({
+    isDirectMessage: interactionCtx.isDirectMessage,
+    userId: interactionCtx.userId,
+    channelId: interactionCtx.channelId,
   });
   const timestamp = Date.now();
   const combinedBody = formatInboundEnvelope({
@@ -182,12 +177,7 @@ export async function dispatchDiscordComponentEvent(params: {
     finalizeInboundContext,
     resolveChunkMode,
     resolveTextChunkLimit,
-  } = await (async () => {
-    const conversationRuntime = await loadConversationRuntime();
-    return {
-      ...conversationRuntime,
-    };
-  })();
+  } = await loadReplyRuntime();
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -226,18 +216,15 @@ export async function dispatchDiscordComponentEvent(params: {
     Surface: "discord" as const,
     WasMentioned: true,
     CommandAuthorized: commandAuthorized,
-    CommandTurn: {
-      kind: "text-slash" as const,
-      source: "text" as const,
+    CommandTurn: createCommandTurnContext(params.commandSource ?? "text", {
       authorized: commandAuthorized,
       body: eventText,
-    },
-    CommandSource: "text" as const,
+    }),
+    CommandSource: params.commandSource ?? "text",
     MessageSid: interaction.rawData.id,
     Timestamp: timestamp,
     OriginatingChannel: "discord" as const,
-    OriginatingTo:
-      resolveDiscordComponentOriginatingTo(interactionCtx) ?? `channel:${interactionCtx.channelId}`,
+    OriginatingTo: originatingTo ?? `channel:${interactionCtx.channelId}`,
   });
 
   const deliverTarget = `channel:${interactionCtx.channelId}`;
@@ -287,14 +274,12 @@ export async function dispatchDiscordComponentEvent(params: {
         record: {
           updateLastRoute: interactionCtx.isDirectMessage
             ? {
-                sessionKey: inboundLastRouteSessionKey,
+                sessionKey,
                 channel: "discord",
-                to:
-                  resolveDiscordComponentOriginatingTo(interactionCtx) ??
-                  `user:${interactionCtx.userId}`,
+                to: originatingTo ?? `user:${interactionCtx.userId}`,
                 accountId,
                 mainDmOwnerPin:
-                  inboundLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner
+                  sessionKey === route.mainSessionKey && pinnedMainDmOwner
                     ? {
                         ownerRecipient: pinnedMainDmOwner,
                         senderRecipient: interactionCtx.userId,
@@ -321,7 +306,6 @@ export async function dispatchDiscordComponentEvent(params: {
               token,
               accountId,
               rest: interaction.client.rest,
-              runtime,
               replyToId,
               replyToMode,
               textLimit,
@@ -336,6 +320,7 @@ export async function dispatchDiscordComponentEvent(params: {
               kind: info.kind,
               bindPendingFinalDelivery: info.bindPendingFinalDelivery,
               onPlatformSendDispatch: info.onPlatformSendDispatch,
+              assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
             });
             if (result.visibleReplySent) {
               replyReference.markSent();

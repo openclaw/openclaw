@@ -1,4 +1,5 @@
-import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
+import { html, type TemplateResult } from "lit";
+import { getSlashCommandDescription, type SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 
 function slashOptionIdSegment(value: string): string {
@@ -19,4 +20,19 @@ export function getSlashArgOptionId(paneId: string, commandName: string, arg: st
     paneId,
     `slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`,
   );
+}
+
+export function renderSlashMatchedName(name: string, query: string): TemplateResult {
+  const matchLength = name.toLowerCase().startsWith(query.toLowerCase()) ? query.length : 0;
+  return matchLength === 0
+    ? html`${name}`
+    : html`<mark>${name.slice(0, matchLength)}</mark>${name.slice(matchLength)}`;
+}
+
+export function getSlashCommandOptionLabel(cmd: SlashCommandDef | undefined): string {
+  if (!cmd) {
+    return "";
+  }
+  const command = `/${cmd.name}${cmd.args ? ` ${cmd.args}` : ""}`;
+  return `${command} ${getSlashCommandDescription(cmd)}`;
 }

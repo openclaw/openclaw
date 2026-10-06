@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildAndroidAppI18nCatalog,
   checkAndroidAppI18n,
@@ -9,30 +11,114 @@ import {
   findUnlocalizedAndroidUiLiterals,
   renderAndroidResourceValue,
   selectDeterministicTranslation,
-  selectGeneratedTranslation,
+  verifyAndroidAppI18n,
 } from "../../scripts/android-app-i18n.ts";
-import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
+import { parseNativeI18nInventory } from "../../scripts/native-i18n-inventory.ts";
+import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
+
+const { generatedOverrides } = vi.hoisted(() => ({
+  generatedOverrides: new Map<string, string>(),
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readFile: (...args: Parameters<typeof actual.readFile>) => {
+      const override =
+        typeof args[0] === "string" ? generatedOverrides.get(path.resolve(args[0])) : undefined;
+      return override === undefined ? actual.readFile(...args) : Promise.resolve(override);
+    },
+  };
+});
 
 describe("Android app i18n resources", () => {
+  it("counts manual resources reached only through the generated native lookup", async () => {
+    const shellPath = path.resolve(
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
+    );
+    const shell = await readFile(shellPath, "utf8");
+    try {
+      generatedOverrides.set(shellPath, shell.replaceAll("R.string.cancel", "R.string.app_name"));
+      await expect(verifyAndroidAppI18n()).resolves.toBeUndefined();
+    } finally {
+      generatedOverrides.clear();
+    }
+  });
+
   it("keeps generated resources, runtime coverage, and every locale aligned", async () => {
-    // Managed native_* rows are reconciled by the post-merge locale refresh
-    // workflow (#111557); source PRs are validated with those rows pending.
     await expect(checkAndroidAppI18n({ tolerateManagedPending: true })).resolves.toBeUndefined();
-    const base = await readFile("apps/android/app/src/main/res/values/strings.xml", "utf8");
-    const wearBase = await readFile("apps/android/wear/src/main/res/values/strings.xml", "utf8");
-    expect(base).toContain('xmlns:tools="http://schemas.android.com/tools"');
+    const catalog = await buildAndroidAppI18nCatalog();
+    const base = catalog.resources.get(
+      path.resolve("apps/android/app/build/generated/native-i18n/res/values/native_strings.xml"),
+    );
     expect(base).toMatch(
       /<string name="native_[a-f0-9]+"[^>]*tools:ignore="Typos,TypographyDashes,TypographyEllipsis">/u,
     );
-    expect(wearBase).toContain('<string name="current_session">Current session</string>');
+  });
+
+  it("projects inventory translations without depending on previous generated files", async () => {
+    const source = "Read";
+    const id = `native.android.${createHash("sha256").update(`android ${source}`).digest("hex").slice(0, 16)}`;
+    const key = `native_${createHash("sha256").update(source).digest("hex").slice(0, 16)}`;
+    const artifactPath = path.resolve("apps/.i18n/native/de.json");
+    const artifact = JSON.parse(await readFile(artifactPath, "utf8"));
+    const inventoryRaw = await readFile("apps/.i18n/native-source.json", "utf8");
+    const inventory = parseNativeI18nInventory(inventoryRaw);
+    expect(inventory).toContainEqual(
+      expect.objectContaining({
+        id,
+        source,
+        surface: "android",
+        sites: expect.arrayContaining([expect.objectContaining({ kind: "tool-display" })]),
+      }),
+    );
+    artifact.translations[id] = 'Lesen & "prüfen"';
+    try {
+      generatedOverrides.set(artifactPath, JSON.stringify(artifact));
+      const catalog = await buildAndroidAppI18nCatalog();
+      expect(catalog.kotlin).toContain(`"Read" to R.string.${key},`);
+      const german = catalog.resources.get(
+        path.resolve(
+          "apps/android/app/build/generated/native-i18n/res/values-de/native_strings.xml",
+        ),
+      );
+      expect(german).toContain(
+        `<string name="${key}" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lesen &amp; \\"prüfen\\""</string>`,
+      );
+
+      const reorderedInventory = JSON.parse(inventoryRaw);
+      reorderedInventory.sites.reverse();
+      generatedOverrides.set(
+        path.resolve("apps/.i18n/native-source.json"),
+        JSON.stringify(reorderedInventory),
+      );
+      const reordered = await buildAndroidAppI18nCatalog();
+      expect(reordered.kotlin).toBe(catalog.kotlin);
+      expect(reordered.resources).toEqual(catalog.resources);
+
+      delete artifact.translations[id];
+      generatedOverrides.set(artifactPath, JSON.stringify(artifact));
+      const fallback = await buildAndroidAppI18nCatalog();
+      expect(
+        fallback.resources.get(
+          path.resolve(
+            "apps/android/app/build/generated/native-i18n/res/values-de/native_strings.xml",
+          ),
+        ),
+      ).toContain(
+        `<string name="${key}" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Read"</string>`,
+      );
+    } finally {
+      generatedOverrides.clear();
+    }
   });
 
   it("routes compact token suffixes through generated resources", async () => {
-    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
-      entries: Array<{ sites: Array<{ kind: string; path: string }>; source: string }>;
-    };
+    const inventory = parseNativeI18nInventory(
+      await readFile("apps/.i18n/native-source.json", "utf8"),
+    );
     const sources = new Set(["${decimal(count / 1_000_000.0)}M", "${thousands}k"]);
-    const entries = inventory.entries
+    const entries = inventory
       .flatMap((entry) => entry.sites.map((site) => ({ ...site, source: entry.source })))
       .filter(
         (entry) => entry.path.endsWith("/ui/chat/ChatTurnRecap.kt") && sources.has(entry.source),
@@ -46,7 +132,7 @@ describe("Android app i18n resources", () => {
     ]);
   });
 
-  it("builds complete Wear resources for every native locale", async () => {
+  it("builds complete Wear and third-party resources for every native locale", async () => {
     const catalog = await buildAndroidAppI18nCatalog();
     const wearResources = [...catalog.resources].filter(
       ([filePath]) =>
@@ -90,11 +176,8 @@ describe("Android app i18n resources", () => {
         'name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis"',
       );
     }
-  });
 
-  it("builds complete third-party flavor resources for every native locale", async () => {
-    const catalog = await buildAndroidAppI18nCatalog();
-    const base = await readFile(
+    const thirdPartyBase = await readFile(
       "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
       "utf8",
     );
@@ -104,7 +187,7 @@ describe("Android app i18n resources", () => {
         filePath.endsWith("/accessibility_strings.xml"),
     );
 
-    expect(base).toContain('tools:ignore="MissingTranslation"');
+    expect(thirdPartyBase).toContain('tools:ignore="MissingTranslation"');
     expect(resources).toHaveLength(NATIVE_I18N_LOCALES.length);
     for (const [, content] of resources) {
       expect(content).toContain('name="accessibility_service_label"');
@@ -196,17 +279,9 @@ describe("Android app i18n resources", () => {
     expect(selectDeterministicTranslation("Source", ["Source", "Source"])).toBe("Source");
   });
 
-  it("preserves a localized resource when translation memory retires its UI source", () => {
+  it("decodes quoted Android resources for canonical translation inputs", () => {
     expect(decodeAndroidResourceValue('"Sitzungen"')).toBe("Sitzungen");
     expect(decodeAndroidResourceValue('"Sag \\"Hallo\\""')).toBe('Sag "Hallo"');
-    const existing = { source: "Sessions", translation: "Sitzungen" };
-    expect(selectGeneratedTranslation("Sessions", [], existing)).toBe("Sitzungen");
-    expect(selectGeneratedTranslation("Sessions", ["Sesiones"], existing)).toBe("Sesiones");
-  });
-
-  it("does not reuse a localized resource after its English source changes", () => {
-    const existing = { source: "Sessions", translation: "Sitzungen" };
-    expect(selectGeneratedTranslation("Threads", [], existing)).toBe("");
   });
 
   it("preserves source argument indexes when a translation reorders interpolations", () => {
@@ -295,12 +370,6 @@ describe("Android app i18n resources", () => {
       expect.objectContaining({ source: "Second sentence." }),
       expect.objectContaining({ source: "Ready" }),
     ]);
-    expect(
-      findUnlocalizedAndroidUiLiterals(
-        source,
-        "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
-      ).map((finding) => finding.source),
-    ).not.toEqual(expect.arrayContaining(["Connected", "Waiting"]));
   });
 
   it("maps typed model fields across generic types and named argument omissions", () => {
@@ -359,6 +428,19 @@ describe("Android app i18n resources", () => {
     );
   });
 
+  it("decodes Kotlin Unicode escapes without collapsing escaped backslashes", () => {
+    const source = String.raw`
+      Text("Progress \u00b7 ready")
+      Text("Literal \\u00b7 marker")
+    `;
+    const findings = findUnlocalizedAndroidUiLiterals(
+      source,
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
+    ).map((finding) => finding.source);
+
+    expect(findings).toEqual(["Progress · ready", String.raw`Literal \u00b7 marker`]);
+  });
+
   it("inventories command, attention, and overview model display literals", () => {
     const source = `
       data class CommandItem(
@@ -399,26 +481,14 @@ describe("Android app i18n resources", () => {
       "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
     ).map((finding) => finding.source);
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        "Open Chat",
-        "Start a conversation",
-        "Gateway",
-        "Connect before chat, voice, and live status.",
-        "Online",
-        "All systems nominal",
-      ]),
-    );
-    expect(findings).not.toEqual(
-      expect.arrayContaining([
-        "chat",
-        "voice",
-        "Start Voice",
-        "Talk with OpenClaw",
-        "Offline",
-        "gateway",
-      ]),
-    );
+    expect(findings).toEqual([
+      "Open Chat",
+      "Start a conversation",
+      "Gateway",
+      "Connect before chat, voice, and live status.",
+      "Online",
+      "All systems nominal",
+    ]);
   });
 
   it("requires exact String fields and scans multiline helper expressions", () => {
@@ -444,8 +514,7 @@ describe("Android app i18n resources", () => {
       "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
     ).map((finding) => finding.source);
 
-    expect(findings).toEqual(expect.arrayContaining(["Failure", "Fallback"]));
-    expect(findings).not.toEqual(expect.arrayContaining(["resource_key", "Ready"]));
+    expect(findings).toEqual(["Failure", "Fallback"]);
   });
 
   it("ignores preview fixtures", () => {
@@ -483,5 +552,94 @@ describe("Android app i18n resources", () => {
         "apps/android/app/src/thirdParty/java/ai/openclaw/app/accessibility/AccessibilityDevActivity.kt",
       ).map((finding) => finding.source),
     ).toEqual(["Developer surface"]);
+  });
+
+  it.each([
+    {
+      name: "a quoted closing parenthesis",
+      source: 'fun statusText(token: String = ")"): String = "Ready"',
+      expected: [
+        {
+          line: 1,
+          source: "Ready",
+        },
+      ],
+    },
+    {
+      name: "an escaped quote before a closing delimiter",
+      source: 'fun statusText(token: String = "\\")"): String = "Ready"',
+      expected: [
+        {
+          line: 1,
+          source: "Ready",
+        },
+      ],
+    },
+    {
+      name: "a doubled backslash before the closing quote",
+      source: 'fun statusText(token: String = "\\\\"): String = "Ready"',
+      expected: [
+        {
+          line: 1,
+          source: "Ready",
+        },
+      ],
+    },
+    {
+      name: "a quoted closing brace in a helper body",
+      source: 'fun statusText(): String { val marker = "}"; return "Ready" }',
+      expected: [
+        {
+          line: 1,
+          source: "Ready",
+        },
+      ],
+    },
+    {
+      name: "quoted commas and delimiters in positional model arguments",
+      source:
+        'data class State(val metadata: List<String>, val statusText: String)\nState(listOf("a,b", ")").map { it }, "🦊 Ready, ) ] }")',
+      expected: [
+        {
+          line: 2,
+          source: "🦊 Ready, ) ] }",
+        },
+      ],
+    },
+    {
+      name: "a default comparison after nested generic types",
+      source:
+        'data class State(val metadata: Map<String, List<Int>>, val enabled: Boolean = 1 < 2, val statusText: String)\nState(emptyMap(), true, "Ready")',
+      expected: [
+        {
+          line: 2,
+          source: "Ready",
+        },
+      ],
+    },
+    {
+      name: "quoted newlines before the next helper declaration",
+      source: 'fun statusText(): String = """First\nsecond"""\nfun helperText(): String = "Next"',
+      expected: [
+        {
+          line: 1,
+          source: "First\nsecond",
+        },
+        {
+          line: 3,
+          source: "Next",
+        },
+      ],
+    },
+    {
+      name: "an unclosed quoted parameter",
+      source: 'fun statusText(token: String = "unterminated): String = "Ready"',
+      expected: [],
+    },
+  ])("keeps scanner boundaries for $name", ({ source, expected }) => {
+    const repoPath = "apps/android/app/src/main/java/ai/openclaw/app/ui/Scanner.kt";
+    expect(findUnlocalizedAndroidUiLiterals(source, repoPath)).toEqual(
+      expected.map((finding) => ({ ...finding, path: repoPath })),
+    );
   });
 });

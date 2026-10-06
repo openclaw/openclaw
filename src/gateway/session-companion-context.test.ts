@@ -1,23 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   appendTranscriptEvent,
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import * as activeTranscriptEvents from "../config/sessions/session-accessor.sqlite-active-events.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import * as redact from "../logging/redact.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
+import { createSessionCompanion } from "./session-companion.js";
+import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
+import * as transcriptReaders from "./session-transcript-readers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  // Worker leases still need these databases until asynchronous cleanup settles.
+  for (const stateDir of tempDirs.dirs) {
+    await cleanupSessionStateForTest({ stateDir });
+  }
   vi.unstubAllEnvs();
 });
 
@@ -33,6 +37,78 @@ function createScope(prefix: string) {
 }
 
 describe("session companion context", () => {
+  it.each(
+    [false, true].flatMap((warm) =>
+      (["reset", "dispose", "request-abort", "backing-reset"] as const).map((cancellation) => ({
+        warm,
+        cancellation,
+      })),
+    ),
+  )(
+    "cancels $cancellation before prepared context resumes (warm=$warm)",
+    async ({ warm, cancellation }) => {
+      const scope = createScope(`companion-cancel-${cancellation}-${warm}`);
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const run = vi.fn(async () => "Existing answer.");
+      const service = createSessionCompanion({
+        scheduler: createTestGatewayScheduler(),
+        getConfig: () => ({}),
+        contextReader: defaultSessionCompanionContextReader,
+        sessionObserver: {
+          getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }),
+        },
+        resolveUtilityModelRef: () => "openai/gpt-5.6-luna",
+        run,
+        now: () => 123,
+      });
+      const request = {
+        agentId: scope.agentId,
+        sessionKey: scope.sessionKey,
+        question: "Why?",
+        connId: "conn-1",
+      };
+      try {
+        if (warm) {
+          await service.ask(request);
+        }
+        const controller = new AbortController();
+        const pending = service
+          .ask({ ...request, signal: controller.signal })
+          .catch((error: unknown) => error);
+        if (cancellation === "reset") {
+          service.reset(request);
+        } else if (cancellation === "dispose") {
+          service.dispose();
+        } else if (cancellation === "backing-reset") {
+          notifyGatewaySessionReset(scope.sessionKey, scope.agentId);
+        } else {
+          controller.abort();
+        }
+        await expect(pending).resolves.toMatchObject({
+          reason: cancellation === "backing-reset" ? "context-unavailable" : "unavailable",
+          message:
+            cancellation === "backing-reset"
+              ? "The selected session changed before Side chat could answer."
+              : cancellation === "reset"
+                ? "The Side chat request was cancelled."
+                : "Side chat could not answer right now.",
+        });
+        expect(run).toHaveBeenCalledTimes(warm ? 1 : 0);
+        expect(service.state(request)).toEqual({
+          exchanges:
+            warm && cancellation === "request-abort"
+              ? [{ question: "Why?", answer: "Existing answer.", ts: 123 }]
+              : [],
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      } finally {
+        service.dispose();
+      }
+    },
+  );
+
   it("distinguishes a missing session from an empty selected transcript", async () => {
     const missing = createScope("companion-context-missing");
     await expect(defaultSessionCompanionContextReader.read(missing)).resolves.toEqual({
@@ -71,23 +147,29 @@ describe("session companion context", () => {
       .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 1")
       .run(scope.sessionId);
 
-    const result = await defaultSessionCompanionContextReader.read(scope);
+    const redaction = vi.spyOn(redact, "redactToolPayloadText");
+    try {
+      const result = await defaultSessionCompanionContextReader.read(scope);
 
-    expect(result.kind).toBe("ready");
-    if (result.kind !== "ready") {
-      return;
+      expect(result.kind).toBe("ready");
+      if (result.kind !== "ready") {
+        return;
+      }
+      expect(result.context.messages).toHaveLength(40);
+      expect(result.context.messages.at(0)).toEqual({
+        role: "assistant",
+        text: "message 161",
+        ts: 161,
+      });
+      expect(result.context.messages.at(-1)).toEqual({
+        role: "user",
+        text: "message 200",
+        ts: 200,
+      });
+      expect(redaction).toHaveBeenCalledTimes(40);
+    } finally {
+      redaction.mockRestore();
     }
-    expect(result.context.messages).toHaveLength(40);
-    expect(result.context.messages.at(0)).toEqual({
-      role: "assistant",
-      text: "message 161",
-      ts: 161,
-    });
-    expect(result.context.messages.at(-1)).toEqual({
-      role: "user",
-      text: "message 200",
-      ts: 200,
-    });
   });
 
   it("pages past a tool-heavy tail while retaining the selected session's latest user turn", async () => {
@@ -265,7 +347,14 @@ describe("session companion context", () => {
       touchSessionEntry: true,
     });
 
-    await expect(defaultSessionCompanionContextReader.read(scope)).resolves.toEqual({
+    const hostSql = observeHostDataSql();
+    const result = await defaultSessionCompanionContextReader
+      .read(scope)
+      .finally(() => hostSql.restore());
+    expect(
+      hostSql.queries.filter((query) => query.includes("session_transcript_active_events")),
+    ).toEqual([]);
+    expect(result).toEqual({
       kind: "ready",
       context: {
         empty: false,
@@ -282,8 +371,8 @@ describe("session companion context", () => {
     const scope = createScope("companion-context-snapshot-fence");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const page = vi
-      .spyOn(activeTranscriptEvents, "readSessionTranscriptBoundedMessageTailPage")
-      .mockReturnValueOnce({
+      .spyOn(transcriptReaders, "readSessionTranscriptBoundedMessageTailPageAsync")
+      .mockResolvedValueOnce({
         activeLeafEntryId: "leaf-1",
         events: [
           {
@@ -303,7 +392,7 @@ describe("session companion context", () => {
         snapshot: { generation: "generation-1", indexedSeq: 1 },
         totalMessages: 1,
       })
-      .mockReturnValueOnce({
+      .mockResolvedValueOnce({
         activeLeafEntryId: "leaf-1",
         events: [],
         newestContiguousEventCount: 0,

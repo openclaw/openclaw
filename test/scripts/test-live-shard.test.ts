@@ -1,10 +1,18 @@
-// Test Live Shard tests cover test live shard script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import {
   LIVE_TEST_SHARDS,
   RELEASE_LIVE_TEST_SHARDS,
@@ -15,15 +23,35 @@ import {
   collectAllLiveTestFiles,
   parseLiveShardArgs,
   removeLiveShardReportFile,
+  resolveLiveShardBuildEntrypoint,
+  resolveLiveShardBuildProfile,
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
+  withoutReleaseWaivedLiveFiles,
 } from "../../scripts/test-live-shard.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
+
+  it("drops release-waived single-case live files only for the waived candidate version", () => {
+    const files = [
+      "src/gateway/gateway-progress-refresh.live.test.ts",
+      "src/gateway/gateway-codex-harness.live.test.ts",
+      "test/gateway-subagent-restart.live.test.ts",
+    ];
+    for (const version of ["2026.9.8", "2026.9.9"]) {
+      expect(withoutReleaseWaivedLiveFiles(files, version)).toEqual([
+        "src/gateway/gateway-codex-harness.live.test.ts",
+      ]);
+    }
+    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.10")).toEqual(files);
+    expect(withoutReleaseWaivedLiveFiles(files, undefined)).toEqual(files);
+  });
 
   it("discovers live tests without scanning source roots in-process", () => {
     expectNoReaddirSyncDuring(() => {
@@ -107,7 +135,11 @@ describe("scripts/test-live-shard", () => {
         "src/gateway/fixture.live.test.ts",
         "src/system-agent/fixture.live.test.ts",
       ],
-      "native-live-src-infra": ["src/infra/fixture.live.test.ts"],
+      "native-live-src-infra": [
+        "src/cli/update-cli/update-command-node-runtime.live.test.ts",
+        "src/commands/doctor-config-preflight.legacy-driver.live.test.ts",
+        "src/infra/fixture.live.test.ts",
+      ],
       "native-live-test": ["test/fixture.live.test.ts"],
       "native-live-extensions-a-k": [
         "extensions/a-provider/model.live.test.ts",
@@ -169,6 +201,12 @@ describe("scripts/test-live-shard", () => {
     const result = spawnSync(process.execPath, ["scripts/test-live-shard.mjs", "--help"], {
       cwd: process.cwd(),
       encoding: "utf8",
+      env: preparedScriptWrapperEnv([
+        [
+          new URL("../../scripts/test-live-shard.mts", import.meta.url),
+          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.liveShard),
+        ],
+      ]),
     });
 
     expect(result.status).toBe(0);
@@ -249,10 +287,62 @@ describe("scripts/test-live-shard", () => {
         OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
       },
     });
-    expect(
-      resolveLiveShardPreparation(selectLiveShardFiles("native-live-src-gateway-core", allFiles)),
-    ).toBeNull();
   });
+
+  it.each([
+    "native-live-src-gateway-core",
+    "native-live-src-infra",
+    "native-live-test",
+    "src/infra/heartbeat-runner.live.test.ts",
+    "test/e2e/qa-lab/runtime/gateway-node-mcp.live.test.ts",
+  ])("prepares the built gateway runtime before %s starts Vitest", (target) => {
+    const files = target.endsWith(".live.test.ts")
+      ? [target]
+      : selectLiveShardFiles(target, allFiles);
+    expect(resolveLiveShardPreparation(files)).toEqual({
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: "dist/.runtime-postbuildstamp",
+    });
+  });
+
+  it("prepares system-agent gateway tests without building unrelated source shards", () => {
+    expect(resolveLiveShardPreparation(["src/system-agent/rescue-channel.live.test.ts"])).toEqual({
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: "dist/.runtime-postbuildstamp",
+    });
+    expect(resolveLiveShardPreparation(["src/infra/push-apns-http2.live.test.ts"])).toBeNull();
+  });
+
+  it("runs the frozen candidate's available build entrypoint and advertised profile", () => {
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mts")).toEqual([
+      "--import",
+      "tsx",
+      "scripts/build-all.mts",
+    ]);
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mjs")).toEqual([
+      "scripts/build-all.mjs",
+    ]);
+    expect(() => resolveLiveShardBuildEntrypoint(() => false)).toThrow(
+      "Live test shard cannot find scripts/build-all.{mts,mjs}",
+    );
+    expect(
+      resolveLiveShardBuildProfile("sourcePerformance", "Profiles:\n  full\n  sourcePerformance\n"),
+    ).toBe("sourcePerformance");
+    expect(resolveLiveShardBuildProfile("sourcePerformance", "Profiles:\n  full\n")).toBe("full");
+  });
+
+  it.each(["native-live-src-agents", "native-live-extensions-openai"])(
+    "prepares executable runtime artifacts before %s exercises live vision",
+    (shard) => {
+      expect(resolveLiveShardPreparation(selectLiveShardFiles(shard, allFiles))).toEqual({
+        env: {},
+        profile: "sourcePerformance",
+        requiredArtifact: "dist/.runtime-postbuildstamp",
+      });
+    },
+  );
 
   it("fails live shard reports with no passing tests", () => {
     expect(validateLiveShardReportPayload({ numPassedTests: 1, numTotalTests: 3 })).toEqual({
@@ -339,108 +429,59 @@ describe("scripts/test-live-shard", () => {
     });
   });
 
-  it("allows explicitly opt-in live shard files to be skipped until their env is enabled", () => {
-    const payload = {
-      numPassedTests: 1,
-      numTotalTests: 2,
-      testResults: [
-        {
-          name: path.join(process.cwd(), "src/gateway/gateway-codex-harness.live.test.ts"),
-          assertionResults: [{ status: "passed" }],
-        },
-        {
-          name: path.join(process.cwd(), "src/gateway/gateway-cli-backend.live.test.ts"),
-          assertionResults: [{ status: "skipped" }],
-        },
-      ],
-    };
-    const expectedFiles = [
-      "src/gateway/gateway-codex-harness.live.test.ts",
-      "src/gateway/gateway-cli-backend.live.test.ts",
-    ];
-
-    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
-      ok: true,
-    });
-    expect(
-      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
-        OPENCLAW_LIVE_CLI_BACKEND: "1",
-      }),
-    ).toEqual({
-      ok: false,
-      reason:
-        "Vitest report selected live test files had no passing assertions: src/gateway/gateway-cli-backend.live.test.ts",
-    });
-  });
-
-  it("allows gateway core opt-in live files to be skipped until their env is enabled", () => {
-    const payload = {
-      numPassedTests: 1,
-      numTotalTests: 2,
-      testResults: [
-        {
-          name: path.join(process.cwd(), "src/gateway/gateway-codex-harness.live.test.ts"),
-          assertionResults: [{ status: "passed" }],
-        },
-        {
-          name: path.join(process.cwd(), "src/gateway/gateway-acp-spawn-defaults.live.test.ts"),
-          assertionResults: [{ status: "skipped" }],
-        },
-      ],
-    };
-    const expectedFiles = [
-      "src/gateway/gateway-codex-harness.live.test.ts",
-      "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
-    ];
-
-    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
-      ok: true,
-    });
-    expect(
-      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
-        OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS: "1",
-      }),
-    ).toEqual({
-      ok: false,
-      reason:
-        "Vitest report selected live test files had no passing assertions: src/gateway/gateway-acp-spawn-defaults.live.test.ts",
-    });
-  });
-
-  it("allows the OpenAI long-context live file to be skipped until its env is enabled", () => {
-    const profilesFile = "src/gateway/gateway-models.profiles.live.test.ts";
-    const longContextFile = "src/gateway/gateway-openai-long-context.live.test.ts";
-    const payload = {
-      numPassedTests: 1,
-      numTotalTests: 2,
-      testResults: [
-        {
-          name: path.join(process.cwd(), profilesFile),
-          assertionResults: [{ status: "passed" }],
-        },
-        {
-          name: path.join(process.cwd(), longContextFile),
-          assertionResults: [{ status: "skipped" }],
-        },
-      ],
-    };
-    const expectedFiles = [profilesFile, longContextFile];
-
-    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
-      ok: true,
-    });
-    expect(
-      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
-        OPENCLAW_LIVE_OPENAI_LONG_CONTEXT: "1",
-      }),
-    ).toEqual({
-      ok: false,
-      reason: `Vitest report selected live test files had no passing assertions: ${longContextFile}`,
-    });
-  });
-
-  it("allows the experience review live file to be skipped until its env is enabled", () => {
-    const reviewFile = "src/skills/workshop/experience-review.live.test.ts";
+  it.each([
+    ["test/e2e/crabbox-sandbox.live.test.ts", "OPENCLAW_E2E_CRABBOX"],
+    ["src/gateway/gateway-cli-backend.live.test.ts", "OPENCLAW_LIVE_CLI_BACKEND"],
+    ["src/gateway/gateway-acp-spawn-defaults.live.test.ts", "OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS"],
+    ["src/gateway/gateway-openai-long-context.live.test.ts", "OPENCLAW_LIVE_OPENAI_LONG_CONTEXT"],
+    ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
+    ["src/agents/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
+    ["src/agents/subagents/announce/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
+    [
+      "src/agents/subagents/announce/subagent-continuation.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_E2E",
+    ],
+    [
+      "src/agents/subagents/announce/subagent-followup-yield.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_E2E",
+    ],
+    [
+      "src/agents/subagents/announce/subagent-late-reply.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_STRESS",
+    ],
+    [
+      "src/agents/subagents/announce/subagent-yield-pause.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_STRESS",
+    ],
+    [
+      "src/agents/subagents/announce/subagent-yield-resume.live.test.ts",
+      "OPENCLAW_LIVE_SUBAGENT_STRESS",
+    ],
+    ["src/agents/tools/sessions-send-peer.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_STRESS"],
+    ["extensions/anthropic/cli-output.compaction.live.test.ts", "OPENCLAW_LIVE_CLAUDE_COMPACTION"],
+    [
+      "extensions/codex/src/app-server/approval-requester.real-binary.live.test.ts",
+      "OPENCLAW_LIVE_CODEX_APPROVAL_REQUESTER",
+    ],
+    [
+      "extensions/codex/src/app-server/async-questions.real-binary.live.test.ts",
+      "OPENCLAW_LIVE_CODEX_ASYNC_QUESTIONS",
+    ],
+    [
+      "extensions/codex/src/app-server/thread-lifecycle.restricted-mcp.real-binary.live.test.ts",
+      "OPENCLAW_LIVE_CODEX_RESTRICTED_MCP",
+    ],
+    ["extensions/ollama/ollama.live.test.ts", "OPENCLAW_LIVE_OLLAMA"],
+    ["extensions/twitch/src/plugin.live.test.ts", "TWITCH_LIVE_TEST"],
+    [
+      "src/agents/cli-runner/execute.compaction-watchdog.claude.live.test.ts",
+      "OPENCLAW_LIVE_CLAUDE_COMPACTION",
+    ],
+    [
+      "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
+      "OPENCLAW_LIVE_OPENAI_COMPACTION",
+    ],
+  ])("respects explicit opt-in and pass evidence for %s", (reviewFile, optInEnv) => {
     const payload = {
       numPassedTests: 1,
       numTotalTests: 2,
@@ -462,34 +503,49 @@ describe("scripts/test-live-shard", () => {
     });
     expect(
       validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
-        OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW: "1",
+        [optInEnv]: "1",
       }),
     ).toEqual({
       ok: false,
       reason: `Vitest report selected live test files had no passing assertions: ${reviewFile}`,
     });
+    const passingPayload = {
+      ...payload,
+      numPassedTests: 2,
+      testResults: payload.testResults.map(({ name }) => ({
+        name,
+        assertionResults: [{ status: "passed" }],
+      })),
+    };
+    expect(
+      validateLiveShardReportPayload(passingPayload, expectedFiles, process.cwd(), {
+        [optInEnv]: "1",
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("allows GPT-Live files to be skipped until their shared opt-in is enabled", () => {
-    const quicksilverFiles = [
+    const gptLiveFiles = [
+      "extensions/openai/realtime-meeting.live.test.ts",
       "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
       "extensions/openai/realtime-quicksilver.live.test.ts",
+      "extensions/openai/realtime-talk-defaults.live.test.ts",
     ];
     const payload = {
       numPassedTests: 1,
-      numTotalTests: 3,
+      numTotalTests: 1 + gptLiveFiles.length,
       testResults: [
         {
           name: path.join(process.cwd(), "extensions/openai/openai.live.test.ts"),
           assertionResults: [{ status: "passed" }],
         },
-        ...quicksilverFiles.map((file) => ({
+        ...gptLiveFiles.map((file) => ({
           name: path.join(process.cwd(), file),
           assertionResults: [{ status: "skipped" }],
         })),
       ],
     };
-    const expectedFiles = ["extensions/openai/openai.live.test.ts", ...quicksilverFiles];
+    const expectedFiles = ["extensions/openai/openai.live.test.ts", ...gptLiveFiles];
 
     expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
       ok: true,
@@ -500,8 +556,21 @@ describe("scripts/test-live-shard", () => {
       }),
     ).toEqual({
       ok: false,
-      reason: `Vitest report selected live test files had no passing assertions: ${quicksilverFiles.join(", ")}`,
+      reason: `Vitest report selected live test files had no passing assertions: ${gptLiveFiles.join(", ")}`,
     });
+    const passingPayload = {
+      ...payload,
+      numPassedTests: expectedFiles.length,
+      testResults: payload.testResults.map(({ name }) => ({
+        name,
+        assertionResults: [{ status: "passed" }],
+      })),
+    };
+    expect(
+      validateLiveShardReportPayload(passingPayload, expectedFiles, process.cwd(), {
+        OPENCLAW_LIVE_GPT_LIVE: "1",
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("does not count disabled opt-in sentinel assertions as live shard proof", () => {
@@ -592,54 +661,122 @@ describe("scripts/test-live-shard", () => {
 
   it.skipIf(process.platform === "win32")(
     "cleans live shard descendants before forwarding parent SIGTERM",
-    async () => {
+    async ({ signal }) => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-shard-signal-"));
       const fakePnpmPath = path.join(root, "pnpm");
+      const argsPath = path.join(root, "args.json");
       const childPidPath = path.join(root, "child.pid");
       const descendantPidPath = path.join(root, "descendant.pid");
       const signaledPath = path.join(root, "signaled");
       let childPid = 0;
       let descendantPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;
+      let runnerClosed: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
 
       try {
         writeFakePnpm(fakePnpmPath);
-        runner = spawn(
+        // Give the real shard selector an APNs-only inventory: readiness must belong
+        // to the live-test child, not a build prerequisite of another infra test.
+        mkdirSync(path.join(root, "src/infra"), { recursive: true });
+        writeFileSync(path.join(root, "src/infra/push-apns-http2.live.test.ts"), "");
+        const startedRunner = spawn(
           process.execPath,
-          ["scripts/test-live-shard.mjs", "native-live-src-agents"],
+          [path.resolve("scripts/test-live-shard.mjs"), "native-live-src-infra"],
           {
-            env: {
-              ...process.env,
-              OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
-              OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
-              OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
-              npm_execpath: fakePnpmPath,
-            },
-            stdio: "ignore",
+            cwd: root,
+            env: preparedScriptWrapperEnv(
+              [
+                [
+                  new URL("../../scripts/test-live-shard.mts", import.meta.url),
+                  resolveRuntimeWorkerUrl(scriptModuleEntrypoints.liveShard),
+                ],
+              ],
+              {
+                ...process.env,
+                OPENCLAW_FAKE_PNPM_ARGS_PATH: argsPath,
+                OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
+                OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
+                OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
+                npm_execpath: fakePnpmPath,
+              },
+            ),
+            stdio: ["ignore", "pipe", "ignore"],
           },
         );
 
-        childPid = await waitForPidFile(childPidPath, 5_000);
-        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+        runner = startedRunner;
+        runnerClosed = new Promise((resolve, reject) => {
+          startedRunner.once("error", reject);
+          startedRunner.once("close", (code, childSignal) =>
+            resolve({ code, signal: childSignal }),
+          );
+        });
+        const ready = createDeferred();
+        let output = "";
+        startedRunner.stdout.on("data", (chunk) => {
+          output += String(chunk);
+          if (output.includes("fixture pnpm tree ready\n")) {
+            ready.resolve();
+          }
+        });
+        await withinTest(
+          awaitGateBeforeSettlement(
+            ready.promise,
+            runnerClosed,
+            `timeout waiting for pid in ${descendantPidPath}`,
+          ),
+          signal,
+        );
+        childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+        descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+        expect(JSON.parse(readFileSync(argsPath, "utf8")).slice(0, 3)).toEqual([
+          "test:live",
+          "--",
+          "src/infra/push-apns-http2.live.test.ts",
+        ]);
 
         runner.kill("SIGTERM");
 
-        await expect(waitForClose(runner)).resolves.toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(() => existsSync(signaledPath), 5_000);
+        await expect(withinTest(runnerClosed, signal)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        // The fixture writes before exit; the runner joins its child before re-raising.
         expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
-        await waitFor(() => !isProcessAlive(childPid), 5_000);
-        await waitFor(() => !isProcessAlive(descendantPid), 5_000);
+        await waitForProcessExit(childPid, signal);
+        await waitForProcessExit(descendantPid, signal);
       } finally {
-        if (runner?.pid && isProcessAlive(runner.pid)) {
-          process.kill(runner.pid, "SIGKILL");
+        try {
+          if (runner?.pid && isProcessAlive(runner.pid)) {
+            runner.kill("SIGTERM");
+          }
+          // Join the shim so it can forward cancellation to its detached child group
+          // before the fixture directory (and its process receipts) disappears.
+          if (runnerClosed) {
+            await runnerClosed;
+          }
+        } finally {
+          // Read durable ownership even when test cancellation interrupted readiness.
+          childPid ||= existsSync(childPidPath) ? Number(readFileSync(childPidPath, "utf8")) : 0;
+          descendantPid ||= existsSync(descendantPidPath)
+            ? Number(readFileSync(descendantPidPath, "utf8"))
+            : 0;
+          // A failed shim join must not skip cleanup of already observed descendants.
+          for (const pid of [childPid, descendantPid]) {
+            if (pid && isProcessAlive(pid)) {
+              process.kill(pid, "SIGKILL");
+            }
+          }
+          try {
+            await Promise.all(
+              [childPid, descendantPid]
+                .filter((pid) => pid > 0)
+                .map((pid) => waitForProcessExit(pid, signal)),
+            );
+          } finally {
+            rmSync(root, { force: true, recursive: true });
+          }
         }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
-        rmSync(root, { force: true, recursive: true });
       }
     },
   );
@@ -652,16 +789,19 @@ function writeFakePnpm(filePath: string): void {
       "#!/usr/bin/env node",
       'const { spawn } = require("node:child_process");',
       'const fs = require("node:fs");',
+      'if (process.argv[2] !== "test:live") throw new Error("Expected the live-test invocation");',
+      "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH, JSON.stringify(process.argv.slice(2)));",
       "const child = spawn(process.execPath, [",
       '  "-e",',
-      "  \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\",",
-      "], { stdio: 'ignore' });",
+      "  \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');\",",
+      "], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });",
       'process.on("SIGTERM", () => {',
       '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
       "  process.exit(0);",
       "});",
       "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
       "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
+      'child.once("message", () => process.stdout.write("fixture pnpm tree ready\\n"));',
       "setInterval(() => {}, 1000);",
       "",
     ].join("\n"),
@@ -669,28 +809,18 @@ function writeFakePnpm(filePath: string): void {
   chmodSync(filePath, 0o755);
 }
 
-async function waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
-  const startedAt = Date.now();
-  while (!condition()) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error("timed out waiting for condition");
+// The product joins terminal process groups, but does not own the reaping of foreign PIDs.
+async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isProcessAlive(pid)) {
+      await delay(5, undefined, { signal });
     }
-    await delay(5);
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`timed out waiting for process ${pid} to exit`, { cause: error });
+    }
+    throw error;
   }
-}
-
-async function waitForClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await Promise.race([
-    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    }),
-    delay(timeoutMs, undefined, { ref: false }).then(() => {
-      throw new Error("timed out waiting for child close");
-    }),
-  ]);
 }
 
 function isProcessAlive(pid: number): boolean {

@@ -1,17 +1,34 @@
 import { consume } from "@lit/context";
 import type { PropertyValues } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  DASHBOARD_DOCUMENT_ELEMENT,
+  ensureCustomElementDefined,
+} from "../../app/lazy-custom-element.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { dashboardSessionListQuery, dashboardsRouteData } from "./route.ts";
-import { renderDashboards, type DashboardsRouteData } from "./view.ts";
+import { dashboardsRouteData } from "./route.ts";
+import {
+  renderDashboards,
+  type DashboardGalleryFilters,
+  type DashboardsRouteData,
+} from "./view.ts";
 
 class DashboardsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
   @property({ attribute: false }) routeData?: DashboardsRouteData;
+
+  @state() private filters: DashboardGalleryFilters = {
+    query: "",
+    ownerId: "",
+    sort: "updated",
+  };
+  @state() private previewError: string | null = null;
 
   private observedSessions?: ApplicationContext["sessions"];
   private observedScopeId?: string | null;
@@ -24,6 +41,18 @@ class DashboardsPage extends OpenClawLightDomElement {
       return agentSelection.subscribe(() => this.bindList());
     },
   );
+
+  override connectedCallback() {
+    super.connectedCallback();
+    void ensureCustomElementDefined(
+      DASHBOARD_DOCUMENT_ELEMENT.tagName,
+      DASHBOARD_DOCUMENT_ELEMENT.loadModule,
+    )
+      .then(() => this.requestUpdate())
+      .catch((error: unknown) => {
+        this.previewError = formatUiError(error);
+      });
+  }
 
   override disconnectedCallback() {
     this.unsubscribeList?.();
@@ -54,34 +83,53 @@ class DashboardsPage extends OpenClawLightDomElement {
     this.unsubscribeList?.();
     this.observedSessions = sessions;
     this.observedScopeId = scopeId;
-    const query = dashboardSessionListQuery(context);
+    const query = dashboardSessionListQuery(context.agentSelection.state.scopeId);
     const apply = (snapshot: ReturnType<typeof sessions.listSnapshot>) => {
       if (
         this.context !== context ||
         this.observedSessions !== sessions ||
         this.observedScopeId !== scopeId ||
-        (!snapshot.result && !snapshot.error)
+        (!snapshot.result && !snapshot.error && this.data?.result)
       ) {
         return;
       }
       this.data = dashboardsRouteData(context, snapshot);
       this.requestUpdate();
+      if (snapshot.result?.hasMore && !snapshot.loading && !snapshot.error) {
+        void sessions.refreshList({
+          ...query,
+          append: true,
+          offset: snapshot.result.nextOffset ?? snapshot.result.sessions.length,
+        });
+      }
     };
     this.unsubscribeList = sessions.subscribeList(query, apply);
     const snapshot = sessions.listSnapshot(query);
     apply(snapshot);
     if (!snapshot.result && !snapshot.loading && context.gateway.snapshot.phase === "connected") {
-      void sessions.refreshList({ ...query, force: true });
+      void sessions.refreshList(query);
     }
   }
 
   override render() {
-    return renderDashboards(this.data, () => {
-      const context = this.context;
-      if (context?.gateway.snapshot.phase === "connected") {
-        void context.sessions.refreshList({ ...dashboardSessionListQuery(context), force: true });
-      }
-    });
+    return renderDashboards(
+      this.data,
+      this.filters,
+      {
+        onQueryChange: (query) => {
+          this.filters = { ...this.filters, query };
+        },
+        onOwnerChange: (ownerId) => {
+          this.filters = { ...this.filters, ownerId };
+        },
+        onSortChange: (sort) => {
+          this.filters = { ...this.filters, sort };
+        },
+        onNavigate: this.context?.navigate,
+      },
+      this.context?.gateway.snapshot,
+      this.previewError,
+    );
   }
 }
 

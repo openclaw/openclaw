@@ -12,6 +12,91 @@ import {
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 describe("incomplete-turn terminal metadata", () => {
+  it("accepts a completed speech-only answer with provider reasoning", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      content: [
+        { type: "thinking", thinking: "Prepare a spoken greeting.", thinkingSignature: "" },
+        { type: "text", text: "" },
+      ],
+      openclawDelivery: { tts: { tagged: true, text: "Have a lovely day." } },
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      currentAttemptAssistant: assistant,
+      currentAttemptCompletedAssistant: assistant,
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 1,
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the side-effect warning when the terminal error is a provider refusal", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "anthropic",
+      stopReason: "error",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 0,
+          details: { provider: "anthropic", category: "cyber" },
+        },
+      ],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    });
+
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 0,
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(
+      "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+    );
+  });
+
+  it("keeps an explicitly replay-safe structured provider refusal replayable", () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "openai",
+      stopReason: "error",
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 0,
+          details: { provider: "openai", category: "cyber" },
+        },
+      ],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      externalAbort: false,
+      timedOut: false,
+      attempt,
+    });
+
+    expect(incompleteTurnText).toContain("provider refused this request");
+    expect(resolveReplayInvalidFlag({ attempt, incompleteTurnText })).toBe(false);
+  });
+
   it("uses the current completed assistant instead of stale session tool-use evidence", () => {
     const staleAssistant = buildEmbeddedRunnerAssistant({ stopReason: "toolUse" });
     const currentAssistant = buildEmbeddedRunnerAssistant({
@@ -35,12 +120,14 @@ describe("incomplete-turn terminal metadata", () => {
     ).toBeNull();
   });
 
-  it("keeps stale session tool-use evidence incomplete without a current assistant", () => {
+  it("keeps completed tool-use evidence incomplete when the current transcript slice is absent", () => {
+    const assistant = buildEmbeddedRunnerAssistant({ stopReason: "toolUse" });
     const attempt = makeEmbeddedRunnerAttempt({
       assistantTexts: ["Let me update the file..."],
       toolMetas: [{ toolName: "write" }],
-      lastAssistant: buildEmbeddedRunnerAssistant({ stopReason: "toolUse" }),
+      lastAssistant: assistant,
       currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: assistant,
     });
 
     expect(
@@ -119,5 +206,44 @@ describe("incomplete-turn terminal metadata", () => {
         attempt,
       }),
     ).toBe("paused");
+  });
+});
+
+describe("tool-authored source replies", () => {
+  // A `canDeliverSourceReply` tool wrote the final answer; the host delivers it, so a
+  // tool-use stop with no post-tool assistant text is not an incomplete turn.
+  it("treats a final tool-authored source reply as a complete tool-use turn", () => {
+    expect(
+      resolveIncompleteTurnPayloadText({
+        payloadCount: 1,
+        aborted: false,
+        externalAbort: false,
+        timedOut: false,
+        attempt: makeEmbeddedRunnerAttempt({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "order_status", meta: "orderId=SO1" }],
+          // A live run starts with no source reply delivered yet.
+          sourceReplyDeliveryState: "missing",
+          messagingToolSourceReplyPayloads: [
+            {
+              text: "Pedido SO1 creado.",
+              sourceReplyFinal: true,
+              toolAuthored: true,
+            },
+          ],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "tool_1",
+                name: "order_status",
+                arguments: { orderId: "SO1" },
+              },
+            ],
+          }),
+        }),
+      }),
+    ).toBeNull();
   });
 });

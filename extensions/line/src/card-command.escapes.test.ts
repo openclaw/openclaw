@@ -2,21 +2,12 @@
 import type { messagingApi } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { registerLineCardCommand } from "./card-command.js";
+import { handleLineCardCommand } from "./card-command.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData } from "./types.js";
 
 async function runCardCommand(args: string): Promise<LineChannelData> {
-  let result: unknown;
-  registerLineCardCommand({
-    registerCommand(command: unknown) {
-      const { handler } = command as {
-        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
-      };
-      result = handler({ channel: "line", args });
-    },
-  } as never);
-  const payload = (await result) as { channelData: { line: LineChannelData } };
+  const payload = (await handleLineCardCommand(args)) as { channelData: { line: LineChannelData } };
   return payload.channelData.line;
 }
 
@@ -105,7 +96,7 @@ describe("line card option separators", () => {
       ),
       "LINE buttons template message",
     );
-    if (message.template.type !== "buttons") {
+    if (message.type !== "template" || message.template.type !== "buttons") {
       throw new Error("Expected a LINE buttons template");
     }
 

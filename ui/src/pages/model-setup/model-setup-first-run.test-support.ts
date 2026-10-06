@@ -1,13 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { ModelSetupPage, type ModelSetupRouteData } from "./model-setup-page.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import type { ModelSetupRouteData } from "./first-run-setup.ts";
+import { ModelSetupPage } from "./model-setup-page.ts";
+import type { ModelSetupPageState } from "./state.ts";
 
 export const detection: SystemAgentSetupDetectResult = {
   candidates: [],
@@ -25,7 +28,8 @@ function mutableGatewaySnapshot(snapshot: ApplicationGateway["snapshot"]) {
 }
 
 export function createFirstRunContext(refreshError?: string, beforeRefresh?: () => Promise<void>) {
-  const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>();
+  const request =
+    vi.fn<(...args: Parameters<GatewayBrowserClient["request"]>) => Promise<unknown>>();
   const client = createTestGatewayClient(request);
   const listeners = new Set<(snapshot: ApplicationGateway["snapshot"]) => void>();
   const snapshot = {
@@ -35,13 +39,17 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
     hello: {
       type: "hello-ok",
       protocol: 1,
-      auth: { role: "operator", scopes: ["operator.read", "operator.admin"] },
+      auth: {
+        role: "operator",
+        scopes: ["operator.read", "operator.admin"],
+        recoveryScope: "synthetic-setup-owner",
+      },
       features: {
         methods: [
           "config.set",
           "openclaw.setup.detect",
           "openclaw.setup.verify",
-          "openclaw.setup.activate",
+          "openclaw.setup.activate.start",
           "openclaw.setup.prepare.start",
         ],
       },
@@ -62,6 +70,8 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
     },
     connectionRevision: 0,
     eventLog: [],
+    eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,
@@ -101,6 +111,10 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
       state: { selectedId: "main", scopeId: "main" },
       subscribe: () => () => undefined,
     },
+    settingsAgentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe: () => () => undefined,
+    },
     basePath: "/openclaw",
     resourceBasePath: "/openclaw",
     navigate: vi.fn(),
@@ -124,22 +138,21 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
 
 export async function mountPage(
   context: ApplicationContext,
-  routeData: Omit<ModelSetupRouteData, "connection"> & { client: GatewayBrowserClient | null },
+  fixture: ModelSetupRouteData & {
+    state: Extract<ModelSetupPageState, { phase: "ready" }>;
+    client: GatewayBrowserClient;
+  },
 ) {
   const provider = createApplicationContextProvider(context);
   const page = new ModelSetupPage();
-  const { client, ...data } = routeData;
-  page.routeData = {
-    ...data,
-    connection: {
-      client,
-      hello: context.gateway.snapshot.hello,
-      agentId: context.agentSelection.state.selectedId,
-    },
-  };
+  // Prime inventory through the real detection boundary; the request fixture
+  // below it continues observing subsequent activation and recovery actions.
+  vi.spyOn(fixture.client, "request").mockResolvedValueOnce(fixture.state.result);
+  page.routeData = { firstRun: fixture.firstRun };
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
+  await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
   return { page, provider };
 }
 
@@ -163,4 +176,34 @@ export function requestParameters(params: unknown) {
     throw new Error("Expected Gateway request parameters.");
   }
   return params;
+}
+
+export async function clickCandidate(page: ModelSetupPage, kind: string) {
+  await waitForFast(() => {
+    const candidateButton = page.querySelector<HTMLButtonElement>(
+      `[data-candidate-kind="${kind}"] button`,
+    );
+    expect(candidateButton).not.toBeNull();
+    expect(candidateButton!.disabled).toBe(false);
+  });
+  const button = page.querySelector<HTMLButtonElement>(`[data-candidate-kind="${kind}"] button`);
+  expect(button).not.toBeNull();
+  expect(button!.disabled).toBe(false);
+  button!.click();
+  await page.updateComplete;
+}
+
+export async function selectManualProvider(page: ModelSetupPage, providerId: string) {
+  const picker = page.querySelector(".model-setup-provider-select")!;
+  const item = picker.querySelector(`[data-manual-provider="${providerId}"]`);
+  expect(item).not.toBeNull();
+  picker.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
+  await page.updateComplete;
+}
+
+export async function waitForModelSetupDetection(page: ModelSetupPage): Promise<void> {
+  await page.updateComplete;
+  await waitForFast(() =>
+    expect(page.querySelector(".model-setup")?.getAttribute("aria-busy")).toBe("false"),
+  );
 }

@@ -3,7 +3,6 @@ import type {
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { validateAnthropicSetupToken } from "openclaw/plugin-sdk/provider-auth";
 import {
   addProviderUsageModel,
   asProviderUsageObject,
@@ -43,10 +42,6 @@ function normalizeAdminKey(raw: string | undefined): string | undefined {
 
 function encodeAdminToken(token: string): string {
   return encodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, token);
-}
-
-function decodeAdminToken(raw: string): string | undefined {
-  return decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, raw);
 }
 
 function utcDay(value: string): string | undefined {
@@ -262,8 +257,11 @@ export async function resolveAnthropicUsageAuth(
   if (adminKey) {
     return { token: encodeAdminToken(adminKey) };
   }
-  if (apiKey && validateAnthropicSetupToken(apiKey) === undefined) {
-    return { token: apiKey };
+  if (apiKey) {
+    const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
+    if (validateAnthropicSetupToken(apiKey) === undefined) {
+      return { token: apiKey };
+    }
   }
 
   // Claude owns its native refresh-token family. Do not resolve a copied
@@ -272,27 +270,20 @@ export async function resolveAnthropicUsageAuth(
 }
 
 /** Formats keychain plan metadata like ("max", "default_max_20x") as "Max (20x)". */
-function formatClaudePlanLabel(
-  subscriptionType?: string,
-  rateLimitTier?: string,
-): string | undefined {
-  const base = subscriptionType?.trim();
+function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string | undefined {
+  const base = ctx.subscriptionType?.trim();
   if (!base) {
     return undefined;
   }
   const label = base.charAt(0).toUpperCase() + base.slice(1);
-  const tier = rateLimitTier?.trim().match(/_(\d+x)$/i)?.[1];
+  const tier = ctx.rateLimitTier?.trim().match(/_(\d+x)$/i)?.[1];
   return tier ? `${label} (${tier})` : label;
-}
-
-function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string | undefined {
-  return formatClaudePlanLabel(ctx.subscriptionType, ctx.rateLimitTier);
 }
 
 export async function fetchAnthropicUsage(
   ctx: ProviderFetchUsageSnapshotContext,
 ): Promise<ProviderUsageSnapshot> {
-  const adminKey = decodeAdminToken(ctx.token);
+  const adminKey = decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, ctx.token);
   if (adminKey) {
     return await fetchAnthropicAdminUsage({
       apiKey: adminKey,

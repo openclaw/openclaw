@@ -7,7 +7,7 @@ import { icons } from "./icons.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import "./web-awesome.ts";
 
-export type CatalogSessionMenuAction = "viewer" | "terminal";
+export type CatalogSessionMenuAction = "viewer" | "import" | "terminal" | "delete";
 
 class CatalogSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) x = 0;
@@ -15,6 +15,8 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) trigger: HTMLElement | null = null;
   @property({ attribute: false }) lastActive = "";
   @property({ attribute: false }) terminalDisabled = false;
+  @property({ attribute: false }) canDelete = false;
+  @property({ attribute: false }) canImport = false;
   @property({ attribute: false }) onAction: (action: CatalogSessionMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
   readonly menuLifecycle = new DropdownMenuController(this, {
@@ -51,7 +53,7 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
 
   override render() {
     const menuWidth = 240;
-    const menuMaxHeight = 140;
+    const menuMaxHeight = 140 + (this.canDelete ? 40 : 0) + (this.canImport ? 40 : 0);
     const x = Math.max(8, Math.min(this.x, window.innerWidth - menuWidth - 8));
     const y = Math.max(8, Math.min(this.y, window.innerHeight - menuMaxHeight - 8));
     const menuLabel = t("chat.catalog.sessionMenu");
@@ -73,17 +75,29 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
           aria-label=${menuLabel}
           style="position: fixed; left: ${x}px; top: ${y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
-        ${this.lastActive
-          ? html`<div class="session-menu__info">
-              ${t("sessionsView.lastActive", { time: this.lastActive })}
-            </div>`
-          : ""}
+        ${
+          this.lastActive
+            ? html`<div class="session-menu__info">
+                ${t("sessionsView.lastActive", { time: this.lastActive })}
+              </div>`
+            : ""
+        }
         <wa-dropdown-item class="session-menu__item" value="viewer">
           <span slot="icon" class="session-menu__icon" aria-hidden="true"
             >${icons.messageSquare}</span
           >
           <span class="session-menu__text">${t("chat.catalog.openInOpenClaw")}</span>
         </wa-dropdown-item>
+        ${
+          this.canImport
+            ? html`<wa-dropdown-item class="session-menu__item" value="import">
+                <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                  >${icons.download}</span
+                >
+                <span class="session-menu__text">${t("chat.catalog.importToOpenClaw")}</span>
+              </wa-dropdown-item>`
+            : ""
+        }
         <wa-dropdown-item
           class="session-menu__item"
           value="terminal"
@@ -93,6 +107,20 @@ class CatalogSessionMenu extends OpenClawLightDomElement {
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.terminal}</span>
           <span class="session-menu__text">${t("chat.catalog.openInTerminal")}</span>
         </wa-dropdown-item>
+        ${
+          this.canDelete
+            ? html`<wa-dropdown-item
+                class="session-menu__item session-menu__item--destructive"
+                variant="danger"
+                value="delete"
+              >
+                <span slot="icon" class="session-menu__icon" aria-hidden="true"
+                  >${icons.trash}</span
+                >
+                <span class="session-menu__text">${t("chat.catalog.deleteSession")}</span>
+              </wa-dropdown-item>`
+            : ""
+        }
       </wa-dropdown>
     `;
   }

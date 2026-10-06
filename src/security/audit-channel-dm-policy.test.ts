@@ -81,6 +81,45 @@ function createDmPlugin(
 }
 
 describe("security audit channel dm policy", () => {
+  it.each(["doctor", "audit"] as const)(
+    "reports unowned DM routes without losing sibling findings in %s mode",
+    async (mode) => {
+      const findings = await collectChannelSecurityFindingsCore({
+        mode,
+        cfg: {
+          agents: { entries: { main: {}, research: {} } },
+          bindings: [{ agentId: "research", match: { channel: "whatsapp", accountId: "owned" } }],
+        },
+        plugins: [
+          createDmPlugin({
+            accounts: {
+              finite: { allowFrom: ["user-a", "user-b"] },
+              open: { policy: "open", allowFrom: ["*"] },
+              owned: { allowFrom: ["user-c", "user-d"] },
+            },
+          }),
+        ],
+      });
+
+      for (const account of ["finite", "open"]) {
+        const finding = requireFinding(
+          findings,
+          `channels.whatsapp.routing.owner_missing.${account}`,
+        );
+        expect(finding).toMatchObject({
+          severity: "warn",
+          remediation: expect.stringContaining(`whatsapp:${account}`),
+        });
+      }
+      expect(
+        findings.filter((finding) => finding.checkId.includes(".routing.owner_missing.")),
+      ).toHaveLength(2);
+      expect(requireFinding(findings, "channels.whatsapp.dm.open").severity).toBe("critical");
+      expect(collisionFindings(findings)).toHaveLength(1);
+      expect(collisionFindings(findings)[0]?.detail).toContain("owned");
+    },
+  );
+
   it("keeps producer-owned channel severity through the audit summary", async () => {
     const pluginOptions = {
       accounts: { default: { policy: "disabled", allowFrom: [] } },
@@ -169,7 +208,7 @@ describe("security audit channel dm policy", () => {
     {
       name: "global session aliases remain isolated by routed agent store",
       cfg: {
-        agents: { list: [{ id: "agent-a" }, { id: "agent-b", default: true }] },
+        agents: { entries: { "agent-a": {}, "agent-b": {} } },
         session: { scope: "global", dmScope: "main" },
         bindings: [
           {
@@ -257,7 +296,7 @@ describe("security audit channel dm policy", () => {
   it("keeps separate collision topologies distinct", async () => {
     const findings = await collectChannelSecurityFindingsCore({
       cfg: {
-        agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] },
+        agents: { entries: { alpha: {}, beta: {} } },
         session: { dmScope: "main" },
         bindings: [
           { agentId: "alpha", match: { channel: "whatsapp", accountId: "a" } },

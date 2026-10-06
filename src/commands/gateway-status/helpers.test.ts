@@ -13,7 +13,7 @@ import {
   resolveTargets,
   sanitizeSshTarget,
 } from "./helpers.js";
-import { createSecretRefGatewayConfig } from "./test-support.js";
+import { createUnreachableGatewayProbe, createSecretRefGatewayConfig } from "./test-support.js";
 
 describe("extractConfigSummary", () => {
   it("marks SecretRef-backed gateway auth credentials as configured", () => {
@@ -237,6 +237,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
+      gatewayReached: true as const,
       error: "missing scope: operator.read",
       close: null,
       auth: {
@@ -253,7 +254,7 @@ describe("probe reachability classification", () => {
     expect(isScopeLimitedProbeFailure(probe)).toBe(true);
     expect(isProbeReachable(probe)).toBe(true);
     expect(renderProbeSummaryLine(probe, false)).toBe(
-      "Connect: ok (51ms) · Capability: write-capable · Read probe: limited - missing scope: operator.read",
+      "Connect: ok (51ms) · Capability: write-capable · Read check: limited - missing scope: operator.read",
     );
   });
 
@@ -262,6 +263,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
+      gatewayReached: true as const,
       error: "permission denied",
       missingScopeErrorDetails: {
         code: "MISSING_SCOPE" as const,
@@ -288,6 +290,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 43,
+      gatewayReached: true as const,
       error: "unknown method: status",
       close: null,
       auth: {
@@ -305,27 +308,12 @@ describe("probe reachability classification", () => {
     expect(isPostConnectProbeFailure(probe)).toBe(true);
     expect(isProbeReachable(probe)).toBe(true);
     expect(renderProbeSummaryLine(probe, false)).toBe(
-      "Connect: ok (43ms) · Capability: connect-only · Read probe: failed - unknown method: status",
+      "Connect: ok (43ms) · Capability: connect-only · Read check: failed - unknown method: status",
     );
   });
 
   it("keeps failed-before-connect probes unreachable", () => {
-    const probe = {
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown" as const,
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    };
+    const probe = createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout");
 
     expect(isPostConnectProbeFailure(probe)).toBe(false);
     expect(isProbeReachable(probe)).toBe(false);

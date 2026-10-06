@@ -1,4 +1,3 @@
-// Proxy capture CA helpers create and inspect local capture CA certificates.
 import { createHash, createPrivateKey, randomBytes, X509Certificate } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -159,7 +158,9 @@ export async function ensureSecretEgressProxyCa(certDir: string): Promise<LocalP
   return await ensureLocalProxyCa(certDir, {
     commonName: "OpenClaw Secret Egress Proxy",
     purpose: "secret egress proxy",
-    validityDays: 1,
+    // Trust is loaded once by subprocesses. Key retention is still limited to
+    // this Gateway process; certificate expiry must not impose daily restarts.
+    validityDays: 3650,
   });
 }
 

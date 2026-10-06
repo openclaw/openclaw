@@ -1,4 +1,3 @@
-// Tlon plugin module implements history behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -9,16 +8,10 @@ import { extractMessageText } from "./utils.js";
  * e.g., 170141184507799509469114119040828178432 -> 170.141.184.507.799.509.469.114.119.040.828.178.432
  */
 function formatUd(id: string | number): string {
-  const str = String(id).replace(/\./g, ""); // Remove any existing dots
-  const reversed = str.split("").toReversed();
+  const str = String(id).replace(/\./g, "");
   const chunks: string[] = [];
-  for (let i = 0; i < reversed.length; i += 3) {
-    chunks.push(
-      reversed
-        .slice(i, i + 3)
-        .toReversed()
-        .join(""),
-    );
+  for (let end = str.length; end > 0; end -= 3) {
+    chunks.push(str.slice(Math.max(0, end - 3), end));
   }
   return chunks.toReversed().join(".");
 }
@@ -49,22 +42,7 @@ function createHistoryEntryFromMemo(params: {
   };
 }
 
-const messageCache = new Map<string, TlonHistoryEntry[]>();
 const MAX_CACHED_MESSAGES = 100;
-
-export function cacheMessage(channelNest: string, message: TlonHistoryEntry) {
-  if (!messageCache.has(channelNest)) {
-    messageCache.set(channelNest, []);
-  }
-  const cache = messageCache.get(channelNest);
-  if (!cache) {
-    return;
-  }
-  cache.unshift(message);
-  if (cache.length > MAX_CACHED_MESSAGES) {
-    cache.pop();
-  }
-}
 
 async function fetchChannelHistory(
   api: { scry: (path: string) => Promise<unknown> },
@@ -81,18 +59,10 @@ async function fetchChannelHistory(
       return [];
     }
 
-    let posts: unknown[] = [];
-    if (Array.isArray(data)) {
-      posts = data;
-    } else {
-      const dataRecord = asRecord(data);
-      const postMap = asRecord(dataRecord?.posts);
-      if (postMap) {
-        posts = Object.values(postMap);
-      } else if (dataRecord) {
-        posts = Object.values(dataRecord);
-      }
-    }
+    const dataRecord = asRecord(data);
+    const posts = Array.isArray(data)
+      ? data
+      : Object.values(asRecord(dataRecord?.posts) ?? dataRecord ?? {});
 
     const messages = posts
       .map((item) => {
@@ -102,12 +72,7 @@ async function fetchChannelHistory(
         const essay = asRecord(itemRecord?.essay) ?? asRecord(replyPostSet?.essay);
         const seal = asRecord(itemRecord?.seal) ?? asRecord(replyPostSet?.seal);
 
-        return {
-          author: typeof essay?.author === "string" ? essay.author : "unknown",
-          content: extractMessageText(essay?.content || []),
-          timestamp: typeof essay?.sent === "number" ? essay.sent : Date.now(),
-          id: typeof seal?.id === "string" ? seal.id : undefined,
-        } as TlonHistoryEntry;
+        return createHistoryEntryFromMemo({ memo: essay, seal });
       })
       .filter((msg) => msg.content);
 
@@ -119,20 +84,60 @@ async function fetchChannelHistory(
   }
 }
 
-export async function getChannelHistory(
+export function createChannelHistoryCache() {
+  // A monitor owns this cache so stopped accounts cannot leak stale history into
+  // a restarted or concurrently running account with the same channel nest.
+  const messageCache = new Map<string, TlonHistoryEntry[]>();
+
+  return {
+    cacheMessage(channelNest: string, message: TlonHistoryEntry) {
+      const cache = messageCache.get(channelNest) ?? [];
+      cache.unshift(message);
+      if (cache.length > MAX_CACHED_MESSAGES) {
+        cache.pop();
+      }
+      messageCache.set(channelNest, cache);
+    },
+    async getChannelHistory(
+      api: { scry: (path: string) => Promise<unknown> },
+      channelNest: string,
+      count = 50,
+      runtime?: RuntimeEnv,
+    ): Promise<TlonHistoryEntry[]> {
+      const cache = messageCache.get(channelNest) ?? [];
+      if (cache.length >= count) {
+        runtime?.log?.(`[tlon] Using cached messages (${cache.length} available)`);
+        return cache.slice(0, count);
+      }
+
+      runtime?.log?.(
+        `[tlon] Cache has ${cache.length} messages, need ${count}, fetching from scry...`,
+      );
+      return await fetchChannelHistory(api, channelNest, count, runtime);
+    },
+  };
+}
+
+export async function fetchThreadRootAuthor(
   api: { scry: (path: string) => Promise<unknown> },
   channelNest: string,
-  count = 50,
+  parentId: string,
   runtime?: RuntimeEnv,
-): Promise<TlonHistoryEntry[]> {
-  const cache = messageCache.get(channelNest) ?? [];
-  if (cache.length >= count) {
-    runtime?.log?.(`[tlon] Using cached messages (${cache.length} available)`);
-    return cache.slice(0, count);
+): Promise<string | null> {
+  // Keep remote identifiers within the authenticated channel-post namespace.
+  if (!/^chat\/~?[a-z-]+\/[a-z0-9-]+$/i.test(channelNest) || !/^\d+(?:\.\d{3})*$/.test(parentId)) {
+    return null;
   }
-
-  runtime?.log?.(`[tlon] Cache has ${cache.length} messages, need ${count}, fetching from scry...`);
-  return await fetchChannelHistory(api, channelNest, count, runtime);
+  try {
+    const data = asRecord(
+      await api.scry(`/channels/v4/${channelNest}/posts/post/id/${formatUd(parentId)}.json`),
+    );
+    const essay = asRecord(data?.essay);
+    return typeof essay?.author === "string" ? essay.author : null;
+  } catch (error: unknown) {
+    runtime?.log?.(`[tlon] Could not identify thread root author: ${formatErrorMessage(error)}`);
+    return null;
+  }
 }
 
 /**

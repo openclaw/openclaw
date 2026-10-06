@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -17,7 +18,10 @@ import { registerLogsCli } from "./logs-cli.js";
 afterEach(() => vi.restoreAllMocks());
 
 async function withLogsGateway(
-  options: { source?: "config" | "environment"; denied?: boolean },
+  options: {
+    source?: "config" | "malformed";
+    failure?: "timeout";
+  },
   run: (fixture: {
     port: string;
     requests: string[];
@@ -29,8 +33,7 @@ async function withLogsGateway(
     {
       label: "logs-port",
       env: {
-        OPENCLAW_GATEWAY_URL:
-          options.source === "environment" ? "ws://remote.example:19001" : undefined,
+        OPENCLAW_GATEWAY_URL: undefined,
         OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: undefined,
       },
     },
@@ -42,6 +45,9 @@ async function withLogsGateway(
           ...(options.source === "config" ? { remote: { url: "ws://remote.example:19001" } } : {}),
         },
       });
+      if (options.source === "malformed") {
+        await fs.writeFile(state.configPath, "{ gateway:");
+      }
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       const requests: string[] = [];
       server.on("connection", (socket) => {
@@ -58,16 +64,7 @@ async function withLogsGateway(
               frame.id,
               buildMinimalGatewayHelloOkPayload({ methods: ["logs.tail"] }),
             );
-          } else if (options.denied) {
-            socket.send(
-              JSON.stringify({
-                type: "res",
-                id: frame.id,
-                ok: false,
-                error: { code: "INVALID_REQUEST", message: "logs unavailable for this client" },
-              }),
-            );
-          } else {
+          } else if (!options.failure) {
             sendMinimalGatewayResponse(socket, frame.id, {
               file: "selected-gateway.log",
               cursor: 1,
@@ -105,7 +102,7 @@ async function runLogs(argv: string[]) {
 }
 
 describe("logs local port selection", () => {
-  it.each(["config", "environment"] as const)(
+  it.each(["config"] as const)(
     "tails the selected local port instead of validating the %s default URL",
     async (source) => {
       await withLogsGateway({ source }, async ({ port, requests, stdout }) => {
@@ -116,38 +113,47 @@ describe("logs local port selection", () => {
     },
   );
 
-  it.each(["text", "json"])(
-    "reports the rejection reason and selected port when the RPC fails in %s mode",
-    async (mode) => {
-      await withLogsGateway({ denied: true }, async ({ port, requests, stderr }) => {
-        const args = [
-          "--port",
-          port,
-          "--timeout",
-          "1500",
-          ...(mode === "json" ? ["--json"] : ["--plain"]),
-        ];
-        await expect(runLogs(args)).rejects.toBeInstanceOf(ExitError);
-        expect(requests).toEqual(["connect", "logs.tail"]);
-        const output = stderr.join("");
-        expect(output).toContain("logs unavailable for this client");
-        if (mode === "json") {
-          expect(JSON.parse(output)).toMatchObject({
-            type: "error",
-            message: "Gateway not reachable. Is it running and accessible?",
-            error: "logs unavailable for this client",
-            details: { url: `ws://127.0.0.1:${port}` },
-          });
-        } else {
-          expect(output).not.toContain("Gateway not reachable");
-          expect(output).toContain(`Gateway target: ws://127.0.0.1:${port}`);
-        }
+  it.each(["--max-bytes"])(
+    "rejects an explicitly empty numeric %s before contacting Gateway",
+    async (flag) => {
+      await withLogsGateway({}, async ({ port, requests }) => {
+        await expect(
+          runLogs(["--port", port, flag, "", "--json", "--timeout", "1500"]),
+        ).rejects.toThrow(`${flag} must be a positive integer.`);
+        expect(requests).toEqual([]);
       });
     },
   );
 
-  it("honors an explicit URL even with an unusable default URL", async () => {
-    await withLogsGateway({ source: "config" }, async ({ port, requests, stdout }) => {
+  it.each([{ failure: "timeout" as const, error: /timeout|timed out/ }])(
+    "uses the failure reason as the JSON summary after a post-hello $failure",
+    async ({ failure, error }) => {
+      await withLogsGateway({ failure }, async ({ port, requests, stdout, stderr }) => {
+        await expect(
+          runLogs([
+            "--url",
+            `ws://127.0.0.1:${port}`,
+            "--token",
+            "fixture-token",
+            "--json",
+            "--timeout",
+            "1500",
+          ]),
+        ).rejects.toBeInstanceOf(ExitError);
+        expect(requests).toEqual(["connect", "logs.tail"]);
+        expect(stdout.join("")).toBe("");
+        expect(JSON.parse(stderr.join(""))).toMatchObject({
+          type: "error",
+          message: expect.stringMatching(error),
+          error: expect.stringMatching(error),
+          details: { url: `ws://127.0.0.1:${port}` },
+        });
+      });
+    },
+  );
+
+  it.each(["malformed"] as const)("honors an explicit URL with unusable %s", async (source) => {
+    await withLogsGateway({ source }, async ({ port, requests, stdout, stderr }) => {
       await runLogs([
         "--url",
         `ws://127.0.0.1:${port}`,
@@ -159,10 +165,13 @@ describe("logs local port selection", () => {
       ]);
       expect(requests).toEqual(["connect", "logs.tail"]);
       expect(stdout.join("")).toContain("selected local log");
+      if (source === "malformed") {
+        expect(stderr.join("")).toContain("openclaw doctor --fix");
+      }
     });
   });
 
-  it.each(["config", "environment"] as const)(
+  it.each(["config"] as const)(
     "still rejects an unsafe %s target without an override",
     async (source) => {
       await withLogsGateway({ source }, async ({ requests }) => {

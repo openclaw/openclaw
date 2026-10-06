@@ -19,9 +19,7 @@ export {
 export { createLocalMeetingRealtimeAudioTransport } from "../meeting-bot/realtime-local-audio-transport.js";
 export { createNodeMeetingRealtimeAudioTransport } from "../meeting-bot/realtime-node-audio-transport.js";
 export {
-  convertMeetingBridgeAudioForStt,
   convertMeetingTtsAudioForBridge,
-  resolveMeetingRealtimeAudioFormat,
   type MeetingRealtimeAudioFormat,
 } from "../meeting-bot/realtime-audio-format.js";
 export {
@@ -60,7 +58,6 @@ export {
 } from "../meeting-bot/browser-request.js";
 export {
   callMeetingBrowserProxyOnNode,
-  createMeetingBrowserNodeCaller,
   resolveMeetingBrowserNode,
   resolveMeetingBrowserNodeInfo,
   type MeetingBrowserNodeInfo,
@@ -108,3 +105,11 @@ export {
   type MeetingBrowserNodeStartConfig,
 } from "../meeting-bot/node-invoke-policy.js";
 export { createMeetingNodeHost, type MeetingNodeHostOptions } from "../meeting-bot/node-host.js";
+
+export { runMeetingParticipationWithBrowser } from "../meeting-bot/participation-browser.js";
+export type {
+  MeetingParticipationRequest,
+  MeetingParticipationSource,
+  MeetingParticipationAttempt,
+  MeetingBrowserParticipationAdapter,
+} from "../meeting-bot/participation-types.js";

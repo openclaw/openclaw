@@ -2,7 +2,7 @@ import { asOptionalRecord, isStringRecord } from "@openclaw/normalization-core/r
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { ServiceChildStart } from "./service-child-protocol.js";
 
-export function buildWindowsJobEnvironmentBlock(env: Record<string, string> | undefined): Buffer {
+export function buildWindowsJobEnvironmentBlock(env: Record<string, string>): Buffer {
   const merged = mergeProcessEnv([env], "win32");
   for (const [key, value] of Object.entries(merged)) {
     if (key.includes("\0") || value.includes("\0")) {
@@ -23,11 +23,12 @@ export function isWindowsJobServiceStart(value: unknown): value is ServiceChildS
   const message = asOptionalRecord(value);
   return Boolean(
     message &&
-    message.type === "start" &&
+    (message.type === "start" || message.type === "prepare") &&
     typeof message.generation === "string" &&
     typeof message.command === "string" &&
     Array.isArray(message.args) &&
     message.args.every((arg) => typeof arg === "string") &&
+    (message.argv0 === undefined || typeof message.argv0 === "string") &&
     (message.cwd === undefined || typeof message.cwd === "string") &&
     (message.env === undefined || isStringRecord(message.env)) &&
     (message.stdinMode === "inherit" ||

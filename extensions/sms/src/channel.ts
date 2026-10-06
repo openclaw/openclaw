@@ -1,4 +1,3 @@
-// Sms plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -21,6 +20,7 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -45,7 +45,7 @@ import {
 } from "./phone.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import {
-  createSmsMessageReceipt,
+  createSmsSendResult,
   prepareSmsMediaAttempt,
   sendPreparedSmsMediaAttempt,
   sendSmsTextChunks,
@@ -205,23 +205,6 @@ const smsSetupContract = defineChannelSetupContract({
   adapter: { applyAccountConfig: applySmsAccountConfig },
 });
 
-function createSmsReceipt(params: {
-  results: Array<{ sid: string; to: string; from?: string; status?: string }>;
-  kind: "text" | "media";
-}) {
-  const first = params.results[0];
-  if (!first) {
-    throw new Error("SMS send did not return a Twilio Message SID.");
-  }
-  const receipt = createSmsMessageReceipt(params);
-  return {
-    channel: CHANNEL_ID,
-    messageId: first.sid,
-    chatId: first.to,
-    receipt,
-  };
-}
-
 function resolveSmsTextChunkLimit(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -252,7 +235,7 @@ async function sendSmsText(ctx: {
     onPlatformSendDispatch: ctx.onPlatformSendDispatch,
     onDeliveryResult: ctx.onDeliveryResult,
   });
-  return createSmsReceipt({ results, kind: "text" });
+  return createSmsSendResult({ results, kind: "text" });
 }
 
 type SmsAttachmentContext = {
@@ -341,7 +324,7 @@ async function sendPreparedSmsAttachment(ctx: SmsAttachmentContext) {
     },
     onDeliveryResult: ctx.onDeliveryResult,
   });
-  return createSmsReceipt({ results, kind: "media" });
+  return createSmsSendResult({ results, kind: "media" });
 }
 
 const smsMessageAdapter = defineChannelMessageAdapter({
@@ -366,16 +349,20 @@ const smsMessageAdapter = defineChannelMessageAdapter({
           return;
         }
         const attemptToken = resolveSmsAttachmentAttemptToken(ctx.attemptToken);
-        // Core can fail after staging but before the adapter starts. Discard only
-        // while the attempt still proves Twilio's HTTP boundary was never crossed.
-        if (!attemptToken || attemptToken.platformDispatchStarted) {
+        // The durable marker precedes Twilio's final credential fence. A typed
+        // rejection still proves the HTTP boundary was never crossed.
+        if (
+          !attemptToken ||
+          (attemptToken.platformDispatchStarted &&
+            !(ctx.error instanceof PlatformMessageNotDispatchedError))
+        ) {
           return;
         }
         await attemptToken.attempt.cleanupHostedMedia();
       },
     },
-    text: async (ctx) => await sendSmsText(ctx),
-    media: async (ctx) => await sendPreparedSmsAttachment(ctx),
+    text: sendSmsText,
+    media: sendPreparedSmsAttachment,
   },
 });
 
@@ -439,10 +426,9 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     },
     messaging: {
       targetPrefixes: ["twilio-sms"],
-      normalizeTarget: (target) => normalizeSmsPhoneNumber(target),
-      inferTargetChatType: ({ to }) =>
-        looksLikeSmsPhoneNumber(normalizeSmsPhoneNumber(to)) ? "direct" : undefined,
-      resolveOutboundSessionRoute: (params) => resolveSmsOutboundSessionRoute(params),
+      normalizeTarget: normalizeSmsPhoneNumber,
+      inferTargetChatType: ({ to }) => (looksLikeSmsPhoneNumber(to) ? "direct" : undefined),
+      resolveOutboundSessionRoute: resolveSmsOutboundSessionRoute,
       targetResolver: {
         looksLikeId: looksLikeSmsPhoneNumber,
         hint: "<+15551234567>",

@@ -8,10 +8,13 @@ import {
 } from "../../../../src/infra/kysely-sync.js";
 import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
+  NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../../../../src/infra/node-commands.js";
 import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
 import type { DB as StateDatabase } from "../../../../src/state/openclaw-state-db.generated.js";
+import { createDeferred } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
@@ -34,6 +37,8 @@ const TEST_TIMEOUT_MS = PROOF_TIMEOUT_MS + 180_000;
 const SESSION_PREFIX = "agent:qa:paired-node-worker-lifecycle";
 const HOLD_A = "WIRE-HOLD-A";
 const HOLD_B = "WIRE-HOLD-B";
+const HOLD_REVOKED = "WIRE-HOLD-REVOKED";
+const HOLD_UNCONFIRMED = "WIRE-HOLD-UNCONFIRMED";
 
 type TurnResult = { runId?: string; status?: string; summary?: string };
 type Placement = {
@@ -140,12 +145,33 @@ async function describePlacement(gateway: WireGateway, key: string): Promise<Pla
   return described.session?.placement ?? {};
 }
 
+function readTurnClaim(gateway: WireGateway, key: string) {
+  return withOpenClawStateDatabaseReadOnly(
+    ({ db }) =>
+      executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<StateDatabase>(db)
+          .selectFrom("worker_session_placements")
+          .select(["turn_claim_owner", "turn_claim_run_id"])
+          .where("session_key", "=", key),
+      ),
+    { env: gateway.runtimeEnv },
+  );
+}
+
 async function readNode(
   operator: GatewayClient,
   nodeId: string,
 ): Promise<WireNodeRead | undefined> {
   const result = await operator.request<{ nodes?: WireNodeRead[] }>("node.list", {});
   return result.nodes?.find((node) => node.nodeId === nodeId);
+}
+
+async function waitForNodeDisconnected(operator: GatewayClient, nodeId: string): Promise<void> {
+  await vi.waitFor(
+    async () => expect(await readNode(operator, nodeId)).toMatchObject({ connected: false }),
+    { timeout: 30_000, interval: 100 },
+  );
 }
 
 async function readEnvironments(operator: GatewayClient): Promise<EnvironmentRead[]> {
@@ -181,7 +207,280 @@ async function expectPublicBundleStatus(params: {
   );
 }
 
+function launchFrameForRun(host: PairedNodeWorkerHost, runId: string) {
+  return host.frames.find((frame) => {
+    if (frame.command !== NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND || !frame.paramsJSON) {
+      return false;
+    }
+    const input = JSON.parse(frame.paramsJSON) as {
+      descriptor?: { assignment?: { runId?: string } };
+    };
+    return input.descriptor?.assignment?.runId === runId;
+  });
+}
+
+function requireLaunchId(host: PairedNodeWorkerHost, runId: string): string {
+  const frame = launchFrameForRun(host, runId);
+  if (!frame?.paramsJSON) {
+    throw new Error(`node launch request missing for run ${runId}`);
+  }
+  const input = JSON.parse(frame.paramsJSON) as { launchId?: string };
+  if (!input.launchId) {
+    throw new Error(`node launch request omitted launch ID for run ${runId}`);
+  }
+  return input.launchId;
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 describe("paired node worker lifecycle wire", () => {
+  it(
+    "fences revoked and unconfirmed turns before real node successor I/O",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const root = tempDirs.make("openclaw-paired-node-worker-turn-fence-");
+      const provider = await startPairedNodeWorkerLifecycleProvider([
+        HOLD_REVOKED,
+        HOLD_UNCONFIRMED,
+      ]);
+      const published = await createPublishedWireWorkspace(root);
+      const gatewayOwner = createQaGatewayChild();
+      let gateway: WireGateway | undefined;
+      let operator: GatewayClient | undefined;
+      let workerNode: PairedNodeWorkerHost | undefined;
+      let testFailure: unknown;
+      let cleanupFailures: unknown[];
+      let releaseStopAcknowledgement: (() => void) | undefined;
+      try {
+        gateway = await startPairedNodeWorkerGateway({
+          owner: gatewayOwner,
+          providerBaseUrl: provider.baseUrl,
+          useRepoCli: false,
+        });
+        operator = await connectWireClient({ gateway, role: "operator", identity: null });
+        workerNode = await createPairedNodeWorkerHost({ gateway, operator, root });
+        const nodeId = workerNode.identity.deviceId;
+
+        const revokedKey = await createSession({ operator, published, suffix: "revoked" });
+        await dispatchNodeSession({ gateway, key: revokedKey, nodeId });
+        const heldRunId = await startTurn({
+          operator,
+          key: revokedKey,
+          marker: HOLD_REVOKED,
+        });
+        await vi.waitFor(() => expect(provider.hasHeld(HOLD_REVOKED)).toBe(true), {
+          timeout: PROOF_TIMEOUT_MS,
+          interval: 100,
+        });
+        const revokedRunId = await startTurn({
+          operator,
+          key: revokedKey,
+          marker: "WIRE-REVOKED-BEFORE-DISPATCH",
+        });
+        await expect(
+          operator.request("chat.abort", { sessionKey: revokedKey, runId: revokedRunId }),
+        ).resolves.toMatchObject({ aborted: true });
+        provider.release(HOLD_REVOKED);
+        await expect(waitForTurn(operator, heldRunId)).resolves.toMatchObject({ status: "ok" });
+        const revokedResult = await waitForTurn(operator, revokedRunId);
+        expect(revokedResult.status).not.toBe("timeout");
+        await workerNode.waitForInvokes();
+        expect(launchFrameForRun(workerNode, revokedRunId)).toBeUndefined();
+
+        const unconfirmedKey = await createSession({
+          operator,
+          published,
+          suffix: "unconfirmed",
+        });
+        const originalPlacement = await dispatchNodeSession({
+          gateway,
+          key: unconfirmedKey,
+          nodeId,
+        });
+        const unconfirmedRunId = await startTurn({
+          operator,
+          key: unconfirmedKey,
+          marker: HOLD_UNCONFIRMED,
+        });
+        await vi.waitFor(() => expect(provider.hasHeld(HOLD_UNCONFIRMED)).toBe(true), {
+          timeout: PROOF_TIMEOUT_MS,
+          interval: 100,
+        });
+        const oldLaunchId = requireLaunchId(workerNode, unconfirmedRunId);
+        const oldReceipt = await workerNode.supervisor.status(oldLaunchId);
+        const oldPid = oldReceipt?.worker?.pid;
+        if (oldReceipt?.state !== "running" || typeof oldPid !== "number") {
+          throw new Error("held node worker did not expose its live child process");
+        }
+        expect(processIsAlive(oldPid)).toBe(true);
+
+        const commandStart = workerNode.frames.length;
+        const stopEntered = createDeferred();
+        const stopCompleted = createDeferred();
+        const stopAcknowledgement = createDeferred();
+        releaseStopAcknowledgement = () => stopAcknowledgement.resolve();
+        const originalStopEnvironment = workerNode.supervisor.stopEnvironment.bind(
+          workerNode.supervisor,
+        );
+        vi.spyOn(workerNode.supervisor, "stopEnvironment").mockImplementation(async (identity) => {
+          stopEntered.resolve();
+          try {
+            await originalStopEnvironment(identity);
+            stopCompleted.resolve();
+          } catch (error) {
+            stopCompleted.reject(error);
+            throw error;
+          }
+          await stopAcknowledgement.promise;
+        });
+        const originalCancel = workerNode.supervisor.cancel.bind(workerNode.supervisor);
+        vi.spyOn(workerNode.supervisor, "cancel").mockImplementation(async (identity) => {
+          if (identity.launchId === oldLaunchId) {
+            throw new Error("synthetic node cancellation acknowledgement loss");
+          }
+          return await originalCancel(identity);
+        });
+        await expect(
+          operator.request("chat.abort", {
+            sessionKey: unconfirmedKey,
+            runId: unconfirmedRunId,
+          }),
+        ).resolves.toMatchObject({ aborted: true });
+        const unconfirmedResult = await waitForTurn(operator, unconfirmedRunId);
+        expect(unconfirmedResult.status).not.toBe("timeout");
+        await stopEntered.promise;
+        await stopCompleted.promise;
+        expect(processIsAlive(oldPid)).toBe(false);
+        expect(readTurnClaim(gateway, unconfirmedKey)).toMatchObject({
+          turn_claim_owner: null,
+          turn_claim_run_id: null,
+        });
+
+        const launchCountBeforeSuccessor = workerNode.frames.filter(
+          (frame) => frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+        ).length;
+        const fencedRunId = await startTurn({
+          operator,
+          key: unconfirmedKey,
+          marker: "WIRE-FENCED-DURING-STOP",
+        });
+        await expect(
+          operator.request("agent.wait", { runId: fencedRunId, timeoutMs: 0 }),
+        ).resolves.toMatchObject({ status: "timeout" });
+        expect(readTurnClaim(gateway, unconfirmedKey)).toMatchObject({
+          turn_claim_owner: null,
+          turn_claim_run_id: null,
+        });
+        expect(launchFrameForRun(workerNode, fencedRunId)).toBeUndefined();
+        await expect(
+          operator.request("chat.abort", { sessionKey: unconfirmedKey, runId: fencedRunId }),
+        ).resolves.toMatchObject({ aborted: true });
+        const fencedResult = await waitForTurn(operator, fencedRunId);
+        expect(fencedResult.status).not.toBe("timeout");
+        releaseStopAcknowledgement();
+        releaseStopAcknowledgement = undefined;
+
+        await vi.waitFor(
+          async () =>
+            expect(await describePlacement(gateway!, unconfirmedKey)).toMatchObject({
+              state: "failed",
+            }),
+          { timeout: PROOF_TIMEOUT_MS, interval: 100 },
+        );
+        const failedPlacement = await describePlacement(gateway, unconfirmedKey);
+        if (typeof failedPlacement.generation !== "number") {
+          throw new Error("failed placement omitted its recovery generation");
+        }
+
+        const reclaimed = (await gateway.call(
+          "sessions.reclaim",
+          {
+            key: unconfirmedKey,
+            recoverToGateway: { expectedGeneration: failedPlacement.generation },
+          },
+          { timeoutMs: PROOF_TIMEOUT_MS },
+        )) as { placement?: Placement };
+        expect(reclaimed).toMatchObject({ placement: { state: "local" } });
+
+        const replacementPlacement = await dispatchNodeSession({
+          gateway,
+          key: unconfirmedKey,
+          nodeId,
+        });
+        expect(replacementPlacement).toMatchObject({
+          state: "active",
+          environmentId: expect.any(String),
+          activeOwnerEpoch: expect.any(Number),
+        });
+        expect(replacementPlacement.environmentId).not.toBe(originalPlacement.environmentId);
+
+        const successorRunId = await startTurn({
+          operator,
+          key: unconfirmedKey,
+          marker: "WIRE-SUCCESSOR-AFTER-STOP",
+        });
+        const successorResult = waitForTurn(operator, successorRunId);
+        await expect(successorResult).resolves.toMatchObject({
+          status: "ok",
+        });
+        await workerNode.waitForInvokes();
+        expect(
+          workerNode.frames.filter(
+            (frame) => frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+          ),
+        ).toHaveLength(launchCountBeforeSuccessor + 1);
+        const lifecycleFrames = workerNode.frames.slice(commandStart);
+        const cancelIndex = lifecycleFrames.findIndex(
+          (frame) => frame.command === NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
+        );
+        const stopIndex = lifecycleFrames.findIndex(
+          (frame) => frame.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+        );
+        const successorFrame = launchFrameForRun(workerNode, successorRunId);
+        const successorIndex = successorFrame ? lifecycleFrames.indexOf(successorFrame) : -1;
+        expect({ cancelIndex, stopIndex, successorIndex }).toSatisfy(
+          (indexes) =>
+            indexes.cancelIndex >= 0 &&
+            indexes.stopIndex > indexes.cancelIndex &&
+            indexes.successorIndex > indexes.stopIndex,
+        );
+        expect(workerNode.invokeErrors).toEqual([]);
+      } catch (error) {
+        testFailure = error;
+      } finally {
+        releaseStopAcknowledgement?.();
+        provider.releaseAll();
+        const cleanup = await Promise.allSettled([
+          workerNode?.stop() ?? Promise.resolve(),
+          operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
+          stopQaGatewayFixture(gatewayOwner),
+          provider.stop(),
+          closeWireServer(published.server),
+        ]);
+        cleanupFailures = cleanup.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+      }
+      const failures = [...(testFailure ? [testFailure] : []), ...cleanupFailures];
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "paired node turn-fence proof failed");
+      }
+    },
+  );
+
   it(
     "keeps local control usable across bundle loss, disconnect, capacity, and role removal",
     { timeout: TEST_TIMEOUT_MS },
@@ -199,6 +498,7 @@ describe("paired node worker lifecycle wire", () => {
         gateway = await startPairedNodeWorkerGateway({
           owner: gatewayOwner,
           providerBaseUrl: provider.baseUrl,
+          useRepoCli: false,
         });
         operator = await connectWireClient({ gateway, role: "operator", identity: null });
         workerNode = await createPairedNodeWorkerHost({
@@ -212,6 +512,18 @@ describe("paired node worker lifecycle wire", () => {
           bundleStatus: true,
         });
         const nodeId = workerNode.identity.deviceId;
+        const retainHost = workerNode;
+        const retainCommandCount = () =>
+          retainHost.commands.filter((command) => command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND)
+            .length;
+        const waitForNewRetainCommand = async (previousCount: number) => {
+          await vi.waitFor(() => expect(retainCommandCount()).toBeGreaterThan(previousCount), {
+            timeout: 30_000,
+            interval: 100,
+          });
+          await retainHost.waitForInvokes();
+          expect(retainHost.invokeErrors).toEqual([]);
+        };
         const localKey = await createSession({ operator, published, suffix: "local-control" });
         const retainedKey = await createSession({ operator, published, suffix: "retention" });
         const retainedPlacement = await dispatchNodeSession({
@@ -278,35 +590,39 @@ describe("paired node worker lifecycle wire", () => {
         const installCountBeforeLoss = bundleInstallFrames(workerNode).length;
         await fs.rm(installedBundle, { recursive: true, force: true });
         await workerNode.disconnect();
+        await waitForNodeDisconnected(operator, nodeId);
+        const retainCountBeforeReconnect = retainCommandCount();
         await workerNode.connect();
+        await waitForNewRetainCommand(retainCountBeforeReconnect);
         await expectPublicBundleStatus({ operator, nodeId, status: "missing" });
-        expect(
-          workerNode.commands.filter((command) => command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND)
-            .length,
-        ).toBeGreaterThan(0);
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AFTER-LOSS" });
 
         const repairedKey = await createSession({ operator, published, suffix: "reinstalled" });
+        const retainCountBeforeRepair = retainCommandCount();
         await dispatchNodeSession({ gateway, key: repairedKey, nodeId });
         await vi.waitFor(
           () => expect(bundleInstallFrames(workerNode!).length).toBe(installCountBeforeLoss + 1),
           { timeout: 30_000, interval: 100 },
         );
+        await waitForNewRetainCommand(retainCountBeforeRepair);
         await expectPublicBundleStatus({ operator, nodeId, status: "installed" });
 
         // An offline runner fails before handoff, leaves the active placement retryable, and
         // does not terminalize the independent local session.
         await workerNode.disconnect();
+        await waitForNodeDisconnected(operator, nodeId);
         const offlineRunId = await startTurn({
           operator,
           key: repairedKey,
           marker: "WIRE-OFFLINE-ATTEMPT",
         });
         const offline = await waitForTurn(operator, offlineRunId);
-        expect(offline.status).not.toBe("ok");
-        expect(`${offline.summary ?? ""} ${JSON.stringify(offline)}`).toMatch(
-          /runner-offline|runner is offline|reconnect/iu,
-        );
+        expect(offline.status).toBe("error");
+        expect(offline).toMatchObject({
+          error:
+            "⚠️ The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
+        });
+        expect(launchFrameForRun(workerNode, offlineRunId)).toBeUndefined();
         expect(await describePlacement(gateway, repairedKey)).toMatchObject({ state: "active" });
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AFTER-OFFLINE" });
         await workerNode.connect();

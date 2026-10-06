@@ -1,4 +1,8 @@
+import type { UserProfile } from "../../../packages/gateway-protocol/src/index.js";
+import type { GatewaySuspension } from "../../../packages/gateway-protocol/src/schema/gateway-suspend.js";
+import type { PluginsUiDescriptorsResult } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import type { SessionCostUsagePublication } from "../../../src/shared/usage-types.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { AuthenticatedUser } from "./user-profile.ts";
@@ -17,13 +21,21 @@ export type ApplicationGatewaySnapshot = {
   phase: ApplicationGatewayPhase;
   offlineStable: boolean;
   restartPending?: boolean;
+  suspensionPhase?: GatewaySuspension["phase"];
+  /** Transport identity stays stable while plugin capability fields are refreshed. */
   hello: GatewayHelloOk | null;
+  pluginCapabilities?: PluginsUiDescriptorsResult | null;
+  usagePublications?: Readonly<
+    Record<string, Readonly<Omit<SessionCostUsagePublication, "agentId"> & { committedAt: number }>>
+  >;
   canvasPluginSurfaceUrl: string | null;
   assistantAgentId: string | null;
   sessionKey: string;
   lastError: string | null;
   lastErrorCode: string | null;
-  /** Identity projected from this browser connection's own presence entry. */
+  reconnectAt?: number;
+  lastErrorAuthReason?: string | null;
+  /** This connection owns its identity; users.self resolves the canonical profile. */
   selfUser?: AuthenticatedUser | null;
 };
 
@@ -43,7 +55,10 @@ export type ApplicationGateway = {
   readonly snapshot: ApplicationGatewaySnapshot;
   readonly connection: ApplicationGatewayConnection;
   readonly connectionRevision: number;
+  /** Raw history is captured only while subscribeEventLog has consumers. */
   readonly eventLog: readonly EventLogEntry[];
+  /** Advances when the connection or authentication context retires diagnostic history. */
+  readonly eventLogRevision: number;
   connect: (connection?: ApplicationGatewayConnectOptions) => void;
   setSessionKey: (sessionKey: string) => void;
   start: () => void;
@@ -51,5 +66,15 @@ export type ApplicationGateway = {
   subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
   subscribeEventLog: (listener: (events: readonly EventLogEntry[]) => void) => () => void;
   subscribeEvents: (listener: GatewayEventListener) => () => void;
+  loadSelfProfile: () => Promise<UserProfile | null>;
   updateSelfUser?: (patch: Partial<Omit<AuthenticatedUser, "id">>) => void;
+  /** True when this browser holds a stored operator device token for the current gateway. */
+  hasStoredDeviceToken?: () => boolean;
+  /**
+   * Forget the operator device token this browser stores for the current
+   * gateway, then reconnect without it. Token-only reset: the browser device
+   * identity and other gateways' tokens survive. Returns false when no
+   * credential was stored.
+   */
+  forgetDeviceToken?: () => boolean;
 };

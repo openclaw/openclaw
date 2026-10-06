@@ -41,7 +41,11 @@ describe("openai completions stream", () => {
         }),
         makeCompletionsChunk({}, "tool_calls"),
       ],
-      expectedFirst: { type: "thinking", thinking: "Need a tool." },
+      expectedFirst: {
+        type: "thinking",
+        thinking: "Need a tool.",
+        thinkingSignature: "reasoning_details",
+      },
       expectedSecond: {
         type: "toolCall",
         id: "call_1",
@@ -176,52 +180,24 @@ describe("openai completions stream", () => {
       baseUrl: "https://openrouter.ai/api/v1",
     });
 
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
 
     const stream: { push(event: unknown): void } = { push() {} };
 
     const mockChunks = [
-      makeCompletionsChunk({}, null, {
-        choices: [
-          {
-            index: 0,
-            delta: {
-              reasoning_details: [
-                { type: "response.output_text", text: "Visible first." },
-                { type: "reasoning.text", text: " Hidden second." },
-                { type: "response.text", text: " Visible third." },
-              ],
-            } as Record<string, unknown>,
-            logprobs: null,
-            finish_reason: "stop" as const,
-          },
-        ],
-      }),
+      makeCompletionsChunk(
+        {
+          reasoning_details: [
+            { type: "response.output_text", text: "Visible first." },
+            { type: "reasoning.text", text: " Hidden second." },
+            { type: "response.text", text: " Visible third." },
+          ],
+        },
+        "stop",
+      ),
     ] as const;
 
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
 
     expect(output.content).toHaveLength(3);
     expectRecordFields(output.content[0], { type: "text", text: "Visible first." });
@@ -268,7 +244,9 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Interim.",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
       {
         type: "thinking",
@@ -278,7 +256,9 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Final.",
-        textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+        ),
       },
     ]);
   });
@@ -291,49 +271,21 @@ describe("openai completions stream", () => {
       baseUrl: "https://openrouter.ai/api/v1",
     });
 
-    const output = {
-      role: "assistant" as const,
-      content: [],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop" as const,
-      timestamp: Date.now(),
-    };
+    const output = createAssistantOutput(model);
 
     const stream: { push(event: unknown): void } = { push() {} };
 
     const mockChunks = [
-      makeCompletionsChunk({}, null, {
-        choices: [
-          {
-            index: 0,
-            delta: {
-              reasoning_details: [{ type: "response.output_text", text: "Visible answer." }],
-              reasoning: "Hidden fallback reasoning.",
-            } as Record<string, unknown>,
-            logprobs: null,
-            finish_reason: "stop" as const,
-          },
-        ],
-      }),
+      makeCompletionsChunk(
+        {
+          reasoning_details: [{ type: "response.output_text", text: "Visible answer." }],
+          reasoning: "Hidden fallback reasoning.",
+        },
+        "stop",
+      ),
     ] as const;
 
-    async function* mockStream() {
-      for (const chunk of mockChunks) {
-        yield chunk as never;
-      }
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
+    await processCompletionsStream(streamChunks(mockChunks), output, model, stream);
 
     expect(output.content).toHaveLength(2);
     expectRecordFields(output.content[0], { type: "text", text: "Visible answer." });

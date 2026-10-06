@@ -3,7 +3,6 @@ import path from "node:path";
 // Plugin registry migration tests cover doctor repair of persisted plugin registry state.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { recordPluginCandidateInstallOwner } from "../../../plugins/candidate-install-owner.js";
 import type { PluginCandidate } from "../../../plugins/discovery.js";
 import { writePersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store-write.js";
@@ -18,7 +17,8 @@ import {
 } from "../../../plugins/test-helpers/fs-fixtures.js";
 import * as stateDbReadOnly from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
-import { migratePluginRegistryForInstall } from "./plugin-registry-migration.js";
+import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
+import { migratePluginRegistryForDoctor } from "./plugin-registry-migration.js";
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -91,19 +91,13 @@ function createCurrentIndex(): InstalledPluginIndex {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
 function expectSha256(value: unknown) {
   expect(typeof value).toBe("string");
   expect(value).toMatch(/^[a-f0-9]{64}$/u);
 }
 
 function requireMigratedIndex(
-  result: Awaited<ReturnType<typeof migratePluginRegistryForInstall>>,
+  result: Awaited<ReturnType<typeof migratePluginRegistryForDoctor>>,
 ): InstalledPluginIndex {
   if (result.status !== "migrated") {
     throw new Error(`Expected migration result to be migrated, got ${result.status}`);
@@ -148,7 +142,7 @@ function insertStalePersistedIndexRow(stateDir: string, installRecordsJson = "{}
   );
 }
 
-describe("plugin registry install migration", () => {
+describe("doctor plugin registry migration", () => {
   it("stops migration with the original error when the shared registry read fails", async () => {
     const stateDir = makeTempDir();
     const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } };
@@ -164,7 +158,7 @@ describe("plugin registry install migration", () => {
     const readConfig = vi.fn(() => ({}));
     await expect
       .soft(
-        migratePluginRegistryForInstall({
+        migratePluginRegistryForDoctor({
           stateDir,
           readConfig,
           candidates: [],
@@ -185,7 +179,7 @@ describe("plugin registry install migration", () => {
       { env: { OPENCLAW_STATE_DIR: stateDir } },
     );
     expect(row).toMatchObject({ updated_at_ms: 123 });
-    const restored = await migratePluginRegistryForInstall({
+    const restored = await migratePluginRegistryForDoctor({
       stateDir,
       readConfig,
       candidates: [],
@@ -200,16 +194,16 @@ describe("plugin registry install migration", () => {
     await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
     const readConfig = vi.fn(async () => ({}));
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       readConfig,
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "skip-existing",
       migrated: false,
     });
-    expectRecordFields(requireRecord(result.preflight, "migration preflight"), {
+    expectObjectFields(requireRecord(result.preflight, "migration preflight"), {
       action: "skip-existing",
       filePath,
     });
@@ -222,20 +216,20 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(pluginDir, { recursive: true });
     insertStalePersistedIndexRow(stateDir);
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [createCandidate(pluginDir)],
       readConfig: async () => ({}),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     expect(result.preflight.action).toBe("migrate");
 
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
     expect(persisted?.migrationVersion).toBe(1);
-    expectRecordFields(requirePlugin(persisted, "demo") as unknown as Record<string, unknown>, {
+    expectObjectFields(requirePlugin(persisted, "demo"), {
       pluginId: "demo",
     });
   });
@@ -246,7 +240,7 @@ describe("plugin registry install migration", () => {
     insertStalePersistedIndexRow(stateDir, installRecordsJson);
 
     await expect(
-      migratePluginRegistryForInstall({
+      migratePluginRegistryForDoctor({
         stateDir,
         readConfig: async () => ({}),
         env: hermeticEnv(),
@@ -276,25 +270,7 @@ describe("plugin registry install migration", () => {
     );
   });
 
-  it("rejects invalid config install records before recovery or persistence", async () => {
-    const stateDir = makeTempDir();
-    const invalidConfig = JSON.parse(
-      '{"plugins":{"installs":{"constructor":{"source":"bogus"}}}}',
-    ) as OpenClawConfig;
-
-    await expect(
-      migratePluginRegistryForInstall({
-        stateDir,
-        readConfig: async () => invalidConfig,
-        env: hermeticEnv(),
-      }),
-    ).rejects.toThrow(
-      "Back up openclaw.json, correct or remove the invalid retired plugins.installs record",
-    );
-    expect(fs.existsSync(resolveInstalledPluginIndexStorePath({ stateDir }))).toBe(false);
-  });
-
-  it("persists migration-relevant plugin records without dropping explicit disabled state", async () => {
+  it("persists the complete plugin inventory without changing disabled state", async () => {
     const stateDir = makeTempDir();
     const enabledDir = path.join(stateDir, "plugins", "enabled-demo");
     const disabledDir = path.join(stateDir, "plugins", "disabled-demo");
@@ -303,7 +279,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(disabledDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(enabledDir, "enabled-demo"),
@@ -321,7 +297,7 @@ describe("plugin registry install migration", () => {
       }),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
@@ -331,9 +307,11 @@ describe("plugin registry install migration", () => {
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
     expect(requirePlugin(persisted, "enabled-demo").enabled).toBe(true);
     expect(requirePlugin(persisted, "disabled-demo").enabled).toBe(false);
+    expect(requirePlugin(persisted, "unused-bundled").enabled).toBe(false);
     expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual([
       "enabled-demo",
       "disabled-demo",
+      "unused-bundled",
     ]);
   });
 
@@ -344,7 +322,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(openaiDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(openaiDir, "openai", "bundled", { enabledByDefault: true }),
@@ -353,14 +331,17 @@ describe("plugin registry install migration", () => {
       readConfig: async () => ({}),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
     expect(requirePlugin(current, "openai").enabledByDefault).toBe(true);
 
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual([
+      "openai",
+      "unused-bundled",
+    ]);
   });
 
   it("keeps bundled migration contracts discoverable after install", async () => {
@@ -370,7 +351,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(migrationDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(migrationDir, "migrate-demo", "bundled", {
@@ -386,42 +367,16 @@ describe("plugin registry install migration", () => {
     });
 
     const current = requireMigratedIndex(result);
-    expect(current.plugins.map((plugin) => plugin.pluginId)).toEqual(["migrate-demo"]);
+    expect(current.plugins.map((plugin) => plugin.pluginId)).toEqual([
+      "migrate-demo",
+      "unused-bundled",
+    ]);
 
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["migrate-demo"]);
-  });
-
-  it("keeps legacy OpenAI Codex plugin references doctor-only", async () => {
-    const stateDir = makeTempDir();
-    const openaiDir = path.join(stateDir, "plugins", "openai");
-    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
-    fs.mkdirSync(openaiDir, { recursive: true });
-    fs.mkdirSync(unusedBundledDir, { recursive: true });
-
-    const result = await migratePluginRegistryForInstall({
-      stateDir,
-      candidates: [
-        createCandidate(openaiDir, "openai", "bundled"),
-        createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
-      ],
-      readConfig: async () => ({
-        plugins: {
-          entries: {
-            "openai-codex": {
-              enabled: true,
-            },
-          },
-        },
-      }),
-      env: hermeticEnv(),
-    });
-
-    const current = requireMigratedIndex(result);
-    expect(current.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual([
+      "migrate-demo",
+      "unused-bundled",
+    ]);
   });
 
   it("keeps bundled memory command plugins discoverable for first-run CLI registration", async () => {
@@ -431,7 +386,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(memoryDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(memoryDir, "memory-core", "bundled", {
@@ -453,31 +408,34 @@ describe("plugin registry install migration", () => {
       readConfig: async () => ({}),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
     expect(requirePlugin(current, "memory-core").startup.memory).toBe(true);
 
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["memory-core"]);
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual([
+      "memory-core",
+      "unused-bundled",
+    ]);
   });
 
   it("supports dry-run preflight without reading config or writing the registry", async () => {
     const stateDir = makeTempDir();
     const readConfig = vi.fn(async () => ({}));
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       dryRun: true,
       readConfig,
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "dry-run",
       migrated: false,
     });
-    expect(result.preflight.action).toBe("migrate");
+    expect(result.preflight.action).toBe("initialize");
     expect(readConfig).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(stateDir, "plugins", "installs.json"))).toBe(false);
   });
@@ -488,13 +446,13 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(pluginDir, { recursive: true });
     const candidate = createCandidate(pluginDir);
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [candidate],
       config: {},
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
       migrated: true,
     });
@@ -509,14 +467,17 @@ describe("plugin registry install migration", () => {
     expect(requirePlugin(persisted, "demo").pluginId).toBe("demo");
   });
 
-  it("seeds first-run install records from shipped plugins.installs config", async () => {
+  it("indexes canonical install records", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [createCandidate(pluginDir, "demo", "global", { installOwner: "demo" })],
+      installRecords: {
+        demo: { source: "npm", spec: "demo@1.0.0", installPath: pluginDir },
+      },
       readConfig: async () => ({
         plugins: {
           entries: {
@@ -524,18 +485,11 @@ describe("plugin registry install migration", () => {
               enabled: true,
             },
           },
-          installs: {
-            demo: {
-              source: "npm",
-              spec: "demo@1.0.0",
-              installPath: pluginDir,
-            },
-          },
         },
       }),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
@@ -557,13 +511,16 @@ describe("plugin registry install migration", () => {
     expectSha256(requirePlugin(persisted, "demo").installRecordHash);
   });
 
-  it("preserves shipped install records when the plugin manifest cannot be discovered", async () => {
+  it("preserves canonical records when the plugin manifest cannot be discovered", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "missing");
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [],
+      installRecords: {
+        missing: { source: "npm", spec: "missing-plugin@1.0.0", installPath: pluginDir },
+      },
       readConfig: async () => ({
         plugins: {
           entries: {
@@ -571,18 +528,11 @@ describe("plugin registry install migration", () => {
               enabled: true,
             },
           },
-          installs: {
-            missing: {
-              source: "npm",
-              spec: "missing-plugin@1.0.0",
-              installPath: pluginDir,
-            },
-          },
         },
       }),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);

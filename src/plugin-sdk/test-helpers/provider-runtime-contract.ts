@@ -202,9 +202,9 @@ export function describeAnthropicProviderRuntimeContract(
       });
     });
 
-    it("owns auth doctor hint generation", () => {
+    it("owns auth doctor hint generation", async () => {
       const provider = requireProviderContractProvider("anthropic");
-      const hint = provider.buildAuthDoctorHint?.({
+      const hint = await provider.buildAuthDoctorHint?.({
         provider: "anthropic",
         profileId: "anthropic:default",
         config: {
@@ -286,16 +286,11 @@ export function describeGithubCopilotProviderRuntimeContract(
       ]);
       const createManifestModel = createManifestModelFactory("github-copilot", manifestCatalog);
 
-      async function resolveStaticModel(modelId: string, discoveryEnabled = false) {
+      async function resolveStaticModel(modelId: string) {
         const { createBundledStaticCatalogModelResolver } =
           await import("../../agents/embedded-agent-runner/model.static-catalog.js");
         const config = {
           models: { catalogRefresh: { enabled: false } },
-          plugins: {
-            entries: {
-              "github-copilot": { config: { discovery: { enabled: discoveryEnabled } } },
-            },
-          },
         };
         const metadataSnapshot = createPluginMetadataSnapshot({
           config,
@@ -337,50 +332,46 @@ export function describeGithubCopilotProviderRuntimeContract(
       }
 
       it.each([
-        ["gemini-3.6-flash", "openai-completions", false],
-        ["gemini-3.1-pro-preview", "openai-completions", false],
-        ["gemini-3.5-flash", "openai-completions", false],
-        ["gemini-2.5-pro", "openai-completions", false],
-        ["gpt-5.6-sol", "openai-responses", false],
-        ["claude-sonnet-5", "anthropic-messages", false],
-        ["gemini-3.6-flash", "openai-completions", true],
-      ] as const)(
-        "routes static %s through %s with discovery enabled=%s",
-        async (modelId, api, discoveryEnabled) => {
-          const { config, model } = await resolveStaticModel(modelId, discoveryEnabled);
-          expect(model.api).toBe(api);
-          if (api === "openai-completions") {
-            expect(model.compat).toMatchObject({
-              supportsStore: false,
-              supportsDeveloperRole: false,
-              supportsUsageInStreaming: false,
-              maxTokensField: "max_tokens",
-            });
-          }
-          const provider = requireProviderContractProvider("github-copilot");
-          expect(
-            provider.preferRuntimeResolvedModel?.({
-              config,
-              provider: "github-copilot",
-              modelId,
-            }),
-          ).toBe(discoveryEnabled);
-          // A missing prepared live row also occurs when enabled discovery is unavailable.
-          expect(
-            provider.resolveDynamicModel?.({
-              config,
-              provider: "github-copilot",
-              modelId,
-              modelRegistry: {
-                find: () => model,
-                getAll: () => [model],
-                getAvailable: () => [],
-                hasConfiguredAuth: () => false,
-              },
-            }),
-          ).toBeUndefined();
-        },
-      );
+        ["gemini-3.6-flash", "openai-completions"],
+        ["gemini-3.1-pro-preview", "openai-completions"],
+        ["gemini-3.5-flash", "openai-completions"],
+        ["gemini-2.5-pro", "openai-completions"],
+        ["gpt-5.6-sol", "openai-responses"],
+        ["claude-sonnet-5", "anthropic-messages"],
+      ] as const)("routes static %s through %s", async (modelId, api) => {
+        const { config, model } = await resolveStaticModel(modelId);
+        expect(model.api).toBe(api);
+        if (api === "openai-completions") {
+          expect(model.compat).toMatchObject({
+            supportsStore: false,
+            supportsDeveloperRole: false,
+            supportsUsageInStreaming: false,
+            maxTokensField: "max_tokens",
+          });
+        }
+        const provider = requireProviderContractProvider("github-copilot");
+        expect(
+          provider.preferRuntimeResolvedModel?.({
+            config,
+            provider: "github-copilot",
+            modelId,
+          }),
+        ).toBe(true);
+        // A missing prepared live row also occurs when enabled discovery is unavailable.
+        expect(
+          provider.resolveDynamicModel?.({
+            config,
+            provider: "github-copilot",
+            modelId,
+            modelRegistry: {
+              find: () => model,
+              getAll: () => [model],
+              getAvailable: () => [],
+              hasConfiguredAuth: () => false,
+            },
+          }),
+        ).toBeUndefined();
+      });
 
       it.each([
         ["minimal", "low"],
@@ -427,7 +418,6 @@ export function describeGithubCopilotProviderRuntimeContract(
               apiKey: "test-token",
               reasoning: level,
               maxTokens: 1024,
-              maxRetries: 0,
               onPayload: (payload) => {
                 payloads.push(payload);
                 throw new Error("Captured payload before network");

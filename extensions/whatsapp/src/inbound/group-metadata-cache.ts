@@ -1,5 +1,5 @@
-// Whatsapp plugin module owns group metadata caching and hydration.
-import type { AnyMessageContent, GroupMetadata, WASocket } from "baileys";
+import type { AnyMessageContent, BaileysEventMap, GroupMetadata, WASocket } from "baileys";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -9,6 +9,7 @@ import {
   rememberWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
 } from "./baileys-cache.js";
+import type { WhatsAppSocketListen } from "./lifecycle.js";
 import {
   addWhatsAppOutboundMentionsToContent,
   mayContainWhatsAppOutboundMention,
@@ -38,7 +39,7 @@ type GroupMetadataCacheOwnerParams = {
   resolveInboundJid: (jid: string | null | undefined) => Promise<string | null>;
   reconnectCache?: WhatsAppGroupMetadataCache;
   baileysCache?: WhatsAppBaileysGroupMetadataCache;
-  listen: (event: string, listener: (...args: unknown[]) => void) => () => void;
+  listen: WhatsAppSocketListen;
   logVerbose: (message: string) => void;
   logHydrationWarning: (error: string) => void;
 };
@@ -64,13 +65,7 @@ function rememberGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEnt
   }
   cache.set(jid, entry);
 
-  while (cache.size > WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    cache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(cache, WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES);
 }
 
 function readGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
@@ -247,18 +242,21 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
       return;
     }
     started = true;
-    const listen = (event: string, listener: (...args: unknown[]) => void) => {
+    const listen = <Event extends keyof BaileysEventMap>(
+      event: Event,
+      listener: (arg: BaileysEventMap[Event]) => void,
+    ) => {
       detachListeners.push(params.listen(event, listener));
     };
 
-    listen("groups.upsert", ((groups: GroupMetadata[]) => {
+    listen("groups.upsert", (groups) => {
       for (const group of groups) {
         if (group.id) {
           rememberFullUpdate(group.id, group);
         }
       }
-    }) as unknown as (...args: unknown[]) => void);
-    listen("groups.update", ((updates: Partial<GroupMetadata>[]) => {
+    });
+    listen("groups.update", (updates) => {
       for (const update of updates) {
         if (!update.id) {
           continue;
@@ -269,10 +267,10 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
         }
         forgetFullMetadata(update.id);
       }
-    }) as unknown as (...args: unknown[]) => void);
-    listen("group-participants.update", ((update: { id: string }) => {
+    });
+    listen("group-participants.update", (update) => {
       forgetFullMetadata(update.id);
-    }) as unknown as (...args: unknown[]) => void);
+    });
 
     void (async () => {
       try {

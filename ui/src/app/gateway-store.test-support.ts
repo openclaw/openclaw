@@ -40,6 +40,10 @@ class FakeGatewayClient {
     this.instanceId = opts.instanceId ?? "";
   }
 
+  get gatewayUrl() {
+    return this.opts.url;
+  }
+
   start() {
     this.started += 1;
   }
@@ -48,9 +52,8 @@ class FakeGatewayClient {
     this.stopped += 1;
   }
 
-  request = vi.fn(
-    (_method: string, _params: unknown): Promise<unknown> =>
-      Promise.reject(new Error("unexpected gateway request")),
+  request = vi.fn((_method: string, _params: unknown): Promise<unknown> =>
+    Promise.reject(new Error("unexpected gateway request")),
   );
 
   addEventListener() {
@@ -62,7 +65,12 @@ export function createGatewayStoreTestStore(
   params: {
     settings?: ReturnType<typeof loadSettings>;
     persistDefaultConnectionSettings?: boolean;
+    ownsWarmBoot?: boolean;
     resourceBasePath?: string;
+    clientOptions?: Pick<
+      GatewayBrowserClientOptions,
+      "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
+    >;
   } = {},
 ) {
   const clients: FakeGatewayClient[] = [];
@@ -77,7 +85,9 @@ export function createGatewayStoreTestStore(
     },
     {
       persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
+      ownsWarmBoot: params.ownsWarmBoot,
       resourceBasePath: params.resourceBasePath,
+      clientOptions: params.clientOptions,
     },
   );
   const current = () => {

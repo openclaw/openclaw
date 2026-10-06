@@ -1,4 +1,3 @@
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import {
   removeConfigFormValue,
@@ -6,9 +5,10 @@ import {
   updateConfigFormValue,
 } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
+import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
 import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
-import { analyzeConfigSchema, renderConfigForm } from "./config-form.ts";
+import { analyzeConfigSchema } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -100,22 +100,15 @@ describe("config form map integrity", () => {
       state.configForm = config();
       const container = document.createElement("div");
       const renderValue = () =>
-        render(
-          renderConfigForm({
-            schema: analysis.schema,
-            uiHints: {
-              "agents.defaults.models.*.codeMode": { label: "Code Mode", placeholder: "Default" },
-              "agents.entries.*.models.*.codeMode": { label: "Code Mode", placeholder: "Default" },
-            },
-            unsupportedPaths: analysis.unsupportedPaths,
-            value: state.configForm,
-            showAdvanced: true,
-            onShowAdvanced: () => {},
-            onPatch: (path, value) => updateConfigFormValue(state, path, value),
-            onRemove: (path) => removeConfigFormValue(state, path),
-          }),
-          container,
-        );
+        renderAnalyzedFormFixture(container, analysis, {
+          uiHints: {
+            "agents.defaults.models.*.codeMode": { label: "Code Mode", placeholder: "Default" },
+            "agents.entries.*.models.*.codeMode": { label: "Code Mode", placeholder: "Default" },
+          },
+          value: state.configForm,
+          onPatch: (path, value) => updateConfigFormValue(state, path, value),
+          onRemove: (path) => removeConfigFormValue(state, path),
+        });
       const getSelect = () =>
         expectElement(
           container.querySelector<HTMLSelectElement>('select[aria-label="Code Mode"]'),
@@ -176,18 +169,10 @@ describe("config form map integrity", () => {
 
     const container = document.createElement("div");
     const onPatch = vi.fn();
-    render(
-      renderConfigForm({
-        schema: analysis.schema,
-        uiHints: {},
-        unsupportedPaths: analysis.unsupportedPaths,
-        value: { values: { primary: { region: "west" } } },
-        showAdvanced: true,
-        onShowAdvanced: () => {},
-        onPatch,
-      }),
-      container,
-    );
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { values: { primary: { region: "west" } } },
+      onPatch,
+    });
 
     expect(container.querySelectorAll(".cfg-map")).toHaveLength(2);
     expect(container.textContent).not.toContain("Unsupported schema node");
@@ -255,18 +240,10 @@ describe("config form map integrity", () => {
       const container = document.createElement("div");
       document.body.append(container);
       try {
-        render(
-          renderConfigForm({
-            schema: analysis.schema,
-            uiHints: {},
-            unsupportedPaths: analysis.unsupportedPaths,
-            value: state.configForm,
-            showAdvanced: true,
-            onShowAdvanced: () => {},
-            onPatch,
-          }),
-          container,
-        );
+        renderAnalyzedFormFixture(container, analysis, {
+          value: state.configForm,
+          onPatch,
+        });
         const keyInput = expectElement(
           container.querySelector<HTMLInputElement>('[aria-label="Key: primary"]'),
           "existing key",
@@ -337,7 +314,7 @@ describe("config form map integrity", () => {
         type: "object",
         properties: {
           name: { type: "string" },
-          retained: { anyOf: [{ type: "string" }, { const: false }] },
+          retained: { anyOf: [{ type: "number" }, { const: false }] },
         },
       } satisfies JsonSchema;
       const collection = (name: string) =>
@@ -358,18 +335,10 @@ describe("config form map integrity", () => {
       state.configSchema = analysis.schema;
       state.configForm = { values: collection("before") };
       const container = document.createElement("div");
-      render(
-        renderConfigForm({
-          schema: analysis.schema,
-          uiHints: {},
-          unsupportedPaths: analysis.unsupportedPaths,
-          value: state.configForm,
-          showAdvanced: true,
-          onShowAdvanced: () => {},
-          onPatch: (path, value) => updateConfigFormValue(state, path, value),
-        }),
-        container,
-      );
+      renderAnalyzedFormFixture(container, analysis, {
+        value: state.configForm,
+        onPatch: (path, value) => updateConfigFormValue(state, path, value),
+      });
       expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
       expect(container.querySelector('[aria-label="Retained"]')).toBeNull();
       const name = expectElement(
@@ -398,18 +367,10 @@ describe("config form map integrity", () => {
       },
     });
     const renderValue = (aliases: Record<string, unknown> | undefined) => {
-      render(
-        renderConfigForm({
-          schema: analysis.schema,
-          uiHints: {},
-          unsupportedPaths: analysis.unsupportedPaths,
-          value: aliases === undefined ? {} : { aliases },
-          showAdvanced: true,
-          onShowAdvanced: () => {},
-          onPatch: () => {},
-        }),
-        container,
-      );
+      renderAnalyzedFormFixture(container, analysis, {
+        value: aliases === undefined ? {} : { aliases },
+        onPatch: () => {},
+      });
     };
 
     renderValue(undefined);

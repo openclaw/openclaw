@@ -1,0 +1,466 @@
+import { GatewayRequestError } from "../../api/gateway.ts";
+import {
+  isHiddenAssistantStreamText,
+  isVisibleChatHistoryMessage,
+  shouldHideAssistantChatMessage,
+  visibleChatHistoryMessages,
+} from "../../lib/chat/message-visibility.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "../../lib/gateway-errors.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { requestSharedHistory } from "./chat-history-request.ts";
+import { formatChatHistoryLoadError, isRetryableChatReadError } from "./chat-history-retry.ts";
+import {
+  type ObservedChatHistoryResult,
+  isHistoryCursor,
+  resolveChatHistoryPagination,
+  historySessionId,
+  reconcileHistoryTail,
+  commitCurrentChatHistorySnapshot,
+  clearHistoryCursor,
+} from "./chat-history-snapshot.ts";
+import {
+  beginHistoryRequest,
+  chatHistoryRequests,
+  ownsHistoryRequest,
+  acceptsHistoryResult,
+  resetChatHistoryProjection,
+  setChatError,
+  setChatHistoryLoad,
+  setChatHistoryRetrying,
+} from "./chat-history-state.ts";
+import {
+  materializeVisibleAssistantStreamMessages,
+  persistsChatCommentary,
+  readRunProjections,
+  applyHistoryRun,
+} from "./chat-history-stream.ts";
+import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
+import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import {
+  getChatSessionProjection,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+  publishChatSessionProjection,
+  publishChatSessionProjectionMessages,
+} from "./history-merge.ts";
+import {
+  controlUiNowMs,
+  recordControlUiPerformanceEvent,
+  roundedControlUiDurationMs,
+} from "./performance.ts";
+import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { rolloverChatStream } from "./stream-causal-boundary.ts";
+import {
+  hasVisibleStreamParts,
+  historyReplacedVisibleStream,
+  maybeResetToolStream,
+  visibleCurrentAssistantStreamTail,
+} from "./stream-reconciliation.ts";
+import {
+  pruneHistoryReplacedStreamSegments,
+  prunePersistedToolStreamMessages,
+} from "./stream-segment-pruning.ts";
+import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
+import { persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
+
+export async function hydrateChatHistory(
+  state: ChatHistoryHost,
+  client: NonNullable<ChatState["client"]>,
+  connectionEpoch: number,
+  sessions: ChatHistorySessions,
+  sessionKey: string,
+  requestAgentId: string | undefined,
+  method: "chat.history" | "chat.startup",
+  deltaCursor: string | undefined,
+  inputRunIds: string[],
+  requestKeyPrefix: string,
+): Promise<ObservedChatHistoryResult | undefined> {
+  const ownership = beginHistoryRequest(state, client, connectionEpoch, sessionKey, requestAgentId);
+  const isCurrent = () => state.sessions === sessions && acceptsHistoryResult(state, ownership);
+  const captureRun = (): ChatHistoryRunObservation | undefined => {
+    const runId = state.chatRunId;
+    const sessionId = state.currentSessionId;
+    const generation = state.chatRunLifecycleGeneration ?? 0;
+    return isCurrent() && runId && sessionId
+      ? {
+          runId,
+          sessionId,
+          isCurrent: () =>
+            isCurrent() &&
+            state.chatRunId === runId &&
+            (state.chatRunLifecycleGeneration ?? 0) === generation &&
+            state.currentSessionId === sessionId,
+        }
+      : undefined;
+  };
+  const startedAtMs = controlUiNowMs();
+  const previousMessages = state.chatMessages;
+  const previousRunProjections = readRunProjections(state, sessionKey, requestAgentId);
+  const previousPagination = state.chatHistoryPagination;
+  const previousSessionId = state.currentSessionId ?? null;
+  const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId;
+  const previousRunId = state.chatRunId;
+  const recordTiming = (
+    phase: "start" | "applied" | "stream-reset" | "stale" | "error",
+    extra: Record<string, unknown> = {},
+  ) =>
+    recordControlUiPerformanceEvent(
+      // SAFETY: real chat panes carry optional performance fields; minimal hosts may omit them.
+      state as ChatState & Parameters<typeof recordControlUiPerformanceEvent>[0],
+      "control-ui.chat.history",
+      {
+        phase,
+        durationMs: roundedControlUiDurationMs(controlUiNowMs() - startedAtMs),
+        sessionKey: state.sessionKey,
+        activeRunId: state.chatRunId,
+        requestSessionKey: sessionKey,
+        requestAgentId,
+        previousRunId,
+        ...extra,
+      },
+      { maxBufferedEventsForType: 30 },
+    );
+  recordTiming("start", { method });
+  // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
+  state.resetChatInputHistoryNavigation?.();
+  state.chatLoading = true;
+  const request = (cursor?: string) =>
+    requestSharedHistory(
+      sessions,
+      client,
+      `${requestKeyPrefix}${cursor === undefined ? "page" : `cursor:${cursor}`}`,
+      method,
+      sessionKey,
+      requestAgentId,
+      state,
+      {
+        isCurrent,
+        captureRun,
+        onRetry: () => {
+          if (isCurrent()) {
+            setChatHistoryRetrying(state, "history", true);
+          }
+        },
+      },
+      cursor,
+      inputRunIds,
+    );
+  try {
+    const requests = chatHistoryRequests(state);
+    let admission = requests.subscriptionReady;
+    while (admission) {
+      const ready = await admission;
+      if (!isCurrent()) {
+        return undefined;
+      }
+      if (admission === requests.subscriptionReady) {
+        if (!ready) {
+          if (requests.subscriptionError) {
+            setChatHistoryLoad(state, {
+              phase: "failed",
+              sessionKey,
+              requestAgentId,
+              startup: method === "chat.startup",
+              message: requests.subscriptionError,
+              retryable: requests.historyLoad.phase === "failed" && requests.historyLoad.retryable,
+            });
+            state.requestUpdate?.();
+          }
+          return undefined;
+        }
+        break;
+      }
+      admission = requests.subscriptionReady;
+    }
+    // The snapshot covers activity emitted before the foreground observer was
+    // admitted; subsequent activity arrives through its acknowledged full stream.
+    setChatError(state, null);
+    let response = await request(deltaCursor);
+    if (!isCurrent()) {
+      recordTiming("stale", {
+        reason: "apply-version",
+      });
+      return undefined;
+    }
+    if (isHistoryCursor(response) && response.kind === "reset") {
+      clearHistoryCursor(state, sessionKey, requestAgentId);
+      response = await request();
+      if (!isCurrent()) {
+        recordTiming("stale", {
+          reason: "reset-fallback-version",
+        });
+        return undefined;
+      }
+    }
+    if (isHistoryCursor(response) && response.kind === "delta") {
+      const runProjectionsBeforeApply = readRunProjections(state, sessionKey, requestAgentId);
+      const activeStreamBeforeApply = state.chatRunId ? state.chatStream : null;
+      const runActive = isSessionRunActive(response.sessionInfo);
+      for (const payload of response.messages) {
+        applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
+      }
+      const historyProjection = getChatSessionProjection(state);
+      if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
+        state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
+      }
+      state.currentSessionId = response.sessionInfo.sessionId?.trim() || previousSessionId;
+      // An accepted delta advances the same transcript generation, not a branch replacement.
+      // Carry ownership across its leaf advance; reseeding loses attributed pending sends and runs.
+      publishChatSessionProjection(state, {
+        ...historyProjection,
+        scope: { ...historyProjection.scope, ...readChatSessionProjectionScope(state) },
+      });
+      applyChatPendingInputs(state, response.pendingInputs, {
+        queriedRunIds: inputRunIds,
+        receipts:
+          !previousSessionId || previousSessionId === state.currentSessionId
+            ? response.inputReceipts
+            : undefined,
+      });
+      state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
+      state.chatQueueModeOverride = response.sessionInfo.queueMode;
+      state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
+      applyHistoryRun({
+        state,
+        run: response.inFlightRun,
+        sessionInfo: response.sessionInfo,
+        historyRun: response.observation.run,
+        previousRunProjections,
+        runProjectionsBeforeApply,
+        currentRunProjections: historyProjection.runs,
+        resetStream: !state.chatRunId || state.chatRunId === previousRunId,
+        activeStreamBeforeReset: activeStreamBeforeApply,
+      });
+      commitCurrentChatHistorySnapshot(state, response.deltaCursor ?? null);
+      recordTiming("applied", {
+        messageCount: response.messages.length,
+        visibleMessageCount: response.messages.length,
+        resetStream: false,
+      });
+      return {
+        messages: state.chatMessages,
+        deltaCursor: response.deltaCursor,
+        pendingInputs: response.pendingInputs,
+        inputReceipts: response.inputReceipts,
+        sessionInfo: response.sessionInfo,
+        ...(response.inFlightRun ? { inFlightRun: response.inFlightRun } : {}),
+        ...(response.metadata ? { metadata: response.metadata } : {}),
+        observation: response.observation,
+      };
+    }
+    if (isHistoryCursor(response)) {
+      throw new Error("chat history page request returned a cursor reset");
+    }
+    const res = response;
+    // Fence concurrent run lifecycle before applying the response. A remount
+    // may replace the map itself, so compare its canonical run entries.
+    const runProjectionsBeforeApply = readRunProjections(state, sessionKey, requestAgentId);
+    const messages = Array.isArray(res.messages) ? res.messages : [];
+    const nextPagination = resolveChatHistoryPagination(res);
+    const nextSessionId = historySessionId(res);
+    const visibleMessages = visibleChatHistoryMessages(messages);
+    const previousTerminalMessages = reconcileAuthoritativeTerminalHistory({
+      host: state,
+      previousMessages,
+      sessionKey,
+      visibleMessages,
+    });
+    const nextDisplayedLeafEntryId = Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
+      ? res.sessionInfo?.activeLeafEntryId?.trim() || null
+      : (previousDisplayedLeafEntryId ?? null);
+    const retainsTranscriptIdentity =
+      res.windowReset !== true &&
+      (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
+      (previousDisplayedLeafEntryId === undefined ||
+        previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
+    const reconciledHistory = reconcileHistoryTail({
+      nextMessages: visibleMessages,
+      nextPagination,
+      nextSessionId,
+      previousMessages: retainsTranscriptIdentity ? previousTerminalMessages : [],
+      previousPagination,
+      previousSessionId,
+    });
+    const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
+    const scope = readChatSessionProjectionScope(state, {
+      sessionKey,
+      agentId: requestAgentId,
+      sessionId: nextSessionId,
+      ...(Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
+        ? { activeLeafEntryId: nextDisplayedLeafEntryId }
+        : {}),
+    });
+    state.chatSubmissions?.observeInitialSession(sessionKey, client, nextSessionId);
+    // Only the pane-owned reducer proves which live and pending rows survive;
+    // terminal-renderer cleanup must not reclassify them as history. A new
+    // session or leaf starts empty.
+    const historyProjection = reduceChatSessionProjection(
+      state,
+      {
+        type: "snapshotLoaded",
+        messages: authoritativeMessages,
+        options: { shouldIncludeMessage: isVisibleChatHistoryMessage },
+      },
+      {
+        scope,
+        runActive:
+          res.sessionInfo &&
+          (typeof res.sessionInfo.hasActiveRun === "boolean" ||
+            res.sessionInfo.status !== undefined)
+            ? isSessionRunActive(res.sessionInfo)
+            : undefined,
+      },
+    );
+    if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
+      state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
+    }
+    state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
+    state.currentSessionId = nextSessionId;
+    applyChatPendingInputs(state, res.pendingInputs, {
+      queriedRunIds: inputRunIds,
+      receipts:
+        !previousSessionId || previousSessionId === nextSessionId ? res.inputReceipts : undefined,
+    });
+    commitCurrentChatHistorySnapshot(state, res.deltaCursor ?? null);
+    if (
+      state.reconnectResumeSessionId &&
+      state.reconnectResumeSessionId !== state.currentSessionId
+    ) {
+      state.reconnectResumeSessionId = null;
+    }
+    state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
+    state.chatVerboseLevel = res.verboseLevel ?? null;
+    state.chatQueueModeOverride = res.sessionInfo?.queueMode;
+    state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
+    const activeStreamBeforeReset = state.chatRunId ? state.chatStream : null;
+    const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
+    if (resetStream) {
+      const streamReconciliation = {
+        persistCommentary: state.chatRunId ? true : persistsChatCommentary(state),
+        isHiddenAssistantMessage: shouldHideAssistantChatMessage,
+        isHiddenStreamText: isHiddenAssistantStreamText,
+      };
+      const hasVisibleStream = hasVisibleStreamParts(state, streamReconciliation);
+      const historyReplacedStream = historyReplacedVisibleStream(
+        state.chatMessages,
+        state,
+        streamReconciliation,
+      );
+      pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
+      const liveToolIds = state.toolStreamOrder ?? [];
+      if (
+        state.chatRunId &&
+        (hasVisibleStream || liveToolIds.length > 0) &&
+        !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
+      ) {
+        reconcileChatRunStartup(state, { state: "activity", runId: state.chatRunId });
+      }
+      const persistedToolStreamIds = persistedCurrentToolStreamIds(state.chatMessages, state);
+      const historyReplacedToolStream =
+        liveToolIds.length > 0 && liveToolIds.every((id) => persistedToolStreamIds.has(id));
+      const historyReplacedSomeToolStream = persistedToolStreamIds.size > 0;
+      const liveToolStreamReplaced = liveToolIds.length === 0 || historyReplacedToolStream;
+      if (!hasVisibleStream || historyReplacedStream) {
+        if (state.chatRunId && historyReplacedStream) {
+          rolloverChatStream(state, { runId: state.chatRunId, persisted: true });
+        }
+        if (liveToolStreamReplaced) {
+          maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
+        } else {
+          prunePersistedToolStreamMessages(state, persistedToolStreamIds);
+        }
+        if (!state.chatRunId) {
+          state.chatStream = null;
+          state.chatStreamStartedAt = null;
+        }
+        recordTiming("stream-reset", {
+          messageCount: messages.length,
+          visibleMessageCount: visibleMessages.length,
+        });
+      } else if (!state.chatRunId) {
+        publishChatSessionProjectionMessages(
+          state,
+          materializeVisibleAssistantStreamMessages(state.chatMessages, state),
+        );
+        maybeResetToolStream(state);
+        state.chatStream = null;
+        state.chatStreamStartedAt = null;
+      } else if (historyReplacedSomeToolStream) {
+        publishChatSessionProjectionMessages(
+          state,
+          materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+            includeCurrent: false,
+            requirePersistedTool: !historyReplacedToolStream,
+            persistCommentary: true,
+          }),
+        );
+        if (!visibleCurrentAssistantStreamTail(state, streamReconciliation.isHiddenStreamText)) {
+          state.chatStreamStartedAt = null;
+        }
+        pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
+        if (historyReplacedToolStream) {
+          maybeResetToolStream(state, { preserveStreamSegments: true });
+        } else {
+          prunePersistedToolStreamMessages(state, persistedToolStreamIds);
+        }
+      }
+    }
+
+    applyHistoryRun({
+      state,
+      run: res.inFlightRun,
+      sessionInfo: res.sessionInfo,
+      historyRun: res.observation.run,
+      previousRunProjections,
+      runProjectionsBeforeApply,
+      currentRunProjections: historyProjection.runs,
+      resetStream,
+      activeStreamBeforeReset,
+    });
+
+    recordTiming("applied", {
+      messageCount: messages.length,
+      visibleMessageCount: visibleMessages.length,
+      resetStream,
+    });
+    return res;
+  } catch (err) {
+    if (!isCurrent()) {
+      recordTiming("stale", {
+        reason: "error-version",
+      });
+      return undefined;
+    }
+    recordTiming("error");
+    const missingReadScope = isMissingOperatorReadScopeError(err);
+    if (missingReadScope) {
+      resetChatHistoryProjection(state, requestAgentId);
+      state.chatThinkingLevel = null;
+      state.chatVerboseLevel = null;
+    }
+    setChatHistoryLoad(state, {
+      phase: "failed",
+      sessionKey,
+      requestAgentId,
+      startup: method === "chat.startup",
+      message: missingReadScope
+        ? formatMissingOperatorReadScopeMessage("existing chat history")
+        : formatChatHistoryLoadError(err),
+      retryable:
+        isRetryableChatReadError(err, method) ||
+        (err instanceof GatewayRequestError && err.retryable),
+    });
+    state.requestUpdate?.();
+  } finally {
+    if (ownsHistoryRequest(state, ownership)) {
+      setChatHistoryRetrying(state, "history", false);
+      state.chatLoading = false;
+    }
+  }
+  return undefined;
+}

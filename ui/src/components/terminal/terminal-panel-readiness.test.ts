@@ -60,6 +60,7 @@ describe("terminal panel readiness", () => {
   afterEach(async () => {
     document.body.replaceChildren();
     createTerminal.mockClear();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     await i18n.setLocale("en");
   });
@@ -181,10 +182,10 @@ describe("terminal panel readiness", () => {
     const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.client = client;
     panel.available = true;
-    document.body.append(panel);
     const catalog = { catalogId: "codex", hostId: "node:mac", threadId: "thread" };
-
-    panel.handleToggleRequest(new CustomEvent("openclaw:terminal-toggle", { detail: { catalog } }));
+    panel.page = panel.fullscreen = panel.embedded = true;
+    panel.routeTarget = { catalog };
+    document.body.append(panel);
 
     await waitForFast(() => {
       expect(requests).toContainEqual({
@@ -213,9 +214,9 @@ describe("terminal panel readiness", () => {
       ).toBeNull(),
     );
     expect(new TextDecoder().decode(controller.write.mock.calls[0]?.[0])).toBe("ready");
-    expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
-      JSON.stringify(["catalog-terminal-1"]),
-    );
+    expect(
+      sessionStorage.getItem(`openclaw.terminal.sessions.v1:page:${JSON.stringify({ catalog })}`),
+    ).toBe(JSON.stringify(["catalog-terminal-1"]));
   });
 
   it("marks a catalog terminal ready when its first visible output is a replay", async () => {
@@ -249,13 +250,11 @@ describe("terminal panel readiness", () => {
     const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
     panel.client = client;
     panel.available = true;
+    panel.page = panel.fullscreen = panel.embedded = true;
+    panel.routeTarget = {
+      catalog: { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" },
+    };
     document.body.append(panel);
-
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:terminal-toggle", {
-        detail: { catalog: { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" } },
-      }),
-    );
     await waitForFast(() =>
       expect(
         panel.renderRoot.querySelector(
@@ -286,52 +285,135 @@ describe("terminal panel readiness", () => {
     );
   });
 
-  it("closes a catalog terminal and shows an error when no output arrives", async () => {
-    const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
-        return (
-          method === "terminal.open"
-            ? { ...terminalOpenResult("catalog-terminal-1"), title: "claude --resume 1234…" }
-            : {}
-        ) as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.available = true;
-    (panel as unknown as { catalogReadyTimeoutMs: number }).catalogReadyTimeoutMs = 5;
-    document.body.append(panel);
-    const catalog = { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" };
+  it.each([
+    { siblingReady: "alone", siblingExit: "none" },
+    { siblingReady: "before timeout", siblingExit: "none" },
+    { siblingReady: "after timeout", siblingExit: "none" },
+    { siblingReady: "before timeout", siblingExit: "error" },
+    { siblingReady: "before timeout", siblingExit: "no error" },
+  ] as const)(
+    "keeps the matching retry with sibling readiness $siblingReady and exit $siblingExit",
+    async ({ siblingReady, siblingExit }) => {
+      vi.useFakeTimers();
+      createTerminal.mockImplementation(async () => createTerminalController());
+      const siblingOpen = createDeferred<ReturnType<typeof terminalOpenResult>>();
+      const requests: Array<{ method: string; params: unknown }> = [];
+      let listener: Parameters<TerminalGatewayClient["addEventListener"]>[0] | undefined;
+      const client: TerminalGatewayClient = {
+        forceReconnect: () => {},
+        request: async <T>(method: string, params?: unknown) => {
+          requests.push({ method, params });
+          if (method === "terminal.open" && !(params as { catalog?: unknown }).catalog) {
+            return siblingOpen.promise as Promise<T>;
+          }
+          return (
+            method === "terminal.open"
+              ? { ...terminalOpenResult("catalog-terminal-1"), title: "claude --resume 1234…" }
+              : {}
+          ) as T;
+        },
+        addEventListener: (nextListener) => {
+          listener = nextListener;
+          return () => {
+            listener = undefined;
+          };
+        },
+      };
+      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      panel.client = client;
+      panel.available = true;
+      panel.agentId = "research";
+      panel.catalogReadyTimeoutMs = 1_000;
+      const catalog = { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" };
+      panel.page = panel.fullscreen = panel.embedded = true;
+      panel.routeTarget = { catalog };
+      document.body.append(panel);
 
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:terminal-toggle", {
-        detail: { catalog },
-      }),
-    );
-
-    await waitForFast(() => {
+      await vi.waitFor(() => {
+        expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(
+          false,
+        );
+        expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(1);
+      });
+      if (siblingReady !== "alone") {
+        panel.agentId = "other";
+        panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-new")!.click();
+        await vi.waitFor(() => {
+          expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(2);
+        });
+        if (siblingReady === "before timeout") {
+          siblingOpen.resolve(terminalOpenResult("sibling-terminal"));
+          await vi.waitFor(() => expect(panel.renderRoot.querySelector(".is-live")).not.toBeNull());
+        }
+      }
+      await vi.advanceTimersByTimeAsync(1_000);
+      await panel.updateComplete;
       expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
         "Session did not connect within 30 seconds",
       );
-    });
-    expect(requests).toContainEqual({
-      method: "terminal.close",
-      params: { sessionId: "catalog-terminal-1" },
-    });
-    expect(panel.renderRoot.querySelector(".tabstrip-tab")).toBeNull();
-    const retry = panel.renderRoot.querySelector<HTMLButtonElement>(".tp-error button");
-    expect(retry?.textContent?.trim()).toBe("Retry");
+      if (siblingReady === "after timeout") {
+        siblingOpen.resolve(terminalOpenResult("sibling-terminal"));
+        await vi.waitFor(() => expect(panel.renderRoot.querySelector(".is-live")).not.toBeNull());
+      }
+      await vi.waitFor(() => {
+        expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+          "Session did not connect within 30 seconds",
+        );
+      });
+      expect(requests).toContainEqual({
+        method: "terminal.close",
+        params: { sessionId: "catalog-terminal-1" },
+      });
+      expect(panel.renderRoot.querySelectorAll(".tabstrip-tab")).toHaveLength(
+        siblingReady === "alone" ? 0 : 1,
+      );
+      expect(requests.filter((request) => request.method === "terminal.close")).toEqual([
+        { method: "terminal.close", params: { sessionId: "catalog-terminal-1" } },
+      ]);
+      const retry = panel.renderRoot.querySelector<HTMLButtonElement>(".tp-error button");
+      expect(retry?.textContent?.trim()).toBe("Retry");
 
-    retry?.click();
-    await waitForFast(() => {
-      expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(2);
-    });
-    expect(requests.findLast((request) => request.method === "terminal.open")?.params).toEqual(
-      expect.objectContaining({ catalog }),
-    );
-  });
+      if (siblingExit !== "none") {
+        const exitError = "The sibling terminal stopped unexpectedly.";
+        listener?.({
+          event: "terminal.exit",
+          payload: {
+            sessionId: "sibling-terminal",
+            reason: "process_exit",
+            exitCode: 1,
+            ...(siblingExit === "error" ? { error: exitError } : {}),
+          },
+        });
+        if (siblingExit === "error") {
+          retry?.click();
+        }
+        await panel.updateComplete;
+        expect(panel.renderRoot.querySelector(".tabstrip-tab__status")?.textContent).toBe(
+          "exited (1)",
+        );
+        if (siblingExit === "error") {
+          expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(exitError);
+          expect(panel.renderRoot.querySelector(".tp-error button")).toBeNull();
+          expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(2);
+          return;
+        }
+        expect(panel.renderRoot.querySelector(".tp-error")?.textContent).toContain(
+          "Session did not connect within 30 seconds",
+        );
+        expect(panel.renderRoot.querySelector(".tp-error button")?.textContent?.trim()).toBe(
+          "Retry",
+        );
+      }
+
+      retry?.click();
+      await vi.waitFor(() => {
+        expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(
+          siblingReady === "alone" ? 2 : 3,
+        );
+      });
+      expect(requests.findLast((request) => request.method === "terminal.open")?.params).toEqual(
+        expect.objectContaining({ catalog, agentId: "research" }),
+      );
+    },
+  );
 });

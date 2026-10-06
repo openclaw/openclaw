@@ -1,3 +1,4 @@
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import {
   clearSessionPlacementRecovery,
@@ -23,26 +24,45 @@ export function resolveSubmissionOutcomeReason(params: {
     : "placement-interrupted";
 }
 
-export function resolveScope(
-  snapshot: {
-    client: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
-    connected: boolean;
-  },
-  current: string,
-  firstBind: boolean,
-): { next: string; changed: boolean } {
-  // Retain the verified scope until replacement auth arrives; a different scope invalidates it.
-  const next =
-    snapshot.connected && snapshot.client?.recoveryScopeReady
-      ? (snapshot.client.recoveryScope ?? "")
-      : current;
-  return { next, changed: !firstBind && snapshot.connected && current !== next };
-}
+const livePlacementDrafts = new WeakMap<
+  object,
+  Map<string, PendingSessionPlacementRecoveryState>
+>();
 
 export class PendingSessionPlacementRecoveryState {
+  private claim:
+    | { owners: Map<string, PendingSessionPlacementRecoveryState>; key: string }
+    | undefined;
+
+  constructor(private readonly readOwner?: () => object | undefined) {}
+
+  releaseClaim() {
+    if (this.claim?.owners.get(this.claim.key) === this) {
+      this.claim.owners.delete(this.claim.key);
+    }
+    this.claim = undefined;
+  }
+
+  private claimOwners() {
+    const owner = this.readOwner?.();
+    if (!owner) {
+      return undefined;
+    }
+    let owners = livePlacementDrafts.get(owner);
+    if (!owners) {
+      owners = new Map();
+      livePlacementDrafts.set(owner, owners);
+    }
+    return owners;
+  }
+
+  private claimKey(gatewayUrl: string, recoveryScope: string, sessionKey: string) {
+    return JSON.stringify([gatewayUrl, recoveryScope, sessionKey]);
+  }
   sessionKey = "";
   messageId = "";
   message = "";
+  mentions: readonly HumanMention[] | undefined;
   attachments: unknown[] | undefined;
   target: SessionPlacementTarget | null = null;
   agentId = "";
@@ -66,8 +86,14 @@ export class PendingSessionPlacementRecoveryState {
     this.reset();
   }
 
+  hasOtherLiveOwner(gatewayUrl: string, recoveryScope: string, sessionKey: string): boolean {
+    const owner = this.claimOwners()?.get(this.claimKey(gatewayUrl, recoveryScope, sessionKey));
+    return owner !== undefined && owner !== this;
+  }
+
   owns(gatewayUrl: string, recoveryScope: string, sessionKey: string): boolean {
     return (
+      !this.hasOtherLiveOwner(gatewayUrl, recoveryScope, sessionKey) &&
       this.gatewayUrl === gatewayUrl &&
       this.recoveryScope === recoveryScope &&
       this.sessionKey === sessionKey
@@ -75,9 +101,11 @@ export class PendingSessionPlacementRecoveryState {
   }
 
   reset() {
+    this.releaseClaim();
     this.sessionKey = "";
     this.messageId = "";
     this.message = "";
+    this.mentions = undefined;
     this.attachments = undefined;
     this.target = null;
     this.agentId = "";
@@ -91,9 +119,11 @@ export class PendingSessionPlacementRecoveryState {
   }
 
   restore(gatewayUrl: string, recoveryScope: string): SessionPlacementRecovery | null {
-    const recovery = listSessionPlacementRecoveries(gatewayUrl, recoveryScope).find(
-      (candidate) => candidate.phase === "creating",
-    );
+    const owners = this.claimOwners();
+    const recovery = listSessionPlacementRecoveries(gatewayUrl, recoveryScope).find((candidate) => {
+      const live = owners?.get(this.claimKey(gatewayUrl, recoveryScope, candidate.sessionKey));
+      return candidate.phase === "creating" && (!live || live === this);
+    });
     if (!recovery || recovery.phase !== "creating") {
       return null;
     }
@@ -109,6 +139,7 @@ export class PendingSessionPlacementRecoveryState {
     agentId: string;
     target: SessionPlacementTarget;
     message: string;
+    mentions?: readonly HumanMention[];
     attachments?: unknown[];
     gatewayUrl: string;
     recoveryScope: string;
@@ -132,6 +163,9 @@ export class PendingSessionPlacementRecoveryState {
       sessionKey,
       messageId: generateUUID(),
       message: params.message,
+      ...(params.mentions?.length
+        ? { mentions: params.mentions.map((mention) => ({ ...mention })) }
+        : {}),
       attachments: params.attachments,
       target: params.target,
       agentId: params.agentId,
@@ -156,6 +190,7 @@ export class PendingSessionPlacementRecoveryState {
     ) {
       return false;
     }
+    this.releaseClaim();
     this.sessionKey = sessionKey;
     this.phase = "dispatching";
     this.createParams = undefined;
@@ -179,6 +214,9 @@ export class PendingSessionPlacementRecoveryState {
       sessionKey,
       messageId: this.messageId,
       message: this.message,
+      ...(this.mentions?.length
+        ? { mentions: this.mentions.map((mention) => ({ ...mention })) }
+        : {}),
       attachments: this.attachments ? [...this.attachments] : undefined,
       target: { ...this.target },
       agentId: this.agentId,
@@ -192,9 +230,17 @@ export class PendingSessionPlacementRecoveryState {
   }
 
   private apply(recovery: SessionPlacementPendingRecovery, restored: boolean, persistent: boolean) {
+    this.releaseClaim();
+    const owners = this.claimOwners();
+    if (owners && recovery.phase === "creating") {
+      const key = this.claimKey(recovery.gatewayUrl, recovery.recoveryScope, recovery.sessionKey);
+      owners.set(key, this);
+      this.claim = { owners, key };
+    }
     this.sessionKey = recovery.sessionKey;
     this.messageId = recovery.messageId;
     this.message = recovery.message;
+    this.mentions = recovery.mentions;
     this.attachments = recovery.attachments;
     this.target = { ...recovery.target };
     this.agentId = recovery.agentId;

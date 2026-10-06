@@ -18,12 +18,15 @@ describe("resolvePersistedSessionRuntimeId", () => {
     ).toBe("codex");
   });
 
-  it("uses the override when the historical harness is not locked", () => {
+  it.each([
+    { modelSelectionLocked: false },
+    { modelSelectionLocked: true, pluginOwnerId: "model-owner" },
+  ])("uses the override without native ownership ($modelSelectionLocked)", (ownership) => {
     expect(
       resolvePersistedSessionRuntimeId({
         agentHarnessId: "codex",
         agentRuntimeOverride: "openclaw",
-        modelSelectionLocked: false,
+        ...ownership,
       }),
     ).toBe("openclaw");
   });
@@ -52,16 +55,35 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
     ).toBe("codex");
   });
 
-  it("does not revive an unlocked historical harness for a future turn", () => {
-    expect(
-      resolveSessionRuntimeOverrideForProvider({
-        provider: "openai",
-        entry: {
-          agentHarnessId: "codex",
-          modelSelectionLocked: false,
-        },
-      }),
-    ).toBeUndefined();
+  it.each([
+    { modelSelectionLocked: false },
+    { modelSelectionLocked: true, pluginOwnerId: "model-owner" },
+  ])(
+    "does not revive an observed harness without native ownership ($modelSelectionLocked)",
+    (ownership) => {
+      expect(
+        resolveSessionRuntimeOverrideForProvider({
+          provider: "openai",
+          entry: { agentHarnessId: "codex", ...ownership },
+        }),
+      ).toBeUndefined();
+    },
+  );
+
+  it("retains a plugin-owned runtime request after another harness reports usage", () => {
+    const entry = {
+      agentRuntimeOverride: "openclaw",
+      modelSelectionLocked: true,
+      pluginOwnerId: "model-owner",
+    };
+    for (const agentHarnessId of [undefined, "codex", "claude-cli"]) {
+      expect(
+        resolveSessionRuntimeOverrideForProvider({
+          provider: "openai",
+          entry: { ...entry, agentHarnessId },
+        }),
+      ).toBe("openclaw");
+    }
   });
 });
 
@@ -84,10 +106,10 @@ describe("resolveManualCompactionCliTarget", () => {
     cliBackendsTesting.resetDepsForTest();
   });
 
-  it("recovers an implicit CLI runtime from its unique compatible binding", () => {
+  it.each(["anthropic", "claude-cli"])("recovers an implicit CLI runtime for %s", (provider) => {
     expect(
       resolveManualCompactionCliTarget({
-        provider: "anthropic",
+        provider,
         entry: {
           cliSessionBindings: {
             "claude-cli": { sessionId: "native-claude-session" },
@@ -101,7 +123,7 @@ describe("resolveManualCompactionCliTarget", () => {
     });
   });
 
-  it("uses setup metadata when the runtime registry is scoped elsewhere", () => {
+  it.each(["anthropic", "claude-cli"])("uses setup metadata for %s", (provider) => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
       resolvePluginSetupCliBackend: ({ backend }) =>
@@ -119,7 +141,7 @@ describe("resolveManualCompactionCliTarget", () => {
     });
     expect(
       resolveManualCompactionCliTarget({
-        provider: "anthropic",
+        provider,
         cfg: {} as OpenClawConfig,
         entry: {
           cliSessionBindings: {

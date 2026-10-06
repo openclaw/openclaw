@@ -1,112 +1,66 @@
-import {
-  createChannelInboundEnvelopeBuilder,
-  toInboundMediaFactsWithMetadata,
-} from "openclaw/plugin-sdk/channel-inbound";
-import type {
-  ChannelIngressContextBinding,
-  ResolvedChannelMessageIngress,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { toInboundMediaFactsWithMetadata } from "openclaw/plugin-sdk/channel-inbound";
 import {
   evaluateSupplementalContextVisibility,
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
-import type { MatrixClient } from "../sdk.js";
+import { resolveMatrixReplyToEventId } from "../relations.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixAllowListMatch } from "./allowlist.js";
+import type { createMatrixEventContextResolver } from "./event-context.js";
 import { resolveMatrixSharedDmContextNotice } from "./handler-helpers.js";
+import type { MatrixIngressContent } from "./handler-ingress-content.js";
 import { loadMatrixSendModule } from "./handler-runtime.js";
-import type { MatrixLocationPayload } from "./location.js";
-import { createMatrixReplyContextResolver } from "./reply-context.js";
-import type { HistoryEntry } from "./room-history.js";
-import type { resolveMatrixInboundRoute } from "./route.js";
-import type { PluginRuntime, RuntimeEnv } from "./runtime-api.js";
-import { createMatrixThreadContextResolver } from "./thread-context.js";
-import { resolveMatrixReplyToEventId, resolveMatrixThreadRouting } from "./threads.js";
+import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
-type MatrixInboundRoute = ReturnType<typeof resolveMatrixInboundRoute>["route"];
-
 export async function resolveMatrixInboundContext(config: {
-  client: MatrixClient;
-  core: PluginRuntime;
-  cfg: CoreConfig;
-  accountId: string;
-  resolveMessageIngress: (
-    contextBinding: ChannelIngressContextBinding,
-    conversation?: { kind: "direct" | "channel"; id: string; threadId?: string },
-  ) => Promise<ResolvedChannelMessageIngress>;
-  runtime: RuntimeEnv;
-  logVerboseMessage: (message: string) => void;
+  handler: MatrixHandlerRuntimeConfig;
+  ingress: MatrixIngressContent;
   roomId: string;
   event: MatrixRawEvent;
   eventTs?: number;
-  route: MatrixInboundRoute;
-  isDirectMessage: boolean;
-  isRoom: boolean;
-  effectiveRoomUsers: string[];
-  groupPolicy: "open" | "allowlist" | "disabled";
-  effectiveGroupAllowFrom: string[];
-  contextVisibilityMode: ReturnType<typeof resolveChannelContextVisibilityMode>;
-  resolveThreadContext: ReturnType<typeof createMatrixThreadContextResolver>;
-  resolveReplyContext: ReturnType<typeof createMatrixReplyContextResolver>;
-  threadRootId?: string;
-  thread: ReturnType<typeof resolveMatrixThreadRouting>;
-  getRoomInfo: (
-    roomId: string,
-    opts?: { includeAliases?: boolean },
-  ) => Promise<{ name?: string; canonicalAlias?: string; altAliases: string[] }>;
+  resolveThreadContext: ReturnType<typeof createMatrixEventContextResolver>;
+  resolveReplyContext: ReturnType<typeof createMatrixEventContextResolver>;
   senderId: string;
-  senderName: string;
-  bodyText: string;
-  commandBodyText: string;
-  roomConfig?: MatrixRoomConfig;
-  messageId: string;
-  inboundHistory?: HistoryEntry[];
-  wasMentioned: boolean;
-  effectiveWasMentioned: boolean;
-  shouldBypassMention: boolean;
-  canDetectMention: boolean;
-  shouldRequireMention: boolean;
-  commandAuthorized: boolean;
-  locationPayload: MatrixLocationPayload | null;
-  media: { path: string; contentType?: string; placeholder: string } | null;
-  preflightAudioTranscript?: string;
-  historyLimit: number;
-  hasExplicitSessionBinding: boolean;
-  dmSessionScope?: "per-user" | "per-room";
   sharedDmContextNoticeRooms: Set<string>;
-  resolveStorePath: typeof resolveStorePath;
-  createChannelInboundEnvelopeBuilder: typeof createChannelInboundEnvelopeBuilder;
-  finalizeInboundContext?: (ctx: Record<string, unknown>) => unknown;
 }) {
   const {
-    client,
-    core,
-    cfg,
-    accountId,
-    resolveMessageIngress,
-    runtime,
-    logVerboseMessage,
+    handler,
+    ingress,
     roomId,
     event,
     eventTs,
+    resolveThreadContext,
+    resolveReplyContext,
+    senderId,
+    sharedDmContextNoticeRooms,
+  } = config;
+  const {
+    client,
+    core,
+    accountId,
+    runtime,
+    logVerboseMessage,
+    groupPolicy,
+    getRoomInfo,
+    historyLimit,
+    dmSessionScope,
+    resolveStorePath: resolveStorePathImpl,
+    createChannelInboundEnvelopeBuilderAsync: createChannelInboundEnvelopeBuilderImpl,
+    finalizeInboundContext,
+  } = handler;
+  const {
+    cfg,
+    resolveMessageIngress,
     route: _route,
     isDirectMessage,
     isRoom,
     effectiveRoomUsers,
-    groupPolicy,
     effectiveGroupAllowFrom,
-    contextVisibilityMode,
-    resolveThreadContext,
-    resolveReplyContext,
     threadRootId,
     thread,
-    getRoomInfo,
-    senderId,
     senderName,
     bodyText,
     commandBodyText,
@@ -122,14 +76,13 @@ export async function resolveMatrixInboundContext(config: {
     locationPayload,
     media,
     preflightAudioTranscript,
-    historyLimit,
     hasExplicitSessionBinding,
-    dmSessionScope,
-    sharedDmContextNoticeRooms,
-    resolveStorePath: resolveStorePathImpl,
-    createChannelInboundEnvelopeBuilder: createChannelInboundEnvelopeBuilderImpl,
-    finalizeInboundContext,
-  } = config;
+  } = ingress;
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg,
+    channel: "matrix",
+    accountId,
+  });
 
   const replyToEventId = resolveMatrixReplyToEventId(event.content as RoomMessageEventContent);
   const threadTarget = thread.threadId;
@@ -160,34 +113,30 @@ export async function resolveMatrixInboundContext(config: {
       kind,
       senderAllowed: isRoomContextSenderAllowed(contextSenderId),
     }).include;
-  let threadContext = threadRootId
-    ? await resolveThreadContext({ roomId, threadRootId })
-    : undefined;
-  let threadContextBlockedByPolicy = false;
+  let threadContext =
+    ingress.threadContext ??
+    (threadRootId ? await resolveThreadContext({ roomId, eventId: threadRootId }) : undefined);
   if (
     threadContext?.senderId &&
     !shouldIncludeRoomContextSender("thread", threadContext.senderId)
   ) {
     logVerboseMessage(`matrix: drop thread root context (mode=${contextVisibilityMode})`);
-    threadContextBlockedByPolicy = true;
     threadContext = undefined;
   }
   let replyContext: Awaited<ReturnType<typeof resolveReplyContext>> | undefined;
   if (replyToEventId && replyToEventId === threadRootId && threadContext?.summary) {
     replyContext = {
-      replyToBody: threadContext.summary,
-      replyToSender: threadContext.senderLabel,
-      replyToSenderId: threadContext.senderId,
+      summary: threadContext.summary,
+      senderLabel: threadContext.senderLabel,
+      senderId: threadContext.senderId,
     };
-  } else if (replyToEventId && replyToEventId === threadRootId && threadContextBlockedByPolicy) {
-    replyContext = await resolveReplyContext({ roomId, eventId: replyToEventId });
   } else {
     replyContext = replyToEventId
       ? await resolveReplyContext({ roomId, eventId: replyToEventId })
       : undefined;
   }
   const replySenderAllowed =
-    !replyContext?.replyToSenderId || isRoomContextSenderAllowed(replyContext.replyToSenderId);
+    !replyContext?.senderId || isRoomContextSenderAllowed(replyContext.senderId);
   const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
   const roomName = roomInfo?.name;
   const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
@@ -195,7 +144,7 @@ export async function resolveMatrixInboundContext(config: {
   const storePath = resolveStorePathImpl(cfg.session?.store, {
     agentId: _route.agentId,
   });
-  const buildEnvelope = createChannelInboundEnvelopeBuilderImpl({ cfg, route: _route });
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderImpl({ cfg, route: _route });
   const sharedDmNoticeSessionKey = threadTarget
     ? _route.mainSessionKey || _route.sessionKey
     : _route.sessionKey;
@@ -232,6 +181,7 @@ export async function resolveMatrixInboundContext(config: {
     {
       agentId: _route.agentId,
       sessionKey: _route.sessionKey,
+      nativeChannelId: roomId,
       messageId,
       inboundEventKind: "user_request",
     },
@@ -250,8 +200,8 @@ export async function resolveMatrixInboundContext(config: {
       quote: replyContext
         ? {
             id: threadTarget ? undefined : (replyToEventId ?? undefined),
-            body: replyContext.replyToBody,
-            sender: replyContext.replyToSender,
+            body: replyContext.summary,
+            sender: replyContext.senderLabel,
             senderAllowed: replySenderAllowed,
           }
         : undefined,
@@ -289,9 +239,7 @@ export async function resolveMatrixInboundContext(config: {
       threadId: threadTarget,
     },
     route: {
-      agentId: _route.agentId,
-      dmScope: _route.dmScope,
-      accountId: _route.accountId,
+      ..._route,
       routeSessionKey: _route.sessionKey,
       parentSessionKey:
         threadTarget && _route.matchedBy !== "binding.channel" ? _route.mainSessionKey : undefined,
@@ -350,22 +298,23 @@ export async function resolveMatrixInboundContext(config: {
     agentId: _route.agentId,
     accountId,
   });
-  const shouldAckReaction = () =>
-    Boolean(
-      ackReaction &&
-      core.channel.reactions.shouldAckReaction({
-        scope: ackScope,
-        isDirect: isDirectMessage,
-        isGroup: isRoom,
-        isMentionableGroup: isRoom,
-        canDetectMention,
-        effectiveWasMentioned,
-        shouldBypassMention,
-      }),
-    );
-  if (shouldAckReaction() && messageId) {
+  const shouldAckReaction = Boolean(
+    ackReaction &&
+    core.channel.reactions.shouldAckReaction({
+      scope: ackScope,
+      isDirect: isDirectMessage,
+      isGroup: isRoom,
+      isMentionableGroup: isRoom,
+      canDetectMention,
+      effectiveWasMentioned,
+      shouldBypassMention,
+    }),
+  );
+  if (shouldAckReaction && messageId) {
     loadMatrixSendModule()
-      .then(({ reactMatrixMessage }) => reactMatrixMessage(roomId, messageId, ackReaction, client))
+      .then(({ reactMatrixMessage }) =>
+        reactMatrixMessage(roomId, messageId, ackReaction, { client }),
+      )
       .catch((err: unknown) => {
         logVerboseMessage(`matrix react failed for room ${roomId}: ${String(err)}`);
       });

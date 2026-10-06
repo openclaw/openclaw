@@ -22,7 +22,7 @@ export function renderChatHistoryBoundary(props: ChatHistoryBoundaryProps): Temp
         type="button"
         ?disabled=${props.loading}
         aria-busy=${props.loading ? "true" : "false"}
-        aria-label=${t("chat.thread.showEarlier")}
+        aria-label=${label}
         @click=${props.onShowEarlier}
       >
         <span role="status">${label}</span>

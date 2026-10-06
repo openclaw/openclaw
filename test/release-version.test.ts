@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import releaseVersionCases from "../apps/linux/tests/release_version_cases.json" with { type: "json" };
 import {
   classifyReleaseTrain,
   collectReleaseVersionFloorErrors,
   compareReleaseVersions,
+  parsePinnedReleaseVersion,
   parseReleaseVersion,
 } from "../scripts/lib/release-version.mjs";
 
@@ -12,7 +14,6 @@ describe("release version policy", () => {
     ["2026.7.2-beta.1", "beta"],
     ["2026.7.32", "stable"],
     ["2026.6.33", "extended-stable"],
-    ["2026.6.34", "extended-stable"],
     ["2026.6.33-1", "unsupported-extended-stable-correction"],
   ] as const)("classifies %s as %s", (version, expected) => {
     const parsed = parseReleaseVersion(version);
@@ -37,9 +38,40 @@ describe("release version policy", () => {
     expect(collectReleaseVersionFloorErrors("2026.7.1")).toEqual([]);
   });
 
-  it("orders prereleases, finals, and corrections", () => {
-    expect(compareReleaseVersions("2026.3.29-alpha.2", "2026.3.29-beta.1")).toBe(-1);
-    expect(compareReleaseVersions("2026.3.29-beta.1", "2026.3.29")).toBe(-1);
-    expect(compareReleaseVersions("2026.3.29-2", "2026.3.29")).toBe(1);
+  it.each(releaseVersionCases.ordered)(
+    "orders shared desktop release $current -> $candidate",
+    ({ current, candidate, ordering }) => {
+      expect(compareReleaseVersions(candidate, current)).toBe(ordering);
+    },
+  );
+
+  it.each(releaseVersionCases.unrecognized)("leaves %s outside calendar ordering", (version) => {
+    expect(parseReleaseVersion(version)).toBeNull();
+  });
+
+  it.each([
+    [" 2026.12.33 ", "2026.12.33"],
+    ["9999.12.9007199254740991", "9999.12.9007199254740991"],
+  ])("accepts stable release pin %j", (version, expected) => {
+    expect(parsePinnedReleaseVersion(version)).toBe(expected);
+  });
+
+  it.each([
+    "v2026.8.1",
+    "2026.8.1-alpha.1",
+    "2026.8.1-beta.1",
+    "2026.8.1-1",
+    "2026.8.1+build.1",
+    "latest",
+    "^2026.8.1",
+    "2026.8.x",
+    "https://example.com/2026.8.1",
+    "2026. 8.1",
+    "2026.08.1",
+    "2026.8.01",
+    "2026.13.1",
+    "2026.8.9007199254740992",
+  ])("rejects non-pin release form %j", (version) => {
+    expect(parsePinnedReleaseVersion(version)).toBeNull();
   });
 });

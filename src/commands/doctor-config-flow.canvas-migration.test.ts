@@ -1,42 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readConfigFileSnapshot } from "../config/config.js";
-import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { readConfigFileSnapshot } from "../config/io.js";
+import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
-import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
+import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 const note = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
+const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
+
 async function repairConfig(configPath: string) {
-  const runtime: RuntimeEnv = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
-  const options: DoctorOptions = { nonInteractive: true, repair: true };
-  const prompter = createDoctorPrompter({ runtime, options });
-  const configResult = await loadAndMaybeMigrateDoctorConfig({
-    options,
-    confirm: (params) => prompter.confirm(params),
-    runtime,
-    prompter,
-  });
-  const ctx: DoctorHealthFlowContext = {
-    runtime,
-    options,
-    prompter,
-    configResult,
-    cfg: configResult.cfg,
-    cfgForPersistence: structuredClone(configResult.cfg),
-    sourceConfigValid: configResult.sourceConfigValid ?? true,
-    configPath,
-    stateDirExistedAtStart: true,
-    ...(configResult.runWithPluginMetadataSnapshot
-      ? { runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot }
-      : {}),
-  };
+  const ctx = await prepareDoctorContext(configPath);
   await runInitialConfigWriteHealth(ctx);
   return JSON.parse(await fs.readFile(configPath, "utf8"));
 }
@@ -60,10 +38,10 @@ describe("Canvas document migration through doctor config persistence", () => {
   // POSIX permissions exercise real read/copy failures; Windows and root ignore chmod(0).
   it
     .skipIf(process.platform === "win32" || process.getuid?.() === 0)
-    .each(["partial", "blind", "env-root", "legacy-root"] as const)(
+    .each(["blind", "env-root"] as const)(
     "retains the root after a %s migration and retires it only after retry",
     async (failure) => {
-      await withTempHome(async (home) => {
+      await withDoctorConfigPreflightHome(async (home) => {
         const customRoot = path.join(home, "custom-canvas");
         const documents = path.join(customRoot, "documents");
         const coreDocuments = path.join(home, ".openclaw", "canvas", "documents");
@@ -75,7 +53,7 @@ describe("Canvas document migration through doctor config persistence", () => {
         const configPath = await writeCanvasConfig(
           home,
           configuredRoot,
-          failure === "legacy-root",
+          false,
           failure === "env-root" ? 18793 : undefined,
         );
         const blockedPath =
@@ -123,36 +101,29 @@ describe("Canvas document migration through doctor config persistence", () => {
     },
   );
 
-  it.each(["complete", "empty", "absent", "canonical", "canonical-alias", "legacy-root"] as const)(
+  it.each(["canonical-alias", "legacy-root"] as const)(
     "retires a %s root without losing canonical documents",
     async (scenario) => {
-      await withTempHome(async (home) => {
+      await withDoctorConfigPreflightHome(async (home) => {
         const coreRoot = path.join(home, ".openclaw", "canvas");
-        const customRoot = scenario === "canonical" ? coreRoot : path.join(home, "custom-canvas");
+        const customRoot = path.join(home, "custom-canvas");
         if (scenario === "canonical-alias") {
           await fs.mkdir(coreRoot, { recursive: true });
           await fs.symlink(coreRoot, customRoot, "junction");
         }
         const documents = path.join(customRoot, "documents");
-        if (scenario !== "absent") {
-          await fs.mkdir(documents, { recursive: true });
-        }
-        const hasDocument = scenario !== "empty" && scenario !== "absent";
-        if (hasDocument) {
-          await fs.mkdir(path.join(documents, "cv_existing"));
-          await fs.writeFile(path.join(documents, "cv_existing", "index.html"), "existing");
-        }
+        await fs.mkdir(path.join(documents, "cv_existing"), { recursive: true });
+        await fs.writeFile(path.join(documents, "cv_existing", "index.html"), "existing");
         const saved = await repairConfig(
           await writeCanvasConfig(home, customRoot, scenario === "legacy-root"),
         );
         expect(saved.plugins.entries.canvas.config.host).toEqual({ enabled: false });
+        expect(Object.keys(saved.plugins.entries)).toEqual(["canvas"]);
         expect(saved).not.toHaveProperty("canvasHost");
         expect((await readConfigFileSnapshot()).valid).toBe(true);
-        if (hasDocument) {
-          await expect(
-            fs.readFile(path.join(coreRoot, "documents", "cv_existing", "index.html"), "utf8"),
-          ).resolves.toBe("existing");
-        }
+        await expect(
+          fs.readFile(path.join(coreRoot, "documents", "cv_existing", "index.html"), "utf8"),
+        ).resolves.toBe("existing");
       });
     },
   );

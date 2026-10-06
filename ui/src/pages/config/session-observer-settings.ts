@@ -5,6 +5,10 @@ import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon.ts";
 import { renderSettingsRow, renderSettingsToggleRow } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatCompletionRoute } from "../../lib/model-runtime-label.ts";
+
+registerSettingsEnglish();
 
 const AUTO_VALUE = "__openclaw_observer_auto__";
 
@@ -42,11 +46,12 @@ function resolvedModelLabel(status: SystemInfoResult["defaultAgentUtilityModel"]
   if (status.status === "disabled") {
     return t("configView.sessionObserver.modelDisabled");
   }
+  const runtime = formatCompletionRoute(status.runtime)?.label;
   return t(
     status.status === "auto"
       ? "configView.sessionObserver.modelAuto"
       : "configView.sessionObserver.modelConfigured",
-    { model: status.model },
+    { model: runtime ? `${status.model} · ${runtime}` : status.model },
   );
 }
 

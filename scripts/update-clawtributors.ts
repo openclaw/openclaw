@@ -1,9 +1,9 @@
-// Update Clawtributors script supports OpenClaw repository automation.
 import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pMap, { pMapSkip } from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { readBoundedResponseBytes } from "./lib/bounded-response.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
@@ -85,7 +85,7 @@ for (const line of log.split("\n")) {
 
     // Track first commit date per login (log is --reverse so first seen = earliest)
     if (currentName && date) {
-      const login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
+      const login = resolveLogin(currentName, currentEmail);
       if (login) {
         const key = login.toLowerCase();
         if (!firstCommitByLogin.has(key)) {
@@ -118,7 +118,7 @@ for (const line of log.split("\n")) {
     continue;
   }
 
-  const login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
+  const login = resolveLogin(currentName, currentEmail);
   if (!login) {
     continue;
   }
@@ -170,22 +170,33 @@ const repoAgeDays = Math.max(1, (now - repoEpoch) / 86_400_000);
 //   score  = base * tenure
 // Squared curve: only true early contributors get meaningful boost.
 // Day-1 = 1.5x, halfway through repo life = 1.125x, recent = ~1.0x.
-function computeScore(loc: number, commits: number, prs: number, firstDate: string): number {
-  const base = commits * 2 + prs * 10 + Math.sqrt(loc);
+function computeTenure(firstDate: string): number {
   const daysIn = firstDate
     ? Math.max(0, (now - new Date(firstDate.slice(0, 10)).getTime()) / 86_400_000)
     : 0;
   const tenureRatio = Math.min(1, daysIn / repoAgeDays);
-  const tenure = 1 + tenureRatio * tenureRatio * 0.5;
-  return base * tenure;
+  return 1 + tenureRatio * tenureRatio * 0.5;
+}
+
+function contributionStats(login: string, firstDate = "") {
+  const loc = linesByLogin.get(login) ?? 0;
+  const commits = contributionsByLogin.get(login) ?? 0;
+  const prs = prsByLogin.get(login) ?? 0;
+  const firstCommitDate = firstCommitByLogin.get(login) ?? firstDate;
+  return {
+    lines: loc > 0 ? loc : commits,
+    commits,
+    prs,
+    score: (commits * 2 + prs * 10 + Math.sqrt(loc)) * computeTenure(firstCommitDate),
+    firstCommitDate,
+  };
 }
 
 const entriesByKey = new Map<string, Entry>();
 
 for (const seed of seedEntries) {
   const login =
-    (seed.html_url ? loginFromUrl(seed.html_url) : null) ??
-    resolveLogin(seed.display, null, apiByLogin, nameToLogin, emailToLogin);
+    (seed.html_url ? loginFromUrl(seed.html_url) : null) ?? resolveLogin(seed.display, null);
   const accountId = accountIdFromAvatarUrl(seed.avatar_url);
   if (!login && !accountId) {
     continue;
@@ -196,7 +207,7 @@ for (const seed of seedEntries) {
   const user = accountId
     ? userByLogin?.id === accountId
       ? userByLogin
-      : fetchUserByAccountId(accountId)
+      : fetchGitHubUser(`user/${accountId}`)
     : (userByLogin ?? (login ? fetchUser(login) : null));
   if (!user) {
     const key = accountId ? `github-id:${accountId}` : expectDefined(loginKey, "seed login key");
@@ -244,9 +255,7 @@ for (const item of contributors) {
     continue;
   }
 
-  const resolvedLogin = item.login
-    ? item.login
-    : resolveLogin(baseName, item.email ?? null, apiByLogin, nameToLogin, emailToLogin);
+  const resolvedLogin = item.login ? item.login : resolveLogin(baseName, item.email ?? null);
 
   if (!resolvedLogin) {
     continue;
@@ -261,40 +270,29 @@ for (const item of contributors) {
 
   const existing = entriesByKey.get(key);
   if (!existing) {
-    const loc = linesByLogin.get(key) ?? 0;
-    const commits = contributionsByLogin.get(key) ?? 0;
-    const prs = prsByLogin.get(key) ?? 0;
-    const fd = firstCommitByLogin.get(key) ?? "";
     entriesByKey.set(key, {
       key,
       login: user.login,
       display: pickDisplay(baseName, user.login),
       html_url: user.html_url,
       avatar_url: normalizeAvatar(user.avatar_url),
-      lines: loc > 0 ? loc : commits,
-      commits,
-      prs,
-      score: computeScore(loc, commits, prs, fd),
-      firstCommitDate: fd,
+      ...contributionStats(key),
     });
   } else {
     existing.login = user.login;
     existing.display = pickDisplay(baseName, user.login, existing.display);
     existing.html_url = user.html_url;
     existing.avatar_url = normalizeAvatar(user.avatar_url);
-    const loc = linesByLogin.get(key) ?? 0;
-    const commits = contributionsByLogin.get(key) ?? 0;
-    const prs = prsByLogin.get(key) ?? 0;
-    const fd = firstCommitByLogin.get(key) ?? existing.firstCommitDate;
-    existing.lines = Math.max(existing.lines, loc > 0 ? loc : commits);
-    existing.commits = Math.max(existing.commits, commits);
-    existing.prs = Math.max(existing.prs, prs);
-    existing.firstCommitDate = fd || existing.firstCommitDate;
-    existing.score = Math.max(existing.score, computeScore(loc, commits, prs, fd));
+    const stats = contributionStats(key, existing.firstCommitDate);
+    existing.lines = Math.max(existing.lines, stats.lines);
+    existing.commits = Math.max(existing.commits, stats.commits);
+    existing.prs = Math.max(existing.prs, stats.prs);
+    existing.firstCommitDate = stats.firstCommitDate || existing.firstCommitDate;
+    existing.score = Math.max(existing.score, stats.score);
   }
 }
 
-for (const [login, loc] of linesByLogin.entries()) {
+for (const login of linesByLogin.keys()) {
   if (entriesByKey.has(login)) {
     continue;
   }
@@ -303,20 +301,13 @@ for (const [login, loc] of linesByLogin.entries()) {
     user = fetchUser(login) || undefined;
   }
   if (user) {
-    const commits = contributionsByLogin.get(login) ?? 0;
-    const prs = prsByLogin.get(login) ?? 0;
-    const fd = firstCommitByLogin.get(login) ?? "";
     entriesByKey.set(login, {
       key: login,
       login: user.login,
       display: displayName[user.login.toLowerCase()] ?? user.login,
       html_url: user.html_url,
       avatar_url: normalizeAvatar(user.avatar_url),
-      lines: loc > 0 ? loc : commits,
-      commits,
-      prs,
-      score: computeScore(loc, commits, prs, fd),
-      firstCommitDate: fd,
+      ...contributionStats(login),
     });
   }
 }
@@ -347,7 +338,11 @@ for (let i = 0; i < visibleEntries.length; i += PER_LINE) {
 
 const block = `${CLAWTRIBUTORS_START}\n${markdownLines.join("\n")}\n${CLAWTRIBUTORS_END}`;
 const hiddenBlock = buildHiddenReadmeBlock(entries, visibleEntries);
-const hiddenRange = findHiddenReadmeRange(currentReadme);
+const hiddenRange = findMarkerRange(
+  currentReadme,
+  CLAWTRIBUTORS_HIDDEN_START,
+  CLAWTRIBUTORS_HIDDEN_END,
+);
 const readmeWithoutMeta = hiddenRange
   ? `${currentReadme.slice(0, hiddenRange.start)}${currentReadme.slice(hiddenRange.end)}`
   : currentReadme;
@@ -372,10 +367,7 @@ console.log("-".repeat(85));
 for (const [index, entry] of visibleEntries.slice(0, 25).entries()) {
   const login = (entry.login ?? entry.key).slice(0, 24);
   const fd = entry.firstCommitDate || "?";
-  const daysIn =
-    fd !== "?" ? Math.max(0, (now - new Date(fd.slice(0, 10)).getTime()) / 86_400_000) : 0;
-  const tr = Math.min(1, daysIn / repoAgeDays);
-  const tenure = 1 + tr * tr * 0.5;
+  const tenure = computeTenure(fd === "?" ? "" : fd);
   console.log(
     `${index + 1}`.padStart(3) +
       `  ${login.padEnd(24)} ${entry.score.toFixed(0).padStart(8)} ${tenure.toFixed(2).padStart(6)}x ${String(entry.commits).padStart(8)} ${String(entry.prs).padStart(6)} ${String(entry.lines).padStart(10)}  ${fd}`,
@@ -401,19 +393,13 @@ function runGh(args: string[]): string {
 }
 
 function parsePaginatedJson(rawLocal: string): unknown[] {
-  const items: unknown[] = [];
-  for (const line of rawLocal.split("\n")) {
-    if (!line.trim()) {
-      continue;
-    }
-    const parsed = JSON.parse(line);
-    if (Array.isArray(parsed)) {
-      items.push(...parsed);
-    } else {
-      items.push(parsed);
-    }
-  }
-  return items;
+  return rawLocal
+    .split("\n")
+    .filter((line) => line.trim())
+    .flatMap((line): unknown[] => {
+      const parsed: unknown = JSON.parse(line);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    });
 }
 
 function normalizeMap(map: Record<string, string>): Record<string, string> {
@@ -433,16 +419,12 @@ function parseCount(value: string): number {
 }
 
 function isValidLogin(login: string): boolean {
-  if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) {
-    return false;
-  }
-  if (login.startsWith("-") || login.endsWith("-")) {
-    return false;
-  }
-  if (login.includes("--")) {
-    return false;
-  }
-  return true;
+  return (
+    /^[A-Za-z0-9-]{1,39}$/.test(login) &&
+    !login.startsWith("-") &&
+    !login.endsWith("-") &&
+    !login.includes("--")
+  );
 }
 
 function normalizeLogin(login: string | null): string | null {
@@ -497,22 +479,12 @@ function parseUser(responseText: string): User | null {
 
 function fetchUser(login: string): User | null {
   const normalized = normalizeLogin(login);
-  if (!normalized) {
-    return null;
-  }
-  try {
-    return parseUser(runGh(["api", `users/${normalized}`]));
-  } catch (error) {
-    if (isGitHubMissing(error)) {
-      return null;
-    }
-    throw error;
-  }
+  return normalized ? fetchGitHubUser(`users/${normalized}`) : null;
 }
 
-function fetchUserByAccountId(accountId: number): User | null {
+function fetchGitHubUser(endpoint: string): User | null {
   try {
-    return parseUser(runGh(["api", `user/${accountId}`]));
+    return parseUser(runGh(["api", endpoint]));
   } catch (error) {
     if (isGitHubMissing(error)) {
       return null;
@@ -556,7 +528,16 @@ async function probeDefaultGitHubAvatar(login: string): Promise<boolean> {
       if (!response.ok) {
         return false;
       }
-      const buffer = await readAvatarProbeBuffer(response, timeoutPromise);
+      const buffer = await readBoundedResponseBytes(
+        response,
+        "avatar probe",
+        AVATAR_PROBE_MAX_BYTES,
+        {
+          timeoutPromise,
+          formatTooLargeMessage: (_label: string, bytes: number) =>
+            `avatar probe exceeded ${bytes} bytes`,
+        },
+      );
       const dimensions = readImageDimensions(buffer);
       return Boolean(
         dimensions &&
@@ -601,118 +582,6 @@ async function withAvatarProbeTimeout<T>(
   }
 }
 
-function cancelAvatarProbeReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>): void {
-  void Promise.resolve()
-    .then(() => reader.cancel())
-    .catch(() => undefined);
-}
-
-function toAvatarProbeError(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  return new Error(fallbackMessage, { cause: value });
-}
-
-async function readAvatarProbeChunkWithTimeout(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  timeoutPromise: Promise<never> | undefined,
-  markCanceled: () => void,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  const readPromise = reader.read();
-  if (!timeoutPromise) {
-    return await readPromise;
-  }
-
-  let waitingForRead = true;
-  const timeoutReadPromise = timeoutPromise.catch((error: unknown) => {
-    if (waitingForRead) {
-      markCanceled();
-      cancelAvatarProbeReaderSoon(reader);
-    }
-    throw toAvatarProbeError(error, "avatar probe response body read timed out");
-  });
-
-  try {
-    return await Promise.race([readPromise, timeoutReadPromise]);
-  } finally {
-    waitingForRead = false;
-  }
-}
-
-async function readAvatarProbeArrayBuffer(
-  response: Response,
-  timeoutPromise: Promise<never> | undefined,
-): Promise<ArrayBuffer> {
-  if (!timeoutPromise) {
-    return await response.arrayBuffer();
-  }
-  return await Promise.race([
-    response.arrayBuffer(),
-    timeoutPromise.catch((error: unknown) => {
-      void response.body?.cancel().catch(() => undefined);
-      throw toAvatarProbeError(error, "avatar probe response body read timed out");
-    }),
-  ]);
-}
-
-async function readAvatarProbeBuffer(
-  response: Response,
-  timeoutPromise?: Promise<never>,
-): Promise<Buffer> {
-  const contentLengthRaw = response.headers.get("content-length");
-  if (contentLengthRaw && /^\d+$/u.test(contentLengthRaw)) {
-    const contentLength = Number(contentLengthRaw);
-    if (!Number.isSafeInteger(contentLength) || contentLength > AVATAR_PROBE_MAX_BYTES) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
-    }
-  }
-
-  const reader = response.body?.getReader?.();
-  if (!reader) {
-    const buffer = Buffer.from(await readAvatarProbeArrayBuffer(response, timeoutPromise));
-    if (buffer.byteLength > AVATAR_PROBE_MAX_BYTES) {
-      throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
-    }
-    return buffer;
-  }
-
-  const chunks: Buffer[] = [];
-  let total = 0;
-  let canceled = false;
-  try {
-    for (;;) {
-      const { done, value } = await readAvatarProbeChunkWithTimeout(reader, timeoutPromise, () => {
-        canceled = true;
-      });
-      if (done) {
-        break;
-      }
-      if (!value?.byteLength) {
-        continue;
-      }
-      const chunk = Buffer.from(value);
-      const nextTotal = total + chunk.byteLength;
-      if (nextTotal > AVATAR_PROBE_MAX_BYTES) {
-        canceled = true;
-        await reader.cancel().catch(() => undefined);
-        throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
-      }
-      chunks.push(chunk);
-      total = nextTotal;
-    }
-  } finally {
-    if (!canceled) {
-      reader.releaseLock();
-    }
-  }
-  return Buffer.concat(chunks, total);
-}
-
 async function filterVisibleEntries(
   entriesResult: Entry[],
   hiddenLogins: ReadonlySet<string>,
@@ -735,17 +604,7 @@ async function filterVisibleEntries(
 }
 
 function readImageDimensions(buffer: Buffer): { width: number; height: number } | null {
-  if (isPng(buffer)) {
-    return readPngDimensions(buffer);
-  }
-  if (isJpeg(buffer)) {
-    return readJpegDimensions(buffer);
-  }
-  return null;
-}
-
-function isPng(buffer: Buffer): boolean {
-  return (
+  if (
     buffer.length >= 24 &&
     buffer[0] === 0x89 &&
     buffer[1] === 0x50 &&
@@ -755,21 +614,13 @@ function isPng(buffer: Buffer): boolean {
     buffer[5] === 0x0a &&
     buffer[6] === 0x1a &&
     buffer[7] === 0x0a
-  );
-}
-
-function readPngDimensions(buffer: Buffer): { width: number; height: number } | null {
-  if (buffer.length < 24) {
-    return null;
+  ) {
+    return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
   }
-  return {
-    width: buffer.readUInt32BE(16),
-    height: buffer.readUInt32BE(20),
-  };
-}
-
-function isJpeg(buffer: Buffer): boolean {
-  return buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8;
+  if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+    return readJpegDimensions(buffer);
+  }
+  return null;
 }
 
 function readJpegDimensions(buffer: Buffer): { width: number; height: number } | null {
@@ -818,19 +669,13 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } |
   return null;
 }
 
-function resolveLogin(
-  name: string,
-  email: string | null,
-  apiByLoginValue: Map<string, User>,
-  nameToLoginLocal: Record<string, string>,
-  emailToLoginLocal: Record<string, string>,
-): string | null {
-  if (email && emailToLoginLocal[email]) {
-    return normalizeLogin(emailToLoginLocal[email]);
+function resolveLogin(name: string, email: string | null): string | null {
+  if (email && emailToLogin[email]) {
+    return normalizeLogin(emailToLogin[email]);
   }
 
   if (email && name) {
-    const guessed = guessLoginFromEmailName(name, email, apiByLoginValue);
+    const guessed = guessLoginFromEmailName(name, email);
     if (guessed) {
       return normalizeLogin(guessed);
     }
@@ -846,37 +691,33 @@ function resolveLogin(
 
   if (email && email.endsWith("@github.com")) {
     const login = expectDefined(email.split("@", 1)[0], "GitHub email local part");
-    if (apiByLoginValue.has(login.toLowerCase())) {
+    if (apiByLogin.has(login.toLowerCase())) {
       return normalizeLogin(login);
     }
   }
 
   const normalized = normalizeName(name);
-  if (nameToLoginLocal[normalized]) {
-    return normalizeLogin(nameToLoginLocal[normalized]);
+  if (nameToLogin[normalized]) {
+    return normalizeLogin(nameToLogin[normalized]);
   }
 
   const compact = normalized.replace(/\s+/g, "");
-  if (nameToLoginLocal[compact]) {
-    return normalizeLogin(nameToLoginLocal[compact]);
+  if (nameToLogin[compact]) {
+    return normalizeLogin(nameToLogin[compact]);
   }
 
-  if (apiByLoginValue.has(normalized)) {
+  if (apiByLogin.has(normalized)) {
     return normalizeLogin(normalized);
   }
 
-  if (apiByLoginValue.has(compact)) {
+  if (apiByLogin.has(compact)) {
     return normalizeLogin(compact);
   }
 
   return null;
 }
 
-function guessLoginFromEmailName(
-  name: string,
-  email: string,
-  apiByLoginLocal: Map<string, User>,
-): string | null {
+function guessLoginFromEmailName(name: string, email: string): string | null {
   const local = email.split("@", 1)[0]?.trim();
   if (!local) {
     return null;
@@ -894,7 +735,7 @@ function guessLoginFromEmailName(
       continue;
     }
     const key = candidate.toLowerCase();
-    if (apiByLoginLocal.has(key)) {
+    if (apiByLogin.has(key)) {
       return key;
     }
   }
@@ -961,7 +802,7 @@ function parseReadmeEntries(
 }
 
 function parseHiddenReadmeLogins(content: string): string[] {
-  const rangeLocal = findHiddenReadmeRange(content);
+  const rangeLocal = findMarkerRange(content, CLAWTRIBUTORS_HIDDEN_START, CLAWTRIBUTORS_HIDDEN_END);
   if (!rangeLocal) {
     return [];
   }
@@ -985,42 +826,31 @@ function buildHiddenReadmeBlock(entriesLocal: Entry[], visibleEntriesLocal: Entr
     .toSorted((a, b) => a.localeCompare(b));
   const notice =
     "default-avatar-cache: hidden from the rendered wall because these users still use GitHub's default avatar";
-  if (hiddenLogins.length === 0) {
-    return `${CLAWTRIBUTORS_HIDDEN_START}\n${notice}\n${CLAWTRIBUTORS_HIDDEN_END}\n`;
-  }
-  return `${CLAWTRIBUTORS_HIDDEN_START}\n${notice}\n${hiddenLogins.join("\n")}\n${CLAWTRIBUTORS_HIDDEN_END}\n`;
+  return [CLAWTRIBUTORS_HIDDEN_START, notice, ...hiddenLogins, CLAWTRIBUTORS_HIDDEN_END, ""].join(
+    "\n",
+  );
 }
 
 function findClawtributorsRange(content: string): { start: number; end: number } | null {
-  const markerStart = content.indexOf(CLAWTRIBUTORS_START);
-  const markerEnd = content.indexOf(CLAWTRIBUTORS_END, markerStart);
-  if (markerStart !== -1 && markerEnd !== -1) {
-    return {
-      start: markerStart,
-      end: markerEnd + CLAWTRIBUTORS_END.length,
-    };
-  }
-
-  const legacyStart = content.indexOf('<p align="left">');
-  const legacyEnd = content.indexOf("</p>", legacyStart);
-  if (legacyStart === -1 || legacyEnd === -1) {
-    return null;
-  }
-  return {
-    start: legacyStart,
-    end: legacyEnd + "</p>".length,
-  };
+  return (
+    findMarkerRange(content, CLAWTRIBUTORS_START, CLAWTRIBUTORS_END) ??
+    findMarkerRange(content, '<p align="left">', "</p>")
+  );
 }
 
-function findHiddenReadmeRange(content: string): { start: number; end: number } | null {
-  const markerStart = content.indexOf(CLAWTRIBUTORS_HIDDEN_START);
-  const markerEnd = content.indexOf(CLAWTRIBUTORS_HIDDEN_END, markerStart);
+function findMarkerRange(
+  content: string,
+  start: string,
+  end: string,
+): { start: number; end: number } | null {
+  const markerStart = content.indexOf(start);
+  const markerEnd = content.indexOf(end, markerStart);
   if (markerStart === -1 || markerEnd === -1) {
     return null;
   }
   return {
     start: markerStart,
-    end: markerEnd + CLAWTRIBUTORS_HIDDEN_END.length,
+    end: markerEnd + end.length,
   };
 }
 
@@ -1041,15 +871,5 @@ function pickDisplay(
   login: string,
   existing?: string,
 ): string {
-  const key = login.toLowerCase();
-  if (displayName[key]) {
-    return displayName[key];
-  }
-  if (existing) {
-    return existing;
-  }
-  if (baseName) {
-    return baseName;
-  }
-  return login;
+  return displayName[login.toLowerCase()] || existing || baseName || login;
 }

@@ -1,9 +1,11 @@
 // Covers plugin config policy validation and ownership decisions.
 import { describe, expect, it } from "vitest";
+import { resolvePluginActivationStateShared } from "./config-activation-shared.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
+import { resolveEffectivePluginActivationState } from "./config-state.js";
 
 describe("normalizePluginsConfigWithResolver", () => {
-  it("uses the provided plugin id resolver for allow deny and entry keys", () => {
+  it("uses case-normalized resolved identities for allow deny and entry keys", () => {
     const normalized = normalizePluginsConfigWithResolver(
       {
         allow: [" alpha "],
@@ -17,8 +19,47 @@ describe("normalizePluginsConfigWithResolver", () => {
       (id) => id.trim().toUpperCase(),
     );
 
-    expect(normalized.allow).toEqual(["ALPHA"]);
-    expect(normalized.deny).toEqual(["BETA"]);
-    expect(normalized.entries).toHaveProperty("GAMMA");
+    expect(normalized.allow).toEqual(["alpha"]);
+    expect(normalized.deny).toEqual(["beta"]);
+    expect(normalized.entries).toHaveProperty("gamma");
+  });
+});
+
+describe("metadata plugin activation policy", () => {
+  it.each([
+    {
+      name: "keeps metadata allowlists strict while runtime honors explicit channel activation",
+      deny: [] as string[],
+      runtime: { enabled: true, source: "explicit", reason: "channel enabled in config" },
+      policy: { enabled: false, source: "disabled", reason: "not in allowlist" },
+    },
+    {
+      name: "keeps denylist precedence in both runtime and metadata channel activation",
+      deny: ["telegram"],
+      runtime: { enabled: false, source: "disabled", reason: "blocked by denylist" },
+      policy: { enabled: false, source: "disabled", reason: "blocked by denylist" },
+    },
+  ])("$name", ({ deny, runtime, policy }) => {
+    const rootConfig = {
+      channels: { telegram: { enabled: true } },
+      plugins: { allow: ["browser"], deny },
+    };
+    const params = {
+      id: "telegram",
+      origin: "bundled" as const,
+      config: normalizePluginsConfigWithResolver(rootConfig.plugins),
+      rootConfig,
+    };
+
+    expect(resolveEffectivePluginActivationState(params)).toEqual({
+      ...runtime,
+      activated: runtime.enabled,
+      explicitlyEnabled: true,
+    });
+    expect(resolvePluginActivationStateShared(params)).toEqual({
+      ...policy,
+      activated: policy.enabled,
+      explicitlyEnabled: true,
+    });
   });
 });

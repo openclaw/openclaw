@@ -1,5 +1,7 @@
-/** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
+import { SessionRestartRecoveryTombstoneError } from "../../config/sessions/lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { classifySessionStateActor } from "../../sessions/session-state-events.js";
+import { getGroupThreadTurn } from "../group-thread-context.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import { createInboundMessageAuditTerminal } from "./dispatch-from-config.audit.js";
 import { chooseDispatchRoute } from "./dispatch-from-config.choose-route.js";
@@ -14,13 +16,12 @@ import type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
-import { commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
-import "./dispatch-from-config.events.js";
+import { sendReplyRestartRecoveryNotice } from "./reply-turn-recovery-notice.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
-/** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
@@ -31,17 +32,19 @@ export async function dispatchReplyFromConfig(
 export async function dispatchLowLevelChannelReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
-  return await dispatchReplyFromConfigWithQueuePolicy(params, true);
+  // A group coordinator must retain this turn until execution, not just queue publication.
+  return await dispatchReplyFromConfigWithQueuePolicy(params, !getGroupThreadTurn());
 }
 
 async function dispatchReplyFromConfigWithQueuePolicy(
   params: DispatchFromConfigParams,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  const ticket = reserveReplyAdmissionTicket([
-    params.ctx.SessionKey,
-    params.ctx.CommandTargetSessionKey,
-  ]);
+  // Gateway ingress reserves before ACK so deferred preparation cannot reorder sends.
+  const inheritedTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
+  const ticket =
+    inheritedTicket ??
+    reserveReplyAdmissionTicket([params.ctx.SessionKey, params.ctx.CommandTargetSessionKey]);
   const ticketedParams = ticket
     ? {
         ...params,
@@ -49,19 +52,37 @@ async function dispatchReplyFromConfigWithQueuePolicy(
       }
     : params;
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
+  let refreshedSessionSnapshot = false;
   try {
-    const result = await dispatchReplyFromConfigInner(
-      ticketedParams,
-      messageAuditTerminal,
-      allowActiveQueueResolution,
-    );
-    messageAuditTerminal?.finishSuccess(result);
-    return result;
-  } catch (error) {
-    messageAuditTerminal?.finishError();
-    throw error;
+    while (true) {
+      try {
+        const result = await dispatchReplyFromConfigInner(
+          ticketedParams,
+          messageAuditTerminal,
+          allowActiveQueueResolution,
+        );
+        messageAuditTerminal?.finishSuccess(result);
+        return result;
+      } catch (error) {
+        if (
+          error instanceof DispatchSessionRefreshRequiredError &&
+          !refreshedSessionSnapshot &&
+          params.replyOptions?.abortSignal?.aborted !== true
+        ) {
+          // Rebuild once from the latest store entry. If another lifecycle mutation wins the
+          // refreshed admission race, leave the event retryable for the channel ingress owner.
+          refreshedSessionSnapshot = true;
+          continue;
+        }
+        messageAuditTerminal?.finishError();
+        throw error;
+      }
+    }
   } finally {
-    ticket?.release();
+    // Ingress owns retries until queue handoff or terminal dispatch cleanup.
+    if (!inheritedTicket) {
+      ticket?.release();
+    }
   }
 }
 
@@ -121,16 +142,58 @@ async function dispatchReplyFromConfigInner(
         return finishReplyOperationAbortedDispatch();
       }
       if (inboundDedupeClaim.status === "claimed") {
-        if (errorState.inboundDedupeReplayUnsafe) {
-          commitInboundDedupe(inboundDedupeClaim.key);
+        if (errorState.turnAdoptionState?.adopted || errorState.inboundDedupeReplayUnsafe) {
+          inboundDedupeClaim.commit();
         } else {
-          releaseInboundDedupe(inboundDedupeClaim.key);
+          inboundDedupeClaim.release();
         }
       }
-      recordAgentDispatchCompleted("error", { error: String(err) });
-      recordProcessed("error", { error: String(err) });
-      markIdle("message_error");
+      if (err instanceof DispatchSessionRefreshRequiredError) {
+        // This attempt already incremented diagnostic queue depth before admission
+        // detected the rotated owner. Balance only that state transition; the
+        // refreshed attempt owns the single processed/audit terminal outcome.
+        markIdle("session_refresh");
+      } else {
+        recordAgentDispatchCompleted("error", { error: String(err) });
+        recordProcessed("error", { error: String(err) });
+        markIdle("message_error");
+      }
       failDispatchReplyOperation(err);
+      if (
+        err instanceof SessionRestartRecoveryTombstoneError &&
+        params.ctx.InboundAccessAuthorized === true &&
+        params.ctx.InboundEventKind !== "room_event" &&
+        params.ctx.InternalTurnSource === undefined &&
+        classifySessionStateActor({ inputProvenance: params.ctx.InputProvenance }).actorType ===
+          "human" &&
+        !errorState.isInternalWebchatTurn &&
+        !errorState.sendPolicyDenied &&
+        !errorState.suppressAcpChildUserDelivery &&
+        params.replyOptions?.abortSignal?.aborted !== true &&
+        errorState.dispatchOperationSessionKey &&
+        errorState.operationSessionStoreEntry.storePath
+      ) {
+        await sendReplyRestartRecoveryNotice({
+          agentId: errorState.operationSessionStoreEntry.agentId ?? errorState.sessionAgentId,
+          cfg: errorState.cfg,
+          channel: errorState.deliveryChannel,
+          sessionKey: errorState.dispatchOperationSessionKey,
+          storePath: errorState.operationSessionStoreEntry.storePath,
+          deliver: async (text) => {
+            const payload = { text, isError: true };
+            const routed = await errorState.routeReplyToOriginating(payload, { mirror: false });
+            if (routed) {
+              return errorState.isRoutedReplyDelivered(routed);
+            }
+            if (!params.dispatcher.sendFinalReply(payload)) {
+              return false;
+            }
+            const receipt = await params.dispatcher.waitForIdle();
+            // Ambiguous sends suppress retries but do not confirm notice delivery.
+            return receipt ? receipt.counts.final.delivered > 0 : false;
+          },
+        });
+      }
       throw err;
     }
   });

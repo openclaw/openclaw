@@ -1,12 +1,35 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import type { ServerResponse } from "node:http";
+import path from "node:path";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  createMockIncomingRequest,
+  createMockServerResponse,
+  postRawWebhook,
+  withEnv,
+  withServer,
+  withStateDirEnv,
+} from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveA2aChannelAccount } from "./accounts.js";
 import { createA2aHttpHandler } from "./http.js";
 import { A2aTaskStore } from "./task-store.js";
 import type { A2aChannelConfig } from "./types.js";
+
+vi.mock("node:timers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:timers")>();
+  return {
+    ...actual,
+    setTimeout: ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+      globalThis.setTimeout(callback, delay, ...args)) as typeof actual.setTimeout,
+    clearTimeout: ((timer: ReturnType<typeof globalThis.setTimeout> | undefined) =>
+      globalThis.clearTimeout(timer)) as typeof actual.clearTimeout,
+  };
+});
 
 const activeStores = new Set<A2aTaskStore>();
 
@@ -101,6 +124,7 @@ async function startHttpHarness(options?: {
   return {
     baseUrl,
     taskStore,
+    handler,
     async get(endpoint: string) {
       return await dispatchRequest({ method: "GET", endpoint });
     },
@@ -145,11 +169,11 @@ describe("A2A HTTP agent discovery", () => {
     const harness = await startHttpHarness({
       config: {
         agents: {
-          list: [
-            { id: "hidden", description: hiddenDescription },
-            { id: "writer", name: "Writing assistant", description: "x".repeat(500) },
-            { id: "reviewer" },
-          ],
+          entries: {
+            hidden: { description: hiddenDescription },
+            writer: { name: "Writing assistant", description: "x".repeat(500) },
+            reviewer: {},
+          },
         },
       },
       a2aConfig: {
@@ -228,7 +252,7 @@ describe("A2A HTTP agent discovery", () => {
 
   it("derives the advertised interface origin from the request Host", async () => {
     const harness = await startHttpHarness({
-      config: { agents: { list: [{ id: "main" }] } },
+      config: { agents: { entries: { main: {} } } },
     });
     const response = await harness.get("/.well-known/agent-card.json");
     const card = (await response.json()) as { supportedInterfaces: Array<{ url: string }> };
@@ -240,22 +264,14 @@ describe("A2A HTTP agent discovery", () => {
 describe("A2A HTTP authentication and request limits", () => {
   it.each([
     ["missing bearer", null],
-    ["empty token", ""],
-    ["short invalid token", "x"],
     ["long invalid token", "x".repeat(200)],
-  ])("rejects %s while accepting configured peer credentials", async (_label, token) => {
+  ])("rejects %s", async (_label, token) => {
     const harness = await startHttpHarness();
     const denied = await harness.post(sendRequest(), token);
 
     expect(denied.status).toBe(401);
     await expect(denied.json()).resolves.toMatchObject({
       error: expect.stringContaining("channels.a2a.peers"),
-    });
-
-    const accepted = await harness.post(sendRequest());
-    expect(accepted.status).toBe(200);
-    await expect(accepted.json()).resolves.toMatchObject({
-      result: { task: { status: { state: "TASK_STATE_COMPLETED" } } },
     });
   });
 
@@ -291,21 +307,183 @@ describe("A2A HTTP authentication and request limits", () => {
     }
   });
 
-  it("returns a readable HTTP 413 response for request bodies above 1 MiB", async () => {
+  it("delivers HTTP 413 over the wire and closes for request bodies above 1 MiB", async () => {
     const harness = await startHttpHarness();
-    const response = await harness.post("x".repeat(1024 * 1024 + 1));
+    await withServer(
+      (req, res) => {
+        void harness.handler(req, res);
+      },
+      async (baseUrl) => {
+        // Declared and sent in one write: the shape whose rejection used to race the flush.
+        const result = await postRawWebhook({
+          url: `${baseUrl}/a2a/v1`,
+          body: "x".repeat(1024 * 1024 + 1),
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer alpha-secret",
+          },
+        });
 
-    expect(response.status).toBe(413);
+        expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+        expect(result.headers.connection).toBe("close");
+        expect(JSON.parse(result.body)).toEqual({
+          error: "Request body exceeds the 1 MiB limit",
+        });
+        expect(result.closedByServer).toBe(true);
+      },
+    );
+  });
+
+  it("delivers the JSON-RPC timeout response before closing a partial upload", async () => {
+    const harness = await startHttpHarness();
+    const requestReceived = createDeferred<void>();
+    await withServer(
+      (req, res) => {
+        void harness.handler(req, res);
+        // Observe after the body reader is installed; Bun's socket wrapper omits raw data events.
+        req.once("data", () => requestReceived.resolve());
+      },
+      async (baseUrl) => {
+        vi.useFakeTimers();
+        try {
+          const resultPromise = postRawWebhook({
+            url: `${baseUrl}/a2a/v1`,
+            body: "{",
+            contentLength: 2,
+            idleTimeoutMs: 60_000,
+            headers: {
+              "content-type": "application/json",
+              authorization: "Bearer alpha-secret",
+            },
+          });
+
+          await requestReceived.promise;
+          await vi.advanceTimersByTimeAsync(31_000);
+          const result = await resultPromise;
+
+          expect(result.statusLine).toBe("HTTP/1.1 200 OK");
+          expect(result.headers.connection).toBe("close");
+          expect(JSON.parse(result.body)).toEqual({
+            jsonrpc: "2.0",
+            id: null,
+            error: { code: -32000, message: "Request body could not be read" },
+          });
+          expect(result.closedByServer).toBe(true);
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
+  });
+
+  it("rejects oversized batches with one bounded error", async () => {
+    const harness = await startHttpHarness();
+    const response = await harness.post(Array.from({ length: 1_000 }, () => null));
+
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      error: expect.stringContaining("1 MiB"),
+      id: null,
+      error: { code: -32000, message: expect.stringContaining("batch") },
     });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+  });
+
+  it("charges schema-invalid requests to the peer rate limit", async () => {
+    const harness = await startHttpHarness({ a2aConfig: { rateLimitPerMinute: 1 } });
+
+    const invalid = await harness.post({ jsonrpc: "2.0", id: "invalid" });
+    await expect(invalid.json()).resolves.toMatchObject({ error: { code: -32600 } });
+
+    const limited = await harness.post({
+      jsonrpc: "2.0",
+      id: "limited",
+      method: "GetTask",
+      params: { id: "missing" },
+    });
+    await expect(limited.json()).resolves.toMatchObject({
+      id: "limited",
+      error: { code: -32000, message: expect.stringContaining("rate limited") },
+    });
+  });
+
+  it("replaces oversized RPC results with a bounded error", async () => {
+    const harness = await startHttpHarness();
+    const task = harness.taskStore.create("ctx-large", "alpha");
+    const oversizedText = "x".repeat(1024 * 1024);
+    harness.taskStore.completeNext(task.contextId, oversizedText, "alpha");
+    const requestBody = JSON.stringify({
+      jsonrpc: "2.0",
+      id: "large-result",
+      method: "GetTask",
+      params: { id: task.id },
+    });
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+
+    const response = await harness.post(requestBody);
+
+    await expect(response.json()).resolves.toMatchObject({
+      id: "large-result",
+      error: { code: -32000, message: expect.stringContaining("response") },
+    });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+    expect(
+      stringifySpy.mock.calls.some(
+        ([value]) =>
+          (value as { result?: { artifacts?: Array<{ parts?: Array<{ text?: string }> }> } })
+            ?.result?.artifacts?.[0]?.parts?.[0]?.text === oversizedText,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the overflow fallback bounded when its request ID cannot fit", async () => {
+    const harness = await startHttpHarness();
+    const requestBody = JSON.stringify({
+      jsonrpc: "2.0",
+      id: "i".repeat(1024 * 1024 - 25),
+    });
+    expect(Buffer.byteLength(requestBody)).toBeLessThanOrEqual(1024 * 1024);
+
+    const response = await harness.post(requestBody);
+
+    await expect(response.json()).resolves.toMatchObject({
+      id: null,
+      error: { code: -32000, message: expect.stringContaining("response") },
+    });
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
+  });
+
+  it("preserves batch response IDs when aggregate results exceed the response limit", async () => {
+    const harness = await startHttpHarness();
+    const taskA = harness.taskStore.create("ctx-large-a", "alpha");
+    const taskB = harness.taskStore.create("ctx-large-b", "alpha");
+    harness.taskStore.completeNext(taskA.contextId, "a".repeat(600 * 1024), "alpha");
+    harness.taskStore.completeNext(taskB.contextId, "b".repeat(600 * 1024), "alpha");
+
+    const response = await harness.post([
+      { jsonrpc: "2.0", id: "large-a", method: "GetTask", params: { id: taskA.id } },
+      { jsonrpc: "2.0", id: "large-b", method: "GetTask", params: { id: taskB.id } },
+    ]);
+
+    await expect(response.json()).resolves.toEqual([
+      {
+        jsonrpc: "2.0",
+        id: "large-a",
+        error: { code: -32000, message: expect.stringContaining("response") },
+      },
+      {
+        jsonrpc: "2.0",
+        id: "large-b",
+        error: { code: -32000, message: expect.stringContaining("response") },
+      },
+    ]);
+    expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
   });
 });
 
 describe("A2A JSON-RPC protocol boundary", () => {
   it.each([
     ["malformed JSON", "{", -32700],
-    ["invalid request", "null", -32600],
+    ["invalid request ID", '{"jsonrpc":"2.0","id":{},"method":"GetTask"}', -32600],
     ["empty batch", "[]", -32600],
   ])("maps %s to its JSON-RPC error with HTTP 200", async (_label, body, errorCode) => {
     const harness = await startHttpHarness();
@@ -320,7 +498,6 @@ describe("A2A JSON-RPC protocol boundary", () => {
   });
 
   it.each([
-    ["missing method", { jsonrpc: "2.0", id: "bad" }, -32600],
     ["wrong protocol version", { jsonrpc: "1.0", id: "bad", method: "GetTask" }, -32600],
     ["unknown method", { jsonrpc: "2.0", id: "bad", method: "tasks/send" }, -32601],
     ["unsupported method", { jsonrpc: "2.0", id: "bad", method: "ListTasks" }, -32004],
@@ -492,6 +669,65 @@ describe("A2A JSON-RPC protocol boundary", () => {
           },
         },
       },
+    });
+  });
+});
+
+describe("A2A HTTP authentication with unresolved token references", () => {
+  const PLACEHOLDER = "${OPENCLAW_A2A_HTTP_TEST_UNSET}";
+
+  it("rejects the literal placeholder as a bearer and never dispatches a task", async () => {
+    await withStateDirEnv("a2a-http-unresolved-", async ({ stateDir }) => {
+      const configPath = path.join(stateDir, "openclaw.json");
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          channels: {
+            a2a: {
+              peers: {
+                lost: { token: PLACEHOLDER },
+                kept: { token: "${OPENCLAW_A2A_HTTP_TEST_SET}" },
+              },
+            },
+          },
+        }),
+      );
+      const cfg = withEnv(
+        {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_A2A_HTTP_TEST_UNSET: undefined,
+          OPENCLAW_A2A_HTTP_TEST_SET: "kept-secret-value",
+        },
+        // Each case needs a fresh load; the default read pins the first snapshot.
+        () => getRuntimeConfig({ pin: false }),
+      );
+      // The loader keeps the literal text: this is the value a caller could replay.
+      expect(cfg.channels?.a2a?.peers?.lost?.token).toBe(PLACEHOLDER);
+
+      const dispatched: string[] = [];
+      const harness = await startHttpHarness({
+        a2aConfig: resolveA2aChannelAccount({ cfg }).config,
+        onDispatch: async (message) => {
+          dispatched.push(message.peerName);
+        },
+      });
+
+      const forged = await harness.post(sendRequest({ returnImmediately: true }), PLACEHOLDER);
+      expect(forged.status).toBe(401);
+      await expect(forged.json()).resolves.toMatchObject({
+        error: expect.stringContaining("channels.a2a.peers"),
+      });
+
+      const legitimate = await harness.post(
+        sendRequest({ returnImmediately: true }),
+        "kept-secret-value",
+      );
+      expect(legitimate.status).toBe(200);
+      await expect(legitimate.json()).resolves.toMatchObject({
+        result: { task: { status: { state: "TASK_STATE_WORKING" } } },
+      });
+      // Only the resolved peer reached the agent; the forged request created no task.
+      expect(dispatched).toEqual(["kept"]);
     });
   });
 });

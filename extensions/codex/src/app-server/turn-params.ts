@@ -1,29 +1,46 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  buildTemporalContextText,
+  buildHarnessVisibleReplyGuidance,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import {
+  neutralizeCodexExplicitMentionSigils,
+  type CodexProjectedImageGroup,
+} from "./context-engine-projection.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
   CodexTurnStartParams,
   CodexUserInput,
 } from "./protocol.js";
-import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
+import {
+  readCodexSupportedReasoningEfforts,
+  resolveCodexAppServerReasoningEffort,
+} from "./reasoning-effort.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
-  resolveReasoningEffort,
 } from "./thread-model-selection.js";
 import { buildCodexUserInput } from "./user-input.js";
 
 const CODEX_CURRENT_SENDER_FIELD_MAX_CHARS = 256;
 
-function buildCodexCurrentSenderContextValue(params: EmbeddedRunAttemptParams): string | undefined {
+type CodexCurrentSender = {
+  id?: string;
+  name?: string;
+  username?: string;
+};
+
+function readCodexCurrentSender(params: EmbeddedRunAttemptParams): CodexCurrentSender | undefined {
   const metadata = asOptionalRecord(
-    asOptionalRecord(params.userTurnTranscriptRecorder?.message as unknown)?.["__openclaw"],
+    asOptionalRecord(params.userTurnTranscriptRecorder?.message)?.["__openclaw"],
   );
   const recorded = [
     normalizeOptionalString(metadata?.["senderId"]),
@@ -41,13 +58,24 @@ function buildCodexCurrentSenderContextValue(params: EmbeddedRunAttemptParams): 
     return undefined;
   }
   const bound = (value: string) => truncateUtf16Safe(value, CODEX_CURRENT_SENDER_FIELD_MAX_CHARS);
-  return JSON.stringify({
-    sender: {
-      ...(id ? { id: bound(id) } : {}),
-      ...(name ? { name: bound(name) } : {}),
-      ...(username ? { username: bound(username) } : {}),
-    },
-  });
+  return {
+    ...(id ? { id: bound(id) } : {}),
+    ...(name ? { name: bound(name) } : {}),
+    ...(username ? { username: bound(username) } : {}),
+  };
+}
+
+export function buildCodexHistoryProvenancePrefix(
+  params: EmbeddedRunAttemptParams,
+): string | undefined {
+  const sender = readCodexCurrentSender(params);
+  // A label is not identity. Native thread history must only attach provenance
+  // when OpenClaw supplied a stable sender id, matching generic compaction.
+  return sender?.id
+    ? neutralizeCodexExplicitMentionSigils(
+        `[OpenClaw conversation info: sender=${JSON.stringify(sender)}]\n`,
+      )
+    : undefined;
 }
 
 export function buildTurnStartParams(
@@ -57,21 +85,25 @@ export function buildTurnStartParams(
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
+    contextImageGroups?: CodexProjectedImageGroup[];
     explicitSkillInputs?: Array<Extract<CodexUserInput, { type: "skill" }>>;
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
     model?: string | null;
     modelProvider?: string | null;
-    turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
-    memoryCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
+    parentLocalEgress?: boolean;
     clearInheritedServiceTier?: boolean;
+    sessionStatusAvailable?: boolean;
+    messageToolAvailable?: boolean;
+    requireExplicitMessageTarget?: boolean;
+    historyProvenancePrefix?: string;
   },
 ): CodexTurnStartParams {
   const modelSelection = options.preserveNativeTurnSettings
     ? undefined
     : resolveCodexAppServerRequestModelSelection({
+        homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider: options.modelProvider,
         authProfileId: params.authProfileId,
@@ -79,23 +111,74 @@ export function buildTurnStartParams(
         agentDir: params.agentDir,
         config: params.config,
       });
-  const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
-  const currentSenderContext =
-    params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
-  // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
-  const additionalContext: CodexTurnStartParams["additionalContext"] = currentSenderContext
-    ? { openclaw_current_sender: { kind: "untrusted", value: currentSenderContext } }
+  const collaborationMode = modelSelection
+    ? buildTurnCollaborationMode(params, {
+        model: modelSelection.model,
+      })
     : undefined;
+  if (collaborationMode && options.parentLocalEgress) {
+    // Catalog collaboration stays native; parent-local context exists only at inference egress.
+    collaborationMode.settings.developer_instructions = null;
+  }
+  const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
+  const currentSender = params.trigger === "user" ? readCodexCurrentSender(params) : undefined;
+  // Codex emits only changed values and cannot retract omitted fragments from model history.
+  // Always send configured-or-host context so warm threads see rollover and removed overrides.
+  const additionalContext: NonNullable<CodexTurnStartParams["additionalContext"]> = {
+    ...buildCodexTemporalAdditionalContext(params, {
+      sessionStatusAvailable: options.sessionStatusAvailable === true,
+    }),
+    // Codex emits changed context only. Unknown must replace a disconnected Mac's hint.
+    openclaw_active_computer: {
+      kind: "application",
+      value:
+        params.hostCapabilities.activeComputerContext?.() ??
+        "Current active computer: active_node=unknown (host presence unavailable)",
+    },
+    openclaw_source_delivery: {
+      kind: "application",
+      value: [
+        "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):",
+        buildHarnessVisibleReplyGuidance({
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          messageToolAvailable: options.messageToolAvailable === true,
+          requireExplicitMessageTarget: options.requireExplicitMessageTarget,
+        }),
+      ].join("\n"),
+    },
+  };
+  // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
+  if (currentSender) {
+    additionalContext.openclaw_current_sender = {
+      kind: "untrusted",
+      value: JSON.stringify({ sender: currentSender }),
+    };
+  }
+  if (params.permissionChange?.notice) {
+    // Application context is a developer message in Codex 0.151.0 and also
+    // reaches native-preserved threads without overriding their turn settings.
+    additionalContext.openclaw_permission_change = {
+      kind: "application",
+      value: params.permissionChange.notice,
+    };
+  }
   return {
     threadId: options.threadId,
+    ...(params.trigger ? { turnTrigger: params.trigger } : {}),
     // codex-rs/app-server-protocol/src/protocol/v2/turn.rs:292-324 at 91d6f48992ad defines
     // UserInput::Skill; skills/src/selection.rs:60-92 blocks those names from duplicate text
     // selection while leaving unmatched Codex-native-only names scannable.
     input: [
-      ...buildCodexUserInput(options.promptText ?? params.prompt, params.images),
+      ...buildCodexUserInput(
+        options.promptText ?? params.prompt,
+        params.images,
+        options.contextImageGroups,
+        options.historyProvenancePrefix ??
+          (params.trigger === "user" ? buildCodexHistoryProvenancePrefix(params) : undefined),
+      ),
       ...(options.explicitSkillInputs ?? []),
     ],
-    ...(additionalContext ? { additionalContext } : {}),
+    additionalContext,
     cwd: options.cwd,
     ...(options.appServer.sessionRoot
       ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
@@ -123,26 +206,32 @@ export function buildTurnStartParams(
       : options.clearInheritedServiceTier
         ? { serviceTier: null }
         : {}),
-    ...(modelSelection
+    ...(collaborationMode
       ? {
-          effort: resolveReasoningEffort(
-            params.thinkLevel,
-            modelSelection.model,
-            readCodexSupportedReasoningEfforts(params.model?.compat),
-          ),
+          effort: collaborationMode.settings.reasoning_effort,
+          collaborationMode,
         }
       : {}),
-    ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
-    ...(modelSelection
-      ? {
-          collaborationMode: buildTurnCollaborationMode(params, {
-            model: modelSelection.model,
-            turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
-            skillsCollaborationInstructions: options.skillsCollaborationInstructions,
-            memoryCollaborationInstructions: options.memoryCollaborationInstructions,
-          }),
-        }
-      : {}),
+    ...(params.requireWorkspaceOnly === true
+      ? { environments: [] }
+      : options.environmentSelection
+        ? { environments: options.environmentSelection }
+        : {}),
+  };
+}
+
+export function buildCodexTemporalAdditionalContext(
+  params: Pick<EmbeddedRunAttemptParams, "config">,
+  options: { sessionStatusAvailable: boolean },
+): NonNullable<CodexTurnStartParams["additionalContext"]> {
+  return {
+    openclaw_temporal_context: {
+      kind: "application",
+      value: buildTemporalContextText({
+        configuredTimezone: params.config?.agents?.defaults?.userTimezone,
+        sessionStatusAvailable: options.sessionStatusAvailable,
+      }),
+    },
   };
 }
 
@@ -152,9 +241,6 @@ export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
   options: {
     model?: string;
-    turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
-    memoryCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
   const model = options.model ?? params.modelId;
@@ -162,55 +248,34 @@ export function buildTurnCollaborationMode(
     mode: "default",
     settings: {
       model,
-      reasoning_effort: resolveReasoningEffort(
-        params.thinkLevel,
-        model,
-        readCodexSupportedReasoningEfforts(params.model?.compat),
-      ),
-      developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
+      reasoning_effort: resolveCodexAppServerReasoningEffort({
+        thinkLevel: params.thinkLevel,
+        modelId: model,
+        supportedReasoningEfforts: readCodexSupportedReasoningEfforts(params.model?.compat),
+      }),
+      developer_instructions:
+        params.trigger === "cron" ? buildCronCollaborationInstructions() : null,
     },
   };
 }
 
-function buildTurnScopedCollaborationInstructions(
+export function buildCodexParentLocalInstructions(
   params: EmbeddedRunAttemptParams,
   options: {
-    turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
-    memoryCollaborationInstructions?: string;
+    personaInstructions?: string;
+    skillsInstructions?: string;
+    memoryInstructions?: string;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
-    options.turnScopedDeveloperInstructions,
-    options.memoryCollaborationInstructions,
-    options.skillsCollaborationInstructions,
+    options.personaInstructions,
+    options.skillsInstructions,
+    options.memoryInstructions,
   );
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
-  if (contextInstructions?.trim()) {
-    return joinPresentSections(buildDefaultCollaborationInstructions(), contextInstructions);
-  }
-  return null;
-}
-
-function buildDefaultCollaborationInstructions(): string {
-  // Codex only applies the built-in Default-mode preset when `developer_instructions`
-  // is null. OpenClaw adds per-turn workspace instructions here, so preserve that
-  // pinned Codex default behavior before appending the workspace overlay.
-  return [
-    "# Collaboration Mode: Default",
-    "",
-    "You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.",
-    "",
-    "Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.",
-    "",
-    "## request_user_input availability",
-    "",
-    "Use the `request_user_input` tool only when it is listed in the available tools for this turn.",
-    "",
-    "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.",
-  ].join("\n");
+  return contextInstructions || null;
 }
 
 function buildCronCollaborationInstructions(): string {
@@ -220,8 +285,4 @@ function buildCronCollaborationInstructions(): string {
     "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
     "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
   ].join("\n\n");
-}
-
-function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }

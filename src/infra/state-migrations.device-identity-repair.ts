@@ -1,5 +1,4 @@
 // Owner-authorized detection and Doctor-only replacement for invalid device identity rows.
-import fs from "node:fs";
 import path from "node:path";
 import {
   DeviceIdentityStorageError,
@@ -8,6 +7,7 @@ import {
   repairInvalidStoredDeviceIdentity,
 } from "./device-identity-store.js";
 import { formatErrorMessage } from "./errors.js";
+import { pathMayExistSync } from "./path-existence.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
@@ -16,27 +16,16 @@ const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const NATIVE_CLAIM_SUFFIX = ".native-importing";
 const IDENTITY_KEY = "primary";
 
-function pathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
 /** Detect retired paths for an authorized importer; only Doctor may rotate invalid SQLite state. */
 export function detectLegacyDeviceIdentity(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
-  allowLegacyDeviceIdentityImport?: boolean;
 }): LegacyDeviceIdentityDetection {
   const sourcePath = path.join(params.stateDir, LEGACY_IDENTITY_RELATIVE_PATH);
   const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
   const nativeClaimPath = `${sourcePath}${NATIVE_CLAIM_SUFFIX}`;
   const doctorAuthorized = params.doctorOnlyStateMigrations === true;
-  const importAuthorized = doctorAuthorized || params.allowLegacyDeviceIdentityImport === true;
   let hasInvalidCanonical = false;
   if (doctorAuthorized) {
     try {
@@ -53,17 +42,19 @@ export function detectLegacyDeviceIdentity(params: {
     claimPath,
     nativeClaimPath,
     hasLegacy:
-      importAuthorized &&
-      (pathMayExist(claimPath) || pathMayExist(nativeClaimPath) || pathMayExist(sourcePath)),
+      doctorAuthorized &&
+      (pathMayExistSync(claimPath) ||
+        pathMayExistSync(nativeClaimPath) ||
+        pathMayExistSync(sourcePath)),
     hasInvalidCanonical,
   };
 }
 
 export function hasLegacyDeviceIdentityPath(detected: LegacyDeviceIdentityDetection): boolean {
   return (
-    pathMayExist(detected.claimPath) ||
-    pathMayExist(detected.nativeClaimPath) ||
-    pathMayExist(detected.sourcePath)
+    pathMayExistSync(detected.claimPath) ||
+    pathMayExistSync(detected.nativeClaimPath) ||
+    pathMayExistSync(detected.sourcePath)
   );
 }
 

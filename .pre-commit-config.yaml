@@ -18,8 +18,6 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=500]
       - id: check-merge-conflict
-      - id: detect-private-key
-        exclude: '(^|/)(\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)'
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
@@ -37,7 +35,7 @@ repos:
 
   # GitHub Actions security audit
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: 451b56af716f9f0d0c2b816503a3fd0cf8b036fa # v1.29.0
+    rev: fa412071e4f5d44d44f9e365f4676f9df92456a2 # v1.30.1
     hooks:
       - id: zizmor
         args:
@@ -52,7 +50,7 @@ repos:
 
   # Python checks for skills scripts
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: aab412d509121cb5f7533134b7e67f9fab59c682 # v0.16.4
+    rev: 2eeb5678de71a00c0902cbda7105d328432f72cb # v0.16.8
     hooks:
       - id: ruff
         files: "^skills/.*\\.py$"
@@ -71,6 +69,13 @@ repos:
   # Project checks (same commands as CI)
   - repo: local
     hooks:
+      # node scripts/detect-private-keys.mts (scanner owns its exclude list)
+      - id: detect-private-key
+        name: detect private key
+        entry: node scripts/detect-private-keys.mts
+        language: system
+        types: [text]
+
       # node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
       - id: pnpm-audit-prod
         name: pnpm-audit-prod

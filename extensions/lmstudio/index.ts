@@ -1,13 +1,18 @@
-// Lmstudio plugin entrypoint registers its OpenClaw integration.
+import {
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeModule,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import {
   definePluginEntry,
   type OpenClawConfig,
   type OpenClawPluginApi,
   type ProviderAuthContext,
-  type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
+import {
+  CUSTOM_LOCAL_AUTH_MARKER,
+  normalizeOptionalSecretInput,
+} from "openclaw/plugin-sdk/provider-auth";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import {
@@ -23,28 +28,18 @@ import { shouldUseLmstudioSyntheticAuth } from "./src/provider-auth.js";
 import { wrapLmstudioInferencePreload } from "./src/stream.js";
 
 const PROVIDER_ID = "lmstudio";
+const loadSetup = createLazyRuntimeModule(() => import("./src/setup.js"));
+const setupMethod = createLazyRuntimeMethodBinder(loadSetup);
 
 function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefined) {
-  if (!config) {
-    return [];
-  }
-  return normalizeLmstudioConfiguredCatalogEntries(config.models?.providers?.lmstudio?.models).map(
-    (entry) => ({
-      provider: PROVIDER_ID,
-      id: entry.id,
-      name: entry.name ?? entry.id,
-      compat: { ...entry.compat, supportsUsageInStreaming: true },
-      contextWindow: entry.contextWindow,
-      contextTokens: entry.contextTokens,
-      reasoning: entry.reasoning,
-      input: entry.input,
-    }),
+  return normalizeLmstudioConfiguredCatalogEntries(config?.models?.providers?.lmstudio?.models).map(
+    (entry) =>
+      Object.assign({}, entry, {
+        provider: PROVIDER_ID,
+        name: entry.name ?? entry.id,
+        compat: { ...entry.compat, supportsUsageInStreaming: true },
+      }),
   );
-}
-
-/** Lazily loads setup helpers so provider wiring stays lightweight at startup. */
-async function loadProviderSetup() {
-  return await import("./src/setup.js");
 }
 
 export default definePluginEntry({
@@ -65,12 +60,9 @@ export default definePluginEntry({
           hint: "Connect to a running LM Studio server and use an already loaded model",
           kind: "custom",
           appGuidedSetup: {
-            detectAvailability: async (ctx) => {
-              const providerSetup = await loadProviderSetup();
-              return await providerSetup.detectAppGuidedLmstudioAvailability(ctx);
-            },
+            detectAvailability: setupMethod((setup) => setup.detectAppGuidedLmstudioAvailability),
             detect: async (ctx) => {
-              const providerSetup = await loadProviderSetup();
+              const providerSetup = await loadSetup();
               const result = await providerSetup.prepareAppGuidedLmstudioSetup(ctx);
               if (!result?.defaultModel) {
                 return null;
@@ -81,13 +73,14 @@ export default definePluginEntry({
                 detail: `${result.defaultModel.slice(`${PROVIDER_ID}/`.length)} at ${provider?.baseUrl ?? "LM Studio"}`,
               };
             },
-            prepare: async (ctx) => {
-              const providerSetup = await loadProviderSetup();
-              return await providerSetup.prepareAppGuidedLmstudioSetup(ctx);
-            },
+            prepare: setupMethod((setup) => setup.prepareAppGuidedLmstudioSetup),
           },
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
-            const providerSetup = await loadProviderSetup();
+            const providerSetup = await loadSetup();
+            const suppliedApiKey =
+              ctx.opts?.tokenProvider === PROVIDER_ID
+                ? normalizeOptionalSecretInput(ctx.opts.token)
+                : undefined;
             return await providerSetup.promptAndConfigureLmstudioInteractive({
               config: ctx.config,
               agentDir: ctx.agentDir,
@@ -97,24 +90,24 @@ export default definePluginEntry({
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,
               isRemote: ctx.isRemote,
               signal: ctx.signal,
+              ...(suppliedApiKey
+                ? {
+                    suppliedApiKey,
+                    requestedModelId: normalizeOptionalSecretInput(ctx.opts?.customModelId),
+                  }
+                : {}),
             });
           },
-          validateNonInteractive: async (ctx) => {
-            const providerSetup = await loadProviderSetup();
-            return await providerSetup.validateLmstudioNonInteractive(ctx);
-          },
-          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
-            const providerSetup = await loadProviderSetup();
-            return await providerSetup.configureLmstudioNonInteractive(ctx);
-          },
+          validateNonInteractive: setupMethod((setup) => setup.validateLmstudioNonInteractive),
+          runNonInteractive: setupMethod((setup) => setup.configureLmstudioNonInteractive),
         },
       ],
       catalog: {
         // Run after early providers so local LM Studio detection does not dominate resolution.
         order: "late",
         run: async (ctx) => {
-          const providerSetup = await loadProviderSetup();
-          return await providerSetup.discoverLmstudioProvider(ctx);
+          const providerSetup = await loadSetup();
+          return await providerSetup.discoverLmstudioProvider(ctx, { discoveryMode: "strict" });
         },
       },
       resolveSyntheticAuth: ({ providerConfig }) => {
@@ -131,10 +124,7 @@ export default definePluginEntry({
         resolvedApiKey?.trim() === LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER ||
         resolvedApiKey?.trim() === CUSTOM_LOCAL_AUTH_MARKER,
       normalizeConfig: ({ providerConfig }) => normalizeLmstudioProviderConfig(providerConfig),
-      prepareDynamicModel: async (ctx) => {
-        const providerSetup = await loadProviderSetup();
-        return await providerSetup.prepareLmstudioDynamicModel(ctx);
-      },
+      prepareDynamicModel: setupMethod((setup) => setup.prepareLmstudioDynamicModel),
       augmentModelCatalog: (ctx) => resolveLmstudioAugmentedCatalogEntries(ctx.config),
       wrapStreamFn: wrapLmstudioInferencePreload,
       ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),

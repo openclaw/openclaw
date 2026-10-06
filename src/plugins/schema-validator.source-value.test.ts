@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
-describe.each([true, false])("source-aware schema validation (cache=%s)", (cache) => {
+describe("source-aware schema validation", () => {
+  const cache = true;
   const schema = {
     type: "object",
     properties: {
@@ -15,31 +16,34 @@ describe.each([true, false])("source-aware schema validation (cache=%s)", (cache
     required: ["credential"],
   };
 
-  it("validates persisted references and defaults the paired runtime without mutating either", () => {
-    const sourceValue = { credential: { id: "KEY" } };
-    const value = { credential: "resolved-fixture-key" };
-    const params = {
-      schema,
-      cacheKey: "source-ref",
-      value,
-      sourceValue,
-      applyDefaults: true,
-      cache,
-    };
-    // Exercise a reused validator as well as its initial compilation.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      expect(validateJsonSchemaValue(params)).toEqual({
-        ok: true,
-        value: { ...value, retries: 2 },
-      });
-      expect(
-        validateJsonSchemaValue({ ...params, sourceValue: { credential: "plaintext" } }).ok,
-      ).toBe(false);
-      expect(validateJsonSchemaValue({ ...params, sourceValue: null }).ok).toBe(false);
-    }
-    expect(sourceValue).toEqual({ credential: { id: "KEY" } });
-    expect(value).toEqual({ credential: "resolved-fixture-key" });
-  });
+  it.each([true, false])(
+    "validates persisted references and defaults the paired runtime without mutating either (cache=%s)",
+    (cacheEnabled) => {
+      const sourceValue = { credential: { id: "KEY" } };
+      const value = { credential: "resolved-fixture-key" };
+      const params = {
+        schema,
+        cacheKey: "source-ref",
+        value,
+        sourceValue,
+        applyDefaults: true,
+        cache: cacheEnabled,
+      };
+      // Exercise a reused validator as well as its initial compilation.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(validateJsonSchemaValue(params)).toEqual({
+          ok: true,
+          value: { ...value, retries: 2 },
+        });
+        expect(
+          validateJsonSchemaValue({ ...params, sourceValue: { credential: "plaintext" } }).ok,
+        ).toBe(false);
+        expect(validateJsonSchemaValue({ ...params, sourceValue: null }).ok).toBe(false);
+      }
+      expect(sourceValue).toEqual({ credential: { id: "KEY" } });
+      expect(value).toEqual({ credential: "resolved-fixture-key" });
+    },
+  );
 
   it.each([true, false])(
     "preserves the runtime identity without applicable defaults (%s)",
@@ -60,7 +64,7 @@ describe.each([true, false])("source-aware schema validation (cache=%s)", (cache
     },
   );
 
-  it("keeps the conditional-default exception tied to the source input", () => {
+  it("shares compiled schemas across callers while keeping defaults tied to the source input", () => {
     const conditional = {
       ...schema,
       properties: { ...schema.properties, enabled: { type: "boolean", default: true } },
@@ -76,16 +80,36 @@ describe.each([true, false])("source-aware schema validation (cache=%s)", (cache
       applyDefaults: true,
       cache,
     };
-    expect(validateJsonSchemaValue(params)).toEqual({
+    expect(validateJsonSchemaValue({ ...params, applyDefaults: false })).toEqual({
       ok: true,
-      value: { credential: "resolved-fixture-key", retries: 2, enabled: true },
+      value: params.value,
     });
-    expect(
-      validateJsonSchemaValue({
-        ...params,
-        sourceValue: { ...params.sourceValue, enabled: true },
-      }).ok,
-    ).toBe(false);
+    const compile = vi.spyOn(globalThis, "Function");
+    try {
+      expect(
+        validateJsonSchemaValue({
+          ...params,
+          schema: structuredClone(conditional),
+          cacheKey: "source-conditional-clone",
+        }),
+      ).toEqual({
+        ok: true,
+        value: { credential: "resolved-fixture-key", retries: 2, enabled: true },
+      });
+      expect(
+        validateJsonSchemaValue({
+          ...params,
+          sourceValue: { ...params.sourceValue, enabled: true },
+        }).ok,
+      ).toBe(false);
+      expect(validateJsonSchemaValue(params)).toEqual({
+        ok: true,
+        value: { credential: "resolved-fixture-key", retries: 2, enabled: true },
+      });
+      expect(compile).not.toHaveBeenCalled();
+    } finally {
+      compile.mockRestore();
+    }
   });
 
   it.each([null, { credential: "invalid-plaintext-fixture" }])(

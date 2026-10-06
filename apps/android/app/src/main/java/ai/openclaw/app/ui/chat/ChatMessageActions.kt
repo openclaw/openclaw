@@ -3,6 +3,8 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.AppAlertDialog
+import ai.openclaw.app.ui.AppDropdownMenu
 import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawTheme
 import android.app.Activity
@@ -25,8 +27,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.LastPage
 import androidx.compose.material.icons.automirrored.filled.NavigateBefore
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -73,9 +73,10 @@ internal fun ChatMessageActionHost(
   enabled: Boolean = true,
   listenActive: Boolean = false,
   onToggleListen: (() -> Unit)? = null,
+  onAddReaction: (() -> Unit)? = null,
   content: @Composable () -> Unit,
 ) {
-  if (!enabled || (text.isBlank() && !showSessionActions)) {
+  if (!enabled || (text.isBlank() && !showSessionActions && onAddReaction == null)) {
     Box(modifier = modifier) { content() }
     return
   }
@@ -93,10 +94,16 @@ internal fun ChatMessageActionHost(
       ),
   ) {
     content()
-    DropdownMenu(
+    AppDropdownMenu(
       expanded = menuExpanded,
       onDismissRequest = { menuExpanded = false },
     ) {
+      onAddReaction?.let { addReaction ->
+        MessageActionItem(label = nativeString("Add reaction")) {
+          menuExpanded = false
+          addReaction()
+        }
+      }
       if (text.isNotBlank()) {
         onToggleListen?.let { toggleListen ->
           MessageActionItem(label = if (listenActive) nativeString("Stop") else nativeString("Listen")) {
@@ -162,7 +169,7 @@ internal fun ChatTextReaderDialog(
   val pages = remember(text) { chatTextLayoutRanges(text) }
   var page by remember(text) { mutableIntStateOf(0) }
   val pageText = remember(text, page) { text.substring(pages[page]) }
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(title) },
     text = {

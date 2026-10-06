@@ -1,10 +1,6 @@
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { CronServiceState } from "./state.js";
 
-export function resolveRunConcurrency(): number {
-  return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
-}
-
 function acquireCronRunSlot(state: CronServiceState): () => void {
   state.runAdmission.active += 1;
   let released = false;
@@ -24,7 +20,7 @@ function dispatchWaiters(state: CronServiceState): void {
     cancelCronRunAdmissionWaiters(state);
     return;
   }
-  const maxConcurrentRuns = resolveRunConcurrency();
+  const maxConcurrentRuns = DEFAULT_CRON_MAX_CONCURRENT_RUNS;
   while (admission.active < maxConcurrentRuns) {
     const waiter = admission.waiters.shift();
     if (!waiter) {
@@ -53,7 +49,7 @@ export function tryAcquireCronRunSlots(
   if (state.stopped || requested <= 0 || state.runAdmission.waiters.length > 0) {
     return [];
   }
-  const available = Math.max(0, resolveRunConcurrency() - state.runAdmission.active);
+  const available = Math.max(0, DEFAULT_CRON_MAX_CONCURRENT_RUNS - state.runAdmission.active);
   return Array.from({ length: Math.min(requested, available) }, () => acquireCronRunSlot(state));
 }
 
@@ -62,16 +58,36 @@ export function setCronRunCapacityListener(state: CronServiceState, listener: ()
   state.runAdmission.capacityListener ??= listener;
 }
 
-async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => void) | null> {
+async function acquireCronRunAdmission(
+  state: CronServiceState,
+  signal?: AbortSignal,
+): Promise<(() => void) | null> {
   const admission = state.runAdmission;
-  if (state.stopped) {
+  if (state.stopped || signal?.aborted) {
     return null;
   }
-  if (admission.waiters.length === 0 && admission.active < resolveRunConcurrency()) {
+  if (admission.waiters.length === 0 && admission.active < DEFAULT_CRON_MAX_CONCURRENT_RUNS) {
     return acquireCronRunSlot(state);
   }
   return await new Promise<(() => void) | null>((resolve) => {
-    admission.waiters.push(resolve);
+    const settle = (release: (() => void) | null) => {
+      signal?.removeEventListener("abort", cancel);
+      resolve(release);
+    };
+    const cancel = () => {
+      const index = admission.waiters.indexOf(settle);
+      if (index < 0) {
+        return;
+      }
+      admission.waiters.splice(index, 1);
+      settle(null);
+      dispatchWaiters(state);
+    };
+    admission.waiters.push(settle);
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) {
+      cancel();
+    }
   });
 }
 
@@ -91,8 +107,9 @@ export async function runWithCronAdmission<T>(
   state: CronServiceState,
   execute: () => Promise<T>,
   acquiredRelease?: () => void,
+  signal?: AbortSignal,
 ): Promise<{ kind: "admitted"; value: T } | { kind: "stopped" }> {
-  const release = acquiredRelease ?? (await acquireCronRunAdmission(state));
+  const release = acquiredRelease ?? (await acquireCronRunAdmission(state, signal));
   if (!release) {
     return { kind: "stopped" };
   }

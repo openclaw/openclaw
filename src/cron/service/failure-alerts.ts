@@ -1,4 +1,5 @@
 /** Resolves and emits cron failure-alert notifications. */
+import { randomUUID } from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -6,36 +7,33 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
-import { buildCodexLoginRecovery } from "../../auto-reply/codex-login-recovery.js";
+import { buildProviderLoginRecovery } from "../../auto-reply/provider-login-recovery.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
+import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type {
+  CronCompletionStatus,
   CronFailureNotificationDelivery,
   CronFailureNotificationDetail,
   CronJob,
   CronMessageChannel,
 } from "../types.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { enqueueCronNotification } from "./wake.js";
+import { buildCronFailureRepairBrief } from "./failure-repair-brief.js";
+import { isJobEnabled } from "./jobs-scheduling.js";
+import {
+  cronNotificationJob,
+  type CronNotificationJob,
+  type ResolvedFailureAlert,
+} from "./notification-intents.js";
+import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
-
-type ResolvedFailureAlert = {
-  after: number;
-  cooldownMs: number;
-  channel: CronMessageChannel;
-  to?: string;
-  mode?: "announce" | "webhook";
-  accountId?: string;
-  threadId?: string | number;
-  includeSkipped: boolean;
-  alternateRoute: boolean;
-};
 
 /** Returns the last failure-notification delivery trace persisted on a cron job. */
 export function failureNotificationDeliveryFromJobState(
@@ -52,17 +50,12 @@ export function failureNotificationDeliveryFromJobState(
   };
 }
 
-function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
-  const channel = normalizeOptionalLowercaseString(input);
-  return channel ? (channel as CronMessageChannel) : undefined;
-}
-
 function resolveFailureAlertChannel(channel: unknown, to?: string): CronMessageChannel | undefined {
-  const normalized = normalizeCronMessageChannel(channel);
+  const normalized = normalizeOptionalLowercaseString(channel);
   if (normalized && normalized !== "last") {
     return normalizeAnyChannelId(normalized) ?? normalized;
   }
-  return normalizeCronMessageChannel(resolveTargetPrefixedChannel(to)) ?? normalized;
+  return normalizeOptionalLowercaseString(resolveTargetPrefixedChannel(to)) ?? normalized;
 }
 
 function normalizeFailureAlertRecipient(channel: CronMessageChannel, to: string): string {
@@ -92,9 +85,19 @@ function clampNonNegativeInt(value: unknown, fallback: number): number {
 
 /** Resolves effective failure-alert policy from job config, delivery defaults, and global cron config. */
 export function resolveFailureAlert(
-  state: { deps: Pick<CronServiceState["deps"], "cronConfig"> },
-  job: Pick<CronJob, "delivery" | "failureAlert">,
+  state: {
+    deps: Pick<CronJobPolicyContext["deps"], "cronConfig">;
+    preparedFailureAlert?: CronJobPolicyContext["preparedFailureAlert"];
+  },
+  job: Pick<CronJob, "delivery" | "failureAlert"> & Partial<Pick<CronJob, "id">>,
 ): ResolvedFailureAlert | null {
+  const prepared = state.preparedFailureAlert;
+  if (prepared) {
+    if (prepared.jobId !== job.id) {
+      throw new Error("cron: prepared failure-alert policy does not match the job");
+    }
+    return prepared.value;
+  }
   const globalConfig = state.deps.cronConfig?.failureAlert;
   const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
 
@@ -116,9 +119,11 @@ export function resolveFailureAlert(
     globalConfig,
     hasJobRoute ? jobConfig : undefined,
   );
-  const primaryRoute = resolveCronDeliveryPlan(job);
+  const primaryRoute = hasCanonicalCronDeliveryMode(job.delivery)
+    ? resolveCronDeliveryPlan(job)
+    : undefined;
   const primaryAnnounceRoute =
-    primaryRoute.mode === "announce" && primaryRoute.requested ? primaryRoute : undefined;
+    primaryRoute?.mode === "announce" && primaryRoute.requested ? primaryRoute : undefined;
   const explicitlyConfigured = jobConfig !== undefined || globalConfig !== undefined;
   if (!alternateRoute && !primaryAnnounceRoute && !explicitlyConfigured) {
     return null;
@@ -192,61 +197,20 @@ export function resolveFailureAlert(
   };
 }
 
-function transportFailureAlert(
-  state: CronServiceState,
-  params: {
-    job: CronJob;
-    payload: ReplyPayload;
-    runAtMs?: number;
-    route: ResolvedFailureAlert;
-  },
-): void {
-  let pendingFallback = true;
-  const fallback = (reachedRecipient = false) => {
-    if (pendingFallback && !reachedRecipient) {
-      enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert");
-    }
-    pendingFallback = false;
-  };
-  if (!state.deps.sendCronFailureAlert) {
-    fallback();
-    return;
-  }
-  void state.deps
-    .sendCronFailureAlert({
-      job: params.job,
-      payload: params.payload,
-      runAtMs: params.runAtMs,
-      channel: params.route.channel,
-      to: params.route.to,
-      mode: params.route.mode,
-      accountId: params.route.accountId,
-      threadId: params.route.threadId,
-      ...(params.route.alternateRoute ? { inheritSessionThread: false as const } : {}),
-      onDeliveryAttempt: fallback,
-    })
-    .catch((err: unknown) => {
-      state.deps.log.warn(
-        { jobId: params.job.id, err: String(err) },
-        "cron: failure alert delivery failed",
-      );
-      fallback();
-    });
-}
+type FailureAlertIncident = NonNullable<CronJob["state"]["failureAlertIncident"]>;
+/** One notification-worthy failure: its dedupe signature and recovery scope. */
+type FailureAlertSignal = Required<Omit<FailureAlertIncident, "repair">>;
 
-function emitFailureAlert(
-  state: CronServiceState,
-  params: {
-    job: CronJob;
-    error?: string;
-    errorReason?: FailoverReason;
-    failureNotificationDetail?: CronFailureNotificationDetail;
-    runAtMs?: number;
-    consecutiveErrors: number;
-    route: ResolvedFailureAlert;
-    status: "error" | "skipped";
-  },
-) {
+function buildFailureAlertPayload(params: {
+  job: CronNotificationJob;
+  error?: string;
+  errorReason?: FailoverReason;
+  failureNotificationDetail?: CronFailureNotificationDetail;
+  consecutiveErrors: number;
+  route: ResolvedFailureAlert;
+  status: "error" | "skipped";
+  repairRequested?: boolean;
+}) {
   const safeJobName = params.job.name || params.job.id;
   const errorReason = params.status === "error" ? params.errorReason : undefined;
   // Keep alert bodies compact because they may route through chat channels
@@ -262,34 +226,55 @@ function emitFailureAlert(
       : cronFailureDetailLines(errorReason, params.failureNotificationDetail);
   const text = [
     `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
+    ...(params.repairRequested
+      ? ["An automatic repair was requested in its owner conversation; it is still failing."]
+      : []),
     ...detailLines,
   ].join("\n");
   const oauthRefreshFailure = params.error ? classifyOAuthRefreshFailure(params.error) : null;
-  const codexLoginRecovery =
+  const providerLoginRecovery =
     params.status === "error" && (errorReason === "auth" || errorReason === "auth_permanent")
-      ? buildCodexLoginRecovery({
-          provider: oauthRefreshFailure?.provider,
+      ? buildProviderLoginRecovery({
+          provider: normalizeOptionalString(oauthRefreshFailure?.provider),
           oauthReason: oauthRefreshFailure?.reason,
         })
       : undefined;
   const payload: ReplyPayload = {
-    text: codexLoginRecovery ? `${text}\n${codexLoginRecovery.hint}` : text,
-    ...(codexLoginRecovery ? { presentation: codexLoginRecovery.presentation } : {}),
+    text: providerLoginRecovery ? `${text}\n${providerLoginRecovery.hint}` : text,
+    ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
   };
 
-  transportFailureAlert(state, {
-    job: params.job,
-    payload,
-    runAtMs: params.runAtMs,
-    route: params.route,
-  });
+  return payload;
+}
+
+function startFailureNotification(job: CronJob): void {
+  job.state.lastFailureNotificationId = randomUUID();
+  job.state.lastFailureNotificationDelivered = undefined;
+  job.state.lastFailureNotificationDeliveryStatus = "unknown";
+  job.state.lastFailureNotificationDeliveryError = undefined;
+}
+
+function startFailureAlertCycle(job: CronJob, incident: FailureAlertSignal, now: number): void {
+  startFailureNotification(job);
+  job.state.lastFailureAlertAtMs = now;
+  const current = job.state.failureAlertIncident;
+  job.state.failureAlertIncident = {
+    ...incident,
+    scope: current?.scope === "run" ? "run" : incident.scope,
+    // An alert after the repair request is its fallback; the marker lasts until success.
+    ...(current?.repair ? { repair: { atMs: current.repair.atMs, alerted: true } } : {}),
+  };
 }
 
 function requestFailureNotification(
-  state: CronServiceState,
+  state: CronJobPolicyContext,
   job: CronJob,
   alertConfig: ResolvedFailureAlert,
+  incident: FailureAlertSignal,
 ): boolean {
+  if (job.state.failureAlertIncident?.signature === incident.signature) {
+    return false;
+  }
   const now = state.deps.nowMs();
   const lastAlert = job.state.lastFailureAlertAtMs;
   // Cooldown is stored on job state so process restarts and service reloads do
@@ -301,16 +286,59 @@ function requestFailureNotification(
   if (inCooldown) {
     return false;
   }
-  job.state.lastFailureNotificationDelivered = undefined;
-  job.state.lastFailureNotificationDeliveryStatus = "unknown";
-  job.state.lastFailureNotificationDeliveryError = undefined;
-  job.state.lastFailureAlertAtMs = now;
+  startFailureAlertCycle(job, incident, now);
   return true;
 }
 
-/** Emits a failure alert when threshold, best-effort, and cooldown policy allow it. */
+function failureRecoveryScope(
+  detail?: CronFailureNotificationDetail,
+): FailureAlertIncident["scope"] {
+  return detail?.kind === "script-failure" && detail.source === "trigger" ? "trigger" : "run";
+}
+
+function recordUnresolvedFailure(job: CronJob, detail?: CronFailureNotificationDetail): void {
+  const scope = failureRecoveryScope(detail);
+  const incident = (job.state.failureAlertIncident ??= { scope });
+  if (scope === "run") {
+    incident.scope = "run";
+  }
+}
+
+function failureIncident(params: {
+  status: "error" | "skipped" | "delivery";
+  error?: string;
+  errorReason?: FailoverReason;
+  failureNotificationDetail?: CronFailureNotificationDetail;
+  route: ResolvedFailureAlert;
+}): FailureAlertSignal {
+  // Classified causes ignore changing provider prose; unknown errors stay private.
+  const cause = params.errorReason ?? params.failureNotificationDetail ?? params.error?.trim();
+  const scope = failureRecoveryScope(params.failureNotificationDetail);
+  return {
+    signature: sha256Hex(
+      JSON.stringify([
+        params.status,
+        scope,
+        cause,
+        params.route.mode,
+        params.route.channel,
+        params.route.to,
+        params.route.accountId,
+        params.route.threadId,
+      ]),
+    ),
+    scope,
+  };
+}
+
+/**
+ * Emits one alert per incident when threshold, best-effort, and cooldown policy allow it.
+ * For a job with an owner conversation that will run again, the first chat alert of a
+ * failure streak becomes a repair request in that conversation; the next failure of that
+ * streak alerts, naming it, and the streak is never repaired twice.
+ */
 export function maybeEmitFailureAlert(
-  state: CronServiceState,
+  state: CronJobPolicyContext,
   params: {
     job: CronJob;
     alertConfig: ResolvedFailureAlert | null;
@@ -320,9 +348,10 @@ export function maybeEmitFailureAlert(
     failureNotificationDetail?: CronFailureNotificationDetail;
     runAtMs?: number;
     consecutiveCount: number;
-    deferredNotifications?: DeferredCronNotifications;
+    deferredNotifications: DeferredCronNotifications;
   },
 ) {
+  recordUnresolvedFailure(params.job, params.failureNotificationDetail);
   const alertConfig = params.alertConfig;
   if (!alertConfig || params.consecutiveCount < alertConfig.after) {
     return;
@@ -332,32 +361,81 @@ export function maybeEmitFailureAlert(
   if (params.job.delivery?.bestEffort === true && !params.job.failureAlert) {
     return;
   }
-  if (!requestFailureNotification(state, params.job, alertConfig)) {
+  const incident = failureIncident({ ...params, route: alertConfig });
+  const now = state.deps.nowMs();
+  const repair = params.job.state.failureAlertIncident?.repair;
+  // The repair request took this streak's alert and cooldown slot; if the job still
+  // fails, the user gets that alert once.
+  if (repair && !repair.alerted) {
+    startFailureAlertCycle(params.job, incident, now);
+  } else if (!requestFailureNotification(state, params.job, alertConfig, incident)) {
     return;
   }
-
-  const job = structuredClone(params.job);
-  const notify = () =>
-    emitFailureAlert(state, {
+  const job = cronNotificationJob(params.job);
+  if (
+    !repair &&
+    alertConfig.mode === "announce" &&
+    params.status === "error" &&
+    params.job.owner?.sessionKey?.trim() &&
+    // Command jobs and on-exit or stream schedules are operator-only, so they alert as before.
+    params.job.payload.kind !== "command" &&
+    params.job.schedule.kind !== "on-exit" &&
+    params.job.schedule.kind !== "stream" &&
+    // Scheduling has settled: a disabled job (such as a one-shot with no retry left) will not
+    // run again, so it cannot show a repair worked.
+    isJobEnabled(params.job)
+  ) {
+    const opened = params.job.state.failureAlertIncident ?? incident;
+    params.job.state.failureAlertIncident = { ...opened, repair: { atMs: now } };
+    // No alert is sent for this cycle; the repair conversation owns any messaging.
+    params.job.state.lastFailureNotificationDeliveryStatus = "not-requested";
+    params.deferredNotifications.push({
+      kind: "failure-repair",
+      job,
+      text: buildCronFailureRepairBrief({
+        job: params.job,
+        consecutiveErrors: params.consecutiveCount,
+        error: params.error,
+        errorReason: params.errorReason,
+      }),
+    });
+    return;
+  }
+  params.deferredNotifications.push({
+    kind: "failure-alert",
+    job,
+    payload: buildFailureAlertPayload({
       job,
       error: params.error,
       errorReason: params.errorReason,
       failureNotificationDetail: params.failureNotificationDetail,
-      runAtMs: params.runAtMs,
       consecutiveErrors: params.consecutiveCount,
       route: alertConfig,
       status: params.status,
-    });
-  if (params.deferredNotifications) {
-    params.deferredNotifications.push(notify);
-  } else {
-    notify();
+      repairRequested: repair !== undefined,
+    }),
+    runAtMs: params.runAtMs,
+    route: alertConfig,
+  });
+}
+
+/**
+ * Resolves the incident after execution succeeds. Recovery is visible in run history and
+ * job state only: a working automation just works, so no notification is sent. Clearing
+ * the incident and cooldown lets the next failure alert again.
+ */
+export function resolveFailureIncident(job: CronJob, opts?: { triggerOnly?: boolean }): void {
+  const incident = job.state.failureAlertIncident;
+  if (!incident || (opts?.triggerOnly && incident.scope !== "trigger")) {
+    return;
   }
+  delete job.state.failureAlertIncident;
+  job.state.lastFailureAlertAtMs = undefined;
 }
 
 /** Finalizes execution or required-delivery alerts after scheduling policy settles. */
 export function finalizeCronFailureNotifications(
-  state: CronServiceState,
+  state: CronJobPolicyContext,
   params: {
     job: CronJob;
     alertConfig: ResolvedFailureAlert | null;
@@ -367,13 +445,18 @@ export function finalizeCronFailureNotifications(
       failureNotificationDetail?: CronFailureNotificationDetail;
       startedAt: number;
     };
-    completionFailed: boolean;
+    completionStatus: CronCompletionStatus;
     autoDisableNotificationOwnsFailure: boolean;
     replay?: boolean;
-    deferredNotifications?: DeferredCronNotifications;
+    deferredNotifications: DeferredCronNotifications;
   },
 ): void {
-  // Finalized history owns notification facts and cooldown; recovery never requests an alert.
+  if (params.result.status === "ok" && params.completionStatus === "succeeded") {
+    resolveFailureIncident(params.job);
+    return;
+  }
+  recordUnresolvedFailure(params.job, params.result.failureNotificationDetail);
+  // Replay repairs incident state but never requests a historical notification.
   if (params.replay) {
     return;
   }
@@ -391,35 +474,42 @@ export function finalizeCronFailureNotifications(
     });
   } else if (
     params.result.status === "ok" &&
-    params.completionFailed &&
+    params.completionStatus === "failed" &&
     params.job.state.lastDeliveryStatus === "not-delivered" &&
     params.alertConfig?.alternateRoute
   ) {
-    if (!requestFailureNotification(state, params.job, params.alertConfig)) {
+    if (
+      !requestFailureNotification(
+        state,
+        params.job,
+        params.alertConfig,
+        failureIncident({
+          status: "delivery",
+          error: params.job.state.lastDeliveryError,
+          errorReason: params.job.state.lastErrorReason,
+          route: params.alertConfig,
+        }),
+      )
+    ) {
       return;
     }
-    const job = structuredClone(params.job);
+    const job = cronNotificationJob(params.job);
     const route = params.alertConfig;
     const detailLines =
       route.mode === "webhook"
         ? [
-            `Last error: ${truncateUtf16Safe(job.state.lastDeliveryError?.trim() || "unknown reason", 200)}`,
+            `Last error: ${truncateUtf16Safe(params.job.state.lastDeliveryError?.trim() || "unknown reason", 200)}`,
           ]
-        : cronFailureDetailLines(job.state.lastErrorReason);
+        : cronFailureDetailLines(params.job.state.lastErrorReason);
     const payload: ReplyPayload = {
       text: [`Automation "${job.name || job.id}" delivery failed`, ...detailLines].join("\n"),
     };
-    const notify = () =>
-      transportFailureAlert(state, {
-        job,
-        payload,
-        runAtMs: params.result.startedAt,
-        route,
-      });
-    if (params.deferredNotifications) {
-      params.deferredNotifications.push(notify);
-    } else {
-      notify();
-    }
+    params.deferredNotifications.push({
+      kind: "failure-alert",
+      job,
+      payload,
+      runAtMs: params.result.startedAt,
+      route,
+    });
   }
 }

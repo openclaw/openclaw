@@ -48,6 +48,9 @@ const AgentInternalEventSchema = closedObject({
   status: Type.String({ enum: [...AGENT_INTERNAL_EVENT_STATUSES] }),
   statusLabel: Type.String(),
   result: Type.String(),
+  // The producer records placeholder substitution independently of its display text.
+  noVisibleResult: Type.Optional(Type.Boolean()),
+  modelRouteChange: Type.Optional(Type.String()),
   attachments: Type.Optional(Type.Array(AgentGeneratedAttachmentSchema)),
   mediaUrls: Type.Optional(Type.Array(Type.String())),
   statsLine: Type.Optional(Type.String()),
@@ -257,12 +260,7 @@ export const ConversationTurnResultSchema = Type.Union([
     channel: NonEmptyString,
     messageId: Type.Optional(NonEmptyString),
     correlationPersisted: Type.Boolean(),
-    status: Type.Union([
-      Type.Literal("sent"),
-      Type.Literal("queued"),
-      Type.Literal("suppressed"),
-      Type.Literal("unknown"),
-    ]),
+    status: ConversationSendResultSchema.properties.status,
     error: NonEmptyString,
   }),
 ]);
@@ -299,6 +297,10 @@ export const AgentParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
   // Backend-owned continuations can bind work to an already-admitted transcript.
   expectedExistingSessionId: Type.Optional(NonEmptyString),
+  // Null binds the original generation before a lifecycle revision was assigned.
+  expectedExistingSessionLifecycleRevision: Type.Optional(
+    Type.Union([NonEmptyString, Type.Null()]),
+  ),
   thinking: Type.Optional(Type.String()),
   deliver: Type.Optional(Type.Boolean()),
   attachments: Type.Optional(Type.Array(Type.Unknown())),

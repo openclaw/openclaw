@@ -7,9 +7,10 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import type { SystemAgentToolOptions } from "../agents/tools/system-agent-tool.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import type { BundleMcpConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpConfig } from "../plugins/bundle-mcp.types.js";
 
 export const OPENCLAW_TOOLS_MCP_TOOLS_ENV = "OPENCLAW_TOOLS_MCP_TOOLS";
 export const OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV =
@@ -37,10 +38,7 @@ export function resolveOpenClawToolsMcpToolSelection(
   if (!raw) {
     return ["cron"];
   }
-  const entries = raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const entries = normalizeCsvOrLooseStringList(raw);
   const selection = entries.filter(isOpenClawToolsMcpToolId);
   if (selection.length === 0 || selection.length !== entries.length) {
     throw new Error(
@@ -134,7 +132,9 @@ export function buildSystemAgentToolsMcpServerConfig(
     mcpServers: {
       openclaw: {
         command: entry.command,
-        args: entry.args,
+        args: options.agentId
+          ? [...entry.args, "--openclaw-agent-id", options.agentId]
+          : entry.args,
         env: {
           [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "openclaw" satisfies OpenClawToolsMcpToolId,
           [OPENCLAW_TOOLS_MCP_SYSTEM_AGENT_SURFACE_ENV]: options.surface,

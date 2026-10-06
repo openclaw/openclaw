@@ -1,5 +1,7 @@
 // Release configured plugin install tests cover doctor checks for release-time plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
+import { initializeNativeSessionCatalogPreferences } from "../../../plugins/native-session-catalog-config.js";
 import { maybeRunConfiguredPluginInstallReleaseStep } from "./release-configured-plugin-installs.js";
 
 const mocks = vi.hoisted(() => ({
@@ -9,34 +11,12 @@ const mocks = vi.hoisted(() => ({
   resolveProviderInstallCatalogEntries: vi.fn(),
 }));
 
-type AutoEnableDetectionCall = {
-  config: {
-    agents?: {
-      defaults?: {
-        model?: string;
-        agentRuntime?: { id?: string };
-      };
-    };
-  };
-};
-
 type MissingPluginInstallRepairCall = {
   pluginIds: string[];
   channelIds?: string[];
+  blockedPluginIds: string[];
   env?: NodeJS.ProcessEnv;
 };
-
-function readOnlyAutoEnableDetectionCall(): AutoEnableDetectionCall {
-  expect(mocks.detectPluginAutoEnableCandidates).toHaveBeenCalledOnce();
-  const calls = mocks.detectPluginAutoEnableCandidates.mock.calls as unknown as Array<
-    [AutoEnableDetectionCall]
-  >;
-  const call = calls[0]?.[0];
-  if (!call) {
-    throw new Error("Expected auto-enable detection call");
-  }
-  return call;
-}
 
 function readOnlyMissingPluginInstallRepairCall(): MissingPluginInstallRepairCall {
   expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledOnce();
@@ -111,6 +91,30 @@ describe("configured plugin install release step", () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: [],
       warnings: [],
+    });
+  });
+
+  it.each(["2026.5.1", "2026.9.1"])(
+    "does not install native catalog plugins from first-write opt-outs (touched %s)",
+    async (touchedVersion) => {
+      const cfg = initializeNativeSessionCatalogPreferences({ gateway: { mode: "local" } });
+      await maybeRunConfiguredPluginInstallReleaseStep({
+        cfg,
+        env: {},
+        currentVersion: "2026.9.1",
+        touchedVersion,
+      });
+      expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains install intent when an opted-out catalog plugin is explicitly enabled", async () => {
+    const cfg = initializeNativeSessionCatalogPreferences({
+      plugins: { entries: { codex: { enabled: true } } },
+    });
+    expect(await collectReleaseConfiguredPluginIdsThroughDoctor({ cfg, env: {} })).toEqual({
+      pluginIds: ["codex"],
+      channelIds: [],
     });
   });
 
@@ -206,26 +210,6 @@ describe("configured plugin install release step", () => {
       "memory-lancedb",
     ]);
     expect(result.channelIds).toEqual(["wecom"]);
-  });
-
-  it("collects Codex from the configured agent runtime even without integration discovery", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            agentRuntime: { id: "codex" },
-          },
-        },
-      },
-      env: {},
-    });
-
-    const detectionCall = readOnlyAutoEnableDetectionCall();
-    expect(detectionCall.config.agents?.defaults?.model).toBe("openai/gpt-5.4");
-    expect(detectionCall.config.agents?.defaults?.agentRuntime).toEqual({ id: "codex" });
-    expect(result.pluginIds).toEqual(["codex"]);
-    expect(result.channelIds).toStrictEqual([]);
   });
 
   it("collects provider plugins from channel-only model overrides", async () => {
@@ -542,22 +526,71 @@ describe("configured plugin install release step", () => {
     ).toStrictEqual([]);
   });
 
-  it("marks the release step complete when there is nothing to install", async () => {
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {},
-      currentVersion: "2026.5.2",
-      touchedVersion: "2026.5.1",
-      env: {},
-    });
+  it.each([
+    { touchedVersion: "2026.5.1", touchedConfig: true },
+    { touchedVersion: "2026.5.2-beta.1", touchedConfig: false },
+  ])(
+    "forwards normalized blocked plugin ids when last touched at $touchedVersion",
+    async ({ touchedVersion, touchedConfig }) => {
+      const result = await maybeRunConfiguredPluginInstallReleaseStep({
+        cfg: {
+          plugins: {
+            deny: [" z-block ", "a-block", "", " ", "z-block"],
+            entries: {
+              " mid-block ": { enabled: false },
+              "a-block": { enabled: false },
+              " ": { enabled: false },
+              kept: { enabled: true },
+              unrelated: {},
+            },
+          },
+        },
+        currentVersion: "2026.5.2-beta.1",
+        touchedVersion,
+        env: {},
+      });
 
-    expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      changes: [],
-      warnings: [],
-      completed: true,
-      touchedConfig: true,
-    });
-  });
+      const repairCall = readOnlyMissingPluginInstallRepairCall();
+      expect(repairCall.blockedPluginIds).toEqual(["a-block", "mid-block", "z-block"]);
+      expect(repairCall.pluginIds).toEqual(["kept"]);
+      expect(repairCall.channelIds).toEqual([]);
+      expect(repairCall.env).toEqual({});
+      expect(result).toEqual({
+        changes: [],
+        warnings: [],
+        completed: true,
+        touchedConfig,
+      });
+    },
+  );
+
+  it.each(["standalone", "pre-plugin", "post-plugin"])(
+    "completes without touching config when there is nothing to install (%s)",
+    async (phase) => {
+      const result = await maybeRunConfiguredPluginInstallReleaseStep({
+        cfg: {},
+        currentVersion: "2026.5.2",
+        touchedVersion: "2026.5.1",
+        env:
+          phase === "standalone"
+            ? {}
+            : {
+                OPENCLAW_UPDATE_IN_PROGRESS: "1",
+                OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+                OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+                ...(phase === "post-plugin" ? { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" } : {}),
+              },
+      });
+
+      expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        changes: [],
+        warnings: [],
+        completed: true,
+        touchedConfig: false,
+      });
+    },
+  );
 
   it("repairs used plugin installs and touches config only on success", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
@@ -565,15 +598,16 @@ describe("configured plugin install release step", () => {
       warnings: [],
       pluginInventoryChanged: true,
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            agentRuntime: { id: "codex" },
-          },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          agentRuntime: { id: "codex" },
         },
       },
+    };
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg,
       currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
       env: {},
@@ -595,15 +629,16 @@ describe("configured plugin install release step", () => {
       warnings: [],
       notices: [reviewNotice],
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            agentRuntime: { id: "codex" },
-          },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          agentRuntime: { id: "codex" },
         },
       },
+    };
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg,
       currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
       env: {},
@@ -627,15 +662,16 @@ describe("configured plugin install release step", () => {
         'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            agentRuntime: { id: "codex" },
-          },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+          agentRuntime: { id: "codex" },
         },
       },
+    };
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg,
       currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
       env: {

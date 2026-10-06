@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { MessageContentItem } from "./chat-types.ts";
 
@@ -5,7 +6,9 @@ function isAttachmentKind(kind: unknown): kind is "image" | "audio" | "video" | 
   return kind === "image" || kind === "audio" || kind === "video" || kind === "document";
 }
 
-export function normalizeAttachmentContentBlock(value: unknown): MessageContentItem[] | undefined {
+export function normalizeAttachmentContentBlock(
+  value: unknown,
+): Array<Extract<MessageContentItem, { type: "attachment" | "attachment_error" }>> | undefined {
   const item = asOptionalRecord(value);
   if (!item || (item.type !== "attachment" && item.type !== "attachment_error")) {
     return undefined;
@@ -19,7 +22,8 @@ export function normalizeAttachmentContentBlock(value: unknown): MessageContentI
     if (
       attachment.code !== "file-not-found" &&
       attachment.code !== "unsupported-format" &&
-      attachment.code !== "delivery-failed"
+      attachment.code !== "delivery-failed" &&
+      attachment.code !== "invalid-reference"
     ) {
       return [];
     }
@@ -38,32 +42,26 @@ export function normalizeAttachmentContentBlock(value: unknown): MessageContentI
   if (typeof attachment.url !== "string") {
     return [];
   }
-  return [
-    {
-      type: "attachment",
-      attachment: {
-        url: attachment.url,
-        kind: attachment.kind,
-        label: attachment.label,
-        ...(mimeType !== undefined ? { mimeType } : {}),
-        ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
-        ...(typeof attachment.artifactId === "string" ? { artifactId: attachment.artifactId } : {}),
-        ...(attachment.playback === "native" || attachment.playback === "transcode"
-          ? { playback: attachment.playback }
-          : {}),
-        ...(typeof attachment.sizeBytes === "number" && attachment.sizeBytes >= 0
-          ? { sizeBytes: attachment.sizeBytes }
-          : {}),
-        ...(typeof attachment.durationMs === "number" && attachment.durationMs >= 0
-          ? { durationMs: attachment.durationMs }
-          : {}),
-        ...(typeof attachment.width === "number" && attachment.width > 0
-          ? { width: attachment.width }
-          : {}),
-        ...(typeof attachment.height === "number" && attachment.height > 0
-          ? { height: attachment.height }
-          : {}),
-      },
-    },
-  ];
+  const normalized: Extract<MessageContentItem, { type: "attachment" }>["attachment"] = {
+    url: attachment.url,
+    kind: attachment.kind,
+    label: attachment.label,
+    ...(mimeType !== undefined ? { mimeType } : {}),
+    ...(attachment.origin === "paste" || attachment.origin === "file"
+      ? { origin: attachment.origin }
+      : {}),
+    ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
+    ...(typeof attachment.artifactId === "string" ? { artifactId: attachment.artifactId } : {}),
+    ...(attachment.playback === "native" || attachment.playback === "transcode"
+      ? { playback: attachment.playback }
+      : {}),
+  };
+  for (const key of ["sizeBytes", "durationMs", "width", "height"] as const) {
+    const numeric = asFiniteNumber(attachment[key]);
+    const dimension = key === "width" || key === "height";
+    if (numeric !== undefined && (dimension ? numeric > 0 : numeric >= 0)) {
+      normalized[key] = numeric;
+    }
+  }
+  return [{ type: "attachment", attachment: normalized }];
 }

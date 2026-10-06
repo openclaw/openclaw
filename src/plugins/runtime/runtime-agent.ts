@@ -1,4 +1,3 @@
-// Runtime agent helpers resolve agent-scoped directories and config for plugin execution.
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
@@ -13,10 +12,9 @@ import {
   resolveEffectiveAgentRuntime,
 } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
+import * as session from "../../config/sessions/lifecycle.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
@@ -31,8 +29,11 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
-import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
+import {
+  captureSessionInitializationOwner,
+  createSessionInitialization,
+} from "../../sessions/session-initialization.js";
 import {
   beginSessionWorkAdmission,
   isSessionWorkAdmissionActive,
@@ -41,53 +42,12 @@ import {
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
-import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
+import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
-type RuntimeSessionStoreReadParams = {
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  hydrateSkillPromptRefs?: boolean;
-  sessionKey: string;
-  readConsistency?: "latest";
-  storePath?: string;
-};
-
-type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
-  readOnly?: boolean;
-};
-
-type RuntimeSessionStoreEntrySummary = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
-
-type RuntimeSessionStoreEntryUpdateParams = {
-  storePath: string;
-  sessionKey: string;
-  update: (
-    entry: SessionEntry,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  requireWriteSuccess?: boolean;
-};
-
-type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
-  fallbackEntry?: SessionEntry;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
-  preserveActivity?: boolean;
-  replaceEntry?: boolean;
-  update: (
-    entry: SessionEntry,
-    context: { existingEntry?: SessionEntry },
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-};
-
-type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
-  entry: SessionEntry;
-};
+type RuntimeSession = PluginRuntime["agent"]["session"];
+type RuntimeSessionStoreReadParams = Parameters<RuntimeSession["getSessionEntry"]>[0];
 
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
@@ -119,9 +79,7 @@ function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | 
   return loadSessionEntryReadOnly(toSessionAccessScope(params));
 }
 
-function listSessionEntries(
-  params: RuntimeSessionStoreListParams = {},
-): RuntimeSessionStoreEntrySummary[] {
+const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) => {
   const listEntries = params.readOnly
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
@@ -133,12 +91,11 @@ function listSessionEntries(
       : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   });
-}
+};
 
-async function patchSessionEntry(
-  params: RuntimeSessionStoreEntryPatchParams,
-): Promise<SessionEntry | null> {
+const patchSessionEntry: RuntimeSession["patchSessionEntry"] = async (params) => {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
+    assertCommitAllowed: params.assertCommitAllowed,
     fallbackEntry: params.fallbackEntry,
     maintenanceConfig:
       params.maintenanceConfig !== undefined
@@ -147,11 +104,9 @@ async function patchSessionEntry(
     preserveActivity: params.preserveActivity,
     replaceEntry: params.replaceEntry,
   });
-}
+};
 
-async function updateSessionStoreEntry(
-  params: RuntimeSessionStoreEntryUpdateParams,
-): Promise<SessionEntry | null> {
+const updateSessionStoreEntry: RuntimeSession["updateSessionStoreEntry"] = async (params) => {
   // Maintainer note: keep the legacy object-parameter API here, but route
   // mutations through the session accessor boundary.
   return await updateSessionEntry(
@@ -166,32 +121,36 @@ async function updateSessionStoreEntry(
       requireWriteSuccess: params.requireWriteSuccess,
     },
   );
-}
+};
 
-async function upsertSessionEntry(params: RuntimeUpsertSessionEntryParams): Promise<void> {
+const upsertSessionEntry: RuntimeSession["upsertSessionEntry"] = async (params) => {
   // Maintainer note: this compatibility helper has full-entry replacement
   // semantics, so removed fields must not survive as merge leftovers.
   await replaceSessionEntry(toSessionAccessScope(params), params.entry);
-}
+};
 
 async function createSessionEntry(
   params: Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0],
 ): Promise<Awaited<ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>>> {
+  const creationOwner = captureSessionInitializationOwner(
+    "agentHarnessId" in params.initialEntry ? params.initialEntry.agentHarnessId : undefined,
+  );
   // Session creation stays behind the canonical Gateway lifecycle boundary while
   // keeping that heavier runtime out of plugin discovery and cold startup.
   const [
     { createGatewaySession },
     { resolveGatewaySessionStoreTarget },
-    { readAcpSessionMetaForEntry, upsertAcpSessionMeta },
+    { readAcpSessionMetaForEntry },
+    { upsertAcpSessionMeta },
     { resolveSandboxedSessionCreation },
   ] = await Promise.all([
     import("../../gateway/session-create-service.js"),
     import("../../gateway/session-utils.js"),
-    // session-meta rides the same lazy boundary: session-utils already pulls it
-    // in transitively, so a separate import here would only duplicate the edge.
+    import("../../acp/runtime/session-meta-readonly.js"),
     import("../../acp/runtime/session-meta.js"),
-    import("../../gateway/operator-role-policy.js"),
+    import("../../gateway/operator-session-run.js"),
   ]);
+  creationOwner.assertCurrent();
   const requiredCreation = resolveSandboxedSessionCreation(
     getPluginRuntimeGatewayRequestScope()?.client,
     params.cfg,
@@ -235,8 +194,8 @@ async function createSessionEntry(
   const persistedAcpBinding = acpInitial
     ? { acpBackendId: acpBackendId!, acpAgentId: acpAgentId!, agentSessionId: agentSessionId! }
     : undefined;
-  const acpMetaMatches = (meta: SessionAcpMeta | undefined): boolean => {
-    return Boolean(
+  const acpMetaMatches = (meta: SessionAcpMeta | undefined): boolean =>
+    Boolean(
       meta &&
       meta.backend === acpBackendId &&
       meta.agent === acpAgentId &&
@@ -246,7 +205,6 @@ async function createSessionEntry(
       meta.mode === "persistent" &&
       meta.cwd === (params.spawnedCwd?.trim() || undefined),
     );
-  };
   const initializesAfterCreate = Boolean(params.afterCreate || acpInitial);
   const matchesExceptUpdatedAt = (left: SessionEntry, right: SessionEntry): boolean => {
     const { updatedAt: _leftUpdatedAt, ...leftStable } = left;
@@ -254,7 +212,7 @@ async function createSessionEntry(
     return isDeepStrictEqual(leftStable, rightStable);
   };
   const identities = new Set([target.canonicalKey, ...target.storeKeys]);
-  return await runExclusiveSessionLifecycleMutation({
+  return await runExclusiveSessionLifecycleMutation("plugin-create", {
     scope: target.storePath,
     identities,
     prepare: async () => {
@@ -265,7 +223,9 @@ async function createSessionEntry(
       }
     },
     run: async () => {
+      creationOwner.assertCurrent();
       const afterCreate = params.afterCreate;
+      let initialization: ReturnType<typeof createSessionInitialization> | undefined;
       let callbackContext: CreatedContext | undefined;
       let finalEntryPatch: { pluginExtensions: SessionEntry["pluginExtensions"] } | undefined;
       let rollbackExpectedEntry: SessionEntry | undefined;
@@ -287,12 +247,44 @@ async function createSessionEntry(
             storePath: context.storePath,
             readConsistency: "latest",
           });
-          if (!persistedEntry) {
-            throw new Error(`created ACP session ${context.key} disappeared during initialization`);
+          if (!persistedEntry || !matchesExceptUpdatedAt(persistedEntry, context.entry)) {
+            throw new Error(`created ACP session ${context.key} changed during initialization`);
           }
           callbackContext = { ...context, entry: persistedEntry };
         }
         rollbackExpectedEntry = structuredClone(callbackContext.entry);
+        const captured = callbackContext;
+        const expected = rollbackExpectedEntry;
+        initialization = createSessionInitialization(
+          {
+            storePath: captured.storePath,
+            sessionKey: captured.key,
+            sessionId: expected.sessionId,
+            lifecycleRevision: expected.lifecycleRevision,
+          },
+          (phase, deleted) => {
+            if (phase === "rollback") {
+              creationOwner.assertRollbackCurrent();
+            } else {
+              creationOwner.assertCurrent();
+            }
+            const current = getSessionEntry({
+              sessionKey: captured.key,
+              storePath: captured.storePath,
+              readConsistency: "latest",
+            });
+            if (
+              deleted
+                ? current !== undefined
+                : current?.initializationPending !== true || !isDeepStrictEqual(current, expected)
+            ) {
+              throw new Error(`Session initialization owner changed: ${captured.key}`);
+            }
+          },
+          { config: params.cfg, agentId: captured.agentId, entry: expected },
+          creationOwner,
+        );
+        initialization.handle.assertCurrent();
         if (!afterCreate) {
           return;
         }
@@ -301,17 +293,16 @@ async function createSessionEntry(
           agentId: callbackContext.agentId,
           sessionId: callbackContext.entry.sessionId,
           entry: structuredClone(callbackContext.entry),
+          initialization: initialization.handle,
         });
-        if (finalPatch === undefined) {
-          return;
+        initialization.handle.assertCurrent();
+        if (finalPatch !== undefined) {
+          const patchKeys = Object.keys(finalPatch);
+          if (patchKeys.length !== 1 || patchKeys[0] !== "pluginExtensions") {
+            throw new Error("session creation final patch may only contain pluginExtensions");
+          }
+          finalEntryPatch = structuredClone(finalPatch);
         }
-        const patchKeys = Object.keys(finalPatch);
-        if (patchKeys.length !== 1 || patchKeys[0] !== "pluginExtensions") {
-          throw new Error("session creation final patch may only contain pluginExtensions");
-        }
-        finalEntryPatch = {
-          pluginExtensions: structuredClone(finalPatch.pluginExtensions),
-        };
       };
       try {
         const matchingEntry =
@@ -374,6 +365,7 @@ async function createSessionEntry(
           await runAfterCreate({
             ...created,
             storePath: target.storePath,
+            isNew: false,
           });
         } else {
           const result = await createGatewaySession({
@@ -474,6 +466,7 @@ async function createSessionEntry(
             {
               preserveActivity: true,
               requireWriteSuccess: true,
+              assertCommitAllowed: () => initialization?.handle.assertCurrent(),
             },
           );
           if (!finalized) {
@@ -482,9 +475,8 @@ async function createSessionEntry(
             );
           }
           finalEntry = finalized;
-          // Any failure after persistence must compare rollback against the
-          // finalized snapshot, not the now-stale initializing entry.
-          rollbackExpectedEntry = structuredClone(finalized);
+          // Readiness COMMIT seals creation authority, even if its publication throws.
+          initialization?.close();
         }
         return {
           key: created.key,
@@ -494,6 +486,18 @@ async function createSessionEntry(
         };
       } catch (error) {
         if (!callbackContext) {
+          throw error;
+        }
+        const current = getSessionEntry({
+          sessionKey: callbackContext.key,
+          storePath: callbackContext.storePath,
+          readConsistency: "latest",
+        });
+        if (
+          current?.sessionId === callbackContext.entry.sessionId &&
+          current.lifecycleRevision === callbackContext.entry.lifecycleRevision &&
+          current.initializationPending !== true
+        ) {
           throw error;
         }
         try {
@@ -524,7 +528,7 @@ async function createSessionEntry(
           };
           // Locked rows require owner-specific rollback capabilities. Unlocked
           // initializers stay on the ordinary guarded lifecycle deletion path.
-          const rolledBack =
+          const rollback = async () =>
             expectedEntry.modelSelectionLocked === true
               ? expectedEntry.agentHarnessId
                 ? await rollbackAgentHarnessSessionEntryLifecycle(rollbackParams)
@@ -533,6 +537,9 @@ async function createSessionEntry(
                     expectedPluginOwnerId: pluginInitial?.pluginOwnerId ?? "",
                   })
               : await deleteSessionEntryLifecycle(rollbackParams);
+          const rolledBack = initialization
+            ? await initialization.rollback(rollback)
+            : await rollback();
           if (!rolledBack.deleted) {
             throw new Error(`created session ${callbackContext.key} changed before rollback`, {
               cause: error,
@@ -547,14 +554,15 @@ async function createSessionEntry(
             });
           }
         } catch (rollbackError) {
-          const aggregateError = new AggregateError(
+          throw new AggregateError(
             [error, rollbackError],
             `Session initialization failed and guarded rollback did not complete for ${callbackContext.key}.`,
             { cause: rollbackError },
           );
-          throw aggregateError;
         }
         throw error;
+      } finally {
+        initialization?.close();
       }
     },
   });
@@ -588,11 +596,11 @@ async function runWithSessionWorkAdmission<T>(
         ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
         : Boolean(currentEntry);
       if (changed) {
-        throw new Error(`Session "${params.sessionKey}" changed while starting work. Retry.`);
+        throw session.createSessionWorkStartChangedError(params.sessionKey);
       }
-      const archivedSessionError = resolveSessionWorkStartError(params.sessionKey, currentEntry);
-      if (archivedSessionError) {
-        throw new Error(archivedSessionError);
+      const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
+      if (startError) {
+        throw new Error(startError);
       }
     },
   });
@@ -607,7 +615,6 @@ async function runWithSessionWorkAdmission<T>(
   }
 }
 
-/** Creates the plugin runtime agent facade with lazy embedded-agent/session helpers. */
 export function createRuntimeAgent(): PluginRuntime["agent"] {
   const agentRuntime = {
     defaults: { model: DEFAULT_MODEL, provider: DEFAULT_PROVIDER },
@@ -628,12 +635,11 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
               modelId: params.model,
             })
           : undefined;
+      const catalog = params.catalog ?? buildConfiguredModelCatalog({ cfg: getRuntimeConfig() });
       const profile = resolveThinkingProfile({
         ...params,
         agentRuntime: effectiveRuntime,
-        catalog: resolveRuntimeThinkingCatalog(params, () =>
-          buildConfiguredModelCatalog({ cfg: getRuntimeConfig() }),
-        ),
+        catalog: params.catalog ?? (catalog.length > 0 ? catalog : undefined),
       });
       const policy: Omit<
         ReturnType<PluginRuntime["agent"]["resolveThinkingPolicy"]>,
@@ -645,7 +651,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     },
     resolveAgentTimeoutMs,
     resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
-    ensureAgentWorkspace,
+    ensureAgentWorkspace: ensurePluginAgentWorkspace,
   } satisfies Omit<
     PluginRuntime["agent"],
     "runCommandFromIngress" | "runEmbeddedAgent" | "session"

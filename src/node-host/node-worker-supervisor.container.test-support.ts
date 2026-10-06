@@ -1,4 +1,33 @@
-export const stdioWorkerSource = String.raw`
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import { writeNodeWorkerFixture } from "./node-worker-supervisor.test-support.js";
+
+export const hostLabel = "openclaw.node-worker.host";
+export const gatewayLabel = "openclaw.node-worker.gateway";
+export const launchLabel = "openclaw.node-worker.launch";
+
+type FakeContainer = {
+  id: string;
+  labels: Record<string, string>;
+  env: Record<string, string>;
+  mounts: string[];
+  image: string;
+  entry: string;
+  workerArgs: string[];
+  status: "created" | "running" | "exited";
+  pid: number | null;
+};
+
+type EngineEvent = {
+  argv: string[];
+  container?: FakeContainer;
+  daemonId?: string;
+  journal?: { state: string; container_json: string | null };
+};
+
+const stdioWorkerSource = String.raw`
 import fs from "node:fs";
 import { createInterface } from "node:readline";
 let active;
@@ -48,25 +77,32 @@ lines.on("line", (line) => {
 lines.once("close", () => process.exit(0));
 `;
 
-export const fakeEngineSource = String.raw`
+const fakeEngineSource = String.raw`
 const { spawn } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 const fs = require("node:fs");
+const { withFileLockSync } = require(fileLockModule);
 const path = require("node:path");
 const args = process.argv.slice(2);
 const command = args[0];
 const statePath = (id) => path.join(engineRoot, id + ".container.json");
 const load = (id) => JSON.parse(fs.readFileSync(statePath(id), "utf8"));
-// Sibling shim invocations (rm/inspect/wait) read this state while another
-// writes it. A truncating write exposes a zero-length window, so a reader
-// parses partial JSON and the shim exits 1; rename is atomic, so readers
-// always see either the previous or the next complete state.
-const save = (container) => {
-  const target = statePath(container.id);
-  const pending = target + "." + process.pid + ".pending";
-  fs.writeFileSync(pending, JSON.stringify(container));
-  fs.renameSync(pending, target);
+// Separate CLI processes share one fake daemon. Serialize state transitions so
+// a delayed start or exit callback cannot recreate a removed container.
+const withContainerLock = (id, operation) => withFileLockSync(statePath(id), {
+  payload: () => ({ pid: process.pid, createdAt: new Date().toISOString() }),
+  timeoutMs: 5_000,
+}, operation);
+const save = (container) => fs.writeFileSync(statePath(container.id), JSON.stringify(container));
+const killWorker = (container) => {
+  if (container.pid) {
+    try {
+      process.kill(process.platform === "win32" ? container.pid : -container.pid, "SIGKILL");
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+  }
 };
 const launchIdFor = (container) =>
   Buffer.from(container.labels["openclaw.node-worker.launch"], "base64url").toString("utf8");
@@ -155,12 +191,13 @@ if (command === "version") {
   const entry = args[entrypoint + 3];
   const workerArgs = args.slice(entrypoint + 4);
   const container = { id, labels, env, mounts, image, entry, workerArgs, status: "created", pid: null };
-  save(container);
+  withContainerLock(id, () => save(container));
   record({ argv: args, container, journal: journalState(launchIdFor(container)) });
   releaseAfterMarker("hold-create", () => process.stdout.write(id + "\n"));
 } else if (command === "start") {
   void (async () => {
-    const container = readContainer(args.at(-1));
+    const id = args.at(-1);
+    let container = withContainerLock(id, () => readContainer(id));
     const journal = await waitForRunningJournal(container);
     record({ argv: args, journal });
     const persisted = journal?.container_json && JSON.parse(journal.container_json);
@@ -175,14 +212,18 @@ if (command === "version") {
     // A real engine leaves the container "created" until its start request lands,
     // so the marker lets a test hold the launch inside that startup window.
     await new Promise((resolve) => releaseAfterMarker("hold-start", resolve));
-    const child = spawn(process.execPath, [container.entry, ...container.workerArgs], {
-      detached: process.platform !== "win32",
-      env: container.env,
-      stdio: ["pipe", "inherit", "inherit"],
+    const child = withContainerLock(id, () => {
+      container = readContainer(id);
+      const child = spawn(process.execPath, [container.entry, ...container.workerArgs], {
+        detached: process.platform !== "win32",
+        env: container.env,
+        stdio: ["pipe", "inherit", "inherit"],
+      });
+      container.status = "running";
+      container.pid = child.pid;
+      save(container);
+      return child;
     });
-    container.status = "running";
-    container.pid = child.pid;
-    save(container);
     process.stdin.pipe(child.stdin);
     child.stdin.on("error", (error) => {
       if (error.code !== "EPIPE") throw error;
@@ -192,12 +233,14 @@ if (command === "version") {
       process.exitCode = 1;
     });
     child.once("exit", (code, signal) => {
-      if (fs.existsSync(statePath(container.id))) {
-        const current = load(container.id);
-        current.status = "exited";
-        current.pid = null;
-        save(current);
-      }
+      withContainerLock(container.id, () => {
+        if (fs.existsSync(statePath(container.id))) {
+          const current = load(container.id);
+          current.status = "exited";
+          current.pid = null;
+          save(current);
+        }
+      });
       process.exit(code ?? (signal ? 137 : 0));
     });
   })().catch((error) => {
@@ -207,7 +250,7 @@ if (command === "version") {
 } else if (command === "inspect") {
   const id = args.at(-1);
   record({ argv: args });
-  const container = readContainer(id);
+  const container = withContainerLock(id, () => readContainer(id));
   const format = args[args.indexOf("--format") + 1];
   const columns = [container.status];
   // Releasing the startup hold here proves the supervisor observed the container
@@ -223,41 +266,42 @@ if (command === "version") {
   }
   process.stdout.write(columns.join("\t") + "\n");
 } else if (command === "kill") {
-  const container = readContainer(args.at(-1));
-  record({ argv: args, journal: journalState(launchIdFor(container)) });
-  if (container.status !== "running") {
-    process.stderr.write("container is not running\n");
-    process.exit(1);
-  }
-  container.status = "exited";
-  save(container);
-  if (container.pid) {
-    try {
-      process.kill(process.platform === "win32" ? container.pid : -container.pid, "SIGKILL");
-    } catch (error) {
-      if (error.code !== "ESRCH") throw error;
+  const id = args.at(-1);
+  withContainerLock(id, () => {
+    const container = readContainer(id);
+    record({ argv: args, journal: journalState(launchIdFor(container)) });
+    if (container.status !== "running") {
+      process.stderr.write("container is not running\n");
+      process.exit(1);
     }
-  }
-  process.stdout.write(container.id + "\n");
+    container.status = "exited";
+    save(container);
+    killWorker(container);
+    process.stdout.write(container.id + "\n");
+  });
 } else if (command === "rm") {
-  const container = readContainer(args.at(-1));
+  const id = args.at(-1);
+  const container = withContainerLock(id, () => readContainer(id));
   record({ argv: args, journal: journalState(launchIdFor(container)) });
   if (fs.existsSync(path.join(engineRoot, "fail-removal"))) {
     process.stderr.write("injected container removal failure\n");
     process.exit(1);
   }
-  releaseAfterMarker("hold-removal", () => {
-    fs.unlinkSync(statePath(container.id));
-    process.stdout.write(container.id + "\n");
-  });
+  releaseAfterMarker("hold-removal", () => withContainerLock(id, () => {
+    const current = readContainer(id);
+    killWorker(current);
+    fs.unlinkSync(statePath(id));
+    process.stdout.write(id + "\n");
+  }));
 } else if (command === "ps") {
   record({ argv: args });
   const ownerFilter = args.find((arg) => arg.startsWith("label=openclaw.node-worker.host="));
   const owner = ownerFilter?.slice("label=openclaw.node-worker.host=".length);
   for (const file of fs.readdirSync(engineRoot).sort()) {
     if (!file.endsWith(".container.json")) continue;
-    const container = JSON.parse(fs.readFileSync(path.join(engineRoot, file), "utf8"));
-    if (container.labels["openclaw.node-worker.host"] !== owner) continue;
+    const id = file.slice(0, -".container.json".length);
+    const container = withContainerLock(id, () => fs.existsSync(statePath(id)) ? load(id) : undefined);
+    if (!container || container.labels["openclaw.node-worker.host"] !== owner) continue;
     process.stdout.write([
       container.id,
       container.labels["openclaw.node-worker.gateway"],
@@ -270,3 +314,99 @@ if (command === "version") {
   process.exit(2);
 }
 `;
+
+export function createNodeWorkerContainerFixture(
+  root: string,
+  fileLockModule: string,
+  options: {
+    image?: string;
+    env?: NodeJS.ProcessEnv;
+    capacity?: number;
+    onCapacityChanged?: (capacity: { total: number; available: number }) => void;
+  } = {},
+) {
+  const { bundleRoot, env, stateDir, workspaceDir } = writeNodeWorkerFixture(root);
+  const bundleEntry = path.join(bundleRoot, "gateway-1", "bundles", "a".repeat(64), "worker.mjs");
+  fs.writeFileSync(bundleEntry, stdioWorkerSource);
+  const engineRoot = path.join(root, "fake-engine");
+  const commandLog = path.join(engineRoot, "commands.jsonl");
+  const command = path.join(engineRoot, "docker");
+  const daemonId = "fake-original-daemon";
+  const engineTarget = createHash("sha256").update(`docker\0${daemonId}`).digest("hex");
+  fs.mkdirSync(engineRoot);
+  // The extensionless fake CLI must stay CommonJS under repository-local temp roots.
+  fs.writeFileSync(path.join(engineRoot, "package.json"), JSON.stringify({ type: "commonjs" }));
+  fs.writeFileSync(path.join(engineRoot, "daemon-id"), daemonId);
+  fs.writeFileSync(
+    command,
+    `#!${process.execPath}\nconst engineRoot = ${JSON.stringify(engineRoot)};\nconst stateRoot = ${JSON.stringify(stateDir)};\nconst commandLog = ${JSON.stringify(commandLog)};\nconst expectedEngineTarget = ${JSON.stringify(engineTarget)};\nconst fileLockModule = ${JSON.stringify(fileLockModule)};\n${fakeEngineSource}`,
+    { mode: 0o755 },
+  );
+  const containerEngine = {
+    id: "docker" as const,
+    command,
+    target: engineTarget,
+    env: { PATH: process.env.PATH, DOCKER_HOST: "unix:///fake-node-worker-daemon.sock" },
+  };
+  const workerEnv = { ...env, ...options.env };
+  const supervisor = createNodeWorkerSupervisor({
+    bundleRoot,
+    env: workerEnv,
+    containerEngine,
+    ...(options.image ? { containerImage: options.image } : {}),
+    ...(options.capacity ? { capacity: options.capacity } : {}),
+    ...(options.onCapacityChanged ? { onCapacityChanged: options.onCapacityChanged } : {}),
+  });
+  const owner = createHash("sha256").update(bundleRoot).digest("hex").slice(0, 32);
+  return {
+    bundleEntry,
+    bundleRoot,
+    containerEngine,
+    engineRoot,
+    env: workerEnv,
+    owner,
+    stateDir,
+    supervisor,
+    workspaceDir,
+    events(): EngineEvent[] {
+      if (!fs.existsSync(commandLog)) {
+        return [];
+      }
+      return fs
+        .readFileSync(commandLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as EngineEvent);
+    },
+    seed(params: {
+      id: string;
+      launchId: string;
+      owner?: string;
+      status?: FakeContainer["status"];
+    }) {
+      const container: FakeContainer = {
+        id: params.id,
+        labels: {
+          [hostLabel]: params.owner ?? owner,
+          [gatewayLabel]: "gateway-1",
+          [launchLabel]: Buffer.from(params.launchId).toString("base64url"),
+        },
+        env: {},
+        mounts: [],
+        image: "node:24.21.0-slim",
+        entry: bundleEntry,
+        workerArgs: ["--internal-worker-session"],
+        status: params.status ?? "running",
+        pid: null,
+      };
+      fs.writeFileSync(
+        path.join(engineRoot, `${params.id}.container.json`),
+        JSON.stringify(container),
+      );
+      return container;
+    },
+    exists(id: string) {
+      return fs.existsSync(path.join(engineRoot, `${id}.container.json`));
+    },
+  };
+}

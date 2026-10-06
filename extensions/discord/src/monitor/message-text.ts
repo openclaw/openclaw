@@ -1,4 +1,3 @@
-// Discord plugin module implements message text behavior.
 import { ComponentType } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
@@ -13,7 +12,7 @@ import {
 } from "./message-forwarded.js";
 import { formatDiscordMediaText } from "./message-media.js";
 
-export function resolveDiscordEmbedText(
+function resolveDiscordEmbedText(
   embeds?: readonly { title?: string | null; description?: string | null }[] | null,
 ): string {
   return (embeds ?? [])
@@ -29,12 +28,11 @@ export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
-  const embedText = resolveDiscordEmbedText(message.embeds);
-  const componentText = extractDiscordComponentsV2Text(resolveDiscordMessageComponents(message));
   const rawText =
-    normalizeOptionalString(message.content) ||
-    embedText ||
-    componentText ||
+    resolveDiscordMessageMentionDocuments(message)
+      .map((text) => normalizeOptionalString(text))
+      .filter(Boolean)
+      .join("\n") ||
     normalizeOptionalString(options?.fallbackText) ||
     "";
   const baseText = resolveDiscordMentions(rawText, message);
@@ -42,13 +40,57 @@ export function resolveDiscordMessageText(
     return baseText;
   }
   const forwardedText = resolveDiscordForwardedMessagesText(message);
-  if (!forwardedText) {
-    return baseText;
+  return [baseText, forwardedText].filter(Boolean).join("\n");
+}
+
+export function resolveDiscordMessageMentionDocuments(message: Message): string[] {
+  const content = typeof message.content === "string" ? message.content : "";
+  if (content.trim()) {
+    return [content];
   }
-  if (!baseText) {
-    return forwardedText;
+  const embedDocuments = (message.embeds ?? []).flatMap(({ title, description }) =>
+    [title, description].filter(
+      (value): value is string => typeof value === "string" && Boolean(value.trim()),
+    ),
+  );
+  if (embedDocuments.length > 0) {
+    return embedDocuments;
   }
-  return `${baseText}\n${forwardedText}`;
+  const componentDocuments: string[] = [];
+  collectDiscordTextDisplayDocuments(resolveDiscordMessageComponents(message), componentDocuments);
+  return componentDocuments;
+}
+
+export function resolveDiscordMessageBatch(last: Message, preceding: readonly Message[]): Message {
+  if (preceding.length === 0) {
+    return last;
+  }
+  const content = [...preceding, last]
+    .map((message) => resolveDiscordMessageText(message, { includeForwarded: false }))
+    .filter(Boolean)
+    .join("\n");
+  return Object.create(Object.getPrototypeOf(last), {
+    ...Object.getOwnPropertyDescriptors(last),
+    content: { value: content, enumerable: true, configurable: true },
+    attachments: { value: [], enumerable: true, configurable: true },
+    message_snapshots: {
+      // SAFETY: This optional transport field stays opaque until snapshot normalization.
+      value: (last as { message_snapshots?: unknown }).message_snapshots,
+      enumerable: true,
+      configurable: true,
+    },
+    messageSnapshots: {
+      // SAFETY: This optional wrapper field stays opaque until snapshot normalization.
+      value: (last as { messageSnapshots?: unknown }).messageSnapshots,
+      enumerable: true,
+      configurable: true,
+    },
+    rawData: {
+      value: { ...last.rawData },
+      enumerable: true,
+      configurable: true,
+    },
+  }) as Message; // SAFETY: The prototype and own fields retain the Message contract.
 }
 
 /** Adds native media text only for history surfaces that cannot carry structured facts. */
@@ -89,13 +131,10 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
   if (!referencedForward) {
     return "";
   }
-  const referencedText = resolveDiscordMessageHistoryText(referencedForward);
-  if (!referencedText) {
-    return "";
-  }
-  const authorLabel = formatDiscordSnapshotAuthor(referencedForward.author);
-  const heading = authorLabel ? `[Forwarded message from ${authorLabel}]` : "[Forwarded message]";
-  return `${heading}\n${referencedText}`;
+  return formatDiscordForwardedMessageBlock(
+    resolveDiscordMessageHistoryText(referencedForward),
+    referencedForward.author,
+  );
 }
 
 function resolveDiscordMessageComponents(message: Message): unknown {
@@ -112,14 +151,17 @@ function resolveDiscordMessageComponents(message: Message): unknown {
 
 function extractDiscordComponentsV2Text(components: unknown): string {
   const parts: string[] = [];
-  collectDiscordTextDisplayContent(components, parts);
-  return parts.join("\n");
+  collectDiscordTextDisplayDocuments(components, parts);
+  return parts
+    .map((part) => normalizeOptionalString(part))
+    .filter((part): part is string => Boolean(part))
+    .join("\n");
 }
 
-function collectDiscordTextDisplayContent(value: unknown, parts: string[]): void {
+function collectDiscordTextDisplayDocuments(value: unknown, parts: string[]): void {
   if (Array.isArray(value)) {
     for (const entry of value) {
-      collectDiscordTextDisplayContent(entry, parts);
+      collectDiscordTextDisplayDocuments(entry, parts);
     }
     return;
   }
@@ -132,49 +174,57 @@ function collectDiscordTextDisplayContent(value: unknown, parts: string[]): void
     components?: unknown;
     component?: unknown;
   };
-  if (component.type === ComponentType.TextDisplay) {
-    const content = normalizeOptionalString(component.content);
-    if (content) {
-      parts.push(content);
-    }
+  if (
+    component.type === ComponentType.TextDisplay &&
+    typeof component.content === "string" &&
+    component.content.trim()
+  ) {
+    parts.push(component.content);
   }
-  collectDiscordTextDisplayContent(component.components, parts);
-  collectDiscordTextDisplayContent(component.component, parts);
+  collectDiscordTextDisplayDocuments(component.components, parts);
+  collectDiscordTextDisplayDocuments(component.component, parts);
 }
 
-export function resolveDiscordForwardedMessagesTextFromSnapshots(snapshots: unknown): string {
-  const forwardedBlocks = normalizeDiscordMessageSnapshots(snapshots)
-    .map((snapshot) => buildDiscordForwardedMessageBlock(snapshot.message))
-    .filter((entry): entry is string => Boolean(entry));
-  if (forwardedBlocks.length === 0) {
+function resolveDiscordForwardedMessagesTextFromSnapshots(
+  snapshots: ReturnType<typeof normalizeDiscordMessageSnapshots>,
+): string {
+  return snapshots
+    .map(({ message }) =>
+      message
+        ? formatDiscordForwardedMessageBlock(resolveDiscordRawMessageText(message), message.author)
+        : "",
+    )
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function formatDiscordForwardedMessageBlock(
+  text: string,
+  author: DiscordSnapshotMessage["author"],
+): string {
+  if (!text) {
     return "";
   }
-  return forwardedBlocks.join("\n\n");
-}
-
-function buildDiscordForwardedMessageBlock(
-  snapshotMessage: DiscordSnapshotMessage | null | undefined,
-): string | null {
-  if (!snapshotMessage) {
-    return null;
-  }
-  const text = resolveDiscordSnapshotMessageText(snapshotMessage);
-  if (!text) {
-    return null;
-  }
-  const authorLabel = formatDiscordSnapshotAuthor(snapshotMessage.author);
+  const authorLabel = formatDiscordSnapshotAuthor(author);
   const heading = authorLabel ? `[Forwarded message from ${authorLabel}]` : "[Forwarded message]";
   return `${heading}\n${text}`;
 }
 
-function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {
-  const content = normalizeOptionalString(snapshot.content) ?? "";
-  const attachmentText = formatDiscordMediaText({
-    attachments: snapshot.attachments ?? undefined,
-    stickers: resolveDiscordSnapshotStickers(snapshot),
+/** Single owner for raw Discord message payloads (REST fetches and forwarded snapshots). */
+export function resolveDiscordRawMessageText(
+  message: DiscordSnapshotMessage & { message_snapshots?: unknown },
+): string {
+  const content = normalizeOptionalString(message.content) ?? "";
+  const mediaText = formatDiscordMediaText({
+    attachments: message.attachments ?? undefined,
+    stickers: resolveDiscordSnapshotStickers(message),
   });
-  const embedText = resolveDiscordEmbedText(snapshot.embeds);
-  const componentText = extractDiscordComponentsV2Text(snapshot.components);
-  const text = content || embedText || componentText;
-  return [text, attachmentText].filter(Boolean).join("\n");
+  const text =
+    content ||
+    resolveDiscordEmbedText(message.embeds) ||
+    extractDiscordComponentsV2Text(message.components) ||
+    resolveDiscordForwardedMessagesTextFromSnapshots(
+      normalizeDiscordMessageSnapshots(message.message_snapshots),
+    );
+  return [text, mediaText].filter(Boolean).join("\n");
 }

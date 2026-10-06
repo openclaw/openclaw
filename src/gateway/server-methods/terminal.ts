@@ -1,4 +1,5 @@
 import { safeParseJson } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -10,7 +11,6 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  type TerminalOpenParams,
   type TerminalUploadResult,
   validateTerminalAttachParams,
   validateTerminalCloseParams,
@@ -39,7 +39,6 @@ import {
 import type { AgentTerminalOwner } from "../terminal/session-manager.types.js";
 import { resolveSessionCatalogProvider } from "./session-catalog.js";
 import {
-  authorizeCatalogTerminalNode,
   authorizeTerminalNodeCommand,
   resolveTerminalOpenSpawnPlan,
 } from "./terminal-open-plan.js";
@@ -60,32 +59,22 @@ function requireConnId(opts: GatewayRequestHandlerOptions): string | null {
   return connId;
 }
 
-function terminalEnabled(context: GatewayRequestHandlerOptions["context"]): boolean {
-  return context.isTerminalEnabled();
-}
-
 export { TERMINAL_OPEN_DEADLINE_MS } from "../terminal/open-deadline.js";
 
 function terminalFailureMessage(message: string, hint?: string): string {
   return hint ? `${message}; ${hint}` : message;
 }
 
-function respondTerminalOpenTimeout(
+function respondTerminalUnavailable(
   respond: GatewayRequestHandlerOptions["respond"],
+  message: string,
   hint?: string,
 ): void {
   respond(
     false,
     undefined,
-    errorShape(ErrorCodes.UNAVAILABLE, terminalFailureMessage("terminal open timed out", hint)),
+    errorShape(ErrorCodes.UNAVAILABLE, terminalFailureMessage(message, hint)),
   );
-}
-
-function parseNodePayload(payload: unknown, payloadJSON?: string | null): unknown {
-  if (!payloadJSON) {
-    return payload;
-  }
-  return safeParseJson(payloadJSON);
 }
 
 async function stageNodeTerminalUpload(
@@ -93,6 +82,7 @@ async function stageNodeTerminalUpload(
   nodeId: string,
   file: TerminalUploadFile,
 ): Promise<TerminalUploadResult> {
+  file.assertCommitAllowed?.();
   const access = authorizeTerminalNodeCommand(context, nodeId, NODE_TERMINAL_UPLOAD_COMMAND);
   if (!access.ok) {
     throw new Error(access.message);
@@ -104,17 +94,22 @@ async function stageNodeTerminalUpload(
       ? { expectedPairingGeneration: access.node.pairingGeneration }
       : {}),
     command: NODE_TERMINAL_UPLOAD_COMMAND,
-    params: file,
+    params: { name: file.name, contentBase64: file.contentBase64 },
+    isDispatchAuthorized: () => {
+      file.assertCommitAllowed?.();
+      return true;
+    },
     timeoutMs: 120_000,
   });
   if (!result.ok) {
     throw new Error(result.error?.message ?? "terminal node upload failed");
   }
-  const payload = parseNodePayload(result.payload, result.payloadJSON);
+  const payload = result.payloadJSON ? safeParseJson(result.payloadJSON) : result.payload;
   if (!validateTerminalUploadResult(payload)) {
     throw new Error("terminal node returned an invalid upload result");
   }
-  return payload as TerminalUploadResult;
+  // Insertion policy belongs to the admitted catalog plan, not the node reply.
+  return { path: payload.path, size: payload.size };
 }
 
 function respondLaunchBlocked(
@@ -123,44 +118,17 @@ function respondLaunchBlocked(
   hint?: string,
 ): void {
   if (block.kind === "disabled") {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, terminalFailureMessage("terminal is disabled", hint)),
-    );
-    return;
-  }
-  if (block.kind === "unknown-agent") {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        terminalFailureMessage(`unknown agent "${block.agentId}"`, hint),
-      ),
-    );
-    return;
-  }
-  if (block.kind === "owner-required") {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, terminalFailureMessage(block.message, hint)),
-    );
+    respondTerminalUnavailable(respond, "terminal is disabled", hint);
     return;
   }
   // Fail closed: a sandboxed agent must never receive a host shell.
-  respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      terminalFailureMessage(
-        `terminal unavailable: agent "${block.agentId}" runs in a sandbox (mode "${block.mode}"); in-sandbox terminals are not supported yet`,
-        hint,
-      ),
-    ),
-  );
+  const message =
+    block.kind === "unknown-agent"
+      ? `unknown agent "${block.agentId}"`
+      : block.kind === "owner-required"
+        ? block.message
+        : `terminal unavailable: agent "${block.agentId}" runs in a sandbox (mode "${block.mode}"); in-sandbox terminals are not supported yet`;
+  invalid(respond, terminalFailureMessage(message, hint));
 }
 
 // A start RPC has no emulator dimensions yet. Match the Control UI's existing
@@ -173,6 +141,7 @@ type TerminalSessionOpenRequest = {
   cols: number;
   rows: number;
   requiredCwd?: string;
+  requireCliAgents?: boolean;
   resolveCatalogPlan?: (agentId: string) => Promise<SessionCatalogTerminalPlan>;
   catalogFailureMessage?: string;
   failureHint?: string;
@@ -190,14 +159,7 @@ export async function openTerminalSession(
   }
   const manager = context.terminalSessions;
   if (!manager) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        terminalFailureMessage("terminal is not available", request.failureHint),
-      ),
-    );
+    respondTerminalUnavailable(respond, "terminal is not available", request.failureHint);
     return;
   }
   const launch = context.resolveTerminalLaunchPolicy(request.agentId);
@@ -214,6 +176,8 @@ export async function openTerminalSession(
     | {
         plan: Extract<SessionCatalogTerminalPlan, { kind: "node" }>;
         params: Record<string, unknown>;
+        connId: string;
+        pairingGeneration?: string;
       }
     | undefined;
   let stageUpload: ((file: TerminalUploadFile) => Promise<TerminalUploadResult>) | undefined;
@@ -226,20 +190,16 @@ export async function openTerminalSession(
       );
     } catch (error) {
       if (error instanceof TerminalOpenDeadlineError) {
-        respondTerminalOpenTimeout(respond, request.failureHint);
+        respondTerminalUnavailable(respond, "terminal open timed out", request.failureHint);
         return;
       }
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
+      invalid(
+        respond,
+        terminalFailureMessage(
           error instanceof Error
-            ? terminalFailureMessage(error.message, request.failureHint)
-            : terminalFailureMessage(
-                request.catalogFailureMessage ?? "catalog terminal open failed",
-                request.failureHint,
-              ),
+            ? error.message
+            : (request.catalogFailureMessage ?? "catalog terminal open failed"),
+          request.failureHint,
         ),
       );
       return;
@@ -255,26 +215,32 @@ export async function openTerminalSession(
       }
     } else {
       const nodeCatalogPlan = catalogPlan;
-      const access = authorizeCatalogTerminalNode(context, nodeCatalogPlan);
+      if (
+        nodeCatalogPlan.uploadPathStyle !== undefined &&
+        nodeCatalogPlan.uploadPathStyle !== "native"
+      ) {
+        invalid(respond, "catalog terminal plan has an unsupported upload path style");
+        return;
+      }
+      const uploadNodeId = nodeCatalogPlan.nodeId;
+      const uploadPathStyle = nodeCatalogPlan.uploadPathStyle;
+      const access = authorizeTerminalNodeCommand(
+        context,
+        nodeCatalogPlan.nodeId,
+        nodeCatalogPlan.command,
+      );
       if (!access.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            terminalFailureMessage(access.message, request.failureHint),
-          ),
-        );
+        respondTerminalUnavailable(respond, access.message, request.failureHint);
         return;
       }
       let nodeParams: Record<string, unknown>;
       try {
         const parsed = JSON.parse(catalogPlan.paramsJSON) as unknown;
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        if (!isRecord(parsed)) {
           throw new Error("invalid params");
         }
         nodeParams = {
-          ...(parsed as Record<string, unknown>),
+          ...parsed,
           cols: request.cols,
           rows: request.rows,
         };
@@ -285,6 +251,13 @@ export async function openTerminalSession(
         );
         return;
       }
+      // Pairing promotion mutates NodeSession in place; freeze its identity before policy awaits.
+      nodeRelay = {
+        plan: nodeCatalogPlan,
+        params: nodeParams,
+        connId: access.node.connId,
+        pairingGeneration: access.node.pairingGeneration,
+      };
       let policyResult: Awaited<ReturnType<typeof applyPluginNodeInvokePolicy>>;
       try {
         policyResult = await waitForTerminalOpenDeadline(
@@ -300,48 +273,38 @@ export async function openTerminalSession(
         );
       } catch (error) {
         if (error instanceof TerminalOpenDeadlineError) {
-          respondTerminalOpenTimeout(respond, request.failureHint);
+          respondTerminalUnavailable(respond, "terminal open timed out", request.failureHint);
           return;
         }
         throw error;
       }
       if (policyResult && !policyResult.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            terminalFailureMessage(policyResult.message, request.failureHint),
-          ),
-        );
+        respondTerminalUnavailable(respond, policyResult.message, request.failureHint);
         return;
       }
-      nodeRelay = { plan: nodeCatalogPlan, params: nodeParams };
-      stageUpload = async (file) =>
-        await stageNodeTerminalUpload(context, nodeCatalogPlan.nodeId, file);
+      stageUpload = async (file) => ({
+        ...(await stageNodeTerminalUpload(context, uploadNodeId, file)),
+        ...(uploadPathStyle ? { uploadPathStyle } : {}),
+      });
     }
   }
 
   if (context.isConnectionActive?.(connId) === false) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        terminalFailureMessage("terminal connection closed", request.failureHint),
-      ),
+    respondTerminalUnavailable(respond, "terminal connection closed", request.failureHint);
+    return;
+  }
+  if (
+    request.requireCliAgents &&
+    context.getRuntimeConfig().gateway?.cliAgents?.enabled === false
+  ) {
+    invalid(
+      respond,
+      "CLI agent terminal start is disabled; enable gateway.cliAgents.enabled and retry",
     );
     return;
   }
-  if (!terminalEnabled(context)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        terminalFailureMessage("terminal is disabled", request.failureHint),
-      ),
-    );
+  if (!context.isTerminalEnabled()) {
+    respondTerminalUnavailable(respond, "terminal is disabled", request.failureHint);
     return;
   }
   const refreshedLaunch = context.resolveTerminalLaunchPolicy(request.agentId);
@@ -372,16 +335,10 @@ export async function openTerminalSession(
     });
     const agentSessionId = entry?.sessionId?.trim();
     if (!agentSessionId) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          terminalFailureMessage(
-            "session is no longer available; refresh and retry",
-            request.failureHint,
-          ),
-        ),
+      respondTerminalUnavailable(
+        respond,
+        "session is no longer available; refresh and retry",
+        request.failureHint,
       );
       return;
     }
@@ -399,16 +356,17 @@ export async function openTerminalSession(
   }
   if (nodeRelay) {
     const relay = nodeRelay;
-    const access = authorizeCatalogTerminalNode(context, relay.plan);
+    const access = authorizeTerminalNodeCommand(context, relay.plan.nodeId, relay.plan.command);
     if (!access.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          terminalFailureMessage(access.message, request.failureHint),
-        ),
-      );
+      respondTerminalUnavailable(respond, access.message, request.failureHint);
+      return;
+    }
+    // Policy awaits cannot authorize a replacement connection or pairing.
+    if (
+      access.node.connId !== relay.connId ||
+      access.node.pairingGeneration !== relay.pairingGeneration
+    ) {
+      invalid(respond, "terminal node connection changed; refresh the host and retry");
       return;
     }
     createBackend = async () =>
@@ -417,6 +375,17 @@ export async function openTerminalSession(
         nodeId: relay.plan.nodeId,
         expectedConnId: access.node.connId,
         expectedPairingGeneration: access.node.pairingGeneration,
+        // Pairing resolution can yield after admission. Fence the live authority
+        // at the registry's final transport handoff, not after a CLI has started.
+        isDispatchAuthorized: () =>
+          context.isConnectionActive?.(connId) !== false &&
+          context.isTerminalEnabled() &&
+          (!request.requireCliAgents ||
+            context.getRuntimeConfig().gateway?.cliAgents?.enabled !== false) &&
+          context.resolveTerminalLaunchPolicy(refreshedLaunch.plan.agentId).ok &&
+          authorizeTerminalNodeCommand(context, relay.plan.nodeId, relay.plan.command).ok &&
+          !deadline.controller.signal.aborted &&
+          Date.now() < deadline.expiresAtMs,
         command: relay.plan.command,
         params: relay.params,
       });
@@ -454,6 +423,7 @@ export async function openTerminalSession(
         agentId: spawnPlan.agentId,
         cwd: spawnPlan.cwd,
         shell: spawnPlan.shell,
+        ...(title ? { title } : {}),
         args: spawnPlan.args,
         cols: request.cols,
         rows: request.rows,
@@ -478,7 +448,7 @@ export async function openTerminalSession(
           () => undefined,
         );
       }
-      respondTerminalOpenTimeout(respond, request.failureHint);
+      respondTerminalUnavailable(respond, "terminal open timed out", request.failureHint);
       return;
     }
     throw error;
@@ -496,14 +466,7 @@ export async function openTerminalSession(
     // A browser deadline can close the socket while PTY creation is still
     // finishing. Release the raced session instead of leaving an orphan.
     closeOpenedSession(outcome.sessionId);
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        terminalFailureMessage("terminal connection closed", request.failureHint),
-      ),
-    );
+    respondTerminalUnavailable(respond, "terminal connection closed", request.failureHint);
     return;
   }
   context.logGateway.info(
@@ -519,7 +482,6 @@ export async function openTerminalSession(
   });
 }
 
-/** Handlers for the operator terminal method family. */
 export const terminalHandlers: GatewayRequestHandlers = {
   ...terminalUploadHandlers,
   "terminal.open": async (opts) => {
@@ -527,41 +489,33 @@ export const terminalHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateTerminalOpenParams, "terminal.open", respond)) {
       return;
     }
-    const p = params as TerminalOpenParams;
     let resolveCatalogPlan: ((agentId: string) => Promise<SessionCatalogTerminalPlan>) | undefined;
-    if (p.catalog) {
-      const provider = resolveSessionCatalogProvider(p.catalog.catalogId);
+    if (params.catalog) {
+      const provider = resolveSessionCatalogProvider(params.catalog.catalogId);
       if (!provider) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${p.catalog.catalogId}`),
-        );
+        invalid(respond, `unknown session catalog: ${params.catalog.catalogId}`);
         return;
       }
       if (!provider.openTerminal) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "session catalog cannot open terminals"),
-        );
+        invalid(respond, "session catalog cannot open terminals");
         return;
       }
       const openTerminal = provider.openTerminal;
-      const catalog = p.catalog;
+      const catalog = params.catalog;
       resolveCatalogPlan = async (agentId) =>
         await openTerminal.call(provider, {
           allowProcessHomeFallback: allowsProcessHomeSessionScan(),
           agentId,
           hostId: catalog.hostId,
           threadId: catalog.threadId,
+          ...(catalog.sourceHomeId ? { sourceHomeId: catalog.sourceHomeId } : {}),
         });
     }
     await openTerminalSession(opts, {
-      ...(p.agentId ? { agentId: p.agentId } : {}),
-      ...(p.sessionKey ? { sessionKey: p.sessionKey } : {}),
-      cols: p.cols,
-      rows: p.rows,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      cols: params.cols,
+      rows: params.rows,
       ...(resolveCatalogPlan ? { resolveCatalogPlan } : {}),
       catalogFailureMessage: "catalog terminal open failed",
     });
@@ -576,16 +530,15 @@ export const terminalHandlers: GatewayRequestHandlers = {
     if (!connId) {
       return;
     }
-    const p = params as { sessionId: string; data: string };
     // Defense-in-depth for an RCE-class surface: disabling the terminal
     // restarts the gateway, but the runtime config snapshot flips first, so
     // re-checking here cuts keystrokes to live PTYs before the restart lands.
-    if (!terminalEnabled(context)) {
-      context.terminalSessions?.close(connId, p.sessionId);
+    if (!context.isTerminalEnabled()) {
+      context.terminalSessions?.close(connId, params.sessionId);
       respond(true, { ok: false });
       return;
     }
-    const ok = context.terminalSessions?.write(connId, p.sessionId, p.data) ?? false;
+    const ok = context.terminalSessions?.write(connId, params.sessionId, params.data) ?? false;
     respond(true, { ok });
   },
 
@@ -598,13 +551,13 @@ export const terminalHandlers: GatewayRequestHandlers = {
     if (!connId) {
       return;
     }
-    const p = params as { sessionId: string; cols: number; rows: number };
-    if (!terminalEnabled(context)) {
-      context.terminalSessions?.close(connId, p.sessionId);
+    if (!context.isTerminalEnabled()) {
+      context.terminalSessions?.close(connId, params.sessionId);
       respond(true, { ok: false });
       return;
     }
-    const ok = context.terminalSessions?.resize(connId, p.sessionId, p.cols, p.rows) ?? false;
+    const ok =
+      context.terminalSessions?.resize(connId, params.sessionId, params.cols, params.rows) ?? false;
     respond(true, { ok });
   },
 
@@ -617,8 +570,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
     if (!connId) {
       return;
     }
-    const p = params as { sessionId: string };
-    const ok = context.terminalSessions?.close(connId, p.sessionId) ?? false;
+    const ok = context.terminalSessions?.close(connId, params.sessionId) ?? false;
     respond(true, { ok });
   },
 
@@ -631,20 +583,15 @@ export const terminalHandlers: GatewayRequestHandlers = {
     if (!connId) {
       return;
     }
-    const p = params as { sessionId: string };
     // Same defense-in-depth as input/resize: the disable restart may still be
     // in flight, so refuse handing a live PTY stream to a new connection.
-    if (!context.terminalSessions || !terminalEnabled(context)) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is not available"));
+    if (!context.terminalSessions || !context.isTerminalEnabled()) {
+      respondTerminalUnavailable(respond, "terminal is not available");
       return;
     }
-    const attached = context.terminalSessions.attach(connId, p.sessionId);
+    const attached = context.terminalSessions.attach(connId, params.sessionId);
     if (!attached) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${p.sessionId}"`),
-      );
+      invalid(respond, `unknown terminal session "${params.sessionId}"`);
       return;
     }
     context.logGateway.info(
@@ -654,10 +601,18 @@ export const terminalHandlers: GatewayRequestHandlers = {
       opts.client?.connect?.caps,
       GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
     );
+    // Older protocol-4 clients validate closed reply shapes from before this metadata existed.
+    const supportsMetadata = hasGatewayClientCap(
+      opts.client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA,
+    );
     respond(true, {
       sessionId: attached.sessionId,
       agentId: attached.agentId,
       shell: attached.shell,
+      ...(supportsMetadata
+        ? { owner: attached.owner, ...(attached.title ? { title: attached.title } : {}) }
+        : {}),
       cwd: attached.cwd,
       confined: false,
       buffer: attached.buffer,
@@ -673,12 +628,17 @@ export const terminalHandlers: GatewayRequestHandlers = {
     }
     // An empty list (not an error) when the surface is off/unwired keeps the
     // reconnect flow simple: clients just fall back to opening fresh sessions.
+    const supportsMetadata = hasGatewayClientCap(
+      opts.client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA,
+    );
     const sessions =
-      context.terminalSessions && terminalEnabled(context)
+      context.terminalSessions && context.isTerminalEnabled()
         ? context.terminalSessions.list().map((session) => ({
             sessionId: session.sessionId,
             agentId: session.agentId,
             shell: session.shell,
+            title: supportsMetadata ? session.title : undefined,
             cwd: session.cwd,
             // Mirrors terminal.open: only unconfined host shells exist today.
             confined: false,

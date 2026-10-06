@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getGlobalHookRunner,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
 afterEach(() => {
@@ -12,37 +14,293 @@ afterEach(() => {
 });
 
 describe("resolveAgentHarnessBeforePromptBuildResult", () => {
-  it("runs a lazy builder with hook tool policy while preserving replacement order", async () => {
+  it.each([false, true])(
+    "preserves the admitted request through projected prompts (authorized=%s)",
+    async (authorized) => {
+      const handler = vi.fn(async (_event: unknown) => undefined);
+      const history = [{ role: "user", content: "Earlier request" }];
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            ...(authorized ? { requiresToolAuthority: true as const } : {}),
+            handler,
+          },
+        ]),
+      );
+      const result = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "Current message: hello",
+        currentInboundContext: {
+          text: "Prior conversation: remember my preference",
+          promptJoiner: "\n",
+        },
+        currentUserMessage: "hello",
+        currentUserMessageId: "message-1",
+        messages: async () => history,
+        developerInstructions: "base",
+        ctx: {},
+        toolAuthority: {
+          fingerprint: "synthetic",
+          activeToolNames: () => ["memory_search"],
+          assertActive: () => undefined,
+        },
+      });
+      expect(result.prompt).toBe(
+        "Prior conversation: remember my preference\nCurrent message: hello",
+      );
+      expect(result.promptInputRange).toEqual({ start: 0, end: result.prompt.length });
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler.mock.calls[0]?.[0]).toMatchObject({
+        currentUserMessage: "hello",
+        currentUserMessageId: "message-1",
+        prompt: expect.stringContaining("Prior conversation:"),
+        messages: history,
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "builds prompts without reading history when only heartbeat hooks can run (heartbeat=%s)",
+    async (heartbeat) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "heartbeat_prompt_contribution",
+            handler: () => ({ prependContext: "Heartbeat reminder." }),
+          },
+        ]),
+      );
+      const result = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "Current request",
+        developerInstructions: "base",
+        messages: async () => {
+          throw new Error("History is unavailable");
+        },
+        ctx: { trigger: heartbeat ? "heartbeat" : "user" },
+      });
+      expect(result.prompt).toBe(
+        heartbeat ? "Heartbeat reminder.\n\nCurrent request" : "Current request",
+      );
+    },
+  );
+
+  it.each([
+    { content: "hello", expected: "hello" },
+    {
+      content: [
+        { type: "text", text: "What do you remember" },
+        { type: "image", mimeType: "image/png", data: "synthetic-image" },
+        { type: "text", text: "about my preferences?" },
+      ],
+      expected: "What do you remember\nabout my preferences?",
+    },
+    {
+      content: [{ type: "image", mimeType: "image/png", data: "synthetic-image" }],
+      expected: "",
+    },
+    { content: "", expected: "" },
+  ] satisfies { content: PersistedUserTurnMessage["content"]; expected: string }[])(
+    "normalizes admitted message content for prompt hooks: $expected",
+    async ({ content, expected }) => {
+      const handler = vi.fn(async (_event: unknown) => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          { hookName: "before_prompt_build", handler },
+          { hookName: "before_prompt_build", requiresToolAuthority: true, handler },
+        ]),
+      );
+      await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "Projected transport prompt",
+        currentUserMessage: { content, idempotencyKey: "original:user" },
+        developerInstructions: "base",
+        messages: [],
+        ctx: {},
+        toolAuthority: {
+          fingerprint: "synthetic",
+          activeToolNames: () => ["memory_search"],
+          assertActive: () => undefined,
+        },
+      });
+      expect(handler).toHaveBeenCalledTimes(2);
+      for (const [event] of handler.mock.calls) {
+        expect(event).toMatchObject({
+          currentUserMessage: expected,
+          currentUserMessageId: "original:user",
+        });
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "does not synthesize an admitted request when the harness omits it (authorized=%s)",
+    async (authorized) => {
+      const handler = vi.fn(async (_event: unknown) => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            ...(authorized ? { requiresToolAuthority: true as const } : {}),
+            handler,
+          },
+        ]),
+      );
+      await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "projected prompt envelope",
+        messages: [],
+        developerInstructions: "base",
+        ctx: {},
+        toolAuthority: {
+          fingerprint: "synthetic",
+          activeToolNames: () => ["memory_search"],
+          assertActive: () => undefined,
+        },
+      });
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler.mock.calls[0]?.[0]).not.toHaveProperty("currentUserMessage");
+      expect(handler.mock.calls[0]?.[0]).not.toHaveProperty("currentUserMessageId");
+    },
+  );
+
+  it.each([false, true])(
+    "isolates nested prompt history across rebuilds (authorized=%s)",
+    async (authorized) => {
+      const messages = [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", arguments: { nested: { value: "original" } } }],
+          __openclaw: { upstreamUserText: "x".repeat(1024 * 1024), mirrorIdentity: "synthetic" },
+        },
+      ];
+      const retained: (typeof messages)[] = [];
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            ...(authorized ? { requiresToolAuthority: true as const } : {}),
+            handler: (event) => {
+              const snapshot = (event as { messages: typeof messages }).messages;
+              expect(snapshot[0]!["__openclaw"]).toEqual({ mirrorIdentity: "synthetic" });
+              expect(snapshot[0]!.content[0]!.arguments.nested.value).toBe("original");
+              retained.push(snapshot);
+              snapshot[0]!.content[0]!.arguments.nested.value = "immediate mutation";
+              return { prependContext: "contribution" };
+            },
+          },
+        ]),
+      );
+      const build = () =>
+        resolveAgentHarnessBeforePromptBuildResult({
+          prompt: "hello",
+          developerInstructions: "base",
+          messages,
+          ctx: {},
+          toolAuthority: {
+            fingerprint: "synthetic-authority",
+            activeToolNames: () => ["read"],
+            assertActive: () => undefined,
+          },
+        });
+      expect((await build()).prompt).toBe("contribution\n\nhello");
+      expect(messages[0]!.content[0]!.arguments.nested.value).toBe("original");
+      retained[0]![0]!.content[0]!.arguments.nested.value = "retained mutation";
+      expect((await build()).prompt).toBe("contribution\n\nhello");
+      expect(retained[0]).not.toBe(retained[1]);
+      expect(messages[0]!.content[0]!.arguments.nested.value).toBe("original");
+    },
+  );
+  it("preserves registration chaining while isolating prepare and authorized dispatches", async () => {
+    const messages = [{ role: "user", content: [{ type: "text", text: "original" }] }];
+    const calls: string[] = [];
+    const mutate = (event: unknown, expected: string, next: string) => {
+      const snapshot = (event as { messages: typeof messages }).messages;
+      expect(snapshot[0]!.content[0]!.text).toBe(expected);
+      snapshot[0]!.content[0]!.text = next;
+      calls.push(next);
+      return { prependContext: next };
+    };
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
+          hookName: "agent_turn_prepare",
+          handler: (event) => mutate(event, "original", "prepare"),
+        },
+        {
           hookName: "before_prompt_build",
-          handler: () => ({
-            appendSystemContext: "after replacement",
-            prependSystemContext: "before replacement",
-            systemPrompt: "hook replacement",
-            toolsAllow: ["read"],
-          }),
+          priority: 10,
+          handler: (event) => mutate(event, "original", "first"),
+        },
+        {
+          hookName: "before_prompt_build",
+          priority: 0,
+          handler: (event) => mutate(event, "first", "second"),
+        },
+        {
+          hookName: "before_prompt_build",
+          requiresToolAuthority: true,
+          handler: (event) => mutate(event, "original", "authorized"),
         },
       ]),
     );
-    const build = vi.fn(() => "policy-filtered base");
-
+    await getGlobalHookRunner()!.runAgentTurnPrepare(
+      { prompt: "hello", messages, queuedInjections: [] },
+      {},
+    );
     const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: "answer directly",
-      developerInstructions: { build },
-      messages: [],
+      prompt: "hello",
+      developerInstructions: "base",
+      messages,
       ctx: {},
+      toolAuthority: {
+        fingerprint: "synthetic",
+        activeToolNames: () => [],
+        assertActive: () => undefined,
+      },
     });
-
-    expect(build).toHaveBeenCalledWith({ toolsAllow: ["read"] });
-    expect(result).toMatchObject({
-      toolsAllow: ["read"],
-      developerInstructions:
-        "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\nhook replacement\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
-    });
-    expect(result.developerInstructions).not.toContain("policy-filtered base");
+    expect(calls).toEqual(["prepare", "first", "second", "authorized"]);
+    expect(result.prompt).toBe("first\n\nsecond\n\nauthorized\n\nhello");
+    expect(messages[0]!.content[0]!.text).toBe("original");
   });
+  it.each([
+    { toolsAllow: undefined, hasToolRestrictions: false },
+    { toolsAllow: [], hasToolRestrictions: true },
+    { toolsAllow: ["read"], hasToolRestrictions: true },
+    { toolsAllow: ["read*"], hasToolRestrictions: true },
+    { toolsAllow: ["*"], hasToolRestrictions: false },
+    { toolsAllow: ["read", " * "], hasToolRestrictions: false },
+  ])(
+    "classifies $toolsAllow before building system instructions",
+    async ({ toolsAllow, hasToolRestrictions }) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            handler: () => ({
+              appendSystemContext: "after replacement",
+              prependSystemContext: "before replacement",
+              systemPrompt: "hook replacement",
+              toolsAllow,
+            }),
+          },
+        ]),
+      );
+      const build = vi.fn(() => "policy-filtered base");
+
+      const result = await resolveAgentHarnessBeforePromptBuildResult({
+        prompt: "answer directly",
+        developerInstructions: { build },
+        messages: [],
+        ctx: {},
+      });
+
+      expect(build).toHaveBeenCalledWith({ toolsAllow, hasToolRestrictions });
+      expect(result).toMatchObject({
+        ...(toolsAllow !== undefined ? { toolsAllow } : {}),
+        developerInstructions:
+          "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\nhook replacement\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
+      });
+      expect(result.developerInstructions).not.toContain("policy-filtered base");
+    },
+  );
 
   it("retains an empty prompt range without hooks", async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
@@ -111,6 +369,46 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
 
     expect(calls).toEqual(["heartbeat", "before_prompt_build"]);
     expect(result.prompt).toBe("heartbeat context\n\nprompt context\n\nhello");
+  });
+
+  it("preserves authenticated channel identity in prompt-build hook context", async () => {
+    const handler = vi.fn(() => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler }]),
+    );
+
+    await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "hello",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: {
+        trigger: "user",
+        accountId: "account-a",
+        channel: "telegram",
+        channelId: "chat-a",
+        senderId: "sender-a",
+        chatId: "chat-a",
+        channelContext: {
+          sender: { id: "sender-a" },
+          chat: { id: "chat-a" },
+        },
+      },
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        accountId: "account-a",
+        channel: "telegram",
+        channelId: "chat-a",
+        senderId: "sender-a",
+        chatId: "chat-a",
+        channelContext: {
+          sender: { id: "sender-a" },
+          chat: { id: "chat-a" },
+        },
+      }),
+    );
   });
 
   it("runs authorized enrichment after restrictive hooks finalize the tool surface", async () => {

@@ -1,14 +1,16 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedBuildAgentRuntimePlan,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 describe("runEmbeddedAgent retry-limit metadata", () => {
@@ -16,9 +18,15 @@ describe("runEmbeddedAgent retry-limit metadata", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.retry-limit" });
     useOpenAIPlatformAuthFixture();
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("reports the latest physical attempt after ordinary retry-budget exhaustion", async () => {
@@ -47,8 +55,14 @@ describe("runEmbeddedAgent retry-limit metadata", () => {
         },
       } as never;
     });
-    mockedRunEmbeddedAttempt.mockResolvedValue(
+    const accepted = {
+      runId: "collector-before-retry",
+      childSessionKey: "agent:main:subagent:collector",
+      expectsCompletionMessage: false,
+    };
+    mockedRunEmbeddedAttempt.mockImplementation(async () =>
       makeAttemptResult({
+        acceptedSessionSpawns: physicalAttempt === 1 ? [accepted] : [],
         preflightRecovery: {
           route: "truncate_tool_results_only",
           source: "mid-turn",
@@ -59,7 +73,7 @@ describe("runEmbeddedAgent retry-limit metadata", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.6-luna",
       runId: "run-retry-limit-physical-attempt-meta",
@@ -67,6 +81,7 @@ describe("runEmbeddedAgent retry-limit metadata", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(32);
     expect(result.meta.error?.kind).toBe("retry_limit");
+    expect(result.acceptedSessionSpawns).toEqual([accepted]);
     expect(result.meta.agentMeta).toMatchObject({
       provider: "openai",
       model: "gpt-5.6-luna",

@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type {
+  WorkboardArtifact,
   WorkboardAttachment,
   WorkboardCard,
   WorkboardNotification,
+  WorkboardProof,
   WorkboardWorkerLog,
 } from "@openclaw/workboard-contract";
 import type { PersistedWorkboardAttachment } from "./persistence-types.js";
@@ -43,20 +45,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     input: WorkboardProofInput,
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
-    const now = Date.now();
-    const proof = normalizeProofInput(input, now);
-    return await this.updateMetadata(
-      id,
-      (existing) => {
-        assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-        return {
-          ...metadata,
-          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-        };
-      },
-      { preserveProofId: proof.id },
-    );
+    return await this.addEvidence(id, scope, normalizeProofInput(input, Date.now()));
   }
 
   async addProofWithArtifact(
@@ -71,19 +60,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     if (!artifact) {
       throw new Error("artifact url or path is required.");
     }
-    return await this.updateMetadata(
-      id,
-      (existing) => {
-        assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-        return {
-          ...metadata,
-          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-          artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
-        };
-      },
-      { preserveProofId: proof.id },
-    );
+    return await this.addEvidence(id, scope, proof, artifact);
   }
 
   async addArtifact(
@@ -95,45 +72,68 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     if (!artifact) {
       throw new Error("artifact url or path is required.");
     }
-    return await this.updateMetadata(id, (existing) => {
-      assertCanMutateClaimedCard(existing, scope);
-      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-      return {
-        ...metadata,
-        artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
-      };
-    });
+    return await this.addEvidence(id, scope, undefined, artifact);
+  }
+
+  private addEvidence(
+    id: string,
+    scope: WorkboardMutationScope | undefined,
+    proof?: WorkboardProof,
+    artifact?: WorkboardArtifact,
+  ): Promise<WorkboardCard> {
+    return this.updateMetadata(
+      id,
+      (existing) => {
+        assertCanMutateClaimedCard(existing, scope);
+        const metadata = { ...clearDiagnostics(existing.metadata, ["missing_proof"]) };
+        if (proof) {
+          metadata.proof = [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF);
+        }
+        if (artifact) {
+          metadata.artifacts = [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS);
+        }
+        return metadata;
+      },
+      { preserveProofId: proof?.id },
+    );
   }
 
   async addAttachment(
     id: string,
     input: WorkboardAttachmentInput,
     scope?: WorkboardMutationScope,
+    assertCurrent?: () => void,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope);
       const now = Date.now();
       const { attachment, contentBase64 } = normalizeAttachmentInput(id, input, now);
-      await this.attachmentStore.register(attachment.id, {
-        version: 1,
-        attachment,
-        contentBase64,
-      });
+      // Blob storage and metadata publication are separate accepted writes. Each
+      // needs live upload authority; rejection cleanup must not require it.
+      await this.withMutationAuthority(
+        () =>
+          this.attachmentStore.register(attachment.id, {
+            version: 1,
+            attachment,
+            contentBase64,
+          }),
+        assertCurrent,
+      );
       try {
-        const updated = await this.updateCard(id, {
-          metadata: {
-            ...clearDiagnostics(existing.metadata, ["missing_proof"]),
-            attachments: [...(existing.metadata?.attachments ?? []), attachment].slice(
-              -MAX_CARD_ATTACHMENTS,
-            ),
-          },
-        });
+        const updated = await this.withMutationAuthority(
+          async () =>
+            this.updateCard(await this.requireCard(id), {
+              metadata: {
+                ...clearDiagnostics(existing.metadata, ["missing_proof"]),
+                attachments: [...(existing.metadata?.attachments ?? []), attachment].slice(
+                  -MAX_CARD_ATTACHMENTS,
+                ),
+              },
+            }),
+          assertCurrent,
+        );
         if (!updated.metadata?.attachments?.some((entry) => entry.id === attachment.id)) {
-          await this.attachmentStore.delete(attachment.id);
           throw new Error("attachment metadata was trimmed before it could be indexed.");
         }
         return updated;
@@ -148,10 +148,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     card: WorkboardCard;
     attachments: WorkboardAttachment[];
   }> {
-    const card = await this.get(id);
-    if (!card) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const card = await this.requireCard(id);
     return { card, attachments: card.metadata?.attachments ?? [] };
   }
 
@@ -167,17 +164,14 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(cardId);
-      if (!existing) {
-        throw new Error(`card not found: ${cardId}`);
-      }
+      const existing = await this.requireCard(cardId);
       assertCanMutateClaimedCard(existing, scope);
       const attachments = existing.metadata?.attachments ?? [];
       if (!attachments.some((attachment) => attachment.id === attachmentId)) {
         throw new Error(`attachment not found: ${attachmentId}`);
       }
       await this.attachmentStore.delete(attachmentId);
-      return await this.updateCard(cardId, {
+      return await this.updateCard(await this.requireCard(cardId), {
         metadata: {
           ...existing.metadata,
           attachments: attachments.filter((attachment) => attachment.id !== attachmentId),
@@ -225,10 +219,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const card = await this.get(id);
-      if (!card) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const card = await this.requireCard(id);
       assertCanMutateClaimedCard(card, scope);
       const now = Date.now();
       const detail =
@@ -260,7 +251,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
           : {}),
         ...(runId || cardRunId(card) ? { runId: runId ?? cardRunId(card) } : {}),
       };
-      return await this.updateCard(card.id, {
+      return await this.updateCard(await this.requireCard(card.id), {
         status: card.status === "done" ? card.status : "blocked",
         ...(execution ? { execution } : {}),
         metadata: {

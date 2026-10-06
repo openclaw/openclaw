@@ -1,10 +1,9 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
-import {
-  applySessionEntryReplacements,
-  iterateDoctorSessionKeyBatches,
-} from "../config/sessions/session-accessor.js";
+import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
+import { countLabel } from "./doctor-state-integrity-format.js";
+import { iterateDoctorSessionKeyBatches } from "./doctor/shared/session-entry-rewrite.js";
 
 export type MainSessionRecoveryIntegrityCandidate = {
   clearStaleAbort: boolean;
@@ -18,7 +17,6 @@ type MainSessionRecoveryDoctorParams = {
   warnings: string[];
   changes: string[];
   confirmRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
-  countLabel: (count: number, singular: string, plural?: string) => string;
 };
 
 export function inspectMainSessionRecoveryEntry(
@@ -45,7 +43,7 @@ export async function noteMainSessionRecoveryIntegrity(
     return;
   }
 
-  const wedgedCount = params.countLabel(wedged.length, "wedged main session");
+  const wedgedCount = countLabel(wedged.length, "wedged main session");
   params.warnings.push(
     [
       `- Found ${wedgedCount} with automatic restart recovery tombstoned.`,
@@ -66,7 +64,7 @@ export async function noteMainSessionRecoveryIntegrity(
   if (staleAborted.length === 0) {
     return;
   }
-  const staleCount = params.countLabel(staleAborted.length, "wedged main session");
+  const staleCount = countLabel(staleAborted.length, "wedged main session");
   if (
     !(await params.confirmRepair({
       message: `Clear stale aborted recovery flags for ${staleCount}?`,
@@ -81,6 +79,7 @@ export async function noteMainSessionRecoveryIntegrity(
   let repaired = 0;
   for (const sessionKeys of iterateDoctorSessionKeyBatches(staleAborted.map(({ key }) => key))) {
     repaired += await applySessionEntryReplacements<number>({
+      consumePendingReset: true,
       sessionKeys,
       storePath: params.storePath,
       update: (currentEntries) => {
@@ -97,7 +96,7 @@ export async function noteMainSessionRecoveryIntegrity(
   }
   if (repaired > 0) {
     params.changes.push(
-      `- Cleared aborted restart-recovery flags for ${params.countLabel(repaired, "wedged main session")}.`,
+      `- Cleared aborted restart-recovery flags for ${countLabel(repaired, "wedged main session")}.`,
     );
   }
 }

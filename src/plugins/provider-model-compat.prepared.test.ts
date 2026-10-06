@@ -15,17 +15,6 @@ vi.mock("../agents/provider-attribution.js", () => ({
   resolveProviderRequestCapabilities,
 }));
 
-vi.mock("@openclaw/ai/transports", () => ({
-  resolveOpenAICompletionsCompat: (
-    model: Model,
-    resolveCapabilities: (input: Model) => {
-      supportsDeveloperRole: boolean;
-      supportsUsageInStreaming: boolean;
-      supportsStrictMode: boolean;
-    },
-  ) => resolveCapabilities(model),
-}));
-
 import { normalizeModelCompat } from "./provider-model-compat.js";
 
 function makeOwners(provider: string): PluginMetadataSnapshotOwnerMaps {
@@ -38,6 +27,8 @@ function makeOwners(provider: string): PluginMetadataSnapshotOwnerMaps {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: [],
+    modelIdNormalizationPolicies: new Map(),
   };
 }
 

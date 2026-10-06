@@ -9,6 +9,7 @@ import type { Message } from "@openclaw/llm-core";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { redactTranscriptMessage } from "../transcript-redact.js";
 import { compactWithSafetyTimeout } from "./compaction-safety-timeout.js";
 import { log } from "./logger.js";
@@ -34,14 +35,20 @@ export async function attemptServerEndpointCompaction(params: {
   customInstructions?: string;
   config?: OpenClawConfig;
   onUsage?: (usage: ServerEndpointCompactionResult["usage"]) => void;
+  onCompactionCommitted?: (tokensBefore: number) => void;
+  assertActive?: () => void;
 }): Promise<ServerEndpointCompactionResult | undefined> {
   if (
     params.trigger === "overflow" ||
     params.customInstructions?.trim() ||
-    !resolveOpenAIResponsesCompactEndpointPlan(params.model, params.extraParams).enabled
+    !resolveOpenAIResponsesCompactEndpointPlan(params.model, params.extraParams, params.trigger)
+      .enabled
   ) {
     return undefined;
   }
+  params.assertActive?.();
+  let compacted: ServerEndpointCompactionResult;
+  let compactionCommitted = false;
   try {
     const messages = params.context.messages.filter(
       (message): message is Message =>
@@ -61,7 +68,7 @@ export async function attemptServerEndpointCompaction(params: {
     if (!owner || owner.type !== "message" || owner.message.role !== "assistant") {
       throw new Error("Responses compact endpoint requires a persisted assistant owner");
     }
-    const compacted = await compactWithSafetyTimeout(
+    compacted = await compactWithSafetyTimeout(
       (signal) =>
         requestPreparedOpenAIResponsesCompaction(
           params.streamFn,
@@ -73,6 +80,7 @@ export async function attemptServerEndpointCompaction(params: {
       params.requestOptions.signal ? { abortSignal: params.requestOptions.signal } : undefined,
     );
     params.onUsage?.(compacted.usage);
+    params.assertActive?.();
     const replacement = structuredClone(owner.message);
     captureOpenAIResponsesCompaction(
       replacement,
@@ -89,24 +97,36 @@ export async function attemptServerEndpointCompaction(params: {
     ) {
       throw new Error("Responses compact endpoint window requires transcript redaction");
     }
-    const rewritten = rewriteTranscriptEntriesInSessionManager({
-      sessionManager: params.sessionManager,
-      replacements: [{ entryId: owner.id, message: redacted }],
-      preserveReplacementCompactionReplay: true,
+    await withSessionManagerWrite(params.sessionManager, async () => {
+      params.requestOptions.signal?.throwIfAborted();
+      params.assertActive?.();
+      const rewritten = await rewriteTranscriptEntriesInSessionManager({
+        sessionManager: params.sessionManager,
+        replacements: [{ entryId: owner.id, message: redacted }],
+        preserveReplacementCompactionReplay: true,
+      });
+      if (
+        replacement.providerReplay?.data !== compacted.item.encrypted_content ||
+        !rewritten.changed
+      ) {
+        throw new Error(
+          `Responses compact endpoint checkpoint was not persisted: ${rewritten.reason}`,
+        );
+      }
+      compactionCommitted = true;
+      params.onCompactionCommitted?.(compacted.usage.input_tokens);
     });
-    if (
-      replacement.providerReplay?.data !== compacted.item.encrypted_content ||
-      !rewritten.changed
-    ) {
-      throw new Error(
-        `Responses compact endpoint checkpoint was not persisted: ${rewritten.reason}`,
-      );
-    }
-    return compacted;
   } catch (err) {
+    // Observer or handle-release failures after commit must not trigger a
+    // second client compaction of the already replaced context.
+    if (compactionCommitted) {
+      throw err;
+    }
+    params.assertActive?.();
     log.debug(
       `Responses compact endpoint failed; falling back to client compaction: ${formatErrorMessage(err)}`,
     );
     return undefined;
   }
+  return compacted;
 }

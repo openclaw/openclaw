@@ -42,7 +42,7 @@ const hoisted = await vi.hoisted(async () => {
 });
 const generatedVendorAssets = generateExportHtmlVendorAssets();
 
-vi.mock("../../acp/runtime/session-meta.js", () => ({
+vi.mock("../../acp/runtime/session-meta-readonly.js", () => ({
   readAcpSessionMetaForEntry: hoisted.readAcpSessionMetaForEntryMock,
 }));
 
@@ -110,7 +110,7 @@ vi.mock("node:fs/promises", async () => {
           return contents;
         }
       }
-      return actual.readFile(filePath, encoding);
+      return actual.readFile(filePath, { encoding });
     }),
   };
   return {
@@ -140,6 +140,7 @@ function makeParams(): HandleCommandsParams {
       updatedAt: 1,
     },
     sessionKey: "agent:target:session",
+    agentId: "target",
     workspaceDir: "/tmp/workspace",
     directives: {},
     elevated: { enabled: true, allowed: true, failures: [] },
@@ -180,6 +181,17 @@ function sessionDataFromHtml(html: string): Record<string, unknown> {
       "utf-8",
     ),
   );
+}
+
+function userTranscript() {
+  return [
+    {
+      type: "message",
+      id: "entry-1",
+      timestamp: "2026-05-16T00:00:00.000Z",
+      message: { role: "user", content: "hello" },
+    },
+  ];
 }
 
 describe("buildExportSessionReply", () => {
@@ -277,6 +289,21 @@ describe("buildExportSessionReply", () => {
   });
 
   it("injects scripts and session data through the real export template", async () => {
+    const entries = [
+      {
+        type: "message",
+        id: "hidden-input",
+        parentId: null,
+        timestamp: "2026-08-31T12:00:00.000Z",
+        message: {
+          role: "user",
+          content: "Synthetic continuation input",
+          display: false,
+          provenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
+        },
+      },
+    ];
+    hoisted.sessionTranscriptEvents = entries;
     await buildExportSessionReply(makeParams());
 
     const html = writtenHtml();
@@ -290,8 +317,8 @@ describe("buildExportSessionReply", () => {
       Buffer.from(
         JSON.stringify({
           header: null,
-          entries: [],
-          leafId: null,
+          entries,
+          leafId: "hidden-input",
           hasLeafControl: false,
           systemPrompt: "system prompt",
           tools: [],
@@ -682,14 +709,7 @@ describe("buildExportSessionReply", () => {
       state: "idle",
       lastActivityAt: 1,
     });
-    hoisted.sessionTranscriptEvents = [
-      {
-        type: "message",
-        id: "entry-1",
-        timestamp: "2026-05-16T00:00:00.000Z",
-        message: { role: "user", content: "hello" },
-      },
-    ];
+    hoisted.sessionTranscriptEvents = userTranscript();
 
     const reply = await buildExportSessionReply(makeParams());
 
@@ -708,14 +728,7 @@ describe("buildExportSessionReply", () => {
     hoisted.readAcpSessionMetaForEntryMock.mockImplementation(() => {
       throw new Error("state database unavailable");
     });
-    hoisted.sessionTranscriptEvents = [
-      {
-        type: "message",
-        id: "entry-1",
-        timestamp: "2026-05-16T00:00:00.000Z",
-        message: { role: "user", content: "hello" },
-      },
-    ];
+    hoisted.sessionTranscriptEvents = userTranscript();
 
     const reply = await buildExportSessionReply(makeParams());
 
@@ -725,14 +738,7 @@ describe("buildExportSessionReply", () => {
   });
 
   it("does not warn for a normal user-only transcript without backend session metadata", async () => {
-    hoisted.sessionTranscriptEvents = [
-      {
-        type: "message",
-        id: "entry-1",
-        timestamp: "2026-05-16T00:00:00.000Z",
-        message: { role: "user", content: "hello" },
-      },
-    ];
+    hoisted.sessionTranscriptEvents = userTranscript();
 
     const reply = await buildExportSessionReply(makeParams());
 
@@ -754,14 +760,7 @@ describe("buildExportSessionReply", () => {
         },
       },
     } as never);
-    hoisted.sessionTranscriptEvents = [
-      {
-        type: "message",
-        id: "entry-1",
-        timestamp: "2026-05-16T00:00:00.000Z",
-        message: { role: "user", content: "hello" },
-      },
-    ];
+    hoisted.sessionTranscriptEvents = userTranscript();
 
     const reply = await buildExportSessionReply(makeParams());
 

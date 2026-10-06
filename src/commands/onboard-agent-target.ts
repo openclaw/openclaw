@@ -25,16 +25,9 @@ import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
 
-export type OnboardingAgentTarget = {
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-};
+export type OnboardingAgentTarget = ReturnType<typeof resolveOnboardingAgentTarget>;
 
-export function resolveOnboardingAgentTarget(
-  config: OpenClawConfig,
-  explicitAgentId?: string,
-): OnboardingAgentTarget {
+export function resolveOnboardingAgentTarget(config: OpenClawConfig, explicitAgentId?: string) {
   const agentId = normalizeAgentId(
     explicitAgentId ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveSoleAgentId(config),
   );
@@ -103,12 +96,31 @@ function replaceOnboardingAgentEntry(
   } else {
     nextEntries.push(replacement);
   }
-  const { list: _list, entries: _entries, ...agents } = config.agents ?? {};
   return {
     ...updated,
     agents: {
-      ...agents,
+      ...config.agents,
       entries: toAgentEntriesRecord(nextEntries),
+    },
+  };
+}
+
+export function applyOnboardingWorkspace(
+  config: OpenClawConfig,
+  target: OnboardingAgentTarget,
+  workspace: string,
+): OpenClawConfig {
+  const entry = resolveMutableAgentEntry(config, target.agentId);
+  // Explicit fleets own workspace at the selected entry even when it inherited
+  // the global default; legacy owners stay global until they author an override.
+  if (entry?.workspace !== undefined || (config.agents?.ownership === "explicit" && entry)) {
+    return replaceOnboardingAgentEntry(config, config, target, { ...entry, workspace });
+  }
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      defaults: { ...config.agents?.defaults, workspace },
     },
   };
 }
@@ -141,6 +153,23 @@ export function applyOnboardingPrimaryModel(
   });
 }
 
+/** Apply a utility selection to its existing agent/default owner without changing primary. */
+export function applyOnboardingUtilityModel(
+  config: OpenClawConfig,
+  target: OnboardingAgentTarget,
+  model: string,
+): OpenClawConfig {
+  const utilityModel = normalizeAgentModelRefForConfig(model);
+  const entry = resolveMutableAgentEntry(config, target.agentId);
+  if (entry?.utilityModel === undefined && config.agents?.ownership !== "explicit") {
+    return {
+      ...config,
+      agents: { ...config.agents, defaults: { ...config.agents?.defaults, utilityModel } },
+    };
+  }
+  return replaceOnboardingAgentEntry(config, config, target, { ...entry, utilityModel });
+}
+
 /** Expose one agent's effective model settings through the defaults-based provider contract. */
 export function prepareAgentModelDefaults(
   config: OpenClawConfig,
@@ -154,6 +183,7 @@ export function prepareAgentModelDefaults(
       defaults: {
         ...config.agents?.defaults,
         ...(entry?.model !== undefined ? { model: entry.model } : {}),
+        ...(entry?.utilityModel !== undefined ? { utilityModel: entry.utilityModel } : {}),
         ...(entry?.models !== undefined ? { models: entry.models } : {}),
         ...(entry?.modelPolicy !== undefined ? { modelPolicy: entry.modelPolicy } : {}),
       },
@@ -205,7 +235,16 @@ export function projectAgentModelDefaults(
   const hasAgentModelPolicy =
     entry?.modelPolicy !== undefined ||
     !isDeepStrictEqual(updatedDefaults?.modelPolicy, originalDefaults?.modelPolicy);
-  const { model: _model, models: _models, modelPolicy: _modelPolicy, ...entryRest } = entry ?? {};
+  const hasAgentUtilityModel =
+    entry?.utilityModel !== undefined ||
+    updatedDefaults?.utilityModel !== originalDefaults?.utilityModel;
+  const {
+    model: _model,
+    models: _models,
+    modelPolicy: _modelPolicy,
+    utilityModel: _utilityModel,
+    ...entryRest
+  } = entry ?? {};
   const nextEntry = {
     ...entryRest,
     ...(hasAgentModel && updatedDefaults?.model !== undefined
@@ -215,11 +254,15 @@ export function projectAgentModelDefaults(
     ...(hasAgentModelPolicy && updatedDefaults?.modelPolicy !== undefined
       ? { modelPolicy: updatedDefaults.modelPolicy }
       : {}),
+    ...(hasAgentUtilityModel && updatedDefaults?.utilityModel !== undefined
+      ? { utilityModel: updatedDefaults.utilityModel }
+      : {}),
   };
   const {
     model: _updatedModel,
     models: _updatedModels,
     modelPolicy: _updatedModelPolicy,
+    utilityModel: _updatedUtilityModel,
     ...sharedDefaults
   } = updatedDefaults ?? {};
   const baseConfig = {
@@ -231,6 +274,9 @@ export function projectAgentModelDefaults(
             defaults: {
               ...sharedDefaults,
               ...(originalDefaults?.model !== undefined ? { model: originalDefaults.model } : {}),
+              ...(originalDefaults?.utilityModel !== undefined
+                ? { utilityModel: originalDefaults.utilityModel }
+                : {}),
               ...(originalDefaults?.models !== undefined
                 ? { models: originalDefaults.models }
                 : {}),

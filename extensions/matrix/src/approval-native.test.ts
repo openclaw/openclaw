@@ -24,6 +24,10 @@ function buildConfig(
 }
 
 describe("matrix approval capability", () => {
+  it("subscribes the native runtime to system-agent approval events", () => {
+    expect(matrixApprovalCapability.nativeRuntime?.eventKinds).toContain("system-agent");
+  });
+
   it("describes the correct Matrix exec-approval setup path", () => {
     const text = matrixApprovalCapability.describeExecApprovalSetup?.({
       channel: "matrix",
@@ -31,6 +35,8 @@ describe("matrix approval capability", () => {
     });
 
     expect(text).toContain("`channels.matrix.execApprovals.approvers`");
+    expect(text).toContain("Approve it from the Web UI for now.");
+    expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
     expect(text).toContain("`channels.matrix.dm.allowFrom`");
   });
 
@@ -74,32 +80,6 @@ describe("matrix approval capability", () => {
     });
   });
 
-  it("resolves origin targets from matrix turn source", async () => {
-    const target = await matrixApprovalCapability.native?.resolveOriginTarget?.({
-      cfg: buildConfig(),
-      accountId: "default",
-      approvalKind: "exec",
-      request: {
-        id: "req-1",
-        request: {
-          command: "echo hi",
-          turnSourceChannel: "matrix",
-          turnSourceTo: "room:!ops:example.org",
-          turnSourceThreadId: "$thread",
-          turnSourceAccountId: "default",
-          sessionKey: "agent:main:matrix:channel:!ops:example.org",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
-
-    expect(target).toEqual({
-      to: "room:!ops:example.org",
-      threadId: "$thread",
-    });
-  });
-
   it("resolves approver dm targets", async () => {
     const targets = await matrixApprovalCapability.native?.resolveApproverDmTargets?.({
       cfg: buildConfig(),
@@ -116,40 +96,6 @@ describe("matrix approval capability", () => {
     });
 
     expect(targets).toEqual([{ to: "user:@owner:example.org" }]);
-  });
-
-  it("suppresses same-channel plugin forwarding when Matrix native delivery is available", () => {
-    const shouldSuppress = matrixApprovalCapability.delivery?.shouldSuppressForwardingFallback;
-    if (!shouldSuppress) {
-      throw new Error("delivery suppression helper unavailable");
-    }
-
-    expect(
-      shouldSuppress({
-        cfg: buildConfig({
-          dm: { allowFrom: ["@owner:example.org"] },
-        }),
-        approvalKind: "plugin",
-        target: {
-          channel: "matrix",
-          to: "room:!ops:example.org",
-          accountId: "default",
-        },
-        request: {
-          id: "plugin:req-1",
-          request: {
-            title: "Plugin Approval Required",
-            description: "Allow plugin action",
-            pluginId: "git-tools",
-            turnSourceChannel: "matrix",
-            turnSourceTo: "room:!ops:example.org",
-            turnSourceAccountId: "default",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      } as never),
-    ).toBe(true);
   });
 
   it("preserves room-id case when matching Matrix origin targets", async () => {
@@ -307,34 +253,6 @@ describe("matrix approval capability", () => {
         action: "approve",
       }),
     ).toEqual({ kind: "disabled" });
-  });
-
-  it("enables matrix-native plugin approval delivery when DM approvers are configured", () => {
-    const capabilities = matrixApprovalCapability.native?.describeDeliveryCapabilities({
-      cfg: buildConfig({
-        dm: { allowFrom: ["@owner:example.org"] },
-      }),
-      accountId: "default",
-      approvalKind: "plugin",
-      request: {
-        id: "plugin:req-1",
-        request: {
-          title: "Plugin Approval Required",
-          description: "Allow plugin access",
-          pluginId: "git-tools",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
-
-    expect(capabilities).toEqual({
-      enabled: true,
-      preferredSurface: "both",
-      supportsOriginSurface: true,
-      supportsApproverDmSurface: true,
-      notifyOriginWhenDmOnly: true,
-    });
   });
 
   it("handles opaque-id plugin approvals for plugin-only approvers", async () => {

@@ -1,27 +1,20 @@
-// Control UI renderers for structured config form nodes.
+import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
+import { Directive, directive } from "lit/directive.js";
+import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
+import { removePathValue, setPathValue } from "../lib/config-form-utils.ts";
+import { ConfigFormArrayIdentity } from "./config-form-array-identity.ts";
 import {
-  containsRedactedSentinel,
-  removePathValue,
-  setPathValue,
-} from "../lib/config-form-utils.ts";
-import { arrayAddCandidates } from "./config-form-array-candidates.ts";
-import {
-  appendArrayRowIdentities,
-  discardArrayRowIdentities,
-  preserveArrayRowIdentities,
-  rowIdentitiesForArray,
-} from "./config-form-array-identity.ts";
-import {
-  ConfigFormCollectionDraft,
+  openCollectionDraft,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.ts";
 import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import { arrayItemSchema } from "./config-form.array-items.ts";
 import {
+  arrayConstraintCandidates,
   arrayInputConstraints,
   canApplyArrayCandidate,
   canApplyObjectCandidate,
@@ -29,28 +22,25 @@ import {
   defaultValue,
   isSupportedConfigValueValid,
   isObjectPropertyNameValid,
+  MAX_AUTO_ARRAY_DEFAULT_ITEMS,
   NO_SAFE_DEFAULT,
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
   objectPropertySchema,
   requiredPropertyKeys,
 } from "./config-form.constraints.ts";
+import { renderMapField } from "./config-form.node.collection-map.ts";
 import {
+  configChildRenderOptions,
   getSensitiveRenderState,
-  isAnySchema,
-  jsonValue,
-  renderCollectionDefaultDescription,
-  renderFlatDefaultRow,
+  removeCollectionRow,
   renderFieldRow,
-  renderJsonTextareaControl,
-  renderTags,
-  schemaWithDefault,
+  renderSchemaDefaultDescription,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
 import {
   hasConfigSearchCriteria as hasSearchCriteria,
-  matchesNodeSearch,
   matchesNodeSelf,
   resolveConfigFieldMeta as resolveFieldMeta,
 } from "./config-form.search.ts";
@@ -60,46 +50,17 @@ import { renderSettingsEmpty } from "./settings-ui.ts";
 const UNSET_ARRAY_SOURCE_IDENTITY = Symbol("unset-array-source");
 const UNSET_MAP_SOURCE_IDENTITY = Symbol("unset-map-source");
 
-function openCollectionDraft(event: Event, draftId: string): void {
-  const block = (event.currentTarget as HTMLElement).closest(".cfg-block");
-  const draft = Array.from(block?.children ?? []).find((child) => child.id === draftId);
-  (draft as Partial<ConfigFormCollectionDraft> | undefined)?.openDraft?.call(draft);
-}
-
-export function renderObject(
-  params: ConfigNodeRenderParams,
-  renderNode: ConfigNodeRenderer,
-): TemplateResult {
-  const {
-    schema,
-    value,
-    path,
-    hints,
-    unsupported,
-    disabled,
-    onPatch,
-    searchCriteria,
-    rawAvailable,
-    revealSensitive,
-    isSensitivePathRevealed,
-    onToggleSensitivePath,
-    onRemove,
-  } = params;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
+  const { schema, value, path, hints, onPatch, onRemove, searchCriteria } = params;
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
       : false;
   const childSearchCriteria = selfMatched ? undefined : searchCriteria;
-
   const inherited = value === undefined && schema.default !== undefined;
   const fallback = inherited ? schema.default : value;
   const objectSourceIdentity = fallback === undefined ? UNSET_MAP_SOURCE_IDENTITY : fallback;
-  const objectValue =
-    fallback && typeof fallback === "object" && !Array.isArray(fallback)
-      ? (fallback as Record<string, unknown>)
-      : {};
-  const defaultDescription = renderCollectionDefaultDescription(params, fallback);
+  const objectValue = asNonArrayRecord(fallback);
   const entries = objectPropertyKeys(schema)
     .map((key) => [key, objectPropertySchema(schema, key)] as const)
     .filter((entry): entry is readonly [string, ConfigNodeRenderParams["schema"]] =>
@@ -107,7 +68,6 @@ export function renderObject(
     );
   const requiredKeys = requiredPropertyKeys(schema);
 
-  // Sort by hint order
   const sorted = entries.toSorted((left, right) => {
     const leftOrder = hintForPath([...path, left[0]], hints)?.order ?? 0;
     const rightOrder = hintForPath([...path, right[0]], hints)?.order ?? 0;
@@ -130,10 +90,10 @@ export function renderObject(
     let candidate: Record<string, unknown>;
     const relativePath = childPath.slice(path.length);
     if (relativePath.length === 0) {
-      if (!childValue || typeof childValue !== "object" || Array.isArray(childValue)) {
+      if (!isRecord(childValue)) {
         return false;
       }
-      candidate = childValue as Record<string, unknown>;
+      candidate = childValue;
     } else {
       try {
         candidate = structuredClone(objectValue);
@@ -157,65 +117,62 @@ export function renderObject(
     return accepted !== false;
   };
 
-  const fields = html`
-    ${sorted.map(([propertyKey, node]) => {
+  return {
+    fields: sorted.map(([propertyKey, node]) => {
       const hasInheritedChild = inherited && Object.hasOwn(objectValue, propertyKey);
-      return renderNode({
-        schema: hasInheritedChild ? schemaWithDefault(node, objectValue[propertyKey]) : node,
+      return Object.assign(configChildRenderOptions(params), {
+        schema: hasInheritedChild ? { ...node, default: objectValue[propertyKey] } : node,
         value: inherited ? undefined : objectValue[propertyKey],
         path: [...path, propertyKey],
-        hints,
-        rawAvailable,
-        unsupported,
-        disabled,
         isRequired: requiredKeys.has(propertyKey),
         sourceIdentity: inherited ? undefined : objectValue[propertyKey],
         controlIdentity: params.controlIdentity ?? objectValue,
-        rowIdentity: params.rowIdentity,
         searchCriteria: childSearchCriteria,
-        revealSensitive,
-        isSensitivePathRevealed,
-        onToggleSensitivePath,
         onPatch: patchObjectChild,
-      });
-    })}
-    ${allowExtra
-      ? renderMapField(
-          {
-            ...params,
-            schema: additionalProperties,
-            value: objectValue,
-            sourceIdentity: objectSourceIdentity,
-            reservedKeys,
-            validateKey: (key) => isObjectPropertyNameValid(schema, key),
-            searchCriteria: childSearchCriteria,
-            onPatch: patchObjectChild,
-          },
-          renderNode,
-        )
-      : nothing}
+      }) satisfies ConfigNodeRenderParams;
+    }),
+    additional: allowExtra
+      ? {
+          ...params,
+          schema: additionalProperties,
+          value: objectValue,
+          sourceIdentity: objectSourceIdentity,
+          reservedKeys,
+          validateKey: (key: string) => isObjectPropertyNameValid(schema, key),
+          searchCriteria: childSearchCriteria,
+          onPatch: patchObjectChild,
+        }
+      : null,
+  };
+}
+
+export function renderObject(
+  params: ConfigNodeRenderParams,
+  renderNode: ConfigNodeRenderer,
+): TemplateResult {
+  const { schema, path, hints } = params;
+  const { label, help } = resolveFieldMeta(path, schema, hints);
+  const object = resolveConfigObjectFields(params);
+  const fields = html`
+    ${object.fields.map((field) => renderNode(field))}
+    ${object.additional ? renderMapField(object.additional, renderNode) : nothing}
   `;
 
   // Top-level objects and label-less contexts emit rows directly into the
   // surrounding settings-group so row dividers stay sibling-driven.
   if (path.length === 1 || params.showLabel === false) {
-    return html`${path.length === 1 ? renderFlatDefaultRow(defaultDescription) : nothing}${fields}`;
+    return fields;
   }
 
-  // Nested objects get collapsible treatment as an indented sub-block.
   return html`
     <details class="cfg-object cfg-block" ?open=${path.length <= 2}>
       <summary class="settings-row cfg-object__summary">
         <div class="settings-row__text">
           <span class="settings-row__title">${label}</span>
           ${help ? html`<span class="settings-row__desc">${help}</span>` : nothing}
-          ${schema.default !== undefined
-            ? html`<span class="settings-row__desc">${defaultDescription}</span>`
-            : nothing}
-          ${renderTags(tags)}
         </div>
         <div class="settings-row__control">
-          <span class="settings-row__chevron cfg-object__chevron">${icons.chevronDown}</span>
+          <span class="settings-row__chevron cfg-object__chevron">${icons.chevronRight}</span>
         </div>
       </summary>
       <div class="settings-subrows">${fields}</div>
@@ -223,27 +180,37 @@ export function renderObject(
   `;
 }
 
-export function renderArray(
+class ConfigFormArrayDirective extends Directive {
+  private rows = new ConfigFormArrayIdentity();
+  private field = "";
+
+  render(params: ConfigNodeRenderParams, renderNode: ConfigNodeRenderer): TemplateResult {
+    // Keyed parents carry row identity. Indices still select patch destinations,
+    // but moving a row must not retire its nested field editors.
+    const field = JSON.stringify(params.path.filter((segment) => typeof segment === "string"));
+    if (field !== this.field) {
+      this.rows = new ConfigFormArrayIdentity();
+      this.field = field;
+    }
+    return renderArrayContent(params, renderNode, this.rows);
+  }
+}
+
+const arrayDirective = directive(ConfigFormArrayDirective);
+
+export function renderArray(params: ConfigNodeRenderParams, renderNode: ConfigNodeRenderer) {
+  return html`${arrayDirective(params, renderNode)}`;
+}
+
+function renderArrayContent(
   params: ConfigNodeRenderParams,
   renderNode: ConfigNodeRenderer,
+  rows: ConfigFormArrayIdentity,
 ): TemplateResult {
-  const {
-    schema,
-    value,
-    path,
-    hints,
-    unsupported,
-    disabled,
-    onPatch,
-    searchCriteria,
-    rawAvailable,
-    revealSensitive,
-    isSensitivePathRevealed,
-    onToggleSensitivePath,
-  } = params;
+  const { schema, value, path, hints, disabled, onPatch, searchCriteria } = params;
   const showLabel = params.showLabel ?? true;
   const showHeaderMeta = params.showHeaderMeta ?? showLabel;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help } = resolveFieldMeta(path, schema, hints);
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
@@ -255,7 +222,6 @@ export function renderArray(
   if (!itemsSchema) {
     return renderFieldRow({
       label,
-      tags: [],
       showLabel: true,
       control: nothing,
       error: t("configForm.unsupportedArray"),
@@ -263,18 +229,19 @@ export function renderArray(
   }
 
   const inherited = value === undefined && Array.isArray(schema.default);
-  const arrayValue = Array.isArray(value)
+  const arraySource = Array.isArray(value)
     ? value
     : Array.isArray(schema.default)
       ? schema.default
-      : [];
-  const arraySourceIdentity = Array.isArray(value)
-    ? value
-    : Array.isArray(schema.default)
-      ? schema.default
-      : UNSET_ARRAY_SOURCE_IDENTITY;
-  const defaultDescription = renderCollectionDefaultDescription(params, arrayValue);
-  const rowIdentities = rowIdentitiesForArray(arrayValue);
+      : undefined;
+  const arrayValue = arraySource ?? [];
+  const arraySourceIdentity = arraySource ?? UNSET_ARRAY_SOURCE_IDENTITY;
+  const defaultDescription = getSensitiveRenderState({ ...params, value: arrayValue }).isRedacted
+    ? nothing
+    : renderSchemaDefaultDescription(schema, value);
+  const rowIdentities = rows.read(arrayValue);
+  const patch = (nextValue: unknown[], identities: readonly symbol[]) =>
+    rows.patch(nextValue, identities, (next) => onPatch(path, next));
   const {
     minItems: minimumItems,
     maxItems: maximumItems,
@@ -282,16 +249,47 @@ export function renderArray(
   } = arrayInputConstraints(schema);
   const itemSchemaAt = (index: number): JsonSchema =>
     arrayItemSchema(schema, index) ?? (tupleItems ? {} : itemsSchema);
-  const { atomicCandidate, autoCandidate } = arrayAddCandidates({
-    schema,
-    value: arrayValue,
-    minimumItems,
-    maximumItems,
-    uniqueItems,
-    isUnset: value === undefined,
-    isRequired: params.isRequired ?? false,
-    itemSchemaAt,
-  });
+  const requiredAppendCount = Math.max(1, minimumItems - arrayValue.length);
+  const autoAppendCount =
+    requiredAppendCount > MAX_AUTO_ARRAY_DEFAULT_ITEMS ? 1 : requiredAppendCount;
+  const generatedItems: unknown[] = [];
+  for (let offset = 0; offset < autoAppendCount; offset += 1) {
+    const generatedDefault = defaultValue(itemSchemaAt(arrayValue.length + offset));
+    if (generatedDefault === NO_SAFE_DEFAULT) {
+      generatedItems.length = 0;
+      break;
+    }
+    generatedItems.push(generatedDefault);
+  }
+  const generatedCandidate =
+    generatedItems.length === autoAppendCount ? [...arrayValue, ...generatedItems] : undefined;
+  const autoCandidate =
+    generatedCandidate !== undefined &&
+    !uniqueItems &&
+    (maximumItems === undefined || generatedCandidate.length <= maximumItems) &&
+    (generatedCandidate.length < minimumItems ||
+      isSupportedConfigValueValid(schema, generatedCandidate))
+      ? generatedCandidate
+      : undefined;
+
+  const currentValueValid = isSupportedConfigValueValid(schema, arrayValue);
+  const constrainedCandidate = arrayConstraintCandidates(schema).find(
+    (candidate) =>
+      isSupportedConfigValueValid(schema, candidate) &&
+      (value === undefined ||
+        !currentValueValid ||
+        (candidate.length > arrayValue.length &&
+          arrayValue.every((entry, index) => configValuesEqual(entry, candidate[index])))),
+  );
+  const wholeArrayDefault =
+    constrainedCandidate ??
+    (value === undefined &&
+    params.isRequired &&
+    maximumItems === 0 &&
+    isSupportedConfigValueValid(schema, [])
+      ? []
+      : undefined);
+  const atomicCandidate = wholeArrayDefault && structuredClone(wholeArrayDefault);
   const canAppend = maximumItems === undefined || arrayValue.length < maximumItems;
   const requiresDraft = atomicCandidate === undefined && autoCandidate === undefined;
   const nextItemSchema = itemSchemaAt(arrayValue.length);
@@ -300,7 +298,7 @@ export function renderArray(
     schema: nextItemSchema,
     label,
     disabled: disabled || !canAppend,
-    identity: draftId,
+    identity: JSON.stringify(path.filter((segment) => typeof segment === "string")),
     sourceIdentity: arraySourceIdentity,
     existingValues: uniqueItems ? arrayValue : undefined,
     validateValue: (candidate) => {
@@ -338,12 +336,7 @@ export function renderArray(
       nextValue[itemIndex] = nextItem.value;
     }
     if (canApplyArrayCandidate(schema, arrayValue, nextValue, uniqueItems, true)) {
-      preserveArrayRowIdentities(nextValue, rowIdentities);
-      const accepted = onPatch(path, nextValue) !== false;
-      if (!accepted) {
-        discardArrayRowIdentities(nextValue);
-      }
-      return accepted;
+      return patch(nextValue, rowIdentities);
     }
     return false;
   };
@@ -353,23 +346,34 @@ export function renderArray(
       <div class="settings-row">
         <div class="settings-row__text">
           ${showLabel ? html`<span class="settings-row__title">${label}</span>` : nothing}
-          ${showHeaderMeta && help
-            ? html`<span class="settings-row__desc">${help}</span>`
-            : nothing}
-          ${showHeaderMeta && schema.default !== undefined
-            ? html`<span class="settings-row__desc">${defaultDescription}</span>`
-            : nothing}
-          ${renderTags(tags)}
+          ${
+            showHeaderMeta && help ? html`<span class="settings-row__desc">${help}</span>` : nothing
+          }
+          ${
+            showHeaderMeta && defaultDescription !== nothing
+              ? html`<span class="settings-row__desc">${defaultDescription}</span>`
+              : nothing
+          }
         </div>
         <div class="settings-row__control">
-          <span class="settings-row__value"
-            >${t(arrayValue.length === 1 ? "configForm.itemCountOne" : "configForm.itemCount", {
-              count: String(arrayValue.length),
-            })}</span
-          >
+          ${
+            params.compact
+              ? nothing
+              : html`
+                  <span class="settings-row__value"
+                    >${t(
+                      arrayValue.length === 1 ? "configForm.itemCountOne" : "configForm.itemCount",
+                      {
+                        count: String(arrayValue.length),
+                      },
+                    )}</span
+                  >
+                `
+          }
           <button
             type="button"
-            class="btn btn--sm"
+            class=${params.compact ? "btn btn--sm btn--icon" : "btn btn--sm"}
+            aria-label=${t("configForm.add")}
             aria-controls=${draftId}
             ?disabled=${disabled || (!canAppend && atomicCandidate === undefined)}
             @click=${(event: Event) => {
@@ -380,19 +384,17 @@ export function renderArray(
               } else if (requiresDraft) {
                 openCollectionDraft(event, draftId);
               } else if (autoCandidate) {
-                appendArrayRowIdentities(
-                  autoCandidate,
-                  rowIdentities,
-                  autoCandidate.length - arrayValue.length,
+                const appended = Array.from(
+                  { length: autoCandidate.length - arrayValue.length },
+                  () => Symbol("array-row"),
                 );
-                if (onPatch(path, autoCandidate) === false) {
-                  discardArrayRowIdentities(autoCandidate);
+                if (!patch(autoCandidate, [...rowIdentities, ...appended])) {
                   openCollectionDraft(event, draftId);
                 }
               }
             }}
           >
-            ${t("configForm.add")}
+            ${params.compact ? icons.plus : t("configForm.add")}
           </button>
         </div>
       </div>
@@ -410,318 +412,87 @@ export function renderArray(
             (nextValue.length < minimumItems || isSupportedConfigValueValid(schema, nextValue));
           let accepted = false;
           if (canApply) {
-            appendArrayRowIdentities(nextValue, rowIdentities, 1);
-            accepted = onPatch(path, nextValue) !== false;
-            if (!accepted) {
-              discardArrayRowIdentities(nextValue);
-            }
+            accepted = patch(nextValue, [...rowIdentities, Symbol("array-row")]);
           }
           if (!accepted) {
             event.preventDefault();
           }
         }}
       ></openclaw-config-form-collection-draft>
-      ${arrayValue.length === 0
-        ? renderSettingsEmpty(t("configForm.noItems"))
-        : html`
-            <div class="settings-subrows">
-              ${arrayValue.map((item, index) => {
-                const itemSchema = itemSchemaAt(index);
-                return html`
-                  <div class="settings-row">
-                    <div class="settings-row__text">
-                      <span class="settings-row__title">#${index + 1}</span>
-                    </div>
-                    <div class="settings-row__control">
-                      <openclaw-tooltip .content=${t("configForm.removeItem")}>
-                        <button
-                          type="button"
-                          class="btn btn--icon"
-                          style="width:28px;height:28px;padding:0;"
-                          aria-label=${t("configForm.removeItem")}
-                          ?disabled=${disabled ||
-                          arrayValue.length <= minimumItems ||
-                          !canApplyArrayCandidate(
-                            schema,
-                            arrayValue,
-                            arrayValue.toSpliced(index, 1),
-                            uniqueItems,
-                            false,
-                          )}
-                          @click=${() => {
-                            const nextValue = arrayValue.toSpliced(index, 1);
-                            if (
-                              canApplyArrayCandidate(
-                                schema,
-                                arrayValue,
-                                nextValue,
-                                uniqueItems,
-                                false,
-                              )
-                            ) {
-                              preserveArrayRowIdentities(
-                                nextValue,
-                                rowIdentities.toSpliced(index, 1),
-                              );
-                              if (onPatch(path, nextValue) === false) {
-                                discardArrayRowIdentities(nextValue);
-                              }
-                            }
-                          }}
-                        >
-                          ${icons.trash}
-                        </button>
-                      </openclaw-tooltip>
-                    </div>
-                  </div>
-                  ${renderNode({
-                    schema: inherited ? schemaWithDefault(itemSchema, item) : itemSchema,
-                    value: inherited ? undefined : item,
-                    path: [...path, index],
-                    hints,
-                    rawAvailable,
-                    unsupported,
-                    disabled,
-                    isRequired: true,
-                    sourceIdentity: inherited ? undefined : item,
-                    controlIdentity: arrayValue,
-                    rowIdentity: rowIdentities[index],
-                    searchCriteria: childSearchCriteria,
-                    showLabel: false,
-                    revealSensitive,
-                    isSensitivePathRevealed,
-                    onToggleSensitivePath,
-                    // Inherited rows stay visually unset, but edits materialize the
-                    // complete effective array through patchArrayItem at the parent path.
-                    onPatch: patchArrayItem,
-                  })}
-                `;
-              })}
-            </div>
-          `}
-    </div>
-  `;
-}
-
-function renderMapField(
-  params: ConfigNodeRenderParams & {
-    value: Record<string, unknown>;
-    reservedKeys: Set<string>;
-    validateKey: (key: string) => boolean;
-  },
-  renderNode: ConfigNodeRenderer,
-): TemplateResult {
-  const {
-    schema,
-    value,
-    path,
-    hints,
-    rawAvailable,
-    unsupported,
-    disabled,
-    reservedKeys,
-    validateKey,
-    onPatch,
-    searchCriteria,
-    revealSensitive,
-    isSensitivePathRevealed,
-    onToggleSensitivePath,
-  } = params;
-  const anySchema = isAnySchema(schema);
-  const entryDefault = anySchema ? {} : defaultValue(schema);
-  const draftId = configFieldId(path, "map-draft");
-  const draftProps: ConfigFormCollectionDraftProps = {
-    schema,
-    label: t("configForm.customEntries"),
-    disabled,
-    identity: draftId,
-    sourceIdentity: params.sourceIdentity ?? value,
-    existingKeys: [...new Set([...Object.keys(value), ...reservedKeys])],
-    validateKey,
-  };
-  const entries = Object.entries(value ?? {}).filter(([key]) => !reservedKeys.has(key));
-  const visibleEntries =
-    searchCriteria && hasSearchCriteria(searchCriteria)
-      ? entries.filter(([key, entryValue]) =>
-          matchesNodeSearch({
-            schema,
-            value: entryValue,
-            path: [...path, key],
-            hints,
-            criteria: searchCriteria,
-          }),
-        )
-      : entries;
-
-  return html`
-    <div class="cfg-block cfg-map">
-      <div class="settings-row">
-        <div class="settings-row__text">
-          <span class="settings-row__title">${t("configForm.customEntries")}</span>
-        </div>
-        <div class="settings-row__control">
-          <button
-            type="button"
-            class="btn btn--sm"
-            aria-controls=${draftId}
-            ?disabled=${disabled}
-            @click=${(event: Event) => {
-              if (entryDefault === NO_SAFE_DEFAULT) {
-                openCollectionDraft(event, draftId);
-                return;
-              }
-              const nextValue = { ...value };
-              let index = 1;
-              let key = `custom-${index}`;
-              while (key in nextValue) {
-                index += 1;
-                key = `custom-${index}`;
-              }
-              nextValue[key] = entryDefault;
-              if (onPatch(path, nextValue) === false) {
-                openCollectionDraft(event, draftId);
-              }
-            }}
-          >
-            ${t("configForm.addEntry")}
-          </button>
-        </div>
-      </div>
-
-      <openclaw-config-form-collection-draft
-        id=${draftId}
-        .props=${draftProps}
-        @config-collection-draft-commit=${(event: CustomEvent<ConfigFormCollectionDraftCommit>) => {
-          const key = event.detail.key;
-          if (
-            !key ||
-            Object.hasOwn(value, key) ||
-            reservedKeys.has(key) ||
-            onPatch(path, { ...value, [key]: event.detail.value }) === false
-          ) {
-            event.preventDefault();
-          }
-        }}
-      ></openclaw-config-form-collection-draft>
-      ${visibleEntries.length === 0
-        ? renderSettingsEmpty(t("configForm.noCustomEntries"))
-        : html`
-            <div class="settings-subrows">
-              ${visibleEntries.map(([key, entryValue]) => {
-                const valuePath = [...path, key];
-                const sensitiveState = getSensitiveRenderState({
-                  path: valuePath,
-                  value: entryValue,
-                  hints,
-                  revealSensitive: revealSensitive ?? false,
-                  isSensitivePathRevealed,
-                });
-                return html`
-                  <div class="settings-row">
-                    <div class="settings-row__text">
-                      <input
-                        type="text"
-                        class="settings-input"
-                        placeholder=${t("configForm.key")}
-                        aria-label=${`${t("configForm.key")}: ${key}`}
-                        .value=${key}
-                        ?disabled=${disabled}
-                        @change=${(event: Event) => {
-                          const target = event.target as HTMLInputElement;
-                          const nextKey = target.value.trim();
-                          if (!nextKey || nextKey === key) {
-                            target.value = key;
-                            return;
-                          }
-                          // Renaming a key that still holds server-redacted secrets would
-                          // submit the sentinel under a new key: the gateway fails closed
-                          // (dead-end draft), and a delete+rename fold in one autosave
-                          // window silently binds the deleted entry's old credential.
-                          const error = !validateKey(nextKey)
-                            ? t("configForm.invalidString")
-                            : containsRedactedSentinel(value[key])
-                              ? t("configForm.renameRedactedBlocked")
-                              : "";
-                          if (nextKey in value || error) {
-                            target.value = key;
-                            if (error) {
-                              target.setCustomValidity(error);
-                              target.reportValidity();
-                              target.setCustomValidity("");
-                            }
-                            return;
-                          }
-                          const nextValue = { ...value, [nextKey]: value[key] };
-                          delete nextValue[key];
-                          if (onPatch(path, nextValue) === false) {
-                            target.value = key;
+      ${
+        arrayValue.length === 0
+          ? params.compact
+            ? nothing
+            : renderSettingsEmpty(t("configForm.noItems"))
+          : html`
+              <div class="settings-subrows">
+                ${repeat(
+                  arrayValue,
+                  (_item, index) => rowIdentities[index],
+                  (item, index) => {
+                    const itemSchema = itemSchemaAt(index);
+                    const nextValue = arrayValue.toSpliced(index, 1);
+                    const canRemove = canApplyArrayCandidate(
+                      schema,
+                      arrayValue,
+                      nextValue,
+                      uniqueItems,
+                      false,
+                    );
+                    const removeControl = html` <openclaw-tooltip
+                      .content=${t("configForm.removeItem")}
+                    >
+                      <button
+                        type="button"
+                        class="btn btn--icon"
+                        style="width:28px;height:28px;padding:0;"
+                        aria-label=${t("configForm.removeItem")}
+                        ?disabled=${disabled || arrayValue.length <= minimumItems || !canRemove}
+                        @click=${(event: MouseEvent) => {
+                          if (canRemove) {
+                            removeCollectionRow(event, () =>
+                              patch(nextValue, rowIdentities.toSpliced(index, 1)),
+                            );
                           }
                         }}
-                      />
-                    </div>
-                    <div class="settings-row__control">
-                      <openclaw-tooltip .content=${t("configForm.removeEntry")}>
-                        <button
-                          type="button"
-                          class="btn btn--icon"
-                          style="width:28px;height:28px;padding:0;"
-                          aria-label=${t("configForm.removeEntry")}
-                          ?disabled=${disabled}
-                          @click=${() => {
-                            const nextValue = { ...value };
-                            delete nextValue[key];
-                            onPatch(path, nextValue);
-                          }}
-                        >
-                          ${icons.trash}
-                        </button>
-                      </openclaw-tooltip>
-                    </div>
-                  </div>
-                  ${anySchema
-                    ? renderFieldRow({
-                        label: key,
-                        tags: [],
-                        showLabel: false,
-                        stacked: true,
-                        control: renderJsonTextareaControl({
-                          schema,
-                          path: valuePath,
-                          ariaLabel: `${key}: ${t("configForm.jsonValue")}`,
-                          sourceValue: entryValue,
-                          rowIdentity: params.rowIdentity,
-                          fallback: jsonValue(entryValue),
-                          rows: 2,
-                          sensitiveState,
-                          disabled,
-                          isRequired: true,
-                          onToggleSensitivePath,
-                          onPatch,
-                        }),
-                      })
-                    : renderNode({
-                        schema,
-                        value: entryValue,
-                        path: valuePath,
-                        hints,
-                        rawAvailable,
-                        unsupported,
-                        disabled,
-                        isRequired: true,
-                        sourceIdentity: entryValue,
-                        controlIdentity: value,
-                        rowIdentity: params.rowIdentity,
-                        searchCriteria,
-                        showLabel: false,
-                        revealSensitive,
-                        isSensitivePathRevealed,
-                        onToggleSensitivePath,
-                        onPatch,
-                      })}
-                `;
-              })}
-            </div>
-          `}
+                      >
+                        ${icons.trash}
+                      </button>
+                    </openclaw-tooltip>`;
+                    const valueControl = renderNode({
+                      ...configChildRenderOptions(params),
+                      schema: inherited ? { ...itemSchema, default: item } : itemSchema,
+                      value: inherited ? undefined : item,
+                      path: [...path, index],
+                      isRequired: true,
+                      sourceIdentity: inherited ? undefined : item,
+                      controlIdentity: arrayValue,
+                      searchCriteria: childSearchCriteria,
+                      showLabel: false,
+                      // Keep inherited source identity until an edit materializes the
+                      // complete effective array through its parent owner.
+                      onPatch: patchArrayItem,
+                    });
+                    if (params.compact) {
+                      return html`<div class="cfg-array__item">
+                        <div class="cfg-array__value">${valueControl}</div>
+                        ${removeControl}
+                      </div>`;
+                    }
+                    return html`
+                      <div class="settings-row">
+                        <div class="settings-row__text">
+                          <span class="settings-row__title">#${index + 1}</span>
+                        </div>
+                        <div class="settings-row__control">${removeControl}</div>
+                      </div>
+                      ${valueControl}
+                    `;
+                  },
+                )}
+              </div>
+            `
+      }
     </div>
   `;
 }

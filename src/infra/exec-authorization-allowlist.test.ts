@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectPolicyInlineEval } from "./command-analysis/policy.js";
+import { detectInlineEvalInSegments } from "./command-analysis/risks.js";
 import {
   makeExecutable,
   makePathEnv,
@@ -31,7 +31,7 @@ describe("authorization-backed exec allowlist", () => {
       ["echo", "$HOME"],
       ["python3", "-c", "print(1)"],
     ]);
-    expect(detectPolicyInlineEval(result.segments)).toEqual(
+    expect(detectInlineEvalInSegments(result.segments)).toEqual(
       expect.objectContaining({
         executable: "python3",
         flag: "-c",
@@ -57,7 +57,7 @@ describe("authorization-backed exec allowlist", () => {
       ["echo", "ok"],
       ["python3", "-c", "print(1)"],
     ]);
-    expect(detectPolicyInlineEval(result.segments)).toEqual(
+    expect(detectInlineEvalInSegments(result.segments)).toEqual(
       expect.objectContaining({
         executable: "python3",
         flag: "-c",
@@ -88,7 +88,7 @@ describe("authorization-backed exec allowlist", () => {
     expect(result.allowlistSatisfied).toBe(true);
     expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-c", "print(1)"]]);
     expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
-    expect(detectPolicyInlineEval(result.segments)).toEqual(
+    expect(detectInlineEvalInSegments(result.segments)).toEqual(
       expect.objectContaining({
         executable: "python3",
         flag: "-c",
@@ -136,7 +136,7 @@ describe("authorization-backed exec allowlist", () => {
     expect(result.analysisOk).toBe(true);
     expect(result.allowlistSatisfied).toBe(true);
     expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-xcprint"]]);
-    expect(detectPolicyInlineEval(result.segments)).toEqual(
+    expect(detectInlineEvalInSegments(result.segments)).toEqual(
       expect.objectContaining({
         executable: "python3",
         flag: "-c",

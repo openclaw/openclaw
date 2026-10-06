@@ -1,12 +1,15 @@
 import { html, nothing } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasNativeUpdateBridge } from "../../app/native-link-routing.ts";
-import { confirmAndStartUpdate } from "../../app/update-confirmation.ts";
-import { createUpdateProgressWatcher } from "../../app/update-overlay-helpers.ts";
+import {
+  confirmAndStartUpdate,
+  createUpdateProgressWatcher,
+} from "../../app/update-confirmation.ts";
 import type {
   CustodianAlert,
   CustodianAlertAction,
 } from "../../components/custodian-alert-contract.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 
@@ -21,6 +24,9 @@ function runAlertAction(
     void confirmAndStartUpdate({
       startGatewayUpdate: () => void context.overlays.runUpdate(),
       watchUpdateProgress: createUpdateProgressWatcher(context),
+      onAcknowledge: () => context.overlays.acknowledgeUpdateRun(),
+      onCheckStatus: () => context.overlays.refreshUpdateStatus(),
+      onReviewUpdate: () => context.navigate("updates"),
       updateAvailable: context.overlays.snapshot.updateAvailable,
       updateSchedule: context.overlays.snapshot.updateSchedule,
       viaNativeApp: hasNativeUpdateBridge(),
@@ -49,22 +55,24 @@ export function renderCustodianAlertCard(params: {
         aria-label=${t("common.dismiss")}
         @click=${params.onDismiss}
       >
-        ×
+        ${icons.x}
       </button>
     </div>
     <ul class="custodian__alert-facts">
       ${params.alert.facts.map((fact) => html`<li>${fact}</li>`)}
     </ul>
-    ${action
-      ? html`<button
-          class="btn btn--sm primary custodian__alert-action"
-          type="button"
-          title=${updateDisabled ? t("updates.adminRequired") : nothing}
-          ?disabled=${updateDisabled}
-          @click=${() => runAlertAction(action.target, params.context, canUpdate)}
-        >
-          ${action.label}
-        </button>`
-      : nothing}
+    ${
+      action
+        ? html`<button
+            class="btn btn--sm primary custodian__alert-action"
+            type="button"
+            title=${updateDisabled ? t("updates.adminRequired") : nothing}
+            ?disabled=${updateDisabled}
+            @click=${() => runAlertAction(action.target, params.context, canUpdate)}
+          >
+            ${action.label}
+          </button>`
+        : nothing
+    }
   </article>`;
 }

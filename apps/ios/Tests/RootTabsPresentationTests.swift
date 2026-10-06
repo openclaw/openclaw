@@ -1,4 +1,5 @@
 import OpenClawChatUI
+import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 import Testing
@@ -7,6 +8,36 @@ import UIKit
 
 @MainActor
 struct RootTabsPresentationTests {
+    @Test func `notification guidance opens delivery setup before system permissions`() {
+        #expect(RootTabs
+            .notificationSettingsPath(servingEnabled: false, disclosureAccepted: false) == "/settings/device")
+        #expect(RootTabs
+            .notificationSettingsPath(servingEnabled: false, disclosureAccepted: true) == "/settings/device")
+        #expect(RootTabs
+            .notificationSettingsPath(servingEnabled: true, disclosureAccepted: false) == "/settings/device")
+        #expect(RootTabs
+            .notificationSettingsPath(servingEnabled: true, disclosureAccepted: true) == "/settings/device/permissions")
+    }
+
+    @Test func `every sidebar destination resolves to a native screen or a valid Dashboard route`() {
+        let expected: [RootTabs.SidebarDestination: RootTabs.SidebarScreen] = [
+            .chat: .chat, .overview: .overview, .agents: .agents, .sessions: .sessions,
+            .files: .files, .desktop: .desktop, .terminal: .terminal, .docs: .docs,
+            .settings: .settings, .gateway: .gateway,
+            .activity: .dashboard("/activity"), .workboard: .dashboard("/workboard"),
+            .skillWorkshop: .dashboard("/skills/workshop"), .instances: .dashboard("/settings/devices"),
+            .dreaming: .dashboard("/settings/memory/dreams"), .usage: .dashboard("/usage"),
+            .cron: .dashboard("/automations"),
+        ]
+        #expect(Set(expected.keys) == Set(RootTabs.SidebarDestination.allCases))
+        for destination in RootTabs.SidebarDestination.allCases {
+            #expect(expected[destination] == destination.screen)
+            if case let .dashboard(path) = destination.screen {
+                #expect(DashboardRouteMap.isValidSameAppPath(path))
+            }
+        }
+    }
+
     @Test func `session activity clamps current and future timestamps to just now`() {
         let now = Date(timeIntervalSince1970: 1_750_000_000)
 
@@ -49,15 +80,18 @@ struct RootTabsPresentationTests {
         #expect(appModel.consumeNewChatRequest(appModel.newChatRequestID))
     }
 
-    @Test func `overview session metrics exclude archived and internal sessions`() {
+    @Test func `overview session metrics exclude snoozed archived and internal sessions`() {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
         let visible = CommandCenterTab.visibleOverviewSessions([
             Self.sessionEntry(key: "main"),
             Self.sessionEntry(key: "onboarding"),
             Self.sessionEntry(key: "agent:main:onboarding"),
             Self.sessionEntry(key: "archived", archived: true),
-        ])
+            Self.sessionEntry(key: "snoozed", snoozedUntil: now.addingTimeInterval(3600).timeIntervalSince1970 * 1000),
+            Self.sessionEntry(key: "expired", snoozedUntil: now.timeIntervalSince1970 * 1000),
+        ], now: now)
 
-        #expect(visible.map(\.key) == ["main"])
+        #expect(visible.map(\.key) == ["main", "expired"])
     }
 
     @Test func `overview token usage sums known totals and marks stale or missing rows partial`() {
@@ -197,21 +231,6 @@ struct RootTabsPresentationTests {
                     sessions: [Self.sessionEntry(key: "first")])
             }
         }
-    }
-
-    @Test func `usage list shows the latest fourteen days newest first`() {
-        let days = (1...20).map { day in
-            CostUsageDailyEntryLite(
-                date: String(format: "2026-07-%02d", day),
-                totalTokens: day,
-                totalCost: Double(day))
-        }
-
-        let displayed = AgentProTab.displayedUsageDays(days)
-
-        #expect(displayed.map(\.date) == (7...20).reversed().map {
-            String(format: "2026-07-%02d", $0)
-        })
     }
 
     @Test func `iOS usage requests device calendar days`() throws {
@@ -402,145 +421,10 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
     }
 
-    @Test func `skill workshop mutations require admin scope`() {
-        #expect(IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: true, hasOperatorAdminScope: true))
-        #expect(!IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: true, hasOperatorAdminScope: false))
-        #expect(!IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: false, hasOperatorAdminScope: true))
-    }
-
-    @Test func `skill workshop actions carry the reviewed revision hash`() throws {
-        let revisionHash = String(repeating: "a", count: 64)
-        let proposal = Self.skillWorkshopProposal(revisionHash: revisionHash)
-        let apply = try #require(IPadSkillProposalAction(kind: .apply, proposal: proposal))
-        let reject = try #require(IPadSkillProposalAction(kind: .reject, proposal: proposal))
-
-        for (action, method) in [
-            (apply, "skills.proposals.apply"),
-            (reject, "skills.proposals.reject"),
-        ] {
-            let encoded = try #require(
-                JSONSerialization.jsonObject(
-                    with: JSONEncoder().encode(action.params(agentID: "main"))) as? [String: Any])
-
-            #expect(action.method == method)
-            #expect(encoded["agentId"] as? String == "main")
-            #expect(encoded["proposalId"] as? String == proposal.id)
-            #expect(encoded["expectedRevisionHash"] as? String == revisionHash)
-        }
-    }
-
-    @Test func `skill workshop actions require an inspected revision hash`() {
-        #expect(IPadSkillProposalAction(
-            kind: .apply,
-            proposal: Self.skillWorkshopProposal(revisionHash: nil)) == nil)
-    }
-
-    @Test func `skill workshop held filter includes quarantined and stale`() {
-        #expect(IPadSkillWorkshopScreen.proposalStatusFilters.contains("held"))
-        #expect(IPadSkillWorkshopScreen.proposalStatusMatchesFilter(status: "quarantined", filter: "held"))
-        #expect(IPadSkillWorkshopScreen.proposalStatusMatchesFilter(status: "stale", filter: "held"))
-        #expect(!IPadSkillWorkshopScreen.proposalStatusMatchesFilter(status: "pending", filter: "held"))
-    }
-
-    @Test func `skill workshop board lanes match status filter`() {
-        #expect(
-            IPadSkillWorkshopScreen.proposalStatusBoardLanes(
-                filter: "pending",
-                proposalStatuses: ["pending", "applied"]) == ["pending"])
-        #expect(
-            IPadSkillWorkshopScreen.proposalStatusBoardLanes(
-                filter: "held",
-                proposalStatuses: ["quarantined", "stale"]) == ["quarantined", "stale"])
-        #expect(
-            IPadSkillWorkshopScreen.proposalStatusBoardLanes(
-                filter: "all",
-                proposalStatuses: ["pending", "needs-review"]) == [
-                "pending",
-                "quarantined",
-                "stale",
-                "applied",
-                "rejected",
-                "needs-review",
-            ])
-        #expect(IPadSkillWorkshopScreen.proposalLaneLabel("quarantined") == "Quarantined")
-        #expect(IPadSkillWorkshopScreen.proposalLaneLabel("pending") == "Pending")
-        #expect(IPadSkillWorkshopScreen.proposalLaneLabel("needs-review") == "Needs Review")
-        #expect(IPadSkillWorkshopScreen.proposalLaneLabel("manual_QA") == "Manual QA")
-    }
-
-    @Test func `skill workshop selection stays inside active filter`() {
-        let proposals = [
-            (id: "applied-1", status: "applied"),
-            (id: "pending-1", status: "pending"),
-            (id: "held-1", status: "quarantined"),
-        ]
-
-        #expect(
-            IPadSkillWorkshopScreen.nextSelectedProposalID(
-                current: "applied-1",
-                proposals: proposals,
-                filter: "pending") == "pending-1")
-        #expect(
-            IPadSkillWorkshopScreen.nextSelectedProposalID(
-                current: "held-1",
-                proposals: proposals,
-                filter: "held") == "held-1")
-        #expect(
-            IPadSkillWorkshopScreen.nextSelectedProposalID(
-                current: "pending-1",
-                visibleProposalIDs: ["held-1"]) == "held-1")
-        #expect(
-            IPadSkillWorkshopScreen.nextSelectedProposalID(
-                current: "pending-1",
-                visibleProposalIDs: []) == nil)
-    }
-
-    @Test func `workboard board scope labels stay compact`() {
-        #expect(IPadWorkboardScreen.normalizedScopeID("  planning ") == "planning")
-        #expect(IPadWorkboardScreen.boardScopeLabel(for: "") == "All boards")
-        #expect(IPadWorkboardScreen.boardScopeLabel(for: "planning") == "planning")
-        #expect(IPadWorkboardScreen.boardScopeOptions(
-            knownBoardIDs: ["default", " empty-board ", ""],
-            cardBoardIDs: ["planning", "default"]) == ["default", "empty-board", "planning"])
-        #expect(IPadWorkboardScreen
-            .workboardSubtitle(boardScopeLabel: "All boards", selectedStatus: "active") == "All boards / Active")
-        #expect(IPadWorkboardScreen
-            .workboardSubtitle(boardScopeLabel: "planning", selectedStatus: "running") == "planning / Running")
-    }
-
-    @Test func `workboard compact unavailable copy explains real capability state`() {
-        #expect(IPadWorkboardScreen
-            .compactWriteUnavailableMessage(canRead: false) ==
-            "Connect from Settings to create, move, and dispatch cards.")
-        #expect(IPadWorkboardScreen.compactWriteUnavailableMessage(canRead: true) == "Read-only gateway.")
-    }
-
-    @Test func `skill workshop agent scope normalizes gateway ids`() {
-        #expect(IPadSkillWorkshopScreen.normalizedScopeID("  aiden ") == "aiden")
-        #expect(IPadSkillWorkshopScreen.normalizedScopeID(nil) == "")
-    }
-
-    @Test func `channel lifecycle controls require admin scope`() {
-        #expect(SettingsChannelsDestination.shouldEnableChannelOperation(canRead: true, hasOperatorAdminScope: true))
-        #expect(!SettingsChannelsDestination.shouldEnableChannelOperation(canRead: true, hasOperatorAdminScope: false))
-        #expect(!SettingsChannelsDestination.shouldEnableChannelOperation(canRead: false, hasOperatorAdminScope: true))
-    }
-
-    @Test func `click clack stays in channels integration metadata`() {
-        #expect(SettingsChannelsDestination.fallbackLabel("clickclack") == "ClickClack")
-        #expect(SettingsChannelsDestination.fallbackDetail("clickclack") == "Self-hosted chat bot routing.")
-        #expect(SettingsChannelsDestination.fallbackSystemImage("clickclack") == "bubble.left.and.bubble.right")
-    }
-
-    @Test func `chat header follows the agent badge presentation`() {
-        #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: true, agentDisplayName: "OpenClaw") == "OpenClaw")
-        #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: false, agentDisplayName: "OpenClaw") == "Chat")
-    }
-
     @Test func `chat transport identity distinguishes unresolved and resolved agents`() {
-        #expect(ChatProTab.transportAgentID(nil).isEmpty)
-        #expect(ChatProTab.transportAgentID("   ").isEmpty)
-        #expect(ChatProTab.transportAgentID(" Main ") == "main")
+        #expect(IOSChatViewModelOwner.transportAgentID(nil).isEmpty)
+        #expect(IOSChatViewModelOwner.transportAgentID("   ").isEmpty)
+        #expect(IOSChatViewModelOwner.transportAgentID(" Main ") == "main")
     }
 
     @Test func `chat keeps active voice capture stoppable while attachment ownership is pinned`() {
@@ -553,42 +437,6 @@ struct RootTabsPresentationTests {
         #expect(ChatProTab.shouldExposeCaptureControl(
             isAttachmentOwnerPinned: false,
             isCaptureInFlight: false))
-    }
-
-    @Test func `chat view model rebuilds only when its transport owner changes`() {
-        #expect(!ChatProTab.requiresViewModelRebuild(
-            currentOwnerID: "gateway-a",
-            nextOwnerID: "gateway-a",
-            currentTransportAgentID: "main",
-            nextTransportAgentID: "main"))
-        #expect(ChatProTab.requiresViewModelRebuild(
-            currentOwnerID: "gateway-a",
-            nextOwnerID: "gateway-b",
-            currentTransportAgentID: "main",
-            nextTransportAgentID: "main"))
-        #expect(ChatProTab.requiresViewModelRebuild(
-            currentOwnerID: "gateway-a",
-            nextOwnerID: "gateway-a",
-            currentTransportAgentID: "main",
-            nextTransportAgentID: "work"))
-    }
-
-    @Test func `workboard dispatch summary reports started and failures`() throws {
-        let payload = Data(
-            """
-            {
-              "count": 2,
-              "started": [{}],
-              "startFailures": [{}],
-              "promoted": [],
-              "reclaimed": [],
-              "blocked": [],
-              "orchestrated": []
-            }
-            """.utf8)
-        let summary = try JSONDecoder().decode(IPadWorkboardDispatchSummary.self, from: payload)
-
-        #expect(summary.summaryText == "2 dispatched: 1 started, 1 failed.")
     }
 
     @Test func `localized QR status matcher accepts positional placeholders`() {
@@ -605,8 +453,8 @@ struct RootTabsPresentationTests {
             navigationPath: [.approvals],
             baseRoute: nil) == .approvals)
         #expect(RootTabs.visibleSettingsRoute(
-            navigationPath: [.approvals, .notifications],
-            baseRoute: .gateway) == .notifications)
+            navigationPath: [.approvals, .licenses],
+            baseRoute: .gateway) == .licenses)
         #expect(RootTabs.visibleSettingsRoute(
             navigationPath: [],
             baseRoute: .approvals) == .approvals)
@@ -615,11 +463,11 @@ struct RootTabsPresentationTests {
             baseRoute: nil) == nil)
     }
 
-    @Test func `i pad portrait uses hidden drawer sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1024, height: 1366))
+    @Test func `wide i pad portrait uses persistent sidebar`() {
+        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1024, height: 1366), isPad: true)
 
-        #expect(mode == .drawer)
-        #expect(!RootTabs.preferredSidebarVisibility(layoutMode: mode))
+        #expect(mode == .split)
+        #expect(RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
     }
 
     @Test func `keyboard contracted content uses portrait window for sidebar layout`() {
@@ -628,7 +476,7 @@ struct RootTabsPresentationTests {
             windowSize: CGSize(width: 1032, height: 1376))
 
         #expect(size == CGSize(width: 1032, height: 1376))
-        #expect(RootTabs.sidebarLayoutMode(containerSize: size) == .drawer)
+        #expect(RootTabs.sidebarLayoutMode(containerSize: size, isPad: true) == .split)
     }
 
     @Test func `sidebar layout container falls back to content size without a window`() {
@@ -638,10 +486,43 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `i pad wide landscape uses visible split sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1366, height: 1024))
+        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1366, height: 1024), isPad: true)
 
         #expect(mode == .split)
-        #expect(RootTabs.preferredSidebarVisibility(layoutMode: mode))
+        #expect(RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
+    }
+
+    @Test(arguments: [CGFloat(400), 900, 1366])
+    func `persistent sidebar threshold depends on width not height`(height: CGFloat) {
+        #expect(RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 799, height: height), isPad: true) == .drawer)
+        #expect(RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 800, height: height), isPad: true) == .split)
+        #expect(RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 801, height: height), isPad: true) == .split)
+    }
+
+    @Test(arguments: [CGFloat(744), 800, 852, 932, 1032, 1366])
+    func `phones and accessibility text retain single column navigation`(width: CGFloat) {
+        let size = CGSize(width: width, height: 430)
+        #expect(RootTabs.sidebarLayoutMode(containerSize: size, isPad: false) == .drawer)
+        #expect(RootTabs.sidebarLayoutMode(
+            containerSize: size, isPad: true, usesAccessibilityText: true) == .drawer)
+    }
+
+    @Test(arguments: [CGFloat(800), 810, 820, 834, 1024, 1366])
+    func `tablet split preserves minimum detail width`(width: CGFloat) {
+        #expect(RootTabs.sidebarLayoutMode(
+            containerSize: CGSize(width: width, height: 1180), isPad: true) == .split)
+        let sidebar = RootTabs.sidebarWidth(containerWidth: width, isDrawerLayout: false)
+        #expect(sidebar >= 300 && sidebar <= 320)
+        #expect(width - sidebar >= 500)
+    }
+
+    @Test func `split visibility preference survives an intervening drawer layout`() {
+        for preference: Bool? in [nil, false, true] {
+            let expected = preference ?? true
+            #expect(RootTabs.sidebarVisibility(layoutMode: .split, splitPreference: preference) == expected)
+            #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: preference))
+            #expect(RootTabs.sidebarVisibility(layoutMode: .split, splitPreference: preference) == expected)
+        }
     }
 
     @Test func `i pad split sidebar width stays usable`() {
@@ -695,20 +576,30 @@ struct RootTabsPresentationTests {
         #expect(RootSidebar.sessionAccessibilityValue(isPinned: true, isUnread: true) == "Pinned, Unread")
     }
 
-    @Test func `iOS sidebar moves pinned sessions ahead of the remaining inventory`() {
-        let sections = ChatSessionSidebarModel.sections(
+    @Test(arguments: ["recent", "agent:main:later", "later"])
+    func `iOS sidebar groups awake sessions without restoring a snoozed selection`(currentSessionKey: String) {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let sections = RootSidebarModel.sections(
             sessions: [
                 Self.sessionEntry(key: "pinned", pinned: true),
                 Self.sessionEntry(key: "recent"),
+                Self.sessionEntry(
+                    key: "agent:main:later",
+                    snoozedUntil: now.addingTimeInterval(3600).timeIntervalSince1970 * 1000),
+                Self.sessionEntry(key: "expired", snoozedUntil: now.timeIntervalSince1970 * 1000),
             ],
-            currentSessionKey: "recent",
-            excludesMainSession: true,
-            query: "")
+            query: "",
+            currentSessionKey: currentSessionKey,
+            mainSessionKey: "main",
+            activeAgentID: "main",
+            groups: [],
+            now: now)
 
         let layout = RootSidebar.sessionLayout(sections)
 
         #expect(layout.pinnedNodes.map(\.session.key) == ["pinned"])
         #expect(layout.sections.map(\.id) == ["recent"])
+        #expect(Set(layout.sections.flatMap(\.nodes).map(\.session.key)) == ["recent", "expired"])
     }
 
     @Test func `sidebar agent badges use canonical identity fallback`() {
@@ -1073,17 +964,15 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `narrow landscape keeps drawer sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 900, height: 600))
+        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 744, height: 600), isPad: true)
 
         #expect(mode == .drawer)
-        #expect(!RootTabs.preferredSidebarVisibility(layoutMode: mode))
+        #expect(!RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
     }
 
     @Test func `i pad split prefers integrated visible sidebar`() {
-        #expect(RootTabs.preferredSidebarVisibility(layoutMode: .split))
-        #expect(!RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .split))
-        #expect(!RootTabs.preferredSidebarVisibility(layoutMode: .drawer))
-        #expect(RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .drawer))
+        #expect(RootTabs.sidebarVisibility(layoutMode: .split, splitPreference: nil))
+        #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
     }
 
     @Test func `destination headers own hidden sidebar reveal control`() {
@@ -1105,39 +994,10 @@ struct RootTabsPresentationTests {
                 layoutMode: .split))
     }
 
-    @Test func `workboard and skill workshop use compact task flow on phone sizes`() {
-        #expect(
-            IPadWorkboardScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .compact,
-                verticalSizeClass: .regular))
-        #expect(
-            IPadSkillWorkshopScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .compact,
-                verticalSizeClass: .regular))
-        #expect(
-            IPadWorkboardScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .regular,
-                verticalSizeClass: .compact))
-        #expect(
-            IPadSkillWorkshopScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .regular,
-                verticalSizeClass: .compact))
-    }
-
-    @Test func `workboard and skill workshop keep regular task flow on wide I pad sizes`() {
-        #expect(
-            !IPadWorkboardScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .regular,
-                verticalSizeClass: .regular))
-        #expect(
-            !IPadSkillWorkshopScreen.usesCompactTaskFlow(
-                horizontalSizeClass: .regular,
-                verticalSizeClass: .regular))
-    }
-
     private static func sessionEntry(
         key: String,
         archived: Bool? = nil,
+        snoozedUntil: Double? = nil,
         pinned: Bool? = nil,
         totalTokens: Int? = nil,
         totalTokensFresh: Bool? = nil,
@@ -1169,6 +1029,7 @@ struct RootTabsPresentationTests {
             contextTokens: contextTokens,
             pinned: pinned,
             archived: archived,
+            snoozedUntil: snoozedUntil,
             observerDigest: observerDigest,
             lastReadAt: lastReadAt,
             worktree: worktree)
@@ -1187,23 +1048,5 @@ struct RootTabsPresentationTests {
             payload: AnyCodable(["kind": AnyCodable("agentTurn")]),
             state: [:],
             lastrunstatus: AnyCodable(status))
-    }
-
-    private static func skillWorkshopProposal(revisionHash: String?) -> IPadSkillProposal {
-        IPadSkillProposal(
-            inspect: IPadSkillProposalInspectResponse(
-                record: IPadSkillProposalRecord(
-                    id: "proposal-1",
-                    status: "pending",
-                    title: "Reviewed proposal",
-                    description: "A reviewed Skill Workshop proposal.",
-                    updatedAt: "2026-08-18T12:00:00Z",
-                    target: IPadSkillProposalTarget(
-                        skillName: "reviewed-skill",
-                        skillKey: "reviewed-skill")),
-                revisionHash: revisionHash,
-                content: "# Reviewed skill",
-                supportFiles: nil),
-            previous: nil)
     }
 }

@@ -1,31 +1,16 @@
 // Loads and saves JSON files with symlink backup handling.
-import "./fs-safe-defaults.js";
 import fs from "node:fs";
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { tryReadJsonSync, writeJsonSync } from "@openclaw/fs-safe/json";
+import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 
-function resolveJsonSymlinkTarget(pathname: string): string | undefined {
-  let stat: fs.Stats;
-  try {
-    stat = fs.lstatSync(pathname);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-  if (!stat.isSymbolicLink()) {
-    return undefined;
-  }
-
-  return path.resolve(path.dirname(pathname), fs.readlinkSync(pathname));
-}
-
-function resolveJsonSaveTarget(pathname: string): string {
-  const target = resolveJsonSymlinkTarget(pathname);
-  if (!target) {
+export function resolveJsonSaveTarget(pathname: string): string {
+  if (!fs.lstatSync(pathname, { throwIfNoEntry: false })?.isSymbolicLink()) {
     return pathname;
   }
+  const resolved = resolvePathPrefixSync(pathname);
+  const target = [resolved.existingPath, ...resolved.unresolvedSegments].join(path.sep);
   fs.statSync(path.dirname(target));
   return target;
 }
@@ -36,10 +21,14 @@ export function writeJsonTarget(pathname: string, data: unknown): void {
 
 // oxlint-disable-next-line typescript-eslint/no-unnecessary-type-parameters -- legacy typed JSON loader alias.
 export function loadJsonFileThroughSymlink<T = unknown>(pathname: string): T | undefined {
-  const direct = tryReadJsonSync<T>(pathname);
-  if (direct !== null) {
-    return direct;
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(pathname);
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
+      return undefined;
+    }
+    throw error;
   }
-  const target = resolveJsonSymlinkTarget(pathname);
-  return target ? (tryReadJsonSync<T>(target) ?? undefined) : undefined;
+  return tryReadJsonSync<T>(resolved) ?? undefined;
 }

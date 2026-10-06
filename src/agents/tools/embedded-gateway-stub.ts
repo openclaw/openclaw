@@ -1,99 +1,45 @@
-/**
- * Embedded-mode Gateway method stub.
- *
- * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
- */
-import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import { normalizeFastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsListParams,
   SessionsResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import type { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import type {
-  readChatHistoryPage,
-  resolveChatHistoryNextOffset,
-  shouldReplayOldestChatHistoryRecord,
-} from "../../gateway/server-methods/chat-history-pages.js";
-import type { SessionsListResult } from "../../gateway/session-utils.types.js";
-import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { readNonNegativeIntegerParam, readPositiveIntegerParam } from "./common.js";
+import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
+import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { parseAgentSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readToolStringParam,
+} from "./common.js";
 
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
 
 const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
 
-interface EmbeddedGatewayRuntime {
-  resolveSessionAgentId: (opts: {
-    sessionKey: string;
-    config: OpenClawConfig;
-    agentId?: string;
-  }) => string;
-  getRuntimeConfig: () => OpenClawConfig;
-  resolveSessionStoreKey: (params: { cfg: OpenClawConfig; sessionKey: string }) => string;
-  resolveStoredSessionKeyForAgentStore: (params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    sessionKey: string;
-  }) => string;
-  resolveSessionStorePathCore: typeof resolveSessionStorePathCore;
-  searchSessionTranscripts: typeof searchSessionTranscripts;
-  getMaxChatHistoryMessagesBytes: () => number;
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: number;
-  replaceOversizedChatHistoryMessages: (opts: {
-    messages: unknown[];
-    maxSingleMessageBytes: number;
-  }) => { messages: unknown[] };
-  resolveEffectiveChatHistoryMaxChars: (cfg: OpenClawConfig) => number;
-  capArrayByJsonBytes: (items: unknown[], maxBytes: number) => { items: unknown[] };
-  listSessionsFromStoreAsync: (opts: {
-    cfg: OpenClawConfig;
-    storePath: string;
-    store: unknown;
-    opts: SessionsListParams;
-  }) => Promise<SessionsListResult>;
-  loadCombinedSessionStoreForGatewayCore: (
-    cfg: OpenClawConfig,
-    opts?: { agentId?: string; projection?: "full" | "list" },
-  ) => {
-    storePath: string;
-    store: unknown;
+const getRuntime = createLazyPromise(() => import("./embedded-gateway-stub.runtime.js"));
+let sessionProjection: Promise<SessionRowProjection> | undefined;
+
+export function bindEmbeddedSessionRowProjection(projection: Promise<SessionRowProjection>) {
+  sessionProjection = projection;
+  return () => {
+    if (sessionProjection === projection) {
+      sessionProjection = undefined;
+    }
   };
-  resolveSessionKeyFromResolveParams: (opts: {
-    cfg: OpenClawConfig;
-    client: null;
-    p: SessionsResolveParams;
-  }) => Promise<SessionsResolveResult>;
-  loadSessionEntry: (
-    sessionKey: string,
-    opts?: { agentId?: string },
-  ) => {
-    cfg: OpenClawConfig;
-    storePath: string | undefined;
-    entry: Parameters<typeof readChatHistoryPage>[0]["entry"];
-    canonicalKey: string;
-  };
-  readChatHistoryPage: typeof readChatHistoryPage;
-  resolveChatHistoryNextOffset: typeof resolveChatHistoryNextOffset;
-  shouldReplayOldestChatHistoryRecord: typeof shouldReplayOldestChatHistoryRecord;
-  resolveSessionModelRef: (
-    cfg: OpenClawConfig,
-    entry: unknown,
-    sessionAgentId: string,
-  ) => { provider: string | undefined };
 }
 
-let runtimeMod: EmbeddedGatewayRuntime | undefined;
-
-async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
-  if (!runtimeMod) {
-    // Lazy import keeps embedded tools cheap and gives tests a single mock boundary.
-    runtimeMod = (await import("./embedded-gateway-stub.runtime.js")) as EmbeddedGatewayRuntime;
+async function borrowSessionRowProjection() {
+  const publication = sessionProjection;
+  if (!publication) {
+    throw new Error("Embedded session projection is unavailable");
   }
-  return runtimeMod;
+  const projection = await publication;
+  if (sessionProjection !== publication) {
+    throw new Error("Embedded session projection is unavailable");
+  }
+  return projection;
 }
 
 function readOffsetParam(params: Record<string, unknown>): number | undefined {
@@ -106,38 +52,35 @@ function readOffsetParam(params: Record<string, unknown>): number | undefined {
 
 async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
-  const cfg = rt.getRuntimeConfig();
-  const opts = params as SessionsListParams;
-  const { storePath, store } = rt.loadCombinedSessionStoreForGatewayCore(cfg, {
-    agentId: opts.agentId,
-    projection: "list",
-  });
-  return rt.listSessionsFromStoreAsync({
-    cfg,
-    storePath,
-    store,
-    opts,
+  return rt.listProjectedSessions({
+    projection: await borrowSessionRowProjection(),
+    opts: params as SessionsListParams,
   });
 }
 
 async function handleSessionsResolve(params: Record<string, unknown>) {
   const rt = await getRuntime();
-  const cfg = rt.getRuntimeConfig();
-  const resolved = await rt.resolveSessionKeyFromResolveParams({
-    cfg,
-    client: null,
-    p: params as SessionsResolveParams,
-  });
-  if (!resolved.ok) {
-    throw new Error(resolved.error.message);
-  }
-  if ("missing" in resolved) {
-    return { ok: false };
-  }
-  if ("ambiguous" in resolved) {
-    return { ok: false, candidates: resolved.candidates };
-  }
-  return { ok: true, key: resolved.key, agentId: resolved.agentId };
+  const publication = sessionProjection;
+  return await rt.withPreparedSessionResolve(
+    {
+      projection: await borrowSessionRowProjection(),
+      isCurrent: () => sessionProjection === publication,
+      client: null,
+      p: params as SessionsResolveParams,
+    },
+    (resolved) => {
+      if (!resolved.ok) {
+        throw new Error(resolved.error.message);
+      }
+      if ("missing" in resolved) {
+        return { ok: false };
+      }
+      if ("ambiguous" in resolved) {
+        return { ok: false, candidates: resolved.candidates };
+      }
+      return { ok: true, key: resolved.key, agentId: resolved.agentId };
+    },
+  );
 }
 
 async function handleSessionsSearch(params: Record<string, unknown>) {
@@ -189,7 +132,7 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
     requestedAgentId ??
     agentIds.values().next().value ??
     rt.resolveSessionAgentId({ sessionKey: "main", config: cfg });
-  const result = rt.searchSessionTranscripts({
+  const result = await rt.searchSessionTranscripts({
     agentId,
     storePath: rt.resolveSessionStorePathCore(cfg.session?.store, { agentId }),
     query,
@@ -198,23 +141,15 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   });
   return {
     results: result.hits,
+    ...(result.archivedTranscriptsExcluded
+      ? { archivedTranscriptsExcluded: result.archivedTranscriptsExcluded }
+      : {}),
     ...(result.indexing ? { indexing: true } : {}),
     ...(result.truncated ? { truncated: true } : {}),
   };
 }
 
-async function handleChatHistory(params: Record<string, unknown>): Promise<{
-  sessionKey: string;
-  sessionId: string | undefined;
-  messages: unknown[];
-  offset?: number;
-  nextOffset?: number;
-  hasMore?: boolean;
-  totalMessages?: number;
-  thinkingLevel?: string;
-  fastMode?: FastMode;
-  verboseLevel?: string;
-}> {
+async function handleChatHistory(params: Record<string, unknown>) {
   const rt = await getRuntime();
 
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : "";
@@ -223,27 +158,55 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const requestedAgentId = agentId ?? parsedAgentId;
   const limit = readPositiveIntegerParam(params, "limit");
   const offset = readOffsetParam(params) ?? 0;
+  const messageId = readToolStringParam(params, "messageId", {
+    required: params.messageId !== undefined,
+  });
+  const requestedSessionId = readToolStringParam(params, "sessionId", {
+    required: params.sessionId !== undefined,
+  });
+  if (params.offset !== undefined && messageId !== undefined) {
+    throw new Error("offset and messageId cannot be used together");
+  }
+  if (requestedSessionId !== undefined && messageId === undefined) {
+    throw new Error("sessionId requires messageId");
+  }
 
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
   const { cfg, storePath, entry, canonicalKey } = rt.loadSessionEntry(
     sessionKey,
     sessionLoadOptions,
   );
-  const sessionId = entry?.sessionId;
   const sessionAgentId = rt.resolveSessionAgentId({
     sessionKey,
     config: cfg,
     agentId: requestedAgentId,
   });
+  if (requestedSessionId) {
+    const transcriptSessionKey = rt.resolveTranscriptSessionKeyBySessionId({
+      agentId: sessionAgentId,
+      sessionId: requestedSessionId,
+      storePath,
+    });
+    if (
+      !transcriptSessionKey ||
+      scopeLegacySessionKeyToAgent({
+        sessionKey: transcriptSessionKey,
+        agentId: sessionAgentId,
+      }) !== scopeLegacySessionKeyToAgent({ sessionKey: canonicalKey, agentId: sessionAgentId })
+    ) {
+      throw new Error("sessionId does not belong to sessionKey");
+    }
+  }
+  const sessionId = requestedSessionId ?? entry?.sessionId;
+  // Reset archives share a logical key, but not the replacement's start boundary or CLI binding.
+  const historyEntry =
+    requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
   const resolvedSessionModel = rt.resolveSessionModelRef(cfg, entry, sessionAgentId);
-  const hardMax = 1000;
-  const defaultLimit = 200;
-  const requested = typeof limit === "number" ? limit : defaultLimit;
-  const max = Math.min(hardMax, requested);
+  const max = Math.min(1000, limit ?? 200);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
-  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
+  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars();
   const page = await rt.readChatHistoryPage({
-    entry,
+    entry: historyEntry,
     provider: resolvedSessionModel.provider,
     sessionId,
     storePath,
@@ -253,7 +216,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     maxHistoryBytes,
     effectiveMaxChars,
     offset: params.offset === undefined ? undefined : offset,
-    messageId: undefined,
+    messageId,
   });
 
   // Keep transport-level byte limits identical after the shared reader projects the page.
@@ -262,8 +225,17 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     messages: page.messages,
     maxSingleMessageBytes: perMessageHardCap,
   });
-  const capped = rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-  const pagination = params.offset === undefined ? undefined : page.pagination;
+  const capped = messageId
+    ? (rt.capChatHistoryAroundMessage({
+        messages: replaced.messages,
+        messageId,
+        // Reserve array framing and separators without evicting the requested anchor.
+        maxCost: maxHistoryBytes - 1,
+        messageCost: (message) => jsonUtf8Bytes(message) + 1,
+      }) ?? rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items)
+    : rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
+  const responseOffset = page.responseOffset ?? (params.offset === undefined ? undefined : offset);
+  const pagination = responseOffset === undefined ? undefined : page.pagination;
   const nextOffset =
     pagination !== undefined
       ? rt.resolveChatHistoryNextOffset({
@@ -271,23 +243,23 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
           totalMessages: pagination.totalMessages,
           offset: pagination.offset,
           rawPageMessages: pagination.rawPageMessages,
-          replayOldestRecord: rt.shouldReplayOldestChatHistoryRecord({
-            projected: page.messages,
-            bounded: capped,
-          }),
+          projected: page.messages,
+          ...(pagination.messageSequences ? { messageSequences: pagination.messageSequences } : {}),
         })
       : 0;
-  const hasMore =
-    pagination !== undefined &&
-    pagination.exhausted !== true &&
-    nextOffset < pagination.totalMessages;
+  const hasMore = pagination !== undefined && nextOffset < pagination.totalMessages;
 
   return {
     sessionKey,
     sessionId,
     messages: capped,
-    ...(params.offset !== undefined
-      ? { offset, hasMore, totalMessages: pagination?.totalMessages ?? page.messages.length }
+    ...(page.windowReset ? { windowReset: true } : {}),
+    ...(responseOffset !== undefined
+      ? {
+          offset: responseOffset,
+          hasMore,
+          totalMessages: pagination?.totalMessages ?? page.messages.length,
+        }
       : {}),
     ...(hasMore ? { nextOffset } : {}),
     thinkingLevel: entry?.thinkingLevel,

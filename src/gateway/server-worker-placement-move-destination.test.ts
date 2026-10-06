@@ -37,7 +37,12 @@ describe("worker placement move destination owner", () => {
     },
     {
       name: "carries runtime-owned node command requirements into a compatible cloud profile",
-      target: { kind: "profile" as const, profileId: "compatible" },
+      target: {
+        kind: "profile" as const,
+        profileId: "compatible",
+        machineClass: "tiny",
+        os: "os-a",
+      },
       supported: true,
       expectedError: "source placement barrier started",
       barrierCalls: 1,
@@ -153,6 +158,7 @@ describe("worker placement move destination owner", () => {
       await expect(resolveDestination.mock.results[0]?.value).resolves.toMatchObject({
         executionMode: "remote-exec",
         devicePlacement: DEVICE_REQUIREMENT,
+        ...(target.kind === "profile" ? { machineClass: target.machineClass, os: target.os } : {}),
       });
     }
     if (target.kind === "profile") {

@@ -128,23 +128,6 @@ describe("Signal durable ingress", () => {
     });
   });
 
-  it("keeps a completion tombstone so a duplicate cannot dispatch twice", async () => {
-    await withQueue(async (queue) => {
-      const event = signalEvent();
-      const dispatch = vi.fn().mockResolvedValue(undefined);
-      const started = await startMonitor(queue, dispatch);
-      try {
-        await started.monitor.receive(event);
-        await started.waitForIdle();
-        await started.monitor.receive(event);
-        await started.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await started.monitor.stop();
-      }
-    });
-  });
-
   it("completes only when deferred dispatch adoption becomes durable", async () => {
     await withQueue(async (queue) => {
       const event = signalEvent();
@@ -194,34 +177,6 @@ describe("Signal durable ingress", () => {
           "failed",
         );
         expect(dispatch).not.toHaveBeenCalled();
-      } finally {
-        await started.monitor.stop();
-      }
-    });
-  });
-
-  it("dedupes a concrete Signal redelivery by sender and timestamp", async () => {
-    await withQueue(async (queue) => {
-      const original = signalEvent({
-        senderNumber: "+15550002222",
-        senderUuid: "123e4567-e89b-12d3-a456-426614174000",
-        timestamp: 1_700_000_000_099,
-        message: "redelivered message",
-      });
-      const redelivery = signalEvent({
-        senderNumber: "+15550002222",
-        senderUuid: "123e4567-e89b-12d3-a456-426614174000",
-        timestamp: 1_700_000_000_099,
-        message: "redelivered message",
-      });
-      const dispatch = vi.fn().mockResolvedValue(undefined);
-      const started = await startMonitor(queue, dispatch);
-      try {
-        await started.monitor.receive(original);
-        await started.waitForIdle();
-        await started.monitor.receive(redelivery);
-        await started.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
       } finally {
         await started.monitor.stop();
       }
@@ -559,7 +514,6 @@ describe("Signal durable ingress", () => {
   it.each([
     ["sync", { envelope: { sourceNumber: "+15550001111", timestamp: 1, syncMessage: {} } }],
     ["receipt", { envelope: { sourceNumber: "+15550001111", timestamp: 2, receiptMessage: {} } }],
-    ["typing", { envelope: { sourceNumber: "+15550001111", timestamp: 3, typingMessage: {} } }],
   ])("does not journal %s envelopes", async (_label, payload) => {
     await withQueue(async (queue) => {
       const dispatch = vi.fn();

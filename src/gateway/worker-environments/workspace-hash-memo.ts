@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { compileFunction } from "node:vm";
 import { z } from "zod";
-import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 
-type WorkspaceHashMetrics = {
+export type WorkspaceHashMetrics = {
   contentHashCount: number;
   contentHashDurationMs: number;
   memoHitCount: number;
@@ -22,12 +22,8 @@ export type WorkspaceReconcileMetrics = {
   localReconciliationDurationMs: number;
 };
 
-type RemoteWorkspaceHashMetrics = WorkspaceHashMetrics & {
-  memoTruncatedCount: number;
-  totalDurationMs: number;
-};
-
 export const MAX_WORKSPACE_HASH_MEMO_BYTES = 8 * 1024 * 1024;
+export const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 25_000;
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const WORKER_HASH_IDENTITY_PATTERN = /^worker:\d+:\d+:\d+:\d+:\d+$/u;
@@ -40,7 +36,7 @@ const remoteWorkspaceManifestEnvelopeSchema = z
       .array(
         z.tuple([z.string().regex(WORKER_HASH_IDENTITY_PATTERN), z.string().regex(SHA256_PATTERN)]),
       )
-      .max(MAX_RECONCILIATION_ENTRIES),
+      .max(MAX_WORKSPACE_HASH_MEMO_ENTRIES),
     metrics: z
       .object({
         contentHashCount: z.number().finite().nonnegative(),
@@ -55,7 +51,6 @@ const remoteWorkspaceManifestEnvelopeSchema = z
 
 export type RemoteWorkspaceManifestEnvelope = z.infer<typeof remoteWorkspaceManifestEnvelopeSchema>;
 
-/** Parses and validates a memo-v1 capture response from the remote manifest script. */
 export function parseRemoteWorkspaceManifestEnvelope(
   stdout: string,
 ): RemoteWorkspaceManifestEnvelope {
@@ -80,6 +75,7 @@ export function replaceWorkerWorkspaceHashMemoEntries(
 type WorkspaceHashContext = {
   memo: WorkspaceHashMemo;
   metrics?: WorkspaceHashMetrics;
+  owner: "gateway" | "worker";
 };
 
 const workspaceHashContext = new AsyncLocalStorage<WorkspaceHashContext>();
@@ -116,12 +112,28 @@ export async function withWorkspaceHashMemo<T>(
   if (active?.memo === memo && active.metrics === inheritedMetrics) {
     return await operation();
   }
-  return await workspaceHashContext.run({ memo, metrics: inheritedMetrics }, operation);
+  return await workspaceHashContext.run(
+    { memo, metrics: inheritedMetrics, owner: active?.owner ?? "gateway" },
+    operation,
+  );
+}
+
+/** Shares hashes validated on the node with its final manifest capture. */
+export async function withWorkerWorkspaceHashMemo<T>(
+  memo: WorkspaceHashMemo,
+  operation: () => Promise<T>,
+  metrics?: WorkspaceHashMetrics,
+): Promise<T> {
+  return await workspaceHashContext.run({ memo, owner: "worker", metrics }, operation);
 }
 
 export async function withWorkspaceHashContext<T>(operation: () => Promise<T>): Promise<T> {
   const active = workspaceHashContext.getStore();
   return await withWorkspaceHashMemo(active?.memo ?? new Map(), operation, active?.metrics);
+}
+
+export async function withoutWorkspaceHashContext<T>(operation: () => Promise<T>): Promise<T> {
+  return await workspaceHashContext.exit(operation);
 }
 
 // A placement-lifetime memo self-bounds its worker entries (each remote capture
@@ -151,21 +163,65 @@ export function takeWorkspaceHashMemo(
   return memo;
 }
 
-export function serializeRemoteWorkspaceHashMemo(memo: WorkspaceHashMemo): string {
-  const serialized = JSON.stringify(
-    [...memo]
-      .filter(([identity]) => identity.startsWith("worker:"))
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  );
-  if (Buffer.byteLength(serialized) > MAX_WORKSPACE_HASH_MEMO_BYTES) {
-    throw new Error("Workspace hash memo exceeds its byte limit");
+// One source for host and standalone worker execution; transformed closures cannot
+// be serialized because their compiler-owned helpers stay in the parent module.
+export const WORKSPACE_HASH_MEMO_JS = String.raw`
+function workspaceStatIdentity(owner, stats) {
+  return [owner, stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(":");
+}
+function selectWorkerWorkspaceHashMemoEntries(memo, maxEntries, maxBytes) {
+  const compareIdentity = ([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0;
+  const candidates = [...memo]
+    .filter(([identity]) => identity.startsWith("worker:"))
+    .map((entry) => ({ entry, size: Number(entry[0].split(":")[3]) }))
+    .toSorted((left, right) => right.size - left.size || compareIdentity(left.entry, right.entry));
+  const selected = [];
+  let bytes = 2;
+  for (const { entry } of candidates) {
+    if (selected.length === maxEntries) {
+      break;
+    }
+    const entryBytes = Buffer.byteLength(JSON.stringify(entry)) + (selected.length > 0 ? 1 : 0);
+    if (bytes + entryBytes <= maxBytes) {
+      selected.push(entry);
+      bytes += entryBytes;
+    }
   }
-  return serialized;
+  return selected.toSorted(compareIdentity);
+}`;
+
+const {
+  workspaceStatIdentity,
+  selectWorkerWorkspaceHashMemoEntries,
+}: {
+  workspaceStatIdentity: (
+    owner: "gateway" | "worker",
+    stats: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint },
+  ) => string;
+  selectWorkerWorkspaceHashMemoEntries: (
+    memo: ReadonlyMap<string, string>,
+    maxEntries: number,
+    maxBytes: number,
+  ) => Array<[string, string]>;
+} = compileFunction(
+  `${WORKSPACE_HASH_MEMO_JS}\nreturn { workspaceStatIdentity, selectWorkerWorkspaceHashMemoEntries };`,
+)();
+
+export { workspaceStatIdentity };
+
+export function serializeRemoteWorkspaceHashMemo(
+  memo: WorkspaceHashMemo,
+  maxBytes = MAX_WORKSPACE_HASH_MEMO_BYTES,
+): string {
+  return JSON.stringify(
+    selectWorkerWorkspaceHashMemoEntries(memo, MAX_WORKSPACE_HASH_MEMO_ENTRIES, maxBytes),
+  );
 }
 
 export function recordRemoteWorkspaceHashMetrics(
   aggregate: WorkspaceReconcileMetrics,
-  metrics: RemoteWorkspaceHashMetrics,
+  metrics: RemoteWorkspaceManifestEnvelope["metrics"],
 ): void {
   aggregate.remoteContentHashCount += metrics.contentHashCount;
   aggregate.remoteMemoHitCount += metrics.memoHitCount;
@@ -184,17 +240,4 @@ export async function measureLocalWorkspaceReconciliation<T>(
   } finally {
     metrics.localReconciliationDurationMs += performance.now() - startedAt;
   }
-}
-
-export function workspaceStatIdentity(
-  owner: "gateway" | "worker",
-  stats: {
-    dev: bigint;
-    ino: bigint;
-    size: bigint;
-    mtimeNs: bigint;
-    ctimeNs: bigint;
-  },
-): string {
-  return `${owner}:${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
 }

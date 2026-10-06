@@ -4,6 +4,14 @@ import { formatUiError } from "../lib/format-error.ts";
 import { icon } from "./icons.ts";
 import { renderLoadingState } from "./loading-state.ts";
 
+export function renderAgentStartupState() {
+  return html`<section class="agent-startup-state" role="status" aria-live="polite">
+    <span class="btn__spinner" aria-hidden="true"></span>
+    <div>${t("agentStartup.title")}</div>
+    <div>${t("agentStartup.description")}</div>
+  </section>`;
+}
+
 type LazyElementState =
   | { status: "loading"; element: { label: string } }
   | { status: "error"; element: { label: string }; error: unknown; stale: boolean };
@@ -35,8 +43,38 @@ export function renderLazyElementModal(controller: {
     return nothing;
   }
   const close = () => controller.close();
-  return html`<openclaw-modal-dialog label=${state.element.label} @modal-cancel=${close}>
-    ${renderLazyElementState(state, () => controller.retry(), close)}
+  const loading = state.status === "loading";
+  return html`<openclaw-modal-dialog
+    class=${loading ? "lazy-element-loading-modal" : nothing}
+    label=${state.element.label}
+    @modal-cancel=${close}
+  >
+    ${
+      loading
+        ? html`<section class="lazy-element-loading">
+            <header class="lazy-element-loading__header">
+              <h2>${state.element.label}</h2>
+              <button
+                class="btn btn--ghost btn--icon"
+                type="button"
+                aria-label=${t("common.close")}
+                @click=${close}
+              >
+                ${icon("x")}
+              </button>
+            </header>
+            <div
+              class="lazy-element-loading__status"
+              role="status"
+              aria-live="polite"
+              aria-label=${t("common.loading")}
+            >
+              <span class="btn__spinner" aria-hidden="true"></span>
+              <span>${t("common.loading")}</span>
+            </div>
+          </section>`
+        : renderLazyElementState(state, () => controller.retry(), close)
+    }
   </openclaw-modal-dialog>`;
 }
 
@@ -67,9 +105,13 @@ export function renderLazyViewError({
         <button class="btn lazy-view-error__action" @click=${onRetry}>
           ${actionLabel ?? (stale ? t("common.reload") : t("lazyView.retry"))}
         </button>
-        ${onClose
-          ? html`<button class="btn" type="button" @click=${onClose}>${t("common.close")}</button>`
-          : nothing}
+        ${
+          onClose
+            ? html`<button class="btn" type="button" @click=${onClose}>
+                ${t("common.close")}
+              </button>`
+            : nothing
+        }
       `,
       detail,
       inline: Boolean(render),
@@ -106,7 +148,14 @@ export function renderPanelErrorState({
       <div class="lazy-view-error__title">${title}</div>
       <div class="lazy-view-error__subtitle">${subtitle}</div>
       ${actions ? html`<div class="lazy-view-error__actions">${actions}</div>` : nothing}
-      ${detail ? html`<code class="lazy-view-error__detail">${detail}</code>` : nothing}
+      ${
+        detail
+          ? html`<details class="lazy-view-error__details">
+              <summary>${t("chat.details")}</summary>
+              <code class="lazy-view-error__detail">${detail}</code>
+            </details>`
+          : nothing
+      }
     </div>
   `;
 }

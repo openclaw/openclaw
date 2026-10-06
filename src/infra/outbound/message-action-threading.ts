@@ -1,5 +1,3 @@
-// Message-action threading helpers inherit reply/thread metadata only for
-// same-conversation sends and prepare outbound session mirroring.
 import { readToolStringParam } from "../../agents/tools/common.js";
 import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import type {
@@ -8,11 +6,6 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  OutboundSessionRoute,
-  ResolveOutboundSessionRouteParams,
-} from "./outbound-session.js";
-import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 type ResolveAutoThreadId = NonNullable<ChannelThreadingAdapter["resolveAutoThreadId"]>;
 type ResolveReplyTransport = NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>;
@@ -22,7 +15,6 @@ function suppressesImplicitThreading(actionParams: Record<string, unknown>): boo
   return actionParams.topLevel === true || actionParams.threadId === null;
 }
 
-/** Resolves and writes the outbound thread id used by message-action sends. */
 export function resolveAndApplyOutboundThreadId(
   actionParams: Record<string, unknown>,
   context: {
@@ -48,7 +40,11 @@ export function resolveAndApplyOutboundThreadId(
         accountId: context.accountId,
         to: context.to,
         toolContext: context.toolContext,
-        replyToId,
+        // An inherited reply names the incoming message, not a user-selected
+        // thread. Let the provider recover its root before canonicalizing it.
+        // Passing a Slack child here suppresses root lookup and posts outside
+        // the conversation. Explicit and unknown reply targets stay intact.
+        replyToId: context.replyToIsExplicit === false ? undefined : replyToId,
       });
   const resolvedThreadId = threadId ?? autoResolvedThreadId;
   if (autoResolvedThreadId && !actionParams.threadId) {
@@ -100,7 +96,6 @@ function isSameConversationTarget(
   return target === currentMessagingTarget || target === currentChannelId;
 }
 
-/** Resolves and writes reply-to metadata for same-conversation message-action sends. */
 export function resolveAndApplyOutboundReplyToId(
   actionParams: Record<string, unknown>,
   context: {
@@ -162,65 +157,4 @@ export function resolveAndApplyOutboundReplyToId(
   }
   actionParams.replyTo = resolvedReplyToId;
   return { replyToId: resolvedReplyToId, source: "implicit", mode };
-}
-
-/** Prepares outbound session mirroring metadata for message-action sends. */
-export async function prepareOutboundMirrorRoute(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  to: string;
-  actionParams: Record<string, unknown>;
-  accountId?: string | null;
-  toolContext?: ChannelThreadingToolContext;
-  agentId?: string;
-  currentSessionKey?: string;
-  dryRun?: boolean;
-  resolvedTarget?: ResolvedMessagingTarget;
-  resolveAutoThreadId?: ResolveAutoThreadId;
-  resolveReplyTransport?: ResolveReplyTransport;
-  replyToIsExplicit?: boolean;
-  resolveOutboundSessionRoute: (
-    params: ResolveOutboundSessionRouteParams,
-  ) => Promise<OutboundSessionRoute | null>;
-}): Promise<{
-  resolvedThreadId?: string;
-  outboundRoute: OutboundSessionRoute | null;
-}> {
-  const resolvedThreadId = resolveAndApplyOutboundThreadId(params.actionParams, {
-    cfg: params.cfg,
-    to: params.to,
-    accountId: params.accountId,
-    toolContext: params.toolContext,
-    resolveAutoThreadId: params.resolveAutoThreadId,
-    resolveReplyTransport: params.resolveReplyTransport,
-    replyToIsExplicit: params.replyToIsExplicit,
-  });
-  const replyToId = readToolStringParam(params.actionParams, "replyTo");
-  // Route resolution is read-only here; the durable session/route write happens
-  // in ensureOutboundSessionEntry only after the send succeeds. Persisting
-  // before delivery let a failed CLI probe rebind the main session's route.
-  const outboundRoute =
-    params.agentId && !params.dryRun
-      ? await params.resolveOutboundSessionRoute({
-          cfg: params.cfg,
-          channel: params.channel,
-          agentId: params.agentId,
-          accountId: params.accountId,
-          target: params.to,
-          currentSessionKey: params.currentSessionKey,
-          resolvedTarget: params.resolvedTarget,
-          replyToId,
-          threadId: resolvedThreadId,
-        })
-      : null;
-  if (outboundRoute && !params.dryRun) {
-    params.actionParams["__sessionKey"] = outboundRoute.sessionKey;
-  }
-  if (params.agentId) {
-    params.actionParams["__agentId"] = params.agentId;
-  }
-  return {
-    resolvedThreadId,
-    outboundRoute,
-  };
 }

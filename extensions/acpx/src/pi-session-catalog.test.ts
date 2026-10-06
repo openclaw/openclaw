@@ -140,24 +140,24 @@ describe("Pi session catalog", () => {
 
     const transcript = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 });
     expect(transcript.items.map((item) => [item.type, item.text])).toEqual([
-      ["userMessage", "hello"],
-      ["reasoning", "thinking"],
-      ["agentMessage", "hi"],
-      ["toolCall", 'bash\n{"command":"pwd"}'],
       ["toolResult", "bash\n/workspace"],
+      ["toolCall", 'bash\n{"command":"pwd"}'],
+      ["agentMessage", "hi"],
+      ["reasoning", "thinking"],
+      ["userMessage", "hello"],
     ]);
     const itemIds = transcript.items.flatMap((item) => (item.id ? [item.id] : []));
     expect(new Set(itemIds).size).toBe(itemIds.length);
 
     const latest = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 2 });
-    expect(latest.items.map((item) => item.type)).toEqual(["toolCall", "toolResult"]);
+    expect(latest.items.map((item) => item.type)).toEqual(["toolResult", "toolCall"]);
     expect(latest.nextCursor).toBeTruthy();
     const older = await readLocalPiTranscriptPage({
       threadId: "pi-session",
       limit: 2,
       cursor: latest.nextCursor,
     });
-    expect(older.items.map((item) => item.type)).toEqual(["reasoning", "agentMessage"]);
+    expect(older.items.map((item) => item.type)).toEqual(["agentMessage", "reasoning"]);
     const nonEmitted = Buffer.from(JSON.stringify({ offset: 2, extra: true }), "utf8").toString(
       "base64url",
     );
@@ -224,7 +224,9 @@ describe("Pi session catalog", () => {
 
   it("recognizes Pi sessions when the agent directory uses a symlinked path", async () => {
     const sessionDirectory = await createPiStore();
-    const agentDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-real-"));
+    const agentDirectory = await fs.mkdtemp(
+      path.join(path.dirname(sessionDirectory), "openclaw-pi-agent-real-"),
+    );
     const symlinkParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-agent-link-"));
     const linkedAgentDirectory = path.join(symlinkParent, "agent");
     temporaryDirectories.push(agentDirectory, symlinkParent);
@@ -384,12 +386,12 @@ describe("Pi session catalog", () => {
 
     const transcript = await readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 });
     expect(transcript.items.map((item) => [item.type, item.text])).toEqual([
-      ["userMessage", "legacy hello"],
-      ["userMessage", "[image: image/png]"],
-      ["toolCall", "bash\npwd"],
-      ["toolResult", "/workspace"],
-      ["other", "review\nvisible note"],
       ["other", "legacy-review\nlegacy visible note"],
+      ["other", "review\nvisible note"],
+      ["toolResult", "/workspace"],
+      ["toolCall", "bash\npwd"],
+      ["userMessage", "[image: image/png]"],
+      ["userMessage", "legacy hello"],
     ]);
   });
 
@@ -874,6 +876,7 @@ describe("Pi session catalog", () => {
       kind: "node",
       nodeId: "node-1",
       command: PI_TERMINAL_RESUME_COMMAND,
+      uploadPathStyle: "native",
       paramsJSON: JSON.stringify({ threadId: "pi-remote" }),
       cwd: "/remote/workspace",
       title: "pi --session pi-remote…",

@@ -90,9 +90,7 @@ export function removeInlineSlashSelection(
   const current = host.getTextarea()?.value ?? host.getDraft();
   const before = current.slice(0, completion.start);
   let after = current.slice(completion.end);
-  if (/\s$/u.test(before) && /^\s/u.test(after)) {
-    after = after.slice(1);
-  } else if (before.length === 0 && /^\s/u.test(after)) {
+  if ((before.length === 0 || /\s$/u.test(before)) && /^\s/u.test(after)) {
     after = after.slice(1);
   }
   commitDraftWithCaret(host, `${before}${after}`, before.length);
@@ -117,7 +115,7 @@ export function hasActiveInlineSlashArgumentPrefix(
 
 export function findDirectInlineSlashArgumentInvocation(
   text: string,
-  caret = text.length,
+  caret: number,
 ): InlineSlashArgumentInvocation | null {
   const boundedCaret = Math.max(0, Math.min(caret, text.length));
   const prefix = text.slice(0, boundedCaret);
@@ -125,10 +123,7 @@ export function findDirectInlineSlashArgumentInvocation(
   let invocation: InlineSlashArgumentInvocation | null = null;
 
   for (const match of prefix.matchAll(commandPattern)) {
-    const typedName = match[1]?.toLowerCase();
-    if (!typedName || match.index === undefined) {
-      continue;
-    }
+    const typedName = match[1]!.toLowerCase();
     const command = getSlashCommandCompletions(typedName, {
       showAll: true,
       inlineOnly: true,
@@ -142,7 +137,7 @@ export function findDirectInlineSlashArgumentInvocation(
     }
     const start = match.index + match[0].indexOf("/");
     const args = prefix.slice(match.index + match[0].length).trim();
-    if (!args || /\s/u.test(args)) {
+    if (/\s/u.test(args) && !command.allowsInlineMultiWordArgs) {
       continue;
     }
     invocation = {

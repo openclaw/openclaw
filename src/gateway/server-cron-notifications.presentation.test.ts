@@ -1,9 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.types.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 
 const mocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(async (_request: GuardedFetchOptions) => ({
+    response: new Response(null, { status: 204 }),
+    finalUrl: "https://example.invalid/cron",
+    release: vi.fn(async () => {}),
+  })),
   sendCronAnnouncePayloadStrict: vi.fn(),
+}));
+
+vi.mock("../infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
 }));
 
 vi.mock("../cron/delivery.js", async (importOriginal) => {
@@ -14,12 +24,74 @@ vi.mock("../cron/delivery.js", async (importOriginal) => {
   };
 });
 
-import { sendGatewayCronFailureAlert } from "./server-cron-notifications.js";
+import { sendGatewayCronFailureAlert as sendGatewayCronFailureAlertBase } from "./server-cron-notifications.js";
+
+const sendGatewayCronFailureAlert = (
+  params: Omit<
+    Parameters<typeof sendGatewayCronFailureAlertBase>[0],
+    "onDeliverySettled" | "routing"
+  >,
+) =>
+  sendGatewayCronFailureAlertBase({
+    ...params,
+    routing: { defaultAgentId: "main" },
+    onDeliverySettled: async () => {},
+  });
 
 describe("sendGatewayCronFailureAlert presentation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.sendCronAnnouncePayloadStrict.mockResolvedValue(undefined);
+    mocks.sendCronAnnouncePayloadStrict.mockResolvedValue({
+      status: "sent",
+      results: [],
+      receipt: {
+        primaryPlatformMessageId: undefined,
+        platformMessageIds: [],
+        parts: [],
+        sentAt: 0,
+      },
+    });
+  });
+
+  it("keeps failure webhook messages stable and adds structured runAtMs", async () => {
+    const runAtMs = Date.parse("2026-01-15T15:30:00.000Z");
+    const job = makeCronJob({
+      delivery: {
+        mode: "announce",
+        completionDestination: { mode: "webhook", to: "https://example.invalid/cron" },
+      },
+    });
+    const webhookSsrfPolicy = { allowedHostnames: ["127.0.0.1"] };
+
+    await sendGatewayCronFailureAlert({
+      deps: {} as CliDeps,
+      logger: { warn: vi.fn() },
+      resolveCronAgent: () => ({
+        agentId: "main",
+        cfg: { agents: { defaults: { userTimezone: "America/New_York" } } },
+      }),
+      job,
+      payload: { text: "cron failed" },
+      runAtMs,
+      channel: "last",
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+      ssrfPolicy: webhookSsrfPolicy,
+    });
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ policy: webhookSsrfPolicy }),
+    );
+    const body = mocks.fetchWithSsrFGuard.mock.calls[0]?.[0].init?.body;
+    if (typeof body !== "string") {
+      throw new Error("expected webhook request body");
+    }
+    expect(JSON.parse(body)).toEqual({
+      jobId: job.id,
+      jobName: job.name,
+      message: "cron failed",
+      runAtMs,
+    });
   });
 
   it.each([

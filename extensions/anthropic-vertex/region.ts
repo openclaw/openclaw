@@ -5,7 +5,6 @@
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import type { GoogleAuthOptions } from "google-auth-library";
-import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -45,23 +44,6 @@ export function resolveAnthropicVertexProjectId(
   );
 }
 
-/** Extract a Vertex region from a provider base URL when possible. */
-export function resolveAnthropicVertexRegionFromBaseUrl(baseUrl?: string): string | undefined {
-  const endpoint = resolveProviderEndpoint(baseUrl);
-  return endpoint.endpointClass === "google-vertex" ? endpoint.googleVertexRegion : undefined;
-}
-
-/** Resolve the client region from model base URL first, then env fallback. */
-export function resolveAnthropicVertexClientRegion(params?: {
-  baseUrl?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  return (
-    resolveAnthropicVertexRegionFromBaseUrl(params?.baseUrl) ||
-    resolveAnthropicVertexRegion(params?.env)
-  );
-}
-
 function hasAnthropicVertexMetadataServerAdc(env: NodeJS.ProcessEnv = process.env): boolean {
   const explicitMetadataOptIn = normalizeOptionalSecretInput(env.ANTHROPIC_VERTEX_USE_GCP_METADATA);
   return (
@@ -94,20 +76,12 @@ function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.e
       );
 }
 
-function resolveAnthropicVertexAdcCredentialsPathCandidate(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  const explicit = normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS);
-  if (explicit) {
-    return explicit;
-  }
-  return resolveAnthropicVertexDefaultAdcPath(env);
-}
-
 export function resolveAnthropicVertexAdcCredentials(
   env: NodeJS.ProcessEnv = process.env,
 ): AnthropicVertexAdcCredentials | undefined {
-  const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
+  const credentialsPath =
+    normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS) ??
+    resolveAnthropicVertexDefaultAdcPath(env);
   const text = tryReadSecretFileSync(credentialsPath, "Anthropic Vertex ADC credentials", {
     maxBytes: ANTHROPIC_VERTEX_ADC_FILE_MAX_BYTES,
     rejectHardlinks: false,

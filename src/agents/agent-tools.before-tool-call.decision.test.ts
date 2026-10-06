@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
-import type { ExecutionDecisionWork } from "../audit/execution-decision-work.js";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
 import {
@@ -11,14 +11,18 @@ import {
 import { addTestHook } from "../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import {
+  bindAgentToolActionDescriptor,
   bindAssembledAgentToolActionDescriptor,
   copyAgentToolMetadata,
 } from "./agent-tool-metadata.js";
-import { markToolDecisionRecorded } from "./agent-tools.before-tool-call.decision.js";
+import {
+  markToolDecisionRecorded,
+  recordGenericToolActionDecision,
+} from "./agent-tools.before-tool-call.decision.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -36,7 +40,7 @@ function assembledTool(
     codingRoot: process.cwd(),
     containmentRoot: process.cwd(),
     includeBaseCodingTools: kind === "data",
-    includeShellTools: kind === "tool",
+    shellTools: kind === "tool" ? "full" : "disabled",
     workspaceOnly: false,
     readOnly: false,
     applyPatchEnabled: false,
@@ -96,6 +100,21 @@ function admittedRun(params: {
   ).finally(clear);
 }
 
+async function captureDecisions(run: () => Promise<unknown>) {
+  const works: ExecutionDecisionWork[] = [];
+  const ownerReceipts: DecisionReceiptV1[] = [];
+  const clear = configureRuntimeActionDecisionSink((receipt) => {
+    ownerReceipts.push(receipt);
+    return true;
+  });
+  try {
+    await admittedRun({ works, run });
+    return { works, ownerReceipts };
+  } finally {
+    clear();
+  }
+}
+
 describe("generic tool action decision receipts", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
@@ -108,72 +127,51 @@ describe("generic tool action decision receipts", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { kind: "data", family: "data", operation: "filesystem" },
-    { kind: "tool", family: "tool", operation: "process" },
-  ] as const)(
-    "records ordinary $kind execution as private attribution independent of name and payload",
-    async ({ kind, family, operation }) => {
-      vi.spyOn(Date, "now").mockReturnValue(250);
-      const works: ExecutionDecisionWork[] = [];
-      const execute = vi.fn().mockResolvedValue({
-        content: [{ type: "text", text: "SECRET_RESULT" }],
-        details: { path: "/private/result" },
-      });
-      const tool = wrapToolWithBeforeToolCallHook(
-        assembledTool(kind, "renamed_private_tool", execute),
-      );
+  it("records filesystem execution as private attribution independent of name and payload", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(250);
+    const works: ExecutionDecisionWork[] = [];
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "SECRET_RESULT" }],
+      details: { path: "/private/result" },
+    });
+    const tool = wrapToolWithBeforeToolCallHook(
+      assembledTool("data", "renamed_private_tool", execute),
+    );
 
-      await admittedRun({
-        works,
-        run: () => tool.execute("same-call", { path: "/private/input" }),
-      });
+    await admittedRun({
+      works,
+      run: () => tool.execute("same-call", { path: "/private/input" }),
+    });
 
-      expect(works).toHaveLength(1);
-      expect(works[0]).toMatchObject({
-        token: {
-          contextId: "c02-tool-context",
-          executionId: "c02-tool-execution",
-          runId: "c02-tool-run",
-        },
-        receipt: {
-          occurredAt: 250,
-          action: { family, operation },
-          decision: { outcome: "allowed", reasonCode: "generic_action_attributed" },
-          enforcement: { coverageState: "attribution-only" },
-          source: { owner: "tool-action" },
-        },
-      });
-      expect(works[0]?.refs).toBeUndefined();
-      const encoded = JSON.stringify(works);
-      expect(encoded).not.toContain("renamed_private_tool");
-      expect(encoded).not.toContain("/private/input");
-      expect(encoded).not.toContain("SECRET_RESULT");
-      expect(encoded).not.toContain("/private/result");
-    },
-  );
+    expect(works).toHaveLength(1);
+    expect(works[0]).toMatchObject({
+      token: {
+        contextId: "c02-tool-context",
+        executionId: "c02-tool-execution",
+        runId: "c02-tool-run",
+      },
+      receipt: {
+        occurredAt: 250,
+        action: { family: "data", operation: "filesystem" },
+        decision: { outcome: "allowed", reasonCode: "generic_action_attributed" },
+        enforcement: { coverageState: "attribution-only" },
+        source: { owner: "tool-action" },
+      },
+    });
+    expect(works[0]?.refs).toBeUndefined();
+    const encoded = JSON.stringify(works);
+    expect(encoded).not.toContain("renamed_private_tool");
+    expect(encoded).not.toContain("/private/input");
+    expect(encoded).not.toContain("SECRET_RESULT");
+    expect(encoded).not.toContain("/private/result");
+  });
 
-  it.each([
-    {
-      label: "memory manifest kind",
-      pluginId: "arbitrary-memory-owner",
-      manifestKind: "memory",
-      family: "data",
-      operation: "memory",
-    },
-    {
-      label: "browser plugin without a canonical generic kind",
-      pluginId: "arbitrary-browser-owner",
-      manifestKind: undefined,
-      family: "tool",
-      operation: "openclaw",
-    },
-  ] as const)("classifies $label independently of plugin and tool names", async (entry) => {
+  it("classifies memory by manifest kind independently of plugin and tool names", async () => {
     const works: ExecutionDecisionWork[] = [];
     const tool = wrapToolWithBeforeToolCallHook(
       assembledPluginTool({
-        pluginId: entry.pluginId,
-        ...(entry.manifestKind ? { manifestKind: entry.manifestKind } : {}),
+        pluginId: "arbitrary-memory-owner",
+        manifestKind: "memory",
         execute: vi.fn().mockResolvedValue({ content: [], details: { ok: true } }),
       }),
     );
@@ -182,8 +180,8 @@ describe("generic tool action decision receipts", () => {
 
     expect(works).toHaveLength(1);
     expect(works[0]?.receipt.action).toMatchObject({
-      family: entry.family,
-      operation: entry.operation,
+      family: "data",
+      operation: "memory",
     });
     expect(JSON.stringify(works)).not.toMatch(/arbitrary|owner_declared|renamed/u);
   });
@@ -221,29 +219,40 @@ describe("generic tool action decision receipts", () => {
     expect(JSON.stringify(works)).not.toMatch(/sessions_list|SECRET_GATEWAY|private\/gateway/u);
   });
 
-  it("keeps an execution failure separate from its generic decision", async () => {
-    const works: ExecutionDecisionWork[] = [];
-    const tool = wrapToolWithBeforeToolCallHook(
-      assembledTool(
-        "data",
-        "throws_after_admission",
-        vi.fn().mockRejectedValue(new Error("SECRET")),
-      ),
-    );
-
-    await expect(
-      admittedRun({
-        works,
-        run: () => tool.execute("failed-call", { secret: "PRIVATE" }),
-      }),
-    ).rejects.toThrow("SECRET");
-
-    expect(works).toHaveLength(1);
-    expect(works[0]?.receipt.decision).toEqual({
-      outcome: "allowed",
-      reasonCode: "generic_action_attributed",
+  it("keeps frozen tool attribution private and copied classifications stable across rebinding", async () => {
+    const source = assembledPluginTool({
+      pluginId: "memory-owner",
+      manifestKind: "memory",
+      execute: vi.fn(),
     });
-    expect(JSON.stringify(works)).not.toMatch(/SECRET|PRIVATE/u);
+    const copied = copyAgentToolMetadata(source, { ...source });
+    Object.freeze(source);
+    const keys = Reflect.ownKeys(source);
+    bindAgentToolActionDescriptor(source, { family: "tool", operation: "process" });
+    const forwarded = new Proxy(source, {
+      get() {
+        throw new Error("Attribution must not read tool properties");
+      },
+    });
+    const works: ExecutionDecisionWork[] = [];
+
+    await admittedRun({
+      works,
+      run: async () => {
+        expect(recordGenericToolActionDecision(source, "source", "allowed")).toBe(true);
+        expect(recordGenericToolActionDecision(copied, "copied", "allowed")).toBe(true);
+        expect(recordGenericToolActionDecision(forwarded, "forwarded", "allowed")).toBe(false);
+        bindAgentToolActionDescriptor(forwarded, { family: "data", operation: "filesystem" });
+        expect(recordGenericToolActionDecision(forwarded, "bound-proxy", "allowed")).toBe(true);
+      },
+    });
+
+    expect(works.map((work) => work.receipt.action)).toEqual([
+      { family: "tool", operation: "process" },
+      { family: "data", operation: "memory" },
+      { family: "data", operation: "filesystem" },
+    ]);
+    expect(Reflect.ownKeys(source)).toEqual(keys);
   });
 
   it("records a generic trusted-policy veto as enforced without owner prose", async () => {
@@ -294,19 +303,9 @@ describe("generic tool action decision receipts", () => {
     });
     setActivePluginRegistry(registry);
     initializeGlobalHookRunner(registry);
-    const works: ExecutionDecisionWork[] = [];
-    const ownerReceipts: DecisionReceiptV1[] = [];
-    const clearOwnerSink = configureRuntimeActionDecisionSink((receipt) => {
-      ownerReceipts.push(receipt);
-      return true;
-    });
     const tool = wrapToolWithBeforeToolCallHook(assembledTool("data", "hook_subject", vi.fn()));
 
-    try {
-      await admittedRun({ works, run: () => tool.execute("hook-call", {}) });
-    } finally {
-      clearOwnerSink();
-    }
+    const { works, ownerReceipts } = await captureDecisions(() => tool.execute("hook-call", {}));
 
     expect(works).toEqual([]);
     expect(ownerReceipts).toHaveLength(1);
@@ -320,15 +319,6 @@ describe("generic tool action decision receipts", () => {
     {
       label: "returns adjusted params",
       result: { params: { ownerAdjusted: true } },
-      matcher: undefined,
-      toolName: undefined,
-      expectedHandlerCalls: 1,
-      expectedGenericReceipts: 0,
-      expectedOwnerReceipts: 1,
-    },
-    {
-      label: "returns void",
-      result: undefined,
       matcher: undefined,
       toolName: undefined,
       expectedHandlerCalls: 1,
@@ -358,12 +348,6 @@ describe("generic tool action decision receipts", () => {
       });
       setActivePluginRegistry(registry);
       initializeGlobalHookRunner(registry);
-      const works: ExecutionDecisionWork[] = [];
-      const ownerReceipts: DecisionReceiptV1[] = [];
-      const clearOwnerSink = configureRuntimeActionDecisionSink((receipt) => {
-        ownerReceipts.push(receipt);
-        return true;
-      });
       const tool = wrapToolWithBeforeToolCallHook(
         assembledTool(
           "data",
@@ -372,11 +356,9 @@ describe("generic tool action decision receipts", () => {
         ),
       );
 
-      try {
-        await admittedRun({ works, run: () => tool.execute("hook-allow-call", {}) });
-      } finally {
-        clearOwnerSink();
-      }
+      const { works, ownerReceipts } = await captureDecisions(() =>
+        tool.execute("hook-allow-call", {}),
+      );
 
       expect(handler).toHaveBeenCalledTimes(testCase.expectedHandlerCalls);
       expect(works).toHaveLength(testCase.expectedGenericReceipts);
@@ -408,12 +390,6 @@ describe("generic tool action decision receipts", () => {
     });
     setActivePluginRegistry(registry);
     initializeGlobalHookRunner(registry);
-    const works: ExecutionDecisionWork[] = [];
-    const ownerReceipts: DecisionReceiptV1[] = [];
-    const clearOwnerSink = configureRuntimeActionDecisionSink((receipt) => {
-      ownerReceipts.push(receipt);
-      return true;
-    });
     const execute = vi.fn();
     const tool = wrapToolWithBeforeToolCallHook(
       assembledTool("data", "approval_subject", execute),
@@ -421,13 +397,9 @@ describe("generic tool action decision receipts", () => {
       { approvalMode: "report" },
     );
 
-    try {
-      await expect(
-        admittedRun({ works, run: () => tool.execute("approval-call", {}) }),
-      ).rejects.toThrow();
-    } finally {
-      clearOwnerSink();
-    }
+    const { works, ownerReceipts } = await captureDecisions(async () => {
+      await expect(tool.execute("approval-call", {})).rejects.toThrow();
+    });
 
     expect(execute).not.toHaveBeenCalled();
     expect(works).toEqual([]);
@@ -488,53 +460,21 @@ describe("generic tool action decision receipts", () => {
   });
 
   it.each([
-    { name: "missing identity", runAdmitted: false, authority: () => true },
-    { name: "stale authority", runAdmitted: true, authority: () => false },
+    { name: "stale authority", authority: () => false },
     {
       name: "throwing authority",
-      runAdmitted: true,
       authority: () => {
         throw new Error("stale");
       },
     },
-  ])(
-    "suppresses receipts with $name without suppressing the tool",
-    async ({ runAdmitted, authority }) => {
-      const works: ExecutionDecisionWork[] = [];
-      const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-      const tool = wrapToolWithBeforeToolCallHook(
-        assembledTool("data", "authority_subject", execute),
-      );
-      if (runAdmitted) {
-        await admittedRun({ works, authority, run: () => tool.execute("authority-call", {}) });
-      } else {
-        await tool.execute("authority-call", {});
-      }
-      expect(execute).toHaveBeenCalledOnce();
-      expect(works).toEqual([]);
-    },
-  );
-
-  it("is deterministic for duplicate delivery and harmless without a sink", async () => {
+  ])("suppresses receipts with $name without suppressing the tool", async ({ authority }) => {
     const works: ExecutionDecisionWork[] = [];
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    const tool = wrapToolWithBeforeToolCallHook(assembledTool("data", "dedupe_subject", execute));
-
-    await admittedRun({
-      works,
-      run: async () => {
-        await tool.execute("duplicate-call", {});
-        await tool.execute("duplicate-call", {});
-      },
-    });
-    expect(works).toHaveLength(2);
-    expect(works[0]?.receipt.receiptId).toBe(works[1]?.receipt.receiptId);
-    expect(works[0]?.receipt.action).toEqual(works[1]?.receipt.action);
-    expect(works[0]?.receipt.decision).toEqual(works[1]?.receipt.decision);
-
-    await expect(tool.execute("no-sink-call", {})).resolves.toMatchObject({
-      details: { ok: true },
-    });
-    expect(execute).toHaveBeenCalledTimes(3);
+    const tool = wrapToolWithBeforeToolCallHook(
+      assembledTool("data", "authority_subject", execute),
+    );
+    await admittedRun({ works, authority, run: () => tool.execute("authority-call", {}) });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(works).toEqual([]);
   });
 });

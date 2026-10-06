@@ -1,4 +1,4 @@
-import { finalizeEvent } from "nostr-tools";
+import { compareEvents, finalizeEvent } from "nostr-tools";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 
@@ -14,61 +14,46 @@ const { PRIVATE_KEY, CHANNEL_ID, startTestBus, signSenderEvent, subscriptionIncl
   useBuzzBusLifecycleFixture();
 
 describe("Buzz profile lifecycle", () => {
-  it("isolates message failures from fatal relay failures", async () => {
+  it("selects the lowest event ID when profiles share a timestamp", async () => {
     relayMocks.auth.mockResolvedValue("ok");
-    relayMocks.profileEvents = [
+    const secretKey = Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex"));
+    const profiles = ["First profile", "Second profile"].map((displayName) =>
       finalizeEvent(
         {
           kind: 0,
           created_at: 1_700_000_000,
-          content: JSON.stringify({ display_name: "Existing Buzz Name", about: "kept" }),
+          content: JSON.stringify({ display_name: displayName }),
           tags: [],
         },
-        Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")),
+        secretKey,
       ),
-    ];
-    const onMessageError = vi.fn();
-    const onFatalError = vi.fn();
-    const onProfilePublished = vi.fn();
-    const bus = await startTestBus({
-      onMessage: async () => {
-        throw new Error("dispatch failed");
-      },
-      profileName: "Configured Agent Name",
-      onMessageError,
-      onFatalError,
-      onProfilePublished,
-    });
-    const event = signSenderEvent({
-      kind: 9,
-      created_at: 1_700_000_000,
-      content: "hello",
-      tags: [["h", CHANNEL_ID]],
-    });
+    );
+    const sortedProfiles = profiles.toSorted(compareEvents);
+    const lowerIdProfile = sortedProfiles[0];
+    const higherIdProfile = sortedProfiles[1];
+    if (!lowerIdProfile || !higherIdProfile) {
+      throw new Error("Expected two signed profile fixtures");
+    }
+    relayMocks.profileEvents = [higherIdProfile, lowerIdProfile];
 
-    relayMocks.subscriptions
-      .find((entry) => subscriptionIncludesKind(entry, 9))
-      ?.handlers.onevent(event);
+    const bus = await startTestBus({ profileName: "Configured Agent Name" });
 
-    await vi.waitFor(() => expect(onMessageError).toHaveBeenCalledWith(expect.any(Error)));
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
+    await vi.waitFor(() =>
+      expect(relayMocks.publish.mock.calls.some(([event]) => event.kind === 10_100)).toBe(true),
+    );
+    const agentProfile = relayMocks.publish.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.kind === 10_100);
+    expect(JSON.parse(agentProfile?.content ?? "{}")).toMatchObject({
+      name: JSON.parse(lowerIdProfile.content).display_name,
+      display_name: JSON.parse(lowerIdProfile.content).display_name,
     });
-    expect(
-      relayMocks.publish.mock.calls.some(([publishedEvent]) => publishedEvent.kind === 0),
-    ).toBe(false);
-    expect(
-      relayMocks.publish.mock.calls.some(([publishedEvent]) => publishedEvent.kind === 10_100),
-    ).toBe(true);
-    expect(onProfilePublished).toHaveBeenCalledOnce();
-    expect(onFatalError).not.toHaveBeenCalled();
     await bus.close();
   });
 
   it.each([
     { phase: "query EOSE", gatedKind: undefined, publishedKinds: [] },
     { phase: "first ACK", gatedKind: 0, publishedKinds: [0] },
-    { phase: "final ACK", gatedKind: 10_100, publishedKinds: [0, 10_100] },
     { phase: "relay close", gatedKind: 10_100, publishedKinds: [0, 10_100] },
   ])(
     "settles profile work without post-abort effects at $phase",

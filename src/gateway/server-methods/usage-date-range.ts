@@ -37,9 +37,6 @@ const parseDateParts = (raw: unknown): DateParts | undefined => {
   const year = Number(yearStr);
   const monthIndex = Number(monthStr) - 1;
   const day = Number(dayStr);
-  if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) {
-    return undefined;
-  }
   // The regex only checks shape; Date.* silently rolls impossible calendar dates over
   // (e.g. 2026-02-30 -> 2026-03-02), so a typo'd day would return usage for the wrong day.
   // Reject parts that don't round-trip through a UTC probe (also catches the JS 2-digit-year remap).
@@ -69,7 +66,17 @@ const datePartsToStartMs = (
 ): number | undefined => {
   const { year, monthIndex, day } = parts;
   if (interpretation.mode === "gateway") {
-    return new Date(year, monthIndex, day).getTime();
+    // The host zone can skip a civil date. The constructor then lands on the
+    // next midnight, and the window ends before it starts.
+    const local = new Date(year, monthIndex, day);
+    if (
+      local.getFullYear() !== year ||
+      local.getMonth() !== monthIndex ||
+      local.getDate() !== day
+    ) {
+      return undefined;
+    }
+    return local.getTime();
   }
   if (interpretation.mode === "time-zone") {
     return resolveTimeZoneDayStartMs(
@@ -88,34 +95,15 @@ const datePartsToEndMs = (
   interpretation: DateInterpretation,
 ): number | undefined => {
   const lookaheadDays =
-    interpretation.mode === "time-zone" ? 1 + MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS : 1;
+    interpretation.mode === "time-zone" || interpretation.mode === "gateway"
+      ? 1 + MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS
+      : 1;
   // A 24-hour date-line transition can remove one civil date entirely. Range
   // resolution separately verifies the requested day; this only finds its end.
   for (let daysAhead = 1; daysAhead <= lookaheadDays; daysAhead += 1) {
     const nextDayStartMs = datePartsToStartMs(shiftDateParts(parts, daysAhead), interpretation);
     if (nextDayStartMs !== undefined) {
       return nextDayStartMs - 1;
-    }
-  }
-  return undefined;
-};
-
-// usage.cost / sessions.usage accept optional startDate/endDate. parseDateParts returns
-// undefined for both absent and invalid input, so an explicitly supplied but unparseable
-// date (bad format or impossible calendar date like 2026-02-30) would otherwise silently
-// fall through to the default range and return a successful response for an unrelated range.
-// Return the offending field so range resolution can reject it instead of querying the wrong window.
-const findInvalidExplicitDate = (params: {
-  startDate?: unknown;
-  endDate?: unknown;
-}): "startDate" | "endDate" | undefined => {
-  for (const field of ["startDate", "endDate"] as const) {
-    const raw = params[field];
-    if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
-      continue;
-    }
-    if (parseDateParts(raw) === undefined) {
-      return field;
     }
   }
   return undefined;
@@ -136,12 +124,6 @@ const parseUtcOffsetToMinutes = (raw: unknown): number | undefined => {
   const sign = match[1] === "+" ? 1 : -1;
   const hours = Number(match[2]);
   const minutes = Number(match[3] ?? "0");
-  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) {
-    return undefined;
-  }
-  if (hours > 14 || (hours === 14 && minutes !== 0)) {
-    return undefined;
-  }
   const totalMinutes = sign * (hours * 60 + minutes);
   if (totalMinutes < -12 * 60 || totalMinutes > 14 * 60) {
     return undefined;
@@ -182,6 +164,13 @@ export const resolveDateInterpretation = (params: {
     if (utcOffsetMinutes !== undefined) {
       return { ok: true, value: { mode: "utc-offset", utcOffsetMinutes } };
     }
+    // Only omission or blank text requests UTC; malformed offsets must not select another day.
+    if (
+      params.utcOffset != null &&
+      (typeof params.utcOffset !== "string" || params.utcOffset.trim() !== "")
+    ) {
+      return { ok: false, error: "invalid utcOffset: expected UTC-12:00 through UTC+14:00" };
+    }
   }
   // Backward compatibility: when mode is missing (or invalid), keep current UTC interpretation.
   return { ok: true, value: { mode: "utc" } };
@@ -213,18 +202,14 @@ const getDateParts = (date: Date, interpretation: DateInterpretation): DateParts
     }
     return parts;
   }
-  if (interpretation.mode === "utc-offset") {
-    const shifted = new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
-    return {
-      year: shifted.getUTCFullYear(),
-      monthIndex: shifted.getUTCMonth(),
-      day: shifted.getUTCDate(),
-    };
-  }
+  const utcDate =
+    interpretation.mode === "utc-offset"
+      ? new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000)
+      : date;
   return {
-    year: date.getUTCFullYear(),
-    monthIndex: date.getUTCMonth(),
-    day: date.getUTCDate(),
+    year: utcDate.getUTCFullYear(),
+    monthIndex: utcDate.getUTCMonth(),
+    day: utcDate.getUTCDate(),
   };
 };
 
@@ -237,51 +222,27 @@ const formatDateParts = (year: number, monthIndex: number, day: number): string 
   `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
 const parseDays = (raw: unknown): number | undefined => {
-  const fromFinite = (n: number): number | undefined => {
-    if (!Number.isFinite(n)) {
-      return undefined;
-    }
-    return Math.min(Math.floor(n), MAX_USAGE_DAYS);
-  };
-  if (typeof raw === "number") {
-    return fromFinite(raw);
-  }
-  if (typeof raw === "string" && raw.trim() !== "") {
-    return fromFinite(Number(raw));
-  }
-  return undefined;
+  const value = typeof raw === "string" && raw.trim() !== "" ? Number(raw) : raw;
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(Math.floor(value), MAX_USAGE_DAYS)
+    : undefined;
 };
 
 const resolveRangeDays = (raw: unknown): number | "all" | undefined => {
-  if (raw === "all") {
-    return "all";
+  switch (raw) {
+    case "all":
+      return "all";
+    case "7d":
+      return 7;
+    case "30d":
+      return 30;
+    case "90d":
+      return 90;
+    case "1y":
+      return 365;
+    default:
+      return undefined;
   }
-  if (raw === "7d") {
-    return 7;
-  }
-  if (raw === "30d") {
-    return 30;
-  }
-  if (raw === "90d") {
-    return 90;
-  }
-  if (raw === "1y") {
-    return 365;
-  }
-  return undefined;
-};
-
-const resolveTrailingDays = (
-  endDateParts: DateParts,
-  days: number,
-  interpretation: DateInterpretation,
-): DateRangeResolution => {
-  const startMs = datePartsToStartMs(shiftDateParts(endDateParts, -(days - 1)), interpretation);
-  const endMs = datePartsToEndMs(endDateParts, interpretation);
-  if (startMs === undefined || endMs === undefined) {
-    return { ok: false, error: "calendar day does not exist in requested time zone" };
-  }
-  return { ok: true, value: { startMs, endMs } };
 };
 
 /**
@@ -300,12 +261,22 @@ export const resolveDateRange = (
   },
   resolvedInterpretation?: DateInterpretation,
 ): DateRangeResolution => {
-  const invalidDate = findInvalidExplicitDate(params);
-  if (invalidDate) {
-    return {
-      ok: false,
-      error: `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
-    };
+  const dates = {
+    startDate: parseDateParts(params.startDate),
+    endDate: parseDateParts(params.endDate),
+  };
+  for (const field of ["startDate", "endDate"] as const) {
+    const raw = params[field];
+    if (
+      raw != null &&
+      (typeof raw !== "string" || raw.trim() !== "") &&
+      dates[field] === undefined
+    ) {
+      return {
+        ok: false,
+        error: `invalid ${field}: expected a valid YYYY-MM-DD calendar date`,
+      };
+    }
   }
 
   const now = new Date();
@@ -322,8 +293,7 @@ export const resolveDateRange = (
     return { ok: false, error: "calendar day does not exist in requested time zone" };
   }
 
-  const startDateParts = parseDateParts(params.startDate);
-  const endDateParts = parseDateParts(params.endDate);
+  const { startDate: startDateParts, endDate: endDateParts } = dates;
   // Explicit date windows are atomic. A single boundary must not silently
   // fall through to the unrelated default 30-day range.
   if ((startDateParts === undefined) !== (endDateParts === undefined)) {
@@ -350,16 +320,10 @@ export const resolveDateRange = (
       value: { startMs: 0, endMs: todayEndMs, includeUntimestamped: true },
     };
   }
-  if (rangeDays !== undefined) {
-    return resolveTrailingDays(todayDateParts, rangeDays, interpretation);
+  const days = Math.max(1, rangeDays ?? parseDays(params.days) ?? 30);
+  const startMs = datePartsToStartMs(shiftDateParts(todayDateParts, -(days - 1)), interpretation);
+  if (startMs === undefined) {
+    return { ok: false, error: "calendar day does not exist in requested time zone" };
   }
-
-  const days = parseDays(params.days);
-  if (days !== undefined) {
-    const clampedDays = Math.max(1, days);
-    return resolveTrailingDays(todayDateParts, clampedDays, interpretation);
-  }
-
-  // Default to last 30 days
-  return resolveTrailingDays(todayDateParts, 30, interpretation);
+  return { ok: true, value: { startMs, endMs: todayEndMs } };
 };

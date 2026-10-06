@@ -49,25 +49,37 @@ private actor DashboardWindowOwnershipEndpointGate {
     }
 }
 
-private actor DashboardWindowOwnershipPresentationGate {
-    private var requested = false
+actor DashboardWindowOwnershipPresentationGate {
+    private var requested = AsyncTestGate()
     private var released = false
     private var requestCount = 0
     private var continuations: [CheckedContinuation<Void, Never>] = []
 
-    func waitForRelease() async {
-        self.requested = true
+    init(released: Bool = false) {
+        self.released = released
+    }
+
+    func hold() {
+        // Reset between request cycles, after prior observers have returned.
+        self.requested = AsyncTestGate()
+        self.released = false
+    }
+
+    @discardableResult
+    func waitForRelease() async -> Int {
+        self.requested.open()
         self.requestCount += 1
-        guard !self.released else { return }
-        await withCheckedContinuation { continuation in
-            self.continuations.append(continuation)
+        let request = self.requestCount
+        if !self.released {
+            await withCheckedContinuation { continuation in
+                self.continuations.append(continuation)
+            }
         }
+        return request
     }
 
     func waitUntilRequested() async {
-        while !self.requested {
-            await Task.yield()
-        }
+        await self.requested.wait()
     }
 
     func numberOfRequests() -> Int {
@@ -100,10 +112,11 @@ private final class DashboardWindowOwnershipTrackingWindow: NSWindow {
     }
 }
 
-@Suite(.serialized)
+/// Suite limits cap every test; the localized case bounds its child test process at 120 s.
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardWindowOwnershipTests {
-    private static let primaryGateway = DashboardGatewayEntry(
+    static let primaryGateway = DashboardGatewayEntry(
         id: "primary",
         name: "Local Gateway",
         kind: "local",
@@ -119,7 +132,7 @@ struct DashboardWindowOwnershipTests {
         let url = server.url("/#token=before")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
@@ -138,13 +151,20 @@ struct DashboardWindowOwnershipTests {
             routeRevision: 2)
         let manager = DashboardManager._testMake(
             authTokenProvider: { _ in await gate.authToken() },
+            legacyCredentialsProvider: { _, _ in
+                guard await gate.authToken() != nil else { throw CancellationError() }
+                return .init(credentials: [:], isCurrent: { true }, waitForInvalidation: nil)
+            },
             endpointStateProvider: { readyState })
         manager._testSetController(controller)
         defer { manager.close() }
 
         await manager.handleEndpointState(readyState)
         let failureController = try #require(manager._testController())
-        #expect(failureController !== controller)
+        #expect(failureController.isShowingFailurePage)
+        #expect(!failureController.canDeliverNativeCommands)
+        #expect(failureController.auth.token == nil)
+        #expect(failureController.documentHost.nativeGatewayAuthProvider == nil)
         #expect(failureController.window === originalWindow)
         #expect(failureController.isWindowOpen)
         #expect(failureController.currentURL == URL(string: "about:blank"))
@@ -160,12 +180,12 @@ struct DashboardWindowOwnershipTests {
         #expect(recoveredController !== failureController)
         #expect(recoveredController.window === originalWindow)
         #expect(recoveredController.currentURL.absoluteString ==
-            replacementServer.url("/#token=after").absoluteString)
-        let authScripts = recoveredController._testUserScripts
-            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
-        #expect(authScripts.count == 1)
-        #expect(authScripts[0].source.contains("after"))
-        #expect(!authScripts[0].source.contains("before"))
+            replacementServer.url("/").absoluteString)
+        let bootstrap = try await dashboardNativeAuthSnapshot(recoveredController)
+        #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
+        #expect(bootstrap["token"] == nil)
+        #expect(bootstrap["password"] == nil)
+        #expect(recoveredController.auth.token == "after")
 
         await manager._testHandleControlChannelStateChange(.connected)
         #expect(manager._testController() === recoveredController)
@@ -182,7 +202,7 @@ struct DashboardWindowOwnershipTests {
         let url = server.url("/#token=initial")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
@@ -223,12 +243,12 @@ struct DashboardWindowOwnershipTests {
         #expect(manager._testController() === currentController)
         #expect(currentController.window === originalWindow)
         #expect(currentController.currentURL.absoluteString ==
-            currentServer.url("/#token=current").absoluteString)
-        let authScripts = currentController._testUserScripts
-            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
-        #expect(authScripts.count == 1)
-        #expect(authScripts[0].source.contains("current"))
-        #expect(!authScripts[0].source.contains("stale"))
+            currentServer.url("/").absoluteString)
+        let bootstrap = try await dashboardNativeAuthSnapshot(currentController)
+        #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
+        #expect(bootstrap["token"] == nil)
+        #expect(bootstrap["password"] == nil)
+        #expect(currentController.auth.token == "current")
     }
 
     @Test func `reopening after credential changes isolates the privileged document`() async throws {
@@ -237,7 +257,7 @@ struct DashboardWindowOwnershipTests {
         let url = server.url("/#token=before")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
@@ -247,7 +267,7 @@ struct DashboardWindowOwnershipTests {
         defer { controller.closeDashboard() }
         controller.show()
         let originalWindow = try #require(controller.window)
-        let originalDocument = controller._testDashboardWebViewIdentity
+        let originalDocument = ObjectIdentifier(controller.webView)
         originalWindow.orderOut(nil)
         let endpointURL = server.websocketURL("/")
 
@@ -267,12 +287,12 @@ struct DashboardWindowOwnershipTests {
         let replacement = try #require(manager._testController())
         #expect(replacement !== controller)
         #expect(replacement.window === originalWindow)
-        #expect(replacement._testDashboardWebViewIdentity != originalDocument)
-        let authScripts = replacement._testUserScripts
-            .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
-        #expect(authScripts.count == 1)
-        #expect(authScripts[0].source.contains("after"))
-        #expect(!authScripts[0].source.contains("before"))
+        #expect(ObjectIdentifier(replacement.webView) != originalDocument)
+        let bootstrap = try await dashboardNativeAuthSnapshot(replacement)
+        #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
+        #expect(bootstrap["token"] == nil)
+        #expect(bootstrap["password"] == nil)
+        #expect(replacement.auth.token == "after")
     }
 
     @Test func `replacing a key dashboard transfers keyboard ownership`() async throws {
@@ -288,7 +308,7 @@ struct DashboardWindowOwnershipTests {
             defer: false)
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
@@ -313,7 +333,7 @@ struct DashboardWindowOwnershipTests {
 
         let replacement = try #require(manager._testController())
         let responder = try #require(originalWindow.firstResponder as? NSView)
-        #expect(ObjectIdentifier(responder) == replacement._testDashboardWebViewIdentity)
+        #expect(ObjectIdentifier(responder) == ObjectIdentifier(replacement.webView))
     }
 
     @Test func `stale async presentation cannot overwrite a newer endpoint`() async throws {
@@ -331,7 +351,7 @@ struct DashboardWindowOwnershipTests {
             defer: false)
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
@@ -372,7 +392,7 @@ struct DashboardWindowOwnershipTests {
         #expect(currentController.window === originalWindow)
         #expect(originalWindow.foregroundRequestCount > backgroundForegroundCount)
         #expect(currentController.currentURL.absoluteString ==
-            currentServer.url("/#token=current").absoluteString)
+            currentServer.url("/").absoluteString)
     }
 
     @Test func `hidden dashboard invalidates stale reopening authority`() async throws {
@@ -387,7 +407,7 @@ struct DashboardWindowOwnershipTests {
         let currentEndpointURL = currentServer.websocketURL("/")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
@@ -429,7 +449,7 @@ struct DashboardWindowOwnershipTests {
         #expect(await gate.numberOfRequests() == 2)
         #expect(replacement.window === originalWindow)
         #expect(replacement.currentURL.absoluteString ==
-            currentServer.url("/#token=current").absoluteString)
+            currentServer.url("/").absoluteString)
     }
 
     @Test func `superseded endpoint failure preserves a newer live dashboard`() async throws {
@@ -440,7 +460,7 @@ struct DashboardWindowOwnershipTests {
         let url = server.url("/#token=initial")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
@@ -475,7 +495,7 @@ struct DashboardWindowOwnershipTests {
         #expect(manager._testController() === currentController)
         #expect(currentController.window === originalWindow)
         #expect(currentController.currentURL.absoluteString ==
-            currentServer.url("/#token=current").absoluteString)
+            currentServer.url("/").absoluteString)
     }
 
     @Test func `window handoff ignores a conflicting target autosave frame`() async throws {
@@ -500,7 +520,7 @@ struct DashboardWindowOwnershipTests {
 
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
@@ -514,7 +534,7 @@ struct DashboardWindowOwnershipTests {
         let transferredWindow = try #require(controller.detachWindowForReplacement())
         let replacement = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "after",
                 password: nil),
@@ -526,6 +546,74 @@ struct DashboardWindowOwnershipTests {
 
         #expect(replacement.window === originalWindow)
         #expect(originalWindow.frame == originalFrame)
+    }
+
+    @Test(arguments: ["closed-success", "closed-failure", "reopened", "auxiliary"])
+    func `window close retires only its pending browser identity presentation`(_ scenario: String) async throws {
+        try await TestIsolation.withIsolatedState {
+            let server = try await DashboardHTTPFixture.start()
+            defer { server.stop() }
+            let state = AppStateStore.shared
+            let previousMode = state.connectionMode
+            state.connectionMode = .remote
+            defer { state.connectionMode = previousMode }
+            let requests = DashboardWindowOwnershipPresentationGate(released: true)
+            let staleLookup = DashboardWindowOwnershipPresentationGate()
+            let endpointURL = server.websocketURL()
+            let identityURL = server.url("/identity")
+            let manager = DashboardManager._testMake(
+                browserIdentityURLProvider: { _, _ in
+                    if await requests.waitForRelease() == 2 {
+                        await staleLookup.waitForRelease()
+                        if scenario == "closed-failure" || scenario == "reopened" {
+                            throw DashboardWindowOwnershipEndpointFailure()
+                        }
+                        return identityURL
+                    }
+                    return nil
+                },
+                primaryEndpointProvider: { _ in
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: endpointURL, token: "synthetic", password: nil), routeAuthority: nil)
+                },
+                gatewayEntriesProvider: { [Self.primaryGateway] })
+            defer { manager.close() }
+            try await manager.show()
+            let original = try #require(manager._testController())
+            let window = try #require(original.window)
+            let pending = Task { @MainActor in try await manager.show() }
+            await staleLookup.waitUntilRequested()
+
+            do {
+                if scenario == "auxiliary" {
+                    await manager._testOpenWindow(for: .primary)
+                    let auxiliary = try #require(manager._testAuxiliaryWindows().first?.controller)
+                    auxiliary.window?.performClose(nil)
+                } else {
+                    window.performClose(nil)
+                }
+                let reopened = scenario == "reopened" ? Task { @MainActor in try await manager.show() } : nil
+                if reopened != nil {
+                    try await TestWait.state("reopened browser identity request") {
+                        await requests.numberOfRequests() >= 3
+                    }
+                    #expect(await requests.numberOfRequests() == 3)
+                }
+                await staleLookup.release()
+                try await pending.value
+                try await reopened?.value
+            } catch {
+                await staleLookup.release()
+                _ = try? await pending.value
+                Issue.record("A closed presentation reported a stale lookup failure: \(error)")
+            }
+
+            #expect(manager._testController()?.window === window)
+            #expect(window.isVisible == (scenario == "reopened" || scenario == "auxiliary"))
+            if scenario == "auxiliary" {
+                #expect(manager._testController()?.currentURL == identityURL)
+            }
+        }
     }
 
     @Test func `concurrent explicit opens share one presentation owner`() async throws {
@@ -562,20 +650,21 @@ struct DashboardWindowOwnershipTests {
         let controller = try #require(manager._testController())
         #expect(controller.isWindowOpen)
         #expect(controller.currentURL.absoluteString ==
-            server.url("/#token=shared").absoluteString)
+            server.url("/").absoluteString)
         try await self.expectPresentationProbe(from: probes.stream)
 
         let autosaveName = try #require(controller.window?.frameAutosaveName)
         #expect(autosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
-        #expect(controller._testDashboardDataStore === dataStore)
-        #expect(!controller._testDashboardDataStore.isPersistent)
-        controller._testOpenLinkBrowser(server.url("/reader/first"))
-        #expect(controller._testLinkBrowserDataStore === dataStore)
+        #expect(controller.webView.configuration.websiteDataStore === dataStore)
+        #expect(!controller.webView.configuration.websiteDataStore.isPersistent)
+        try controller.nativeBrowser.open(tabId: "mac-first", url: server.url("/reader/first"), sessionKey: "")
+        #expect(try #require(controller.nativeBrowser.webView(for: "mac-first"))
+            .configuration.websiteDataStore === dataStore)
 
         await manager.handleEndpointState(.connecting(mode: .remote, detail: "Reconnecting"))
         let failure = try #require(manager._testController())
         #expect(failure !== controller)
-        #expect(failure._testDashboardDataStore === dataStore)
+        #expect(failure.webView.configuration.websiteDataStore === dataStore)
         #expect(failure.window?.frameAutosaveName == autosaveName)
 
         await manager.handleEndpointState(.ready(
@@ -586,29 +675,33 @@ struct DashboardWindowOwnershipTests {
             routeRevision: 2))
         let recovered = try #require(manager._testController())
         #expect(recovered !== failure)
-        #expect(recovered._testDashboardDataStore === dataStore)
+        #expect(recovered.webView.configuration.websiteDataStore === dataStore)
         #expect(recovered.window?.frameAutosaveName == autosaveName)
-        recovered._testOpenLinkBrowser(server.url("/reader/recovered"))
-        #expect(recovered._testLinkBrowserDataStore === dataStore)
+        try recovered.nativeBrowser.open(tabId: "mac-recovered", url: server.url("/reader/recovered"), sessionKey: "")
+        #expect(try #require(recovered.nativeBrowser.webView(for: "mac-recovered"))
+            .configuration.websiteDataStore === dataStore)
     }
 
-    @Test func `configured presentation uses its owned health probe`() async throws {
+    @Test(arguments: [AppState.ConnectionMode.local, .remote])
+    func `configured presentation uses its owned health probe`(_ mode: AppState.ConnectionMode) async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
         let configPath = TestIsolation.tempConfigPath()
         defer { try? FileManager.default.removeItem(atPath: configPath) }
         let config = """
-        {"gateway":{"remote":{"transport":"direct","url":"\(server.websocketURL())","token":"configured"}}}
+        {"gateway":{"port":\(server.port),"auth":{"token":"configured"},
+        "remote":{"transport":"direct","url":"\(server.websocketURL())","token":"configured"}}}
         """
         try Data(config.utf8).write(to: URL(fileURLWithPath: configPath))
         try await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PORT": nil,
             "OPENCLAW_GATEWAY_TOKEN": nil,
             "OPENCLAW_GATEWAY_PASSWORD": nil,
         ]) {
             let state = AppStateStore.shared
             let originalMode = state.connectionMode
-            state.connectionMode = .remote
+            state.connectionMode = mode
             defer { state.connectionMode = originalMode }
             let probes = AsyncStream<DashboardRouteProbePurpose>.makeStream()
             defer { probes.continuation.finish() }
@@ -617,20 +710,20 @@ struct DashboardWindowOwnershipTests {
                 gatewayEntriesProvider: { [Self.primaryGateway] })
             defer { manager.close() }
 
-            #expect(manager.showConfiguredWindowIfPossible())
+            // First presentation resolves native readiness even for local mode.
+            #expect(!manager.showConfiguredWindowIfPossible())
+            try await manager.show()
             let controller = try #require(manager._testController())
             #expect(controller.isWindowOpen)
             #expect(controller.currentURL.absoluteString ==
-                server.url("/#token=configured").absoluteString)
+                server.url("/").absoluteString)
             try await self.expectPresentationProbe(from: probes.stream)
         }
     }
 
     private func expectPresentationProbe(from probes: AsyncStream<DashboardRouteProbePurpose>) async throws {
-        let purpose = try await AsyncTimeout.withTimeout(
-            seconds: 3,
-            onTimeout: { NSError(domain: "DashboardPresentationProbe", code: 1) },
-            operation: { await probes.first(where: { _ in true }) })
+        var iterator = probes.makeAsyncIterator()
+        let purpose = await iterator.next()
         #expect(purpose == .presentation)
     }
 }

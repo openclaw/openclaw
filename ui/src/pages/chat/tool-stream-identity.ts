@@ -1,3 +1,4 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asToolRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -6,6 +7,7 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import type { LiveToolStreamState } from "./tool-stream-contract.ts";
 
 type ToolMessageRef = {
   id: string;
@@ -14,13 +16,6 @@ type ToolMessageRef = {
 
 type LiveToolStreamRef = ToolMessageRef & {
   identity: string;
-};
-
-type LiveToolStreamHost = {
-  chatStream?: string | null;
-  chatStreamStartedAt?: number | null;
-  toolStreamById?: Map<string, unknown>;
-  toolStreamOrder?: unknown[];
 };
 
 const TOOL_NAME_FIELDS = ["toolName", "tool_name"] as const;
@@ -66,7 +61,8 @@ export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
       )
     : [];
   const topLevelToolId = resolveToolUseId({ ...record, id: undefined });
-  const topLevelRunId = normalizeOptionalString(record.runId);
+  const topLevelRunId =
+    readSessionMessageIdentity(record)?.runId ?? normalizeOptionalString(record.runId);
   const role = record.role;
   const messageHasToolShape =
     (typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "tool") ||
@@ -92,26 +88,13 @@ export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
   return refs;
 }
 
-/** Resolves canonical live entries while preserving existing bare-id fixtures. */
-export function resolveLiveToolStreamRefs(state: LiveToolStreamHost): LiveToolStreamRef[] {
-  if (!Array.isArray(state.toolStreamOrder)) {
-    return [];
-  }
-  return state.toolStreamOrder
-    .filter(
-      (identity): identity is string => typeof identity === "string" && Boolean(identity.trim()),
-    )
-    .map((identity) => {
-      const entry = asToolRecord(state.toolStreamById?.get(identity));
-      const message = asToolRecord(entry?.message);
-      const id =
-        normalizeOptionalString(entry?.toolCallId) ??
-        (message ? resolveToolUseId(message) : undefined) ??
-        identity;
-      const runId =
-        normalizeOptionalString(entry?.runId) ?? normalizeOptionalString(message?.runId);
-      return runId ? { identity, id, runId } : { identity, id };
-    });
+export function resolveLiveToolStreamRefs(state: LiveToolStreamState): LiveToolStreamRef[] {
+  return (state.toolStreamOrder ?? []).map((identity) => {
+    const entry = state.toolStreamById?.get(identity);
+    const id = normalizeOptionalString(entry?.toolCallId) ?? identity;
+    const runId = normalizeOptionalString(entry?.runId);
+    return runId ? { identity, id, runId } : { identity, id };
+  });
 }
 
 /** Unscoped history cannot prove which sibling owns a reused tool call id. */
@@ -128,7 +111,7 @@ export function resolveMatchingLiveToolIdentity(
 
 export function persistedCurrentToolStreamIds(
   messages: unknown[],
-  state: LiveToolStreamHost,
+  state: LiveToolStreamState,
 ): Set<string> {
   const liveToolRefs = resolveLiveToolStreamRefs(state);
   const matchedToolIds = new Set<string>();

@@ -1,4 +1,3 @@
-// Media Core module implements mime behavior.
 import path from "node:path";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 import { extnameFromAnyPath } from "./file-name.js";
@@ -109,6 +108,8 @@ const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
   "audio/webm": "video/webm",
 };
 
+const IMAGE_FORMATS = new Set(["avif", "jpg", "jpeg", "heic", "heif", "png", "webp", "gif"]);
+
 // file-type can return generic ZIP when package metadata is outside its sniff window.
 // Only ZIP-backed MIME families may refine that result; arbitrary headers cannot.
 const ZIP_CONTAINER_MIMES = new Set([
@@ -162,6 +163,9 @@ const MIME_SYNONYMS: Record<string, string> = {
   "text/yaml": "application/yaml",
   "application/x-yaml": "application/yaml",
   "application/xml": "text/xml",
+  // Preserve shipped filename/header spellings for byte-detected container aliases.
+  "video/vnd.avi": "video/x-msvideo",
+  "video/matroska": "video/x-matroska",
 };
 
 /** Normalizes MIME strings by dropping parameters, lowercasing, and folding registered synonyms. */
@@ -173,7 +177,9 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!cleaned) {
     return undefined;
   }
-  return MIME_SYNONYMS[cleaned] ?? cleaned;
+  // Object.hasOwn: a remote "__proto__"/"constructor" header would otherwise
+  // resolve to inherited Object.prototype members and break the string contract.
+  return Object.hasOwn(MIME_SYNONYMS, cleaned) ? MIME_SYNONYMS[cleaned] : cleaned;
 }
 
 /** Returns the bounded buffer prefix used for dependency MIME sniffing. */
@@ -206,21 +212,17 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   if (!filePath) {
     return undefined;
   }
-  try {
-    if (/^https?:\/\//i.test(filePath)) {
-      const url = new URL(filePath);
-      let filename = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
-      try {
-        // Decode only the URL filename while keeping encoded separators literal.
-        const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
-        filename = decodeURIComponent(decodable);
-      } catch {
-        // Preserve the raw filename when its own percent encoding is malformed.
-      }
-      return path.posix.extname(filename).toLowerCase() || undefined;
+  const url = /^https?:\/\//i.test(filePath) ? URL.parse(filePath) : null;
+  if (url) {
+    let filename = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
+    try {
+      // Decode only the URL filename while keeping encoded separators literal.
+      const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
+      filename = decodeURIComponent(decodable);
+    } catch {
+      // Preserve the raw filename when its own percent encoding is malformed.
     }
-  } catch {
-    // fall back to plain path parsing
+    return path.posix.extname(filename).toLowerCase() || undefined;
   }
   const ext = extnameFromAnyPath(filePath).toLowerCase();
   return ext || undefined;
@@ -272,8 +274,10 @@ export async function detectMime(opts: {
   // file-type defaults these containers to video without parsing their tracks.
   // Preserve a concrete audio hint only for those documented ambiguous results.
   const audioContainerHint =
-    mimeHints.find((mime) => AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred) ??
-    (extMime && AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[extMime] === inferred ? extMime : undefined);
+    inferred &&
+    [...mimeHints, extMime].find(
+      (mime) => mime && AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred,
+    );
   if (audioContainerHint) {
     return audioContainerHint;
   }
@@ -286,7 +290,9 @@ export function extensionForMime(mime?: string | null): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return EXT_BY_MIME[normalized];
+  // Same prototype-key hazard as normalizeMimeType: a "__proto__" lookup would
+  // return Object.prototype where callers expect string | undefined.
+  return Object.hasOwn(EXT_BY_MIME, normalized) ? EXT_BY_MIME[normalized] : undefined;
 }
 
 /** Returns true when content type or filename identifies GIF media. */
@@ -306,25 +312,8 @@ export function imageMimeFromFormat(format?: string | null): string | undefined 
   if (!format) {
     return undefined;
   }
-  switch (format.toLowerCase()) {
-    case "avif":
-      return "image/avif";
-    case "jpg":
-    case "jpeg":
-      return "image/jpeg";
-    case "heic":
-      return "image/heic";
-    case "heif":
-      return "image/heif";
-    case "png":
-      return "image/png";
-    case "webp":
-      return "image/webp";
-    case "gif":
-      return "image/gif";
-    default:
-      return undefined;
-  }
+  const normalized = format.toLowerCase();
+  return IMAGE_FORMATS.has(normalized) ? MIME_BY_EXT[`.${normalized}`] : undefined;
 }
 
 /** Normalizes a MIME string before classifying it into a media family. */

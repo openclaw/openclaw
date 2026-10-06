@@ -1,14 +1,91 @@
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+  type ErrorShape,
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
+import { gatewayWebSocketTransportUrl, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
+import { formatUiError } from "../lib/format-error.ts";
+
+const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
+export const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
+
+export function formatBrowserWebSocketConstructorError(err: unknown, url: string): ErrorShape {
+  const name = err && typeof err === "object" && "name" in err ? err.name : undefined;
+  const browserErrorName = typeof name === "string" && name.trim() ? name : undefined;
+  const browserMessage = formatUiError(err);
+  const message = browserMessage.toLowerCase();
+  const securityError =
+    browserErrorName?.toLowerCase() === "securityerror" ||
+    message.includes("security error") ||
+    message.includes("mixed content") ||
+    message.includes("insecure websocket");
+  const isPlaintextWs = url.trim().toLowerCase().startsWith("ws://");
+  const details = {
+    code: securityError
+      ? BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
+      : BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
+    browserErrorName,
+    browserMessage,
+  };
+  if (securityError) {
+    return {
+      code: BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
+      message:
+        "Browser refused the Gateway WebSocket for security reasons." +
+        (isPlaintextWs
+          ? " Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789."
+          : " Check the Gateway WebSocket URL and browser security policy."),
+      details,
+    };
+  }
+  return {
+    code: BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
+    message: `Could not create the Gateway WebSocket: ${browserMessage}`,
+    details,
+  };
+}
+
+export async function probeGatewayReachability(url: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    const gateway = new URL(url, window.location.href);
+    gateway.protocol = gateway.protocol.replace(/^ws/u, "http");
+    const probe = new URL(
+      uiDevGatewayResourceUrl(new URL("/healthz", gateway).href),
+      window.location.href,
+    );
+    if (probe.origin !== new URL(window.location.href).origin) {
+      return false;
+    }
+    const response = await fetch(probe, {
+      cache: "no-store",
+      credentials: "same-origin",
+      redirect: "error",
+      signal,
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const body: unknown = await response.json();
+    return (
+      body !== null &&
+      typeof body === "object" &&
+      "ok" in body &&
+      body.ok === true &&
+      "status" in body &&
+      body.status === "live"
+    );
+  } catch {
+    return false;
+  }
+}
 
 export function createBrowserGatewaySocket(
   url: string,
   handlers: GatewayProtocolSocketHandlers,
+  maxPayloadBytes?: () => number | undefined,
 ): GatewayProtocolSocket {
-  const socket = new WebSocket(url);
+  const socket = new WebSocket(gatewayWebSocketTransportUrl(url));
   let opening = true;
   let openingTimeoutReason: string | undefined;
   let openingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -55,11 +132,26 @@ export function createBrowserGatewaySocket(
 
   return {
     isOpen: () => socket.readyState === WebSocket.OPEN,
-    send: (data) => socket.send(data),
+    send: (data) => {
+      const limit = maxPayloadBytes?.();
+      if (limit !== undefined && new TextEncoder().encode(data).byteLength > limit) {
+        throw new GatewayPayloadLimitError();
+      }
+      socket.send(data);
+    },
     close: (code, reason) => {
       finishOpening();
       // Browser-initiated closes reject the shared protocol's 1008 policy code.
       socket.close(code === 1008 ? 4008 : code, reason);
     },
   };
+}
+
+export class GatewayPayloadLimitError extends Error {
+  constructor() {
+    super(
+      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
+    );
+    this.name = "GatewayPayloadLimitError";
+  }
 }

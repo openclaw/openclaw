@@ -15,6 +15,8 @@ export type DedupeEntry = {
   ok: boolean;
   /** Optional effectful-request fingerprint for methods with caller-supplied operation ids. */
   requestIdentity?: string;
+  /** Retain source privacy for diagnostic replay after the live session binding is gone. */
+  incognito?: true;
   payload?: unknown;
   error?: ErrorShape;
 };

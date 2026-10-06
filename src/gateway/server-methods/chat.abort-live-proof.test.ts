@@ -1,15 +1,15 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
@@ -56,26 +56,23 @@ function assistantRows(events: readonly unknown[]): Array<Record<string, unknown
   });
 }
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-pr132123-proof-");
 
-describe("PR #132123 real Gateway proof", () => {
+describe("late abort real Gateway proof", () => {
   it(
-    "skips a late abort partial after the same run commits its final reply",
+    "rejects a late abort after the same run commits its final reply",
     { timeout: 90_000 },
     async () => {
       const envSnapshot = captureEnv([...envKeys]);
       const afterTurnStarted = createDeferred();
       const releaseAfterTurn = createDeferred();
       const replyVisible = createDeferred<Record<string, unknown>>();
+      const replyEvents: Record<string, unknown>[] = [];
       let providerServer: ReturnType<typeof createServer> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
 
       try {
-        const tempHome = tempDirs.make("openclaw-pr132123-proof-");
+        const tempHome = tempDirs.make();
         const stateDir = path.join(tempHome, ".openclaw");
         const workspaceDir = path.join(tempHome, "workspace");
         const configPath = path.join(stateDir, "openclaw.json");
@@ -200,7 +197,7 @@ describe("PR #132123 real Gateway proof", () => {
                 [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
           gateway: { auth: { mode: "token", token: "pr132123-proof-token" } },
@@ -216,7 +213,9 @@ describe("PR #132123 real Gateway proof", () => {
               event.event === "chat" &&
               JSON.stringify(event.payload ?? {}).includes(REPLY_TEXT)
             ) {
-              replyVisible.resolve((event.payload ?? {}) as Record<string, unknown>);
+              const payload = (event.payload ?? {}) as Record<string, unknown>;
+              replyEvents.push(payload);
+              replyVisible.resolve(payload);
             }
           },
         });
@@ -264,7 +263,6 @@ describe("PR #132123 real Gateway proof", () => {
           { sessionKey, runId: started.runId },
           { timeoutMs: 15_000 },
         );
-        expect(abort.aborted).toBe(true);
         const afterRows = assistantRows(await loadTranscriptEvents(transcriptScope)).filter(
           (message) => assistantText(message) === REPLY_TEXT,
         );
@@ -272,6 +270,11 @@ describe("PR #132123 real Gateway proof", () => {
         expect(afterRows.filter((message) => message.openclawAbort)).toHaveLength(0);
 
         releaseAfterTurn.resolve();
+        const terminal = await gateway.client.request<{ status?: string }>(
+          "agent.wait",
+          { runId: started.runId, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        );
         await disconnectGatewayClient(gateway.client);
         await gateway.server.close();
         gateway = undefined;
@@ -281,23 +284,31 @@ describe("PR #132123 real Gateway proof", () => {
         const reopenedRows = assistantRows(await loadTranscriptEvents(transcriptScope)).filter(
           (message) => assistantText(message) === REPLY_TEXT,
         );
+        const replyEventStates = replyEvents.map((event) => event.state);
         const verdict = {
           runId: started.runId,
           replyVisible: JSON.stringify(visibleEvent).includes(REPLY_TEXT),
           waitBeforeAbort: waiting.status,
           durableRowsBeforeAbort: beforeRows.length,
           abort,
+          terminalStatus: terminal.status,
+          replyEventStates,
+          abortedReplyEvents: replyEventStates.filter((state) => state === "aborted").length,
+          finalReplyEvents: replyEventStates.filter((state) => state === "final").length,
           durableRowsAfterAbort: afterRows.length,
           abortMarkedRowsAfterAbort: afterRows.filter((message) => message.openclawAbort).length,
           reopenedRows: reopenedRows.length,
           reopenedAbortMarkedRows: reopenedRows.filter((message) => message.openclawAbort).length,
         };
-        console.info(`PR132123_VERDICT ${JSON.stringify(verdict)}`);
+        console.info(`LATE_ABORT_VERDICT ${JSON.stringify(verdict)}`);
         expect(verdict).toMatchObject({
           replyVisible: true,
           waitBeforeAbort: "timeout",
           durableRowsBeforeAbort: 1,
-          abort: { aborted: true },
+          abort: { aborted: false, runIds: [] },
+          terminalStatus: "ok",
+          abortedReplyEvents: 0,
+          finalReplyEvents: 1,
           durableRowsAfterAbort: 1,
           abortMarkedRowsAfterAbort: 0,
           reopenedRows: 1,
@@ -319,8 +330,6 @@ describe("PR #132123 real Gateway proof", () => {
         clearRuntimeConfigSnapshot();
         clearConfigCache();
         clearSessionStoreCacheForTest();
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
       }
     },
   );

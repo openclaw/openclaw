@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { buildMacGatewayLaunchUrl } from "./gateway-launch.ts";
 import { renderApps } from "./view.ts";
 
 const EXPECTED_EXTERNAL_HREFS = [
@@ -37,26 +38,6 @@ describe("renderApps", () => {
     return container;
   }
 
-  it("renders the hero and one heading per section", () => {
-    const container = renderIntoContainer();
-    expect(container.querySelector(".apps-hero__title")?.textContent).toBe(
-      "Take OpenClaw everywhere",
-    );
-    expect(container.querySelector(".apps-hero__tagline")?.textContent).toContain(
-      "Companion apps for your phone",
-    );
-    const headings = Array.from(container.querySelectorAll(".apps-section__heading")).map(
-      (heading) => heading.textContent,
-    );
-    expect(headings).toEqual([
-      "On your phone",
-      "On your wrist",
-      "On your desktop",
-      "In your browser",
-      "Community",
-    ]);
-  });
-
   it("renders every external link in order with safe target and rel", () => {
     const container = renderIntoContainer();
     const anchors = Array.from(container.querySelectorAll<HTMLAnchorElement>("a[href]"));
@@ -80,6 +61,31 @@ describe("renderApps", () => {
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith("plugins");
   });
 
+  it("opens the connected Gateway in the Mac app without losing the download option", () => {
+    const container = document.createElement("div");
+    render(
+      renderApps({
+        onNavigate: vi.fn(),
+        macGatewayLaunchUrl: buildMacGatewayLaunchUrl("wss://research.example:8443/assistant"),
+      }),
+      container,
+    );
+    const launch = container.querySelector<HTMLAnchorElement>("a[href^='openclaw:']");
+    expect(launch?.textContent?.trim()).toBe("Open in Mac app");
+    const url = new URL(launch!.href);
+    expect(url.host).toBe("gateway");
+    expect(url.pathname).toBe("/add");
+    expect([...url.searchParams]).toEqual([["url", "https://research.example:8443/assistant"]]);
+    expect(launch?.getAttribute("target")).toBeNull();
+    const card = launch?.closest(".apps-card");
+    expect(card?.querySelector("h3")?.textContent).toBe("macOS");
+    expect(
+      card
+        ?.querySelector("a[href='https://github.com/openclaw/openclaw/releases']")
+        ?.textContent?.trim(),
+    ).toBe("Download");
+  });
+
   it("offers device pairing from the phone section only when permitted", () => {
     const withoutPair = renderIntoContainer();
     expect(withoutPair.querySelector(".apps-pair-hint")).toBeNull();
@@ -90,17 +96,6 @@ describe("renderApps", () => {
     expect(hint?.textContent).toContain("Already have the app?");
     hint?.querySelector("button")?.click();
     expect(onPairDevice).toHaveBeenCalledOnce();
-  });
-
-  it("badges only the bundled watch apps", () => {
-    const container = renderIntoContainer();
-    const badges = Array.from(container.querySelectorAll(".apps-card__badge")).map(
-      (badge) => badge.textContent?.trim(),
-    );
-    expect(badges).toEqual([
-      "Included with the iOS app",
-      "Included with the Android app",
-    ]);
   });
 
   it("renders decorative lazy card art with a per-theme variant for every card", () => {

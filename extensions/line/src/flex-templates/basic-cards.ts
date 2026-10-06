@@ -1,9 +1,7 @@
 import { normalizeLineAction } from "../actions.js";
-// Line plugin module implements basic cards behavior.
-import { attachFooterText } from "./common.js";
+import { createCardBubble, createCardTitle } from "./common.js";
 import type {
   Action,
-  CardAction,
   FlexBox,
   FlexBubble,
   FlexButton,
@@ -13,90 +11,59 @@ import type {
   ListItem,
 } from "./types.js";
 
-/**
- * Create an info card with title, body, and optional footer
- *
- * Editorial design: Clean hierarchy with accent bar, generous spacing,
- * and subtle background zones for visual separation.
- */
 export function createInfoCard(title: string, body: string, footer?: string): FlexBubble {
-  const bubble: FlexBubble = {
-    type: "bubble",
-    size: "mega",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: [
-        // Title with accent bar
-        {
-          type: "box",
-          layout: "horizontal",
-          contents: [
+  return createCardBubble(
+    [
+      {
+        type: "box",
+        layout: "horizontal",
+        contents: [
+          {
+            type: "box",
+            layout: "vertical",
+            contents: [],
+            width: "4px",
+            backgroundColor: "#06C755",
+            cornerRadius: "2px",
+          } as FlexBox,
+          {
+            ...createCardTitle(title),
+            flex: 1,
+            margin: "lg",
+          },
+        ],
+      } as FlexBox,
+      // Body text in subtle container, only when there is a body to show:
+      // LINE rejects the whole push when a Flex text is blank.
+      ...(body
+        ? [
             {
               type: "box",
               layout: "vertical",
-              contents: [],
-              width: "4px",
-              backgroundColor: "#06C755",
-              cornerRadius: "2px",
+              contents: [
+                {
+                  type: "text",
+                  text: body,
+                  size: "md",
+                  color: "#444444",
+                  wrap: true,
+                  lineSpacing: "6px",
+                } as FlexText,
+              ],
+              margin: "xl",
+              paddingAll: "lg",
+              backgroundColor: "#F8F9FA",
+              cornerRadius: "lg",
             } as FlexBox,
-            {
-              type: "text",
-              text: title,
-              weight: "bold",
-              size: "xl",
-              color: "#111111",
-              wrap: true,
-              flex: 1,
-              margin: "lg",
-            } as FlexText,
-          ],
-        } as FlexBox,
-        // Body text in subtle container, only when there is a body to show:
-        // LINE rejects the whole push when a Flex text is blank.
-        ...(body
-          ? [
-              {
-                type: "box",
-                layout: "vertical",
-                contents: [
-                  {
-                    type: "text",
-                    text: body,
-                    size: "md",
-                    color: "#444444",
-                    wrap: true,
-                    lineSpacing: "6px",
-                  } as FlexText,
-                ],
-                margin: "xl",
-                paddingAll: "lg",
-                backgroundColor: "#F8F9FA",
-                cornerRadius: "lg",
-              } as FlexBox,
-            ]
-          : []),
-      ],
-      paddingAll: "xl",
-      backgroundColor: "#FFFFFF",
-    },
-  };
-
-  if (footer) {
-    attachFooterText(bubble, footer);
-  }
-
-  return bubble;
+          ]
+        : []),
+    ],
+    footer,
+  );
 }
 
-/**
- * Create a list card with title and multiple items
- *
- * Editorial design: Numbered/bulleted list with clear visual hierarchy,
- * accent dots for each item, and generous spacing.
- */
 export function createListCard(title: string, items: ListItem[]): FlexBubble {
-  const itemContents: FlexComponent[] = items.slice(0, 8).map((item, index) => {
+  const itemContents = items.slice(0, 8).map<FlexBox>((item, index) => {
     const itemContentsLocal: FlexComponent[] = [
       {
         type: "text",
@@ -119,11 +86,10 @@ export function createListCard(title: string, items: ListItem[]): FlexBubble {
       } as FlexText);
     }
 
-    const itemBox: FlexBox = {
+    return {
       type: "box",
       layout: "horizontal",
       contents: [
-        // Accent dot
         {
           type: "box",
           layout: "vertical",
@@ -142,7 +108,6 @@ export function createListCard(title: string, items: ListItem[]): FlexBubble {
           alignItems: "center",
           paddingTop: "sm",
         } as FlexBox,
-        // Item content
         {
           type: "box",
           layout: "vertical",
@@ -152,140 +117,79 @@ export function createListCard(title: string, items: ListItem[]): FlexBubble {
       ],
       margin: index > 0 ? "lg" : undefined,
     };
-
-    if (item.action) {
-      itemBox.action = normalizeLineAction(item.action, 40);
-    }
-
-    return itemBox;
   });
 
-  return {
-    type: "bubble",
-    size: "mega",
-    body: {
+  return createCardBubble([
+    createCardTitle(title),
+    {
+      type: "separator",
+      margin: "lg",
+      color: "#EEEEEE",
+    },
+    {
       type: "box",
       layout: "vertical",
-      contents: [
-        {
-          type: "text",
-          text: title,
-          weight: "bold",
-          size: "xl",
-          color: "#111111",
-          wrap: true,
-        } as FlexText,
-        {
-          type: "separator",
-          margin: "lg",
-          color: "#EEEEEE",
-        },
-        {
-          type: "box",
-          layout: "vertical",
-          contents: itemContents,
-          margin: "lg",
-        } as FlexBox,
-      ],
-      paddingAll: "xl",
-      backgroundColor: "#FFFFFF",
-    },
-  };
+      contents: itemContents,
+      margin: "lg",
+    } as FlexBox,
+  ]);
 }
 
-/**
- * Create an image card with image, title, and optional body text
- */
-export function createImageCard(
-  imageUrl: string,
-  title: string,
-  body?: string,
-  options?: {
-    aspectRatio?: "1:1" | "1.51:1" | "1.91:1" | "4:3" | "16:9" | "20:13" | "2:1" | "3:1";
-    aspectMode?: "cover" | "fit";
-    action?: Action;
-  },
-): FlexBubble {
-  const bubble: FlexBubble = {
-    type: "bubble",
-    hero: {
-      type: "image",
-      url: imageUrl,
-      size: "full",
-      aspectRatio: options?.aspectRatio ?? "20:13",
-      aspectMode: options?.aspectMode ?? "cover",
-      action: options?.action === undefined ? undefined : normalizeLineAction(options.action, 40),
-    } as FlexImage,
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: [
-        {
-          type: "text",
-          text: title,
-          weight: "bold",
-          size: "xl",
-          wrap: true,
-        } as FlexText,
-      ],
-      paddingAll: "lg",
-    },
+function createTitleBody(title: string, body?: string): FlexBox {
+  const box: FlexBox = {
+    type: "box",
+    layout: "vertical",
+    contents: [
+      {
+        type: "text",
+        text: title,
+        weight: "bold",
+        size: "xl",
+        wrap: true,
+      },
+    ],
+    paddingAll: "lg",
   };
 
-  if (body && bubble.body) {
-    bubble.body.contents.push({
+  if (body) {
+    box.contents.push({
       type: "text",
       text: body,
       size: "md",
       wrap: true,
       margin: "md",
       color: "#666666",
-    } as FlexText);
+    });
   }
-
-  return bubble;
+  return box;
 }
 
-/**
- * Create an action card with title, body, and action buttons
- */
+export function createImageCard(imageUrl: string, title: string, body?: string): FlexBubble {
+  return {
+    type: "bubble",
+    hero: {
+      type: "image",
+      url: imageUrl,
+      size: "full",
+      aspectRatio: "20:13",
+      aspectMode: "cover",
+      action: undefined,
+    },
+    body: createTitleBody(title, body),
+  };
+}
+
 export function createActionCard(
   title: string,
   body: string,
-  actions: CardAction[],
+  actions: Action[],
   options?: {
     imageUrl?: string;
-    aspectRatio?: "1:1" | "1.51:1" | "1.91:1" | "4:3" | "16:9" | "20:13" | "2:1" | "3:1";
   },
 ): FlexBubble {
   const bubble: FlexBubble = {
     type: "bubble",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: [
-        {
-          type: "text",
-          text: title,
-          weight: "bold",
-          size: "xl",
-          wrap: true,
-        } as FlexText,
-        ...(body
-          ? [
-              {
-                type: "text",
-                text: body,
-                size: "md",
-                wrap: true,
-                margin: "md",
-                color: "#666666",
-              } as FlexText,
-            ]
-          : []),
-      ],
-      paddingAll: "lg",
-    },
+    body: createTitleBody(title, body),
     footer: {
       type: "box",
       layout: "vertical",
@@ -293,7 +197,7 @@ export function createActionCard(
         (action, index) =>
           ({
             type: "button",
-            action: normalizeLineAction(action.action, 40),
+            action: normalizeLineAction(action, 40),
             style: index === 0 ? "primary" : "secondary",
             margin: index > 0 ? "sm" : undefined,
           }) as FlexButton,
@@ -307,7 +211,7 @@ export function createActionCard(
       type: "image",
       url: options.imageUrl,
       size: "full",
-      aspectRatio: options.aspectRatio ?? "20:13",
+      aspectRatio: "20:13",
       aspectMode: "cover",
     } as FlexImage;
   }

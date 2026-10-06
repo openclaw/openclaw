@@ -67,6 +67,31 @@ describe("flattenMarkdownDetails", () => {
     ).toBe("10. **A**\n\n    body");
   });
 
+  it.each([
+    [31, "**A**\n\nonelater\n\nmiddle\n\n**B**\n\ntwo"],
+    [32, "AonelatermiddleBtwo"],
+  ] as const)("preserves child rendering at parent depth %i", (depth, expected) => {
+    const prefix = "<summary>".repeat(depth);
+    const suffix = "</summary>".repeat(depth);
+    const children =
+      "<details><summary>A</summary>one<summary>later</summary></details>" +
+      "middle<details><summary>B</summary>two</details>";
+
+    expect(flattenMarkdownDetails(`${prefix}<summary>${children}</summary>${suffix}`)).toBe(
+      expected,
+    );
+    expect(
+      flattenMarkdownDetails(
+        `${prefix}<details><summary>Body</summary>${children}</details>${suffix}`,
+      ),
+    ).toBe(`**Body**\n\n${expected}`);
+    expect(
+      flattenMarkdownDetails(
+        `${prefix}<details><summary>${children}</summary>tail</details>${suffix}`,
+      ),
+    ).toBe(`**${expected}**\n\ntail`);
+  });
+
   it("bounds rendering of deeply nested details", () => {
     let markdown = "deep body";
     for (let index = 0; index < 128; index += 1) {
@@ -116,5 +141,28 @@ describe("flattenMarkdownDetails", () => {
   it("leaves backslash-escaped disclosure tags unchanged", () => {
     const markdown = "\\<details>literal\\</details>";
     expect(flattenMarkdownDetails(markdown)).toBe(markdown);
+  });
+
+  it.each([
+    ["\n \t\n body \n\t \n", " body "],
+    ["\r\n a\r\n \r\n", " a"],
+    ["\n \t", " \t"],
+    ["\r", "\r"],
+    ["body\n\r", "body\n\r"],
+    ["body \t", "body \t"],
+  ])("trims complete blank lines without changing body content in %j", (body, expected) => {
+    expect(flattenMarkdownDetails(`<details>${body}</details>`)).toBe(`**Details**\n\n${expected}`);
+  });
+
+  it("stays responsive on a long blank-line run inside a details body", () => {
+    // A blank-line run that ends on anything else made the previous
+    // `(?:\r?\n[ \t]*)+$` restart from every position in the run.
+    const body = `a${"\n".repeat(60_000)}X`;
+    const started = process.hrtime.bigint();
+    const flattened = flattenMarkdownDetails(`<details>${body}</details>`);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+    expect(flattened).toBe(`**Details**\n\n${body}`);
+    expect(elapsedMs).toBeLessThan(1_000);
   });
 });

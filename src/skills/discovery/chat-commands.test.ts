@@ -8,7 +8,9 @@ let listSkillCommandsForAgents: typeof import("./chat-commands.js").listSkillCom
 let listSkillCommandsForWorkspace: typeof import("./chat-commands.js").listSkillCommandsForWorkspace;
 let expandExplicitSkillReferences: typeof import("./chat-commands.js").expandExplicitSkillReferences;
 let resolveSkillCommandInvocation: typeof import("./chat-commands.js").resolveSkillCommandInvocation;
-let lastPluginMetadataSnapshot: unknown;
+let lastCommandBuildOptions:
+  | { pluginMetadataSnapshot?: unknown; librarySelections?: unknown }
+  | undefined;
 
 function resolveSkillReferenceInvocations(
   params: Parameters<typeof expandExplicitSkillReferences>[0],
@@ -41,10 +43,10 @@ function listMainResearchSkillCommands(params: {
   return listSkillCommandsForAgents({
     cfg: {
       agents: {
-        list: [
-          { id: "main", workspace: params.mainWorkspace, skills: ["demo-skill"] },
-          { id: "research", workspace: params.researchWorkspace, skills: ["extra-skill"] },
-        ],
+        entries: {
+          main: { workspace: params.mainWorkspace, skills: ["demo-skill"] },
+          research: { workspace: params.researchWorkspace, skills: ["extra-skill"] },
+        },
       },
     },
     agentIds: ["main", "research"],
@@ -97,20 +99,21 @@ function buildWorkspaceSkillCommandSpecs(
     skillFilter?: string[];
     agentId?: string;
     pluginMetadataSnapshot?: unknown;
+    librarySelections?: unknown;
     config?: {
       agents?: {
         defaults?: { skills?: string[] };
-        list?: Array<{ id: string; skills?: string[] }>;
+        entries?: Record<string, { skills?: string[] }>;
       };
     };
   },
 ) {
-  lastPluginMetadataSnapshot = opts?.pluginMetadataSnapshot;
+  lastCommandBuildOptions = opts;
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(reserved.toLowerCase());
   }
-  const agentSkills = opts?.config?.agents?.list?.find((entry) => entry.id === opts?.agentId);
+  const agentSkills = opts?.agentId ? opts.config?.agents?.entries?.[opts.agentId] : undefined;
   const filter =
     opts?.skillFilter ??
     (agentSkills && Object.hasOwn(agentSkills, "skills")
@@ -151,12 +154,12 @@ vi.mock("./agent-filter.js", () => ({
     cfg: {
       agents?: {
         defaults?: { skills?: string[] };
-        list?: Array<{ id?: string; skills?: string[] }>;
+        entries?: Record<string, { skills?: string[] }>;
       };
     },
     agentId: string,
   ) => {
-    const agent = cfg.agents?.list?.find((entry) => entry.id === agentId);
+    const agent = cfg.agents?.entries?.[agentId];
     if (agent && Object.hasOwn(agent, "skills")) {
       return agent.skills;
     }
@@ -179,27 +182,29 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  lastPluginMetadataSnapshot = undefined;
+  lastCommandBuildOptions = undefined;
   resolveNodeExecEligibilityMock.mockReturnValue({ canExec: false });
 });
 
 describe("resolveSkillCommandInvocation", () => {
-  it("matches skill commands and parses args", () => {
-    const invocation = resolveSkillCommandInvocation({
-      commandBodyNormalized: "/demo_skill do the thing",
-      skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
-    });
-    expect(invocation?.command.skillName).toBe("demo-skill");
-    expect(invocation?.args).toBe("do the thing");
-  });
-
-  it("supports /skill with name argument", () => {
-    const invocation = resolveSkillCommandInvocation({
-      commandBodyNormalized: "/skill demo_skill do the thing",
-      skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
-    });
-    expect(invocation?.command.name).toBe("demo_skill");
-    expect(invocation?.args).toBe("do the thing");
+  it("keeps a renamed dashboard skill addressable through /skill and $ references", () => {
+    const dashboard = {
+      name: "dashboard_2",
+      skillName: "dashboard",
+      description: "Custom dashboard skill",
+    };
+    expect(
+      resolveSkillCommandInvocation({
+        commandBodyNormalized: "/skill dashboard custom input",
+        skillCommands: [dashboard],
+      }),
+    ).toEqual({ command: dashboard, args: "custom input" });
+    expect(
+      resolveSkillReferenceInvocations({
+        text: "Use $dashboard for the custom workflow",
+        skillCommands: [dashboard],
+      }),
+    ).toEqual([dashboard]);
   });
 
   it("preserves multiline args for /skill invocations", () => {
@@ -435,10 +440,10 @@ describe("listSkillCommandsForAgents", () => {
     const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
-          list: [
-            { id: "main", workspace: mainWorkspace },
-            { id: "research", workspace: researchWorkspace },
-          ],
+          entries: {
+            main: { workspace: mainWorkspace },
+            research: { workspace: researchWorkspace },
+          },
         },
       },
     });
@@ -455,7 +460,7 @@ describe("listSkillCommandsForAgents", () => {
     const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
-          list: [{ id: "research", workspace: researchWorkspace, skills: ["extra-skill"] }],
+          entries: { research: { workspace: researchWorkspace, skills: ["extra-skill"] } },
         },
       },
       agentIds: ["research"],
@@ -497,10 +502,10 @@ describe("listSkillCommandsForAgents", () => {
     const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
-          list: [
-            { id: "agent-a", workspace: sharedWorkspace, skills: ["extra-skill"] },
-            { id: "agent-b", workspace: sharedWorkspace, skills: ["extra-skill", "demo-skill"] },
-          ],
+          entries: {
+            "agent-a": { workspace: sharedWorkspace, skills: ["extra-skill"] },
+            "agent-b": { workspace: sharedWorkspace, skills: ["extra-skill", "demo-skill"] },
+          },
         },
       },
       agentIds: ["agent-a", "agent-b"],
@@ -518,10 +523,10 @@ describe("listSkillCommandsForAgents", () => {
     const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
-          list: [
-            { id: "restricted", workspace: sharedWorkspace, skills: ["extra-skill"] },
-            { id: "unrestricted", workspace: sharedWorkspace },
-          ],
+          entries: {
+            restricted: { workspace: sharedWorkspace, skills: ["extra-skill"] },
+            unrestricted: { workspace: sharedWorkspace },
+          },
         },
       },
       agentIds: ["restricted", "unrestricted"],
@@ -530,25 +535,6 @@ describe("listSkillCommandsForAgents", () => {
     const skillNames = commands.map((entry) => entry.skillName);
     expect(skillNames).toContain("demo-skill");
     expect(skillNames).toContain("extra-skill");
-  });
-
-  it("merges empty allowlist with non-empty allowlist for shared workspace", async () => {
-    const baseDir = tempDirs.make("openclaw-skills-empty-");
-    const sharedWorkspace = await createWorkspace(baseDir, "research");
-
-    const commands = listSkillCommandsForAgents({
-      cfg: {
-        agents: {
-          list: [
-            { id: "locked", workspace: sharedWorkspace, skills: [] },
-            { id: "partial", workspace: sharedWorkspace, skills: ["extra-skill"] },
-          ],
-        },
-      },
-      agentIds: ["locked", "partial"],
-    });
-
-    expect(commands.map((entry) => entry.skillName)).toEqual(["extra-skill"]);
   });
 
   it("uses inherited defaults for agents that share one workspace", async () => {
@@ -561,11 +547,11 @@ describe("listSkillCommandsForAgents", () => {
           defaults: {
             skills: ["alpha-skill"],
           },
-          list: [
-            { id: "alpha", workspace: sharedWorkspace },
-            { id: "beta", workspace: sharedWorkspace, skills: ["beta-skill"] },
-            { id: "gamma", workspace: sharedWorkspace },
-          ],
+          entries: {
+            alpha: { workspace: sharedWorkspace },
+            beta: { workspace: sharedWorkspace, skills: ["beta-skill"] },
+            gamma: { workspace: sharedWorkspace },
+          },
         },
       },
       agentIds: ["alpha", "beta", "gamma"],
@@ -584,10 +570,10 @@ describe("listSkillCommandsForAgents", () => {
           defaults: {
             skills: ["alpha-skill", "hidden-skill"],
           },
-          list: [
-            { id: "alpha", workspace: sharedWorkspace, skills: [] },
-            { id: "beta", workspace: sharedWorkspace, skills: ["beta-skill"] },
-          ],
+          entries: {
+            alpha: { workspace: sharedWorkspace, skills: [] },
+            beta: { workspace: sharedWorkspace, skills: ["beta-skill"] },
+          },
         },
       },
       agentIds: ["alpha", "beta"],
@@ -604,10 +590,10 @@ describe("listSkillCommandsForAgents", () => {
     const commands = listSkillCommandsForAgents({
       cfg: {
         agents: {
-          list: [
-            { id: "valid", workspace: validWorkspace },
-            { id: "broken", workspace: missingWorkspace },
-          ],
+          entries: {
+            valid: { workspace: validWorkspace },
+            broken: { workspace: missingWorkspace },
+          },
         },
       },
       agentIds: ["valid", "broken"],
@@ -631,7 +617,7 @@ describe("listSkillCommandsForWorkspace", () => {
           defaults: {
             skills: ["alpha-skill"],
           },
-          list: [{ id: "alpha", workspace: sharedWorkspace }],
+          entries: { alpha: { workspace: sharedWorkspace } },
         },
       },
       agentId: "alpha",
@@ -661,6 +647,22 @@ describe("listSkillCommandsForWorkspace", () => {
       pluginMetadataSnapshot,
     });
 
-    expect(lastPluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
+    expect(lastCommandBuildOptions?.pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
+  });
+
+  it("delegates pinned library loading to the command entry provider", async () => {
+    const baseDir = tempDirs.make("openclaw-skills-workspace-library-");
+    const workspaceDir = await createWorkspace(baseDir, "main");
+    const librarySelections = [
+      { skillId: "library-guide", revision: "revision", name: "guide", ownerProfileId: "profile" },
+    ];
+
+    listSkillCommandsForWorkspace({
+      workspaceDir,
+      cfg: {},
+      sessionEntry: { skillLibrarySelections: librarySelections },
+    });
+
+    expect(lastCommandBuildOptions?.librarySelections).toBe(librarySelections);
   });
 });

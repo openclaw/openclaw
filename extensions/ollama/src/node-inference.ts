@@ -11,7 +11,6 @@ import type {
   AnyAgentTool,
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   readProviderJsonResponse,
@@ -31,8 +30,6 @@ import {
   OLLAMA_CHAT_COMMAND,
   OLLAMA_MODELS_COMMAND,
   OLLAMA_NODE_INFERENCE_CAPABILITY,
-  OLLAMA_NODE_INFERENCE_COMMANDS,
-  OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS,
   ollamaNodeInferenceToolDefinition,
 } from "./node-inference-contract.js";
 import {
@@ -58,25 +55,6 @@ type NodeModel = {
   contextWindow?: number;
   capabilities?: string[];
   loaded: boolean;
-};
-
-type OllamaModelsPayload = {
-  provider: "ollama";
-  models: NodeModel[];
-};
-
-type OllamaChatPayload = {
-  provider: "ollama";
-  model: string;
-  response: string;
-  usage?: {
-    promptTokens?: number;
-    completionTokens?: number;
-  };
-  timings?: {
-    loadMs?: number;
-    totalMs?: number;
-  };
 };
 
 type NodeSummary = Awaited<
@@ -150,10 +128,7 @@ async function requestOllamaJson<T>(params: {
   }
 }
 
-async function discoverOllamaNodeModels(
-  baseUrl = OLLAMA_DEFAULT_BASE_URL,
-  signal?: AbortSignal,
-): Promise<OllamaModelsPayload> {
+async function discoverOllamaNodeModels(baseUrl = OLLAMA_DEFAULT_BASE_URL, signal?: AbortSignal) {
   const apiBase = resolveOllamaApiBase(baseUrl);
   const discovered = await fetchOllamaModels(apiBase, signal ? { signal } : undefined);
   if (!discovered.reachable) {
@@ -223,7 +198,7 @@ async function runOllamaNodeChat(params: {
   maxTokens: number;
   timeoutMs: number;
   signal?: AbortSignal;
-}): Promise<OllamaChatPayload> {
+}) {
   const apiBase = resolveOllamaApiBase(params.baseUrl);
   const deadlineMs = performance.now() + params.timeoutMs;
   const remainingTimeoutMs = (): number => {
@@ -316,12 +291,14 @@ export function createOllamaNodeHostCommands(options?: {
     {
       command: OLLAMA_MODELS_COMMAND,
       cap: OLLAMA_NODE_INFERENCE_CAPABILITY,
+      hasActiveWork: () => false,
       handle: async (_paramsJSON, _io, context) =>
         JSON.stringify(await discoverOllamaNodeModels(baseUrl, context?.signal)),
     },
     {
       command: OLLAMA_CHAT_COMMAND,
       cap: OLLAMA_NODE_INFERENCE_CAPABILITY,
+      hasActiveWork: () => false,
       handle: async (paramsJSON, _io, context) => {
         const params = readNodeCommandParams(paramsJSON);
         const model = readStringParam(params, "model", { required: true });
@@ -363,14 +340,6 @@ export function createOllamaNodeHostCommands(options?: {
       },
     },
   ];
-}
-
-export function createOllamaNodeInvokePolicy(): OpenClawPluginNodeInvokePolicy {
-  return {
-    commands: [...OLLAMA_NODE_INFERENCE_COMMANDS],
-    defaultPlatforms: [...OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS],
-    handle: async (ctx) => await ctx.invokeNode(),
-  };
 }
 
 function findNode(nodes: NodeSummary[], query: string): NodeSummary {

@@ -1,5 +1,13 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import type { ChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import type {
+  ChannelIngressLegacyImport,
+  ChannelIngressLegacyImportResult,
+} from "../channels/message/ingress-queue.migration.js";
+import type { ChannelDoctorConfigMutation } from "../channels/plugins/types.adapters.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
+import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
   OpenKeyedStoreOptions,
@@ -13,14 +21,52 @@ export type PluginDoctorStateMigrationDetection = {
   preview: string[];
 };
 
+export type PluginDoctorCronJob = {
+  storeKey: string;
+  id: string;
+  sortOrder: number;
+  /** Exact persisted definition; runtime state remains host-owned. */
+  definitionJson: string;
+  definition: Record<string, unknown> | null;
+  invalidReason?: string;
+};
+
+export type PluginDoctorCronInventory = {
+  jobs: PluginDoctorCronJob[];
+};
+
+export type PluginDoctorCronChange = {
+  job: PluginDoctorCronJob;
+  /** null retires the row; replacements preserve its ID, order, and runtime state. */
+  definition: Record<string, unknown> | null;
+};
+
 export type PluginDoctorStateMigrationContext = {
+  /** Trusted plugins only; non-creating inspection includes inactive cron partitions. */
+  inspectCronJobs?: () => Promise<PluginDoctorCronInventory>;
+  /** Offline repair only. Backs up first, then compares inspected rows before one commit. */
+  repairCronJobs?: (
+    inventory: PluginDoctorCronInventory,
+    changes: readonly PluginDoctorCronChange[],
+  ) => Promise<{ changed: number; backupPath?: string }>;
+  /** Non-creating canonical ACP claims for this backend, including incomplete evidence. */
+  inspectAcpSessionClaims?: () => Promise<{
+    claims: PluginDoctorAcpSessionClaim[];
+    incomplete: string[];
+  }>;
+  /** Present only inside offline repair; compares metadata and entry binding before writing. */
+  updateAcpSessionIdentity?: (input: {
+    claim: PluginDoctorAcpSessionClaim;
+    runtimeSessionName: string;
+    acpxRecordId: string;
+  }) => void;
   openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
   /** Doctor-only batch import preserving source age and remaining retention. */
   importPluginStateEntries?: (
     options: OpenKeyedStoreOptions,
     entries: readonly { key: string; value: unknown; createdAt: number; ttlMs?: number }[],
   ) => void;
-  /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
+  /** Live plugin rows for import preflight; current hosts report no aggregate limit (Infinity). Older hosts may omit it. */
   getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
   readPluginStateEntriesInKeyRange?: (
     namespace: string,
@@ -39,10 +85,22 @@ export type PluginDoctorStateMigrationContext = {
     namespace: string,
     entries: readonly PluginDoctorRawStateEntry[],
   ) => { deleted: number; changed: number };
+  /** Offline repair only: verified backup, exact row comparison, and one atomic update. */
+  repairPluginStateEntries?: (
+    namespace: string,
+    replacements: readonly { entry: PluginDoctorRawStateEntry; value: unknown }[],
+  ) => Promise<{ changes: string[]; warnings: string[] }>;
   /** Owner-bound ingress queue access, one entry per manifest-declared channel;
    *  the host fixes the channel identity and doctor state directory. Older test
    *  hosts may omit it. */
   channelIngressQueues?: readonly PluginDoctorChannelIngressQueueAccess[];
+};
+
+export type PluginDoctorAcpSessionClaim = {
+  agentId: string;
+  sessionKey: string;
+  binding: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "sessionStartedAt">;
+  meta: SessionAcpMeta;
 };
 
 /** Read-only projection of a durable ingress queue. Detection runs before the host
@@ -56,6 +114,13 @@ export type PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata = unkn
  *  the runtime proxy's accessor, minus the state-dir override the host fixes. */
 export type PluginDoctorChannelIngressQueueAccess = {
   channelId: string;
+  /** Offline migration authority, checked again immediately before filesystem effects. */
+  assertCurrent?: () => void;
+  /** Offline-only import with canonical IDs; terminal tombstones never become pending work. */
+  importLegacyEntries?: (params: {
+    accountId: string;
+    entries: readonly ChannelIngressLegacyImport[];
+  }) => ChannelIngressLegacyImportResult;
   /** Inspection-only access, available in every phase including detection. */
   openChannelIngressQueueForInspection: <TPayload, TMetadata = unknown>(options?: {
     accountId?: string;
@@ -81,7 +146,29 @@ type PluginDoctorStateMigrationInput = {
   env: NodeJS.ProcessEnv;
   stateDir: string;
   oauthDir: string;
+  /** Same workspace selected for Gateway plugin services; never Doctor's cwd. */
+  serviceWorkspaceDir?: string;
   context: PluginDoctorStateMigrationContext;
+};
+
+type PluginDoctorStateMigrationResult = {
+  changes: string[];
+  warnings: string[];
+  notices?: string[];
+  /** Every warning is advisory; required state remains safe for later repairs. */
+  warningDisposition?: "recoverable";
+};
+
+export type PluginDoctorMigrationBackupResource = {
+  /** Absolute source or destination path, including destinations not created yet. */
+  path: string;
+  kind: "sqlite" | "file" | "directory";
+};
+
+export type PluginDoctorMigrationBackupWarning = {
+  kind: "undeclared-migration-resources";
+  pluginId: string;
+  message: string;
 };
 
 export type PluginDoctorStateMigration = {
@@ -90,6 +177,18 @@ export type PluginDoctorStateMigration = {
   /** Import retired file state only during explicit `doctor --fix` repair. */
   doctorOnly?: boolean;
   phase?: "after-session-repair";
+  /** Read-only recovery inventory. Never open or migrate a writable store here. */
+  collectBackupResources?: (
+    params: Pick<
+      PluginDoctorStateMigrationInput,
+      "config" | "env" | "stateDir" | "serviceWorkspaceDir"
+    > & {
+      /** Rehearsal admission must reject remote or otherwise unlisted migration data. */
+      requireLocalResources?: boolean;
+    },
+  ) =>
+    | readonly PluginDoctorMigrationBackupResource[]
+    | Promise<readonly PluginDoctorMigrationBackupResource[]>;
   detectLegacyState: (
     params: PluginDoctorStateMigrationInput,
   ) =>
@@ -98,12 +197,25 @@ export type PluginDoctorStateMigration = {
     | null;
   migrateLegacyState: (
     params: PluginDoctorStateMigrationInput,
-  ) =>
-    | Promise<{ changes: string[]; warnings: string[]; notices?: string[] }>
-    | { changes: string[]; warnings: string[]; notices?: string[] };
+  ) => Promise<PluginDoctorStateMigrationResult> | PluginDoctorStateMigrationResult;
+};
+
+export type PluginDoctorStateMigrationEntry = {
+  pluginId: string;
+  channelIds: string[];
+  /**
+   * Mirrors the runtime proxy's durable-store gate: only bundled plugins and trusted
+   * official installs may reach channel ingress queues. Doctor must not become a way
+   * around that for an activated workspace plugin.
+   */
+  trustedForDurableStores?: boolean;
+  migration: PluginDoctorStateMigration;
 };
 
 export type PluginDoctorContractModule = {
+  historicalWebhookListener?: unknown;
+  /** Retained host artifacts can migrate listener settings while plugin repairs stay deferred. */
+  normalizeHistoricalWebhookConfig?: unknown;
   legacyConfigRules?: unknown;
   normalizeCompatibilityConfig?: unknown;
   resolveSessionStoreAgentIds?: unknown;
@@ -115,10 +227,9 @@ export type PluginDoctorContractModule = {
   stateMigrations?: unknown;
 };
 
-type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
-  config: OpenClawConfig;
-  changes: string[];
-};
+export type PluginDoctorCompatibilityNormalizer = (params: {
+  cfg: OpenClawConfig;
+}) => ChannelDoctorConfigMutation;
 
 type PluginDoctorSessionStoreAgentIdsResolver = (params: {
   cfg: OpenClawConfig;
@@ -128,13 +239,10 @@ function coerceLegacyConfigRules(value: unknown): LegacyConfigRule[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    const candidate = entry as { path?: unknown; message?: unknown };
-    return Array.isArray(candidate.path) && typeof candidate.message === "string";
-  }) as LegacyConfigRule[];
+  return value.filter((entry): entry is LegacyConfigRule => {
+    const candidate = asOptionalObjectRecord(entry);
+    return Array.isArray(candidate?.path) && typeof candidate?.message === "string";
+  });
 }
 
 function coerceNormalizeCompatibilityConfig(
@@ -152,17 +260,9 @@ function coerceSessionStoreAgentIdsResolver(
 }
 
 function isPluginDoctorStateMigration(value: unknown): value is PluginDoctorStateMigration {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as {
-    id?: unknown;
-    label?: unknown;
-    detectLegacyState?: unknown;
-    migrateLegacyState?: unknown;
-  };
+  const candidate = asOptionalObjectRecord(value);
   return (
-    typeof candidate.id === "string" &&
+    typeof candidate?.id === "string" &&
     candidate.id.trim().length > 0 &&
     typeof candidate.label === "string" &&
     candidate.label.trim().length > 0 &&
@@ -180,17 +280,44 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
     label: migration.label.trim(),
     doctorOnly: migration.doctorOnly === true ? true : undefined,
     phase: migration.phase === "after-session-repair" ? migration.phase : undefined,
+    collectBackupResources: migration.collectBackupResources,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));
 }
 
 /** Coerce a loaded doctor contract once for both registry use and declaration validation. */
-export function coercePluginDoctorContractModule(mod: PluginDoctorContractModule) {
+export function coercePluginDoctorContractModule(
+  mod: PluginDoctorContractModule,
+  allowedChannels?: readonly string[],
+) {
   const defaultExport = (mod as { default?: PluginDoctorContractModule }).default;
+  const historicalWebhookListener = z
+    .object({
+      channelId: z
+        .string()
+        .trim()
+        .min(1)
+        .refine(
+          (id) => !allowedChannels || allowedChannels.includes(id),
+          "Historical webhook listener channel must belong to the plugin",
+        ),
+      port: z.number().int().min(1).max(65535),
+      host: z.string().trim().min(1).optional(),
+      preserveAuthoredActivation: z.literal(true).optional(),
+    })
+    .optional()
+    .parse(
+      mod.historicalWebhookListener === undefined
+        ? defaultExport?.historicalWebhookListener
+        : mod.historicalWebhookListener,
+    );
   const rules = coerceLegacyConfigRules(defaultExport?.legacyConfigRules ?? mod.legacyConfigRules);
   const normalizeCompatibilityConfig = coerceNormalizeCompatibilityConfig(
     mod.normalizeCompatibilityConfig ?? defaultExport?.normalizeCompatibilityConfig,
+  );
+  const normalizeHistoricalWebhookConfig = coerceNormalizeCompatibilityConfig(
+    mod.normalizeHistoricalWebhookConfig ?? defaultExport?.normalizeHistoricalWebhookConfig,
   );
   const resolveSessionStoreAgentIds = coerceSessionStoreAgentIdsResolver(
     mod.resolveSessionStoreAgentIds ?? defaultExport?.resolveSessionStoreAgentIds,
@@ -208,6 +335,8 @@ export function coercePluginDoctorContractModule(mod: PluginDoctorContractModule
     stateMigrations: stateMigrations.length > 0,
   };
   return {
+    historicalWebhookListener,
+    normalizeHistoricalWebhookConfig,
     rules,
     normalizeCompatibilityConfig,
     resolveSessionStoreAgentIds,
@@ -216,3 +345,7 @@ export function coercePluginDoctorContractModule(mod: PluginDoctorContractModule
     summary,
   };
 }
+
+export type PluginDoctorHistoricalWebhookListener = NonNullable<
+  ReturnType<typeof coercePluginDoctorContractModule>["historicalWebhookListener"]
+>;

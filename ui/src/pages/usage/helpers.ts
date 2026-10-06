@@ -1,6 +1,4 @@
-// Control UI module implements usage helpers behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { formatUiError } from "../../lib/format-error.ts";
 
 type UsageQueryTerm = {
   key?: string;
@@ -35,13 +33,14 @@ type UsageSessionQueryTarget = {
   } | null;
 };
 
-export function currentLocalDate(): string {
-  const date = new Date();
+export function currentLocalDate(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-export function toUsageErrorMessage(error: unknown): string {
-  return formatUiError(error, "request failed");
+export function createDefaultUsageDateRange(date = new Date()) {
+  const start = new Date(date);
+  start.setDate(start.getDate() - 29);
+  return { startDate: currentLocalDate(start), endDate: currentLocalDate(date) };
 }
 
 export function toggleUsageRangeSelection<T>(
@@ -84,8 +83,6 @@ export function selectUsageSessionKeys(
   }
   return selected.length === 1 && selected[0] === key ? [] : [key];
 }
-
-const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
 
 const globToRegex = (pattern: string): RegExp => {
   const escaped = pattern
@@ -136,44 +133,27 @@ export const extractQueryTerms = (query: string): UsageQueryTerm[] => {
   });
 };
 
-const getSessionText = (session: UsageSessionQueryTarget): string[] => {
-  const items: Array<string | undefined> = [session.label, session.key, session.sessionId];
-  return items
+const normalizeQueryValues = (items: Array<string | undefined>): string[] =>
+  items
     .filter((item): item is string => Boolean(item))
     .map((item) => normalizeLowercaseStringOrEmpty(item));
-};
 
-const getSessionProviders = (session: UsageSessionQueryTarget): string[] => {
-  const providers = new Set<string>();
-  if (session.modelProvider) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.modelProvider));
-  }
-  if (session.providerOverride) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.providerOverride));
-  }
-  if (session.origin?.provider) {
-    providers.add(normalizeLowercaseStringOrEmpty(session.origin.provider));
-  }
-  for (const entry of session.usage?.modelUsage ?? []) {
-    if (entry.provider) {
-      providers.add(normalizeLowercaseStringOrEmpty(entry.provider));
-    }
-  }
-  return Array.from(providers);
-};
+const getSessionText = (session: UsageSessionQueryTarget): string[] =>
+  normalizeQueryValues([session.label, session.key, session.sessionId]);
 
-const getSessionModels = (session: UsageSessionQueryTarget): string[] => {
-  const models = new Set<string>();
-  if (session.model) {
-    models.add(normalizeLowercaseStringOrEmpty(session.model));
-  }
-  for (const entry of session.usage?.modelUsage ?? []) {
-    if (entry.model) {
-      models.add(normalizeLowercaseStringOrEmpty(entry.model));
-    }
-  }
-  return Array.from(models);
-};
+const getSessionProviders = (session: UsageSessionQueryTarget): string[] =>
+  normalizeQueryValues([
+    session.modelProvider,
+    session.providerOverride,
+    session.origin?.provider,
+    ...(session.usage?.modelUsage ?? []).map((entry) => entry.provider),
+  ]);
+
+const getSessionModels = (session: UsageSessionQueryTarget): string[] =>
+  normalizeQueryValues([
+    session.model,
+    ...(session.usage?.modelUsage ?? []).map((entry) => entry.model),
+  ]);
 
 const getSessionTools = (session: UsageSessionQueryTarget): string[] =>
   (session.usage?.toolUsage?.tools ?? []).map((tool) => normalizeLowercaseStringOrEmpty(tool.name));
@@ -221,59 +201,81 @@ const QUERY_KEYS = new Set([
 ]);
 const MULTI_VALUE_QUERY_KEYS = new Set(["channel", "provider", "model", "tool"]);
 
-const matchesUsageQuery = (session: UsageSessionQueryTarget, term: UsageQueryTerm): boolean => {
-  const value = normalizeQueryText(term.value ?? "");
-  if (!value) {
-    return true;
+const matchesEverySession: UsageQueryPredicate = () => true;
+
+const prepareUsageQuery = (
+  term: UsageQueryTerm,
+  key: string,
+  warnings: string[],
+): UsageQueryPredicate => {
+  if (term.key && !QUERY_KEYS.has(key)) {
+    warnings.push(`Unknown filter: ${term.key}`);
+    return matchesEverySession;
   }
-  if (!term.key) {
-    return getSessionText(session).some((text) => text.includes(value));
+  if (term.key && term.value === "") {
+    warnings.push(`Missing value for ${term.key}`);
   }
 
-  const key = normalizeQueryText(term.key);
+  const value = normalizeLowercaseStringOrEmpty(term.value ?? "");
+  const numericSpec = Object.hasOwn(NUMERIC_QUERY_SPECS, key)
+    ? NUMERIC_QUERY_SPECS[key]
+    : undefined;
+  const threshold = numericSpec && term.value ? parseQueryNumber(term.value) : null;
+  if (numericSpec && term.value && threshold === null) {
+    warnings.push(`Invalid number for ${term.key}`);
+  }
+  if (key === "has") {
+    const predicate = Object.hasOwn(HAS_PREDICATES, value) ? HAS_PREDICATES[value] : undefined;
+    if (term.value && !predicate) {
+      warnings.push(`Unknown has:${term.value}`);
+    }
+    return predicate ?? matchesEverySession;
+  }
+  if (!value) {
+    return matchesEverySession;
+  }
+  if (!term.key) {
+    return (session) => getSessionText(session).some((text) => text.includes(value));
+  }
+
   switch (key) {
     case "agent":
-      return normalizeLowercaseStringOrEmpty(session.agentId).includes(value);
+      return (session) => normalizeLowercaseStringOrEmpty(session.agentId).includes(value);
     case "channel":
-      return normalizeLowercaseStringOrEmpty(session.channel).includes(value);
+      return (session) => normalizeLowercaseStringOrEmpty(session.channel).includes(value);
     case "chat":
-      return normalizeLowercaseStringOrEmpty(session.chatType).includes(value);
+      return (session) => normalizeLowercaseStringOrEmpty(session.chatType).includes(value);
     case "provider":
-      return getSessionProviders(session).some((provider) => provider.includes(value));
+      return (session) => getSessionProviders(session).some((provider) => provider.includes(value));
     case "model":
-      return getSessionModels(session).some((model) => model.includes(value));
+      return (session) => getSessionModels(session).some((model) => model.includes(value));
     case "tool":
-      return getSessionTools(session).some((tool) => tool.includes(value));
+      return (session) => getSessionTools(session).some((tool) => tool.includes(value));
     case "label":
-      return normalizeLowercaseStringOrEmpty(session.label).includes(value);
+      return (session) => normalizeLowercaseStringOrEmpty(session.label).includes(value);
     case "key":
     case "session":
     case "id":
       if (value.includes("*") || value.includes("?")) {
-        const regex = globToRegex(value);
-        return (
-          regex.test(session.key) || (session.sessionId ? regex.test(session.sessionId) : false)
-        );
+        let regex: RegExp | undefined;
+        return (session) => {
+          // Preserve lazy construction after earlier predicates, then reuse this call's matcher.
+          regex ??= globToRegex(value);
+          return (
+            regex.test(session.key) || (session.sessionId ? regex.test(session.sessionId) : false)
+          );
+        };
       }
-      return (
+      return (session) =>
         normalizeLowercaseStringOrEmpty(session.key).includes(value) ||
-        normalizeLowercaseStringOrEmpty(session.sessionId).includes(value)
-      );
-    case "has": {
-      const predicate = Object.hasOwn(HAS_PREDICATES, value) ? HAS_PREDICATES[value] : undefined;
-      return predicate?.(session) ?? true;
-    }
+        normalizeLowercaseStringOrEmpty(session.sessionId).includes(value);
   }
 
-  const numericSpec = Object.hasOwn(NUMERIC_QUERY_SPECS, key)
-    ? NUMERIC_QUERY_SPECS[key]
-    : undefined;
-  if (!numericSpec) {
-    return true;
+  if (!numericSpec || threshold === null) {
+    return matchesEverySession;
   }
-  const threshold = parseQueryNumber(value);
   const [getValue, matches] = numericSpec;
-  return threshold === null || matches(getValue(session), threshold);
+  return (session) => matches(getValue(session), threshold);
 };
 
 export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
@@ -286,50 +288,24 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
   }
 
   const warnings: string[] = [];
-  const categoricalTerms = new Map<string, UsageQueryTerm[]>();
-  for (const term of terms) {
-    if (!term.key) {
-      continue;
+  const categoricalTerms = new Map<string, UsageQueryPredicate[]>();
+  const predicates = terms.map((term) => {
+    const key = normalizeLowercaseStringOrEmpty(term.key ?? "");
+    const predicate = prepareUsageQuery(term, key, warnings);
+    if (!MULTI_VALUE_QUERY_KEYS.has(key)) {
+      return predicate;
     }
-    const normalizedKey = normalizeQueryText(term.key);
-    if (!QUERY_KEYS.has(normalizedKey)) {
-      warnings.push(`Unknown filter: ${term.key}`);
-      continue;
+    const alternatives = categoricalTerms.get(key) ?? [];
+    if (term.value) {
+      alternatives.push(predicate);
     }
-    if (term.value && MULTI_VALUE_QUERY_KEYS.has(normalizedKey)) {
-      const alternatives = categoricalTerms.get(normalizedKey) ?? [];
-      alternatives.push(term);
-      categoricalTerms.set(normalizedKey, alternatives);
-    }
-    if (term.value === "") {
-      warnings.push(`Missing value for ${term.key}`);
-    }
-    if (
-      normalizedKey === "has" &&
-      term.value &&
-      !Object.hasOwn(HAS_PREDICATES, normalizeQueryText(term.value))
-    ) {
-      warnings.push(`Unknown has:${term.value}`);
-    }
-    if (
-      Object.hasOwn(NUMERIC_QUERY_SPECS, normalizedKey) &&
-      term.value &&
-      parseQueryNumber(term.value) === null
-    ) {
-      warnings.push(`Invalid number for ${term.key}`);
-    }
-  }
+    categoricalTerms.set(key, alternatives);
+    // Every original term still revisits its completed OR group, including empty terms.
+    return (session: UsageSessionQueryTarget) =>
+      alternatives.length === 0 || alternatives.some((match) => match(session));
+  });
 
-  const filtered = sessions.filter((session) =>
-    terms.every((term) => {
-      const alternatives = term.key
-        ? categoricalTerms.get(normalizeQueryText(term.key))
-        : undefined;
-      return alternatives
-        ? alternatives.some((alternative) => matchesUsageQuery(session, alternative))
-        : matchesUsageQuery(session, term);
-    }),
-  );
+  const filtered = sessions.filter((session) => predicates.every((match) => match(session)));
   return { sessions: filtered, warnings };
 };
 

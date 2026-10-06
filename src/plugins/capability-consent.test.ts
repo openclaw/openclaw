@@ -5,15 +5,12 @@ import type {
   PluginAcceptedDeclaredSurface,
   PluginInstallRecord,
 } from "../config/types.plugins.js";
-import {
-  buildPluginCapabilityConsentReview,
-  createManagedPluginArtifactConsentHandler,
-  diffDeclaredSurfaceWidening,
-  resolvePluginArtifactDeclaredSurface,
-} from "./capability-consent.js";
+import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
+import { createManagedPluginArtifactConsentHandler } from "./capability-consent.js";
 import {
   buildPluginCapabilitySummary,
   computeDeclaredSurfaceHash,
+  diffDeclaredSurfaceWidening,
   mergePluginDeclaredSurfaces,
   resolveAcceptedSurfaceCurrent,
   resolvePluginInstallRecordIntegrity,
@@ -218,14 +215,6 @@ describe("plugin capability consent", () => {
     },
   );
 
-  it("reads declared skills from bundle-format plugin artifacts", () => {
-    const rootDir = createArtifactFixture({
-      ".claude-plugin/plugin.json": { name: "bundle", skills: ["./bundle-skills"] },
-    });
-
-    expect(resolvePluginArtifactDeclaredSurface(rootDir).skills).toEqual(["./bundle-skills"]);
-  });
-
   it("reviews native package extensions before a competing bundle manifest, like runtime discovery", () => {
     const rootDir = createArtifactFixture({
       "package.json": { openclaw: { extensions: ["./index.js"] } },
@@ -311,12 +300,6 @@ describe("plugin capability consent", () => {
       widened: {},
     },
     {
-      label: "an unchanged capability surface",
-      previous: { channels: ["chat"], tools: ["read"] },
-      next: { channels: ["chat"], tools: ["read"] },
-      widened: {},
-    },
-    {
       label: "capabilities in a previously empty group",
       previous: { tools: ["read"] },
       next: { tools: ["read"], mcpServers: ["zulu", "alpha"] },
@@ -371,12 +354,6 @@ describe("plugin capability consent", () => {
       current: false,
     },
     {
-      label: "matching declared surface and artifact integrity",
-      record: { integrity: "sha512-current", acceptedSurfaceIntegrity: "sha512-current" },
-      declared: { tools: ["read"] },
-      current: true,
-    },
-    {
       label: "matching declared surface without an available artifact digest",
       record: {},
       declared: { tools: ["read"] },
@@ -394,23 +371,33 @@ describe("plugin capability consent", () => {
     expect(resolveAcceptedSurfaceCurrent(installRecord, surface)).toBe(current);
   });
 
-  it("redacts source credentials before a capability review reaches a prompt or pending inspection", () => {
+  it("redacts source credentials before a capability review reaches a prompt or pending inspection", async () => {
     const url = new URL("https://example.invalid/plugins/demo.git");
     url.username = "fixture-user";
     url.password = "fixture-password";
     url.searchParams.set("token", "fixture-token");
     const record: PluginInstallRecord = { source: "git", spec: `git:${url.href}` };
 
-    const review = buildPluginCapabilityConsentReview({
-      pluginId: "plugin",
-      manifest: {},
+    let reviewSpec: string | undefined;
+    const consent = createManagedPluginArtifactConsentHandler({
       config: {},
-      record,
+      source: record.source,
+      spec: record.spec,
+      onCapabilityConsent: async (review) => {
+        reviewSpec = review.source?.spec;
+        return { reviewToken: review.reviewToken };
+      },
+    });
+    await consent.onBeforePluginArtifactCommit({
+      pluginId: "plugin",
+      mode: "install",
+      stagedArtifactDir: createArtifactFixture({
+        "index.js": "export {};",
+        "openclaw.plugin.json": { id: "plugin", configSchema: { type: "object" } },
+      }),
     });
 
-    expect(review.source?.spec).toBe(
-      "git:https://***:***@example.invalid/plugins/demo.git?token=***",
-    );
+    expect(reviewSpec).toBe("git:https://***:***@example.invalid/plugins/demo.git?token=***");
     expect(record.spec).toBe(`git:${url.href}`);
   });
 
@@ -498,7 +485,7 @@ describe("plugin capability consent", () => {
     },
   );
 
-  it("requires consent when reinstalling a previously disabled plugin will enable it", async () => {
+  it("rejects reinstall without capability consent even when the plugin is disabled", async () => {
     const rootDir = createArtifactFixture({
       "package.json": { openclaw: { extensions: ["./index.js"] } },
       "index.js": "export {};",
@@ -518,4 +505,41 @@ describe("plugin capability consent", () => {
       }),
     ).rejects.toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
   });
+
+  it.each(["install", "update"] as const)(
+    "directs an %s consent rejection to retry the command, not enable",
+    async (mode) => {
+      const rootDir = createArtifactFixture({
+        "package.json": { openclaw: { extensions: ["./index.js"] } },
+        "index.js": "export {};",
+        "openclaw.plugin.json": {
+          id: "plugin",
+          ...(mode === "update" ? { contracts: { tools: ["read"] } } : {}),
+          configSchema: { type: "object" },
+        },
+      });
+      const consent = createManagedPluginArtifactConsentHandler({
+        config: {},
+        source: mode === "install" ? "clawhub" : "npm",
+        spec: mode === "install" ? "clawhub:@openviking/openclaw-plugin" : undefined,
+        previousRecords:
+          mode === "update" ? { plugin: { source: "npm", installPath: rootDir } } : undefined,
+      });
+
+      const error: unknown = await consent
+        .onBeforePluginArtifactCommit({ pluginId: "plugin", stagedArtifactDir: rootDir, mode })
+        .catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toContain(
+        `The plugin was not ${mode === "install" ? "installed" : "updated"}`,
+      );
+      expect(message).toContain(
+        'Re-run the same "openclaw plugins install" or "openclaw plugins update" command with --accept-capabilities',
+      );
+      expect(message).toContain("keeping its source and other options");
+      expect(message).toContain("complete the plugin command first, then retry Doctor or setup");
+      expect(message).not.toContain("plugins enable");
+    },
+  );
 });

@@ -1,6 +1,8 @@
+import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import "./modal-dialog.ts";
+import "./tooltip.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;
@@ -38,6 +40,113 @@ async function mountModal(host = container, variant = "", autofocus = true) {
 }
 
 describe.runIf(browserMode)("modal native focus ownership", () => {
+  it.each(["standard", "drawer"])(
+    "honors reduced motion when opening and closing (%s)",
+    async (variant) => {
+      const { cdp } = await import("vitest/browser");
+      const session: CDPSession = cdp();
+      await session.send("Emulation.setEmulatedMedia", {
+        features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+      });
+      try {
+        expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
+        const modal = document.createElement("openclaw-modal-dialog");
+        modal.manual = true;
+        modal.className = variant === "drawer" ? "drawer" : "";
+        modal.label = "Motion preference";
+        modal.style.setProperty("--wa-transition-normal", "150ms");
+        modal.textContent = "Settings";
+        container.append(modal);
+        const { dialog, webAwesomeDialog } = await getRenderedModalDialog(container);
+        expect(dialog.open).toBe(false);
+        const after = (name: string) =>
+          new Promise<void>((resolve) => {
+            webAwesomeDialog.addEventListener(name, () => resolve(), { once: true });
+          });
+        // Observe motion after the lifecycle event's task sets up the animation.
+        const motionAtStart = (name: string) =>
+          after(name).then(() =>
+            dialog
+              .getAnimations({ subtree: true })
+              .map((animation) => Number(animation.effect?.getComputedTiming().activeDuration ?? 0))
+              .filter((duration) => duration > 0),
+          );
+
+        const opening = motionAtStart("wa-show");
+        const shown = after("wa-after-show");
+        modal.show();
+        expect(await opening).toEqual([]);
+        await shown;
+        expect(dialog.open).toBe(true);
+
+        const closing = motionAtStart("wa-hide");
+        const hidden = after("wa-after-hide");
+        modal.hide();
+        expect(await closing).toEqual([]);
+        await hidden;
+        expect(dialog.open).toBe(false);
+      } finally {
+        await session.send("Emulation.setEmulatedMedia", { features: [] });
+      }
+    },
+  );
+
+  it.each(["drawer", "viewport-edge-to-edge"])(
+    "keeps the bottom action reachable in scrollable viewport content (%s)",
+    async (variant) => {
+      const { userEvent } = await import("vitest/browser");
+      const { modal } = await mountModal(container, variant, false);
+      const content = document.createElement("section");
+      content.style.cssText = "display: flex; height: 100%; width: 100%;";
+      const scroller = document.createElement("div");
+      scroller.style.cssText = "width: 100%; min-height: 0; overflow: auto;";
+      const longContent = document.createElement("div");
+      longContent.style.height = "200dvh";
+      const action = document.createElement("button");
+      action.textContent = "Bottom action";
+      let clicked = false;
+      action.addEventListener("click", () => {
+        clicked = true;
+      });
+      scroller.append(longContent, action);
+      content.append(scroller);
+      modal.replaceChildren(content);
+
+      await expect.poll(() => scroller.clientHeight).toBeGreaterThan(0);
+      expect(scroller.clientHeight).toBeLessThanOrEqual(window.innerHeight);
+      expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
+      await userEvent.click(action);
+      expect(clicked).toBe(true);
+      expect(action.getBoundingClientRect().bottom).toBeLessThanOrEqual(window.innerHeight);
+    },
+  );
+
+  it("dismisses a tooltip before native modal cancellation and preserves the draft", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const { modal, dialog, notes } = await mountModal();
+    notes.value = "Unsaved draft";
+    const tooltip = document.createElement("openclaw-tooltip");
+    tooltip.content = "Draft editing help";
+    tooltip.anchor = notes;
+    modal.append(tooltip);
+    await tooltip.updateComplete;
+    notes.focus();
+    await tooltip.updateComplete;
+    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
+    await expect.poll(() => popup.open).toBe(true);
+
+    await userEvent.keyboard("{Escape}");
+
+    await expect.poll(() => popup.open).toBe(false);
+    expect(dialog.open).toBe(true);
+    expect(modal.open).toBe(true);
+    expect(notes.value).toBe("Unsaved draft");
+    expect(document.activeElement).toBe(notes);
+
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => dialog.open).toBe(false);
+  });
+
   it.each(["", "palette", "drawer"])(
     "preserves selected content through chrome focus and retained reopen (%s)",
     async (variant) => {

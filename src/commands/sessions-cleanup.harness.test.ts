@@ -8,13 +8,14 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as gatewayLock from "../infra/gateway-lock.js";
 import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
-import * as pluginModuleRuntime from "../plugins/loader-module-runtime.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import * as nativeModule from "../plugins/native-module-require.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createNonExitingRuntime } from "../runtime.js";
@@ -84,9 +85,16 @@ function writeCleanupPlugins(bundledRoot: string) {
 }
 
 beforeEach(() => {
-  // Reuse Vitest's real runtime graph; Jiti would compile a second host graph on first deletion.
-  vi.spyOn(pluginModuleRuntime, "createLazyPluginRuntime").mockImplementation(
-    ({ runtimeOptions }) => createPluginRuntime(runtimeOptions),
+  // Retain lazy initialization while using the harness's real mocked runtime graph.
+  const nativeLoad = nativeModule.tryNativeRequireModule;
+  const runtimePaths = new Set([
+    path.resolve("src/plugins/runtime/index.ts"),
+    path.resolve("dist/plugins/runtime/index.js"),
+  ]);
+  vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation((modulePath, options) =>
+    runtimePaths.has(modulePath)
+      ? { ok: true, moduleExport: { createPluginRuntime } }
+      : nativeLoad(modulePath, options),
   );
 });
 
@@ -101,6 +109,59 @@ afterAll(() => {
 });
 
 describe("offline sessions cleanup harness ownership", () => {
+  it("refuses an owned store, permits preview, and cleans only after exclusive admission", async () => {
+    await withOpenClawTestState({ label: "cleanup-maintenance-owner" }, async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        plugins: { enabled: false },
+        session: {
+          maintenance: {
+            mode: "warn",
+            pruneAfter: "1d",
+            preserveRecent: false,
+            maxDiskBytes: false,
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const storePath = path.join(state.sessionsDir(), "sessions.json");
+      const scope = { agentId: "main", sessionKey: "agent:main:hook:owned-cleanup", storePath };
+      const entry = { sessionId: "owned-cleanup", updatedAt: Date.now() - 40 * 86_400_000 };
+      await replaceSessionEntry(scope, entry);
+      const runtime = createNonExitingRuntime();
+      const output = vi.spyOn(runtime, "writeJson").mockImplementation(() => {});
+      const acquire = gatewayLock.acquireGatewayLock;
+      vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation((opts) =>
+        acquire({ ...opts, timeoutMs: 0 }),
+      );
+      const owner = await acquire({ allowInTests: true, port: 18789, timeoutMs: 0 });
+      if (!owner) {
+        throw new Error("expected Gateway owner");
+      }
+      try {
+        await expect(
+          sessionsCleanupCommand({ store: storePath, enforce: true }, runtime),
+        ).rejects.toThrow(
+          `OpenClaw process (PID ${process.pid}) owns this state; run Gateway-delegated cleanup without --store, or stop the Gateway`,
+        );
+        expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject(entry);
+        await sessionsCleanupCommand(
+          { store: storePath, enforce: true, dryRun: true, json: true },
+          runtime,
+        );
+        expect(output).toHaveBeenCalledWith(
+          expect.objectContaining({ dryRun: true, wouldMutate: true }),
+          2,
+        );
+        expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject(entry);
+      } finally {
+        await owner.release();
+      }
+      await sessionsCleanupCommand({ store: storePath, enforce: true, json: true }, runtime);
+      expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toBeUndefined();
+    });
+  });
+
   it.each([
     { label: "recorded", metadata: "recorded", activation: "enabled" },
     { label: "legacy", metadata: "legacy", activation: "enabled" },
@@ -121,7 +182,7 @@ describe("offline sessions cleanup harness ownership", () => {
         const cfg: OpenClawConfig = {
           agents: {
             defaults: { model: { primary: "other-provider/other-model" } },
-            entries: { main: { default: true, workspace: state.workspaceDir } },
+            entries: { main: { workspace: state.workspaceDir } },
           },
           plugins: {
             enabled: activation !== "globally-disabled",
@@ -147,7 +208,7 @@ describe("offline sessions cleanup harness ownership", () => {
         };
         setRuntimeConfigSnapshot(cfg, cfg);
         const storePath = path.join(state.sessionsDir(), "sessions.json");
-        const sessionKey = "agent:main:cleanup-owned";
+        const sessionKey = "agent:main:hook:cleanup-owned";
         const siblingKey = "agent:main:cleanup-kept";
         const sessionId = "shared-physical-id";
         const scope = { agentId: "main", sessionKey, storePath };

@@ -1,19 +1,11 @@
-// Msteams helper module supports file consent helpers behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildFileConsentCard } from "./file-consent.js";
 import { storePendingUploadFs } from "./pending-uploads-fs.js";
-import { storePendingUpload } from "./pending-uploads.js";
+import { storePendingUpload, type PendingUpload } from "./pending-uploads.js";
 
-type FileConsentMedia = {
-  buffer: Buffer;
-  filename: string;
-  contentType?: string;
-};
+export const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
-type FileConsentActivityResult = {
-  activity: Record<string, unknown>;
-  uploadId: string;
-};
+type FileConsentMedia = Pick<PendingUpload, "buffer" | "filename" | "contentType">;
 
 function buildConsentActivity(params: {
   media: FileConsentMedia;
@@ -33,20 +25,12 @@ function buildConsentActivity(params: {
   };
 }
 
-/**
- * Prepare a FileConsentCard activity for large files or non-images in personal chats.
- * Returns the activity object and uploadId - caller is responsible for sending.
- *
- * This variant only writes to the in-memory store. Use it when the caller and
- * the `fileConsent/invoke` handler share the same process (for example the
- * messenger reply path). For proactive CLI sends where the invoke arrives in
- * a different process, use {@link prepareFileConsentActivityFs} instead.
- */
+/** In-process replies keep consent bytes in memory; CLI sends use the persisted variant below. */
 export function prepareFileConsentActivity(params: {
   media: FileConsentMedia;
   conversationId: string;
   description?: string;
-}): FileConsentActivityResult {
+}) {
   const { media, conversationId, description } = params;
 
   const uploadId = storePendingUpload({
@@ -56,61 +40,29 @@ export function prepareFileConsentActivity(params: {
     conversationId,
   });
 
-  const activity = buildConsentActivity({ media, description, uploadId });
-  return { activity, uploadId };
+  return { activity: buildConsentActivity({ media, description, uploadId }), uploadId };
 }
 
-/**
- * Prepare a FileConsentCard activity and persist the pending upload to the
- * filesystem so a different process can read it when the user accepts.
- *
- * This is used by the proactive CLI `message send --media` path: the CLI
- * process sends the card and exits, but the `fileConsent/invoke` callback is
- * delivered to the long-lived gateway monitor process. The FS-backed store
- * bridges those two processes. The in-memory store is also populated so
- * same-process flows keep the fast path.
- */
-export async function prepareFileConsentActivityFs(params: {
-  media: FileConsentMedia;
-  conversationId: string;
-  description?: string;
-}): Promise<FileConsentActivityResult> {
-  const { media, conversationId, description } = params;
-
-  // Populate the in-memory store first so the uploadId is consistent, then
-  // mirror the same entry to the FS store under the same id so an invoke
-  // handler in another process can find it.
-  const uploadId = storePendingUpload({
-    buffer: media.buffer,
-    filename: media.filename,
-    contentType: media.contentType,
-    conversationId,
-  });
-
+/** Persist consent bytes for callbacks received by another process after the CLI exits. */
+export async function prepareFileConsentActivityFs(
+  params: Parameters<typeof prepareFileConsentActivity>[0],
+) {
+  const result = prepareFileConsentActivity(params);
   await storePendingUploadFs({
-    id: uploadId,
-    buffer: media.buffer,
-    filename: media.filename,
-    contentType: media.contentType,
-    conversationId,
+    id: result.uploadId,
+    ...params.media,
+    conversationId: params.conversationId,
   });
-
-  const activity = buildConsentActivity({ media, description, uploadId });
-  return { activity, uploadId };
+  return result;
 }
 
-/**
- * Check if a file requires FileConsentCard flow.
- * True for: personal chat AND (large file OR non-image)
- */
 export function requiresFileConsent(params: {
   conversationType: string | undefined;
   contentType: string | undefined;
   bufferSize: number;
-  thresholdBytes: number;
 }): boolean {
   const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
   const isImage = params.contentType?.startsWith("image/") ?? false;
-  const isLargeFile = params.bufferSize >= params.thresholdBytes;
+  const isLargeFile = params.bufferSize >= FILE_CONSENT_THRESHOLD_BYTES;
   return isPersonal && (isLargeFile || !isImage);
 }

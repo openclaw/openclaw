@@ -2,8 +2,9 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
@@ -67,8 +68,9 @@ function splitUtf8ChildScript(params: {
 }
 
 async function createLiveRedirectSandbox(
-  targetHost: "source.test" | "target.test",
+  targetHost: "source.test" | "target.test" | "127.0.0.1" | "private.test",
   redirectStatus = 302,
+  holdFinalResponse?: (response: ServerResponse) => void,
 ) {
   const requests: IncomingMessage[] = [];
   const requestBodies: string[] = [];
@@ -93,12 +95,14 @@ async function createLiveRedirectSandbox(
         return;
       }
       response.writeHead(200, { "content-type": "text/plain" });
+      if (holdFinalResponse) {
+        response.flushHeaders();
+        holdFinalResponse(response);
+        return;
+      }
       response.end("final body");
     });
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-
   const fixtureDir = tempDirs.make("codex-http-redirect-");
   await writeFile(
     join(fixtureDir, "sitecustomize.py"),
@@ -109,6 +113,8 @@ async function createLiveRedirectSandbox(
       "def getaddrinfo(host, *args, **kwargs):",
       '    if host in ("source.test", "target.test"):',
       '        host = "93.184.216.34"',
+      '    elif host == "private.test":',
+      '        host = "127.0.0.1"',
       "    return original_getaddrinfo(host, *args, **kwargs)",
       "def connect(self, address):",
       '    if isinstance(address, tuple) and address[0] == "93.184.216.34":',
@@ -118,6 +124,8 @@ async function createLiveRedirectSandbox(
       "socket.socket.connect = connect",
     ].join("\n"),
   );
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
 
   const env = { ...testExecEnv(), PYTHONPATH: fixtureDir };
   const sandbox = createSandboxContext({
@@ -147,6 +155,7 @@ async function createLiveRedirectSandbox(
     requests,
     requestBodies,
     async close() {
+      server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
@@ -155,19 +164,67 @@ async function createLiveRedirectSandbox(
 }
 
 describe("OpenClaw Codex sandbox exec-server HTTP", () => {
+  it("cancels an outstanding nonstreaming HTTP response when its exec-server socket closes", async () => {
+    const responseClosed = vi.fn();
+    const responseReceived = createDeferred<ServerResponse>();
+    let heldResponse: ServerResponse | undefined;
+    const fixture = await createLiveRedirectSandbox("source.test", 302, (response) => {
+      heldResponse = response;
+      response.once("close", responseClosed);
+      responseReceived.resolve(response);
+    });
+    try {
+      const socket = await openSandboxHttpSocket(fixture.sandbox);
+      try {
+        await rpc(socket, "initialize", { clientName: "test" });
+        const request = rpc(socket, "http/request", {
+          requestId: "pending-http",
+          method: "GET",
+          url: fixture.url,
+        });
+        // Python startup and redirects are ready only when the real server holds the response.
+        const response = await Promise.race([
+          responseReceived.promise,
+          request.then(() => {
+            throw new Error("HTTP request completed before the fixture held its response");
+          }),
+        ]);
+        expect(heldResponse).toBeDefined();
+        const closed = once(response, "close");
+        socket.terminate();
+        await closed;
+        expect(responseClosed).toHaveBeenCalledOnce();
+      } finally {
+        socket.terminate();
+      }
+    } finally {
+      heldResponse?.destroy();
+      await fixture.close();
+    }
+  });
+
   it("routes HTTP requests through the sandbox backend", async () => {
-    const runShellCommand = vi.fn(async () => ({
-      stdout: Buffer.from(
-        JSON.stringify({
-          status: 201,
-          headers: [{ name: "content-type", value: "text/plain" }],
-          bodyBase64: Buffer.from("sandbox-http").toString("base64"),
-        }),
-      ),
-      stderr: Buffer.alloc(0),
-      code: 0,
-    }));
-    const sandbox = createSandboxContext({ runShellCommand });
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: [
+          process.execPath,
+          "-e",
+          [
+            "let input = '';",
+            "process.stdin.setEncoding('utf8');",
+            "process.stdin.on('data', chunk => input += chunk);",
+            "process.stdin.on('end', () => {",
+            "  const request = JSON.parse(input);",
+            "  process.stdout.write(JSON.stringify({",
+            "    status: 201, headers: request.headers, bodyBase64: request.bodyBase64,",
+            "  }));",
+            "});",
+          ].join("\n"),
+        ],
+        env: testExecEnv(),
+        stdinMode: "pipe-closed",
+      }),
+    });
     const socket = await openSandboxHttpSocket(sandbox);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
@@ -182,25 +239,19 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       }),
     ).resolves.toEqual({
       status: 201,
-      headers: [{ name: "content-type", value: "text/plain" }],
-      bodyBase64: Buffer.from("sandbox-http").toString("base64"),
+      headers: [{ name: "authorization", value: "Bearer test" }],
+      bodyBase64: Buffer.from("body").toString("base64"),
     });
-    expect(runShellCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowFailure: true,
-        stdin: expect.stringContaining("https://example.test/mcp"),
-      }),
-    );
     socket.close();
   });
 
   it("blocks private HTTP targets before starting the sandbox backend", async () => {
-    const runShellCommand = vi.fn(async () => ({
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      code: 0,
+    const buildExecSpec = vi.fn(async () => ({
+      argv: [process.execPath, "-e", ""],
+      env: testExecEnv(),
+      stdinMode: "pipe-closed" as const,
     }));
-    const sandbox = createSandboxContext({ runShellCommand });
+    const sandbox = createSandboxContext({ buildExecSpec });
     const socket = await openSandboxHttpSocket(sandbox);
     await rpc(socket, "initialize", { clientName: "test" });
     socket.send(JSON.stringify({ method: "initialized" }));
@@ -212,14 +263,17 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
         url: "http://127.0.0.1:6379/",
       }),
     ).rejects.toThrow("Blocked hostname or private/internal IP");
-    expect(runShellCommand).not.toHaveBeenCalled();
+    expect(buildExecSpec).not.toHaveBeenCalled();
     socket.close();
   });
 
-  it.each([false, true])(
-    "returns redirects without exposing credentials when redirectPolicy=stop (stream=%s)",
-    async (streamResponse) => {
-      const fixture = await createLiveRedirectSandbox("target.test");
+  it.each([
+    { redirectStatus: 308, streamResponse: false },
+    { redirectStatus: 308, streamResponse: true },
+  ])(
+    "returns $redirectStatus without exposing credentials when redirectPolicy=stop (stream=$streamResponse)",
+    async ({ redirectStatus, streamResponse }) => {
+      const fixture = await createLiveRedirectSandbox("target.test", redirectStatus);
       const socket = await openSandboxHttpSocket(fixture.sandbox);
       try {
         const notifications = collectNotifications(socket);
@@ -236,7 +290,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
             streamResponse,
           }),
         ).resolves.toEqual({
-          status: 302,
+          status: redirectStatus,
           headers: expect.arrayContaining([
             expect.objectContaining({ name: "location", value: expect.stringContaining("/final") }),
           ]),
@@ -260,14 +314,37 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
   );
 
   it.each([
-    { targetHost: "source.test" as const, preserveCredentials: true },
-    { targetHost: "target.test" as const, preserveCredentials: false },
-  ])(
-    "preserves redirect credentials only within the original origin ($targetHost)",
-    async ({ targetHost, preserveCredentials }) => {
-      const fixture = await createLiveRedirectSandbox(targetHost);
+    {
+      targetHost: "source.test",
+      preserveCredentials: true,
+      redirectStatus: 302,
+      streamResponse: false,
+    },
+    {
+      targetHost: "target.test",
+      preserveCredentials: false,
+      redirectStatus: 302,
+      streamResponse: false,
+    },
+    {
+      targetHost: "source.test",
+      preserveCredentials: true,
+      redirectStatus: 308,
+      streamResponse: true,
+    },
+    {
+      targetHost: "target.test",
+      preserveCredentials: false,
+      redirectStatus: 308,
+      streamResponse: true,
+    },
+  ] as const)(
+    "preserves redirect credentials only within the original origin ($targetHost $redirectStatus stream=$streamResponse)",
+    async ({ targetHost, preserveCredentials, redirectStatus, streamResponse }) => {
+      const fixture = await createLiveRedirectSandbox(targetHost, redirectStatus);
       const socket = await openSandboxHttpSocket(fixture.sandbox);
       try {
+        const notifications = collectNotifications(socket);
         await rpc(socket, "initialize", { clientName: "test" });
         socket.send(JSON.stringify({ method: "initialized" }));
 
@@ -285,14 +362,24 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
               { name: "x-request-id", value: "safe-request" },
             ],
             redirectPolicy: "follow",
+            streamResponse,
           }),
         ).resolves.toEqual({
           status: 200,
           headers: expect.arrayContaining([
             expect.objectContaining({ name: "content-type", value: "text/plain" }),
           ]),
-          bodyBase64: Buffer.from("final body").toString("base64"),
+          bodyBase64: streamResponse ? "" : Buffer.from("final body").toString("base64"),
         });
+        if (streamResponse) {
+          await expect(waitForHttpBodyDeltas(notifications, 2)).resolves.toEqual([
+            expect.objectContaining({
+              deltaBase64: Buffer.from("final body").toString("base64"),
+              done: false,
+            }),
+            expect.objectContaining({ deltaBase64: "", done: true }),
+          ]);
+        }
         expect(fixture.requests).toHaveLength(2);
         const redirectedHeaders = fixture.requests[1]?.headers;
         expect(redirectedHeaders?.["x-request-id"]).toBe("safe-request");
@@ -362,6 +449,35 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     },
   );
 
+  it.each([
+    { redirectStatus: 308, targetHost: "127.0.0.1", streamResponse: false },
+    { redirectStatus: 308, targetHost: "private.test", streamResponse: true },
+  ] as const)(
+    "blocks redirect destinations before connecting ($redirectStatus $targetHost stream=$streamResponse)",
+    async ({ redirectStatus, targetHost, streamResponse }) => {
+      const fixture = await createLiveRedirectSandbox(targetHost, redirectStatus);
+      const socket = await openSandboxHttpSocket(fixture.sandbox);
+      try {
+        await rpc(socket, "initialize", { clientName: "test" });
+        socket.send(JSON.stringify({ method: "initialized" }));
+
+        await expect(
+          rpc(socket, "http/request", {
+            requestId: "http-blocked-redirect",
+            method: "GET",
+            url: fixture.url,
+            redirectPolicy: "follow",
+            streamResponse,
+          }),
+        ).rejects.toThrow(/Blocked.*private\/internal\/special-use/);
+        expect(fixture.requests).toHaveLength(1);
+      } finally {
+        socket.close();
+        await fixture.close();
+      }
+    },
+  );
+
   it("blocks metadata HTTP targets before starting the streaming sandbox backend", async () => {
     const buildExecSpec = vi.fn(async () => ({
       argv: [process.execPath, "-e", ""],
@@ -382,85 +498,6 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       }),
     ).rejects.toThrow("Blocked hostname or private/internal IP");
     expect(buildExecSpec).not.toHaveBeenCalled();
-    socket.close();
-  });
-
-  it("streams HTTP response body deltas from the sandbox backend", async () => {
-    const headerLine = JSON.stringify({
-      type: "headers",
-      status: 202,
-      headers: [{ name: "content-type", value: "text/event-stream" }],
-    });
-    const bodyLine = JSON.stringify({
-      type: "bodyDelta",
-      seq: 1,
-      deltaBase64: Buffer.from("event: ok\n\n").toString("base64"),
-      done: false,
-    });
-    const doneLine = JSON.stringify({
-      type: "bodyDelta",
-      seq: 2,
-      deltaBase64: "",
-      done: true,
-    });
-    const buildExecSpec = vi.fn(async () => ({
-      argv: [
-        process.execPath,
-        "-e",
-        [headerLine, bodyLine, doneLine]
-          .map((line) => `process.stdout.write(${JSON.stringify(`${line}\n`)});`)
-          .join(""),
-      ],
-      env: testExecEnv(),
-      stdinMode: "pipe-closed" as const,
-    }));
-    const runShellCommand = vi.fn(async () => ({
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      code: 0,
-    }));
-    const sandbox = createSandboxContext({ buildExecSpec, runShellCommand });
-    const socket = await openSandboxHttpSocket(sandbox);
-    const notifications = collectNotifications(socket);
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-
-    await expect(
-      rpc(socket, "http/request", {
-        requestId: "http-stream",
-        method: "GET",
-        url: "https://example.test/sse",
-        streamResponse: true,
-      }),
-    ).resolves.toEqual({
-      status: 202,
-      headers: [{ name: "content-type", value: "text/event-stream" }],
-      bodyBase64: "",
-    });
-    const deltas = await waitForHttpBodyDeltas(notifications, 2);
-
-    expect(buildExecSpec).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: expect.stringContaining("python3"),
-        usePty: false,
-        workdir: "/workspace",
-      }),
-    );
-    expect(runShellCommand).not.toHaveBeenCalled();
-    expect(deltas).toEqual([
-      expect.objectContaining({
-        requestId: "http-stream",
-        seq: 1,
-        deltaBase64: Buffer.from("event: ok\n\n").toString("base64"),
-        done: false,
-      }),
-      expect.objectContaining({
-        requestId: "http-stream",
-        seq: 2,
-        deltaBase64: "",
-        done: true,
-      }),
-    ]);
     socket.close();
   });
 

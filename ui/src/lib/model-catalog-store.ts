@@ -1,223 +1,453 @@
-// Control UI model metadata boundary.
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import {
+  GatewayProtocolRequestTimeoutError,
+  isGatewayProtocolResponseError,
+  resolveSafeTimeoutDelayMs,
+  type GatewayProtocolRequestOptions,
+} from "@openclaw/gateway-client/browser";
+import type {
+  ModelsListParams,
+  ModelsSnapshotEvent,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferredCore } from "../../../src/shared/deferred.js";
 import type { ModelCatalogResult } from "../api/types.ts";
-import { invalidateChatMetadataStore } from "./chat/chat-metadata-store.ts";
+import type { ApplicationGateway } from "../app/context.ts";
+import { t } from "../i18n/index.ts";
+import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.ts";
+import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "./gateway-availability.ts";
+import {
+  invalidateModelCatalogCache,
+  invalidateModelCatalogEntry,
+  isModelCatalogRetired,
+  beginModelCatalogRead,
+  getModelCatalogCache,
+  modelCatalogCache,
+  modelCatalogEventInvalidation,
+  modelCatalogKey,
+  modelCatalogObservers,
+  modelCatalogParams,
+  publishModelCatalogResult,
+  type ModelCatalogReadScope,
+  type ModelCatalogInvalidation,
+  type ModelCatalogClient,
+  type ModelCatalogCacheUpdate,
+  type ModelCatalogRead,
+  type ModelCatalogRequest,
+  type ModelCatalogRequestLane,
+} from "./model-catalog-cache.ts";
+import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
 
-const MODEL_CATALOG_CACHE_TTL_MS = 60_000;
-// A picker open is an operator signal to revalidate, but full provider discovery can be slow.
-const MODEL_CATALOG_REFRESH_COOLDOWN_MS = 5 * 60_000;
+registerModelControlsEnglish();
 
-type ModelCatalogCacheEntry = {
-  expiresAt: number;
-  refreshEligibleAt?: number;
-  result: ModelCatalogResult;
-  inFlight?: ModelCatalogPendingRequest;
-  inFlightRefresh?: boolean;
-  inFlightRejects?: boolean;
+export type ChatModelCatalogState = {
+  hasSnapshot: boolean;
+  initialized?: boolean;
+  retired?: boolean;
+  modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+  refreshFailed?: boolean;
+  pendingProviders?: readonly string[];
+  status: "idle" | "loading" | "ready" | "error" | "offline";
 };
 
-type ModelCatalogPendingRequest = {
-  controller?: AbortController;
-  promise: Promise<ModelCatalogResult>;
-  subscribers: Set<object>;
+export type ModelCatalogPresentation = ModelCatalogResult & {
+  hasSnapshot: boolean;
+  retired: boolean;
 };
 
-const modelCatalogCache = new WeakMap<GatewayBrowserClient, Map<string, ModelCatalogCacheEntry>>();
-
-export function invalidateModelCatalogCache(client: GatewayBrowserClient): void {
-  modelCatalogCache.delete(client);
+/** Settings readers share the catalog's accepted display receipt and retirement boundary. */
+export function readAgentModelCatalog(
+  client: ModelCatalogClient | null | undefined,
+  agentId: string | null | undefined,
+): ModelCatalogPresentation {
+  const catalog =
+    client && agentId ? peekModelCatalog(client, { agentId }, { allowStale: true }) : undefined;
+  return {
+    ...catalog,
+    models: catalog?.models ?? [],
+    hasSnapshot: catalog !== undefined,
+    retired: client && agentId ? isModelCatalogRetired(client, { agentId }) : false,
+  };
 }
 
-function modelCatalogCacheFor(client: GatewayBrowserClient): Map<string, ModelCatalogCacheEntry> {
-  let cache = modelCatalogCache.get(client);
-  if (!cache) {
-    cache = new Map();
-    modelCatalogCache.set(client, cache);
-  }
-  return cache;
+export function subscribeModelCatalogCache(
+  client: ModelCatalogClient,
+  listener: (update: ModelCatalogCacheUpdate) => void,
+): () => void {
+  const listeners = modelCatalogObservers.get(client) ?? new Set();
+  modelCatalogObservers.set(client, listeners);
+  listeners.add(listener);
+  return () => {
+    if (listeners.delete(listener) && listeners.size === 0) {
+      modelCatalogObservers.delete(client);
+    }
+  };
 }
 
-export async function loadModelCatalog(
-  client: GatewayBrowserClient,
-  opts: {
-    agentId: string;
-    preparedOnly?: boolean;
-    refresh?: boolean;
-    refreshIfDue?: boolean;
-    rejectOnFailure?: boolean;
-    signal?: AbortSignal;
-  },
-): Promise<ModelCatalogResult> {
-  opts.signal?.throwIfAborted();
-  const cache = modelCatalogCacheFor(client);
-  const agentId = opts.agentId.trim();
-  const rejectOnFailure = opts?.rejectOnFailure === true;
-  const cacheKey = `${agentId}\0${opts.preparedOnly ? "prepared" : "exact"}`;
-  const preparedCacheKey = `${agentId}\0prepared`;
-  const cached = cache.get(cacheKey);
-  const now = Date.now();
-  // Abort is synchronous, but cache cleanup runs in a promise reaction. A
-  // replacement during that gap must not inherit the retired producer/cooldown.
-  const pendingRequestAborted = cached?.inFlight?.controller?.signal.aborted === true;
-  const refresh =
-    opts.refresh === true ||
-    (opts.refreshIfDue === true &&
-      (pendingRequestAborted || (cached?.refreshEligibleAt ?? 0) <= now));
-  const nextRefreshEligibleAt = refresh
-    ? now + MODEL_CATALOG_REFRESH_COOLDOWN_MS
-    : cached?.refreshEligibleAt;
-  const refreshCooldownActive =
-    opts.refreshIfDue === true && (cached?.refreshEligibleAt ?? 0) > now;
-  if (
-    opts.refreshIfDue === true &&
-    cached?.inFlight &&
-    !pendingRequestAborted &&
-    cached.inFlightRefresh === true &&
-    cached.inFlightRejects === rejectOnFailure
-  ) {
-    return await subscribeToModelCatalogRequest(cached.inFlight, opts.signal);
-  }
-  if (!refresh && cached?.result && (cached.expiresAt > now || refreshCooldownActive)) {
-    return cached.result;
-  }
-  if (
-    cached?.inFlight &&
-    !pendingRequestAborted &&
-    cached.inFlightRejects === rejectOnFailure &&
-    (!refresh || cached.inFlightRefresh === true)
-  ) {
-    return await subscribeToModelCatalogRequest(cached.inFlight, opts.signal);
-  }
+export function resolveModelCatalogState(
+  result: Pick<ModelCatalogResult, "models" | "refreshFailed" | "modelSelectionPolicy"> &
+    Pick<ChatModelCatalogState, "pendingProviders">,
+  {
+    connected = true,
+    loading = false,
+    error = null,
+    retired = false,
+    initialized = true,
+  }: {
+    connected?: boolean;
+    loading?: boolean;
+    error?: string | null;
+    retired?: boolean;
+    initialized?: boolean;
+  } = {},
+): ChatModelCatalogState {
+  return {
+    hasSnapshot: initialized && !retired && (result.models.length > 0 || (!loading && !error)),
+    initialized,
+    retired,
+    modelSelectionPolicy: result.modelSelectionPolicy,
+    refreshFailed: result.refreshFailed,
+    pendingProviders: result.pendingProviders,
+    status: !connected
+      ? "offline"
+      : error
+        ? "error"
+        : loading
+          ? "loading"
+          : initialized
+            ? "ready"
+            : "idle",
+  };
+}
 
-  // The cache write happens here, gated on inFlight identity: a refresh call
-  // replaces inFlight, so an older request resolving late cannot clobber the
-  // fresher result with pre-mutation catalog data.
-  const controller = opts.signal ? new AbortController() : undefined;
-  const inFlight: ModelCatalogPendingRequest = {
+export function modelCatalogRefreshError(
+  result: ModelCatalogResult,
+  failureMessage?: string,
+): string | null {
+  return result.refreshFailed
+    ? (failureMessage ??
+        t(
+          result.models.length
+            ? "chat.modelControls.modelsRefreshFailed"
+            : "chat.modelControls.modelsUnavailable",
+        ))
+    : null;
+}
+
+/** A synchronous display read; the Gateway remains the authority for sending and mutations. */
+export function peekModelCatalog(
+  client: ModelCatalogClient,
+  options: ModelsListParams,
+  { allowStale = false }: { allowStale?: boolean } = {},
+): ModelCatalogResult | undefined {
+  const cache = modelCatalogCache.get(client)?.entries;
+  const key = modelCatalogKey(modelCatalogParams(options));
+  const entry = cache?.get(key);
+  if (entry?.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+    invalidateModelCatalogEntry(client, entry);
+    // Keep ordering until bounded eviction so an older unresolved read cannot refill this slot.
+  }
+  if (entry?.invalidated && !allowStale) {
+    return undefined;
+  }
+  if (cache && entry?.result) {
+    cache.delete(key);
+    cache.set(key, entry);
+  }
+  return entry?.result;
+}
+
+export function settleModelCatalogRequests(
+  client: ModelCatalogClient,
+  scope: ModelsListParams,
+): Promise<void> | undefined {
+  const key = modelCatalogKey(modelCatalogParams(scope));
+  const pending = Array.from(
+    modelCatalogCache.get(client)?.requests.get(key)?.values() ?? [],
+  ).flatMap(({ active }) => (active ? [active.transportSettled] : []));
+  return pending.length ? Promise.allSettled(pending).then(() => {}) : undefined;
+}
+
+function createModelCatalogRequest(params: {
+  client: ModelCatalogClient;
+  scope: ModelsListParams;
+  timeoutMs: GatewayProtocolRequestOptions["timeoutMs"];
+  cache: ModelCatalogRead["cache"];
+  lane: ModelCatalogRequestLane;
+  queued: boolean;
+  releaseLane: () => void;
+}): ModelCatalogRequest {
+  const { client, cache, lane, timeoutMs: timeout } = params;
+  const controller = new AbortController();
+  const completion = createDeferredCore<ModelCatalogResult>();
+  const transportSettled = createDeferredCore();
+  const duration =
+    typeof timeout === "number" && Number.isFinite(timeout)
+      ? resolveSafeTimeoutDelayMs(timeout, { minMs: 0 })
+      : undefined;
+  let deadline = duration === undefined ? undefined : Date.now() + duration;
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  let started = false;
+  let requestSent = false;
+  const rejectTimeout = (timeoutMs: number) =>
+    pending.reject(
+      new GatewayProtocolRequestTimeoutError({ method: "models.list", timeoutMs, requestSent }),
+    );
+  const canRetry = () =>
+    !pending.settled &&
+    !controller.signal.aborted &&
+    pending.subscribers.size > 0 &&
+    modelCatalogCache.get(client) === cache &&
+    cache.reads.has(pending.read) &&
+    lane.active === pending &&
+    !lane.queued;
+  const settle = (complete: () => void) => {
+    if (pending.settled) {
+      return;
+    }
+    clearTimeout(deadlineTimer);
+    cache.reads.delete(pending.read);
+    pending.settled = true;
+    if (lane.queued === pending) {
+      lane.queued = undefined;
+      params.releaseLane();
+    }
+    complete();
+  };
+  const finishTransport = () => {
+    transportSettled.resolve();
+    if (lane.active !== pending) {
+      return;
+    }
+    lane.active = undefined;
+    const next = lane.queued;
+    if (next && modelCatalogCache.get(client) === cache) {
+      lane.queued = undefined;
+      lane.active = next;
+      next.start();
+    }
+    params.releaseLane();
+  };
+  const pending: ModelCatalogRequest = {
+    refresh: params.scope.refresh === true,
     controller,
+    read: beginModelCatalogRead(client, params.scope, controller.signal),
+    preparing: true,
+    settled: false,
     subscribers: new Set(),
-    promise: requestModels(
-      client,
-      cached?.result,
-      agentId,
-      opts.preparedOnly === true,
-      refresh,
-      rejectOnFailure,
-      controller?.signal,
-    )
-      .then((result) => {
-        const latest = cache.get(cacheKey);
-        if (modelCatalogCache.get(client) === cache && latest?.inFlight === inFlight) {
-          const refreshEligibleAt = refresh
-            ? result.fresh
-              ? Date.now() + MODEL_CATALOG_REFRESH_COOLDOWN_MS
-              : undefined
-            : nextRefreshEligibleAt;
-          const entry = {
-            expiresAt: result.fresh ? Date.now() + MODEL_CATALOG_CACHE_TTL_MS : 0,
-            ...(refreshEligibleAt ? { refreshEligibleAt } : {}),
-            result: result.value,
-          };
-          cache.set(cacheKey, entry);
-          if (result.fresh && opts.preparedOnly !== true) {
-            // An exact catalog supersedes the prepared projection. Reusing it for
-            // automatic reads prevents route re-entry from restoring stale data.
-            cache.set(preparedCacheKey, entry);
-            // Discovery changes prepared metadata, including session-locked projections.
-            invalidateChatMetadataStore(client, { agentId });
+    promise: completion.promise,
+    transportSettled: transportSettled.promise,
+    resolve: (result) => settle(() => completion.resolve(result)),
+    reject: (error) => settle(() => completion.reject(error)),
+    start: () => {
+      if (started) {
+        return;
+      }
+      started = true;
+      if (pending.settled) {
+        finishTransport();
+        return;
+      }
+      const remaining = deadline === undefined ? undefined : deadline - Date.now();
+      if (params.queued && duration !== undefined && remaining !== undefined && remaining <= 0) {
+        rejectTimeout(duration);
+        finishTransport();
+        return;
+      }
+      const read = pending.read;
+      const requestParams = { ...params.scope, ...(pending.refresh ? { refresh: true } : {}) };
+      void (async () => {
+        let retried = false;
+        let startupAttempt = 0;
+        let resumeAfterStartup = false;
+        for (;;) {
+          if (resumeAfterStartup && duration !== undefined) {
+            deadline = Date.now() + duration;
+            deadlineTimer = setTimeout(() => rejectTimeout(duration), duration);
+          }
+          resumeAfterStartup = false;
+          try {
+            // Only a received rejection can retry; local timeout still owns its transport.
+            // Confirmed agent startup suspends the overall budget, never a silent read's timeout.
+            const result = await (timeout === undefined
+              ? client.request<ModelCatalogResult>("models.list", requestParams)
+              : client.request<ModelCatalogResult>("models.list", requestParams, {
+                  timeoutMs: duration === undefined ? timeout : null,
+                  ...(duration === undefined
+                    ? {}
+                    : {
+                        onSent: () => {
+                          requestSent = true;
+                        },
+                      }),
+                }));
+            publishModelCatalogResult(read, requestParams, result);
+            pending.resolve(result);
+            return;
+          } catch (error) {
+            const startupPending = isAgentDatabaseInspectionPendingError(error);
+            if (
+              (retried && !startupPending) ||
+              !isGatewayProtocolResponseError(error) ||
+              error.gatewayCode !== "UNAVAILABLE" ||
+              !error.retryable ||
+              !canRetry()
+            ) {
+              pending.reject(error);
+              return;
+            }
+            if (startupPending) {
+              clearTimeout(deadlineTimer);
+              deadline = undefined;
+              resumeAfterStartup = true;
+            } else {
+              // Other unavailable responses retain their one replacement attempt.
+              retried = true;
+            }
+            const wake = createDeferredCore();
+            const timer = setTimeout(
+              wake.resolve,
+              startupPending
+                ? resolveGatewayReadRetryDelayMs(error, startupAttempt++)
+                : resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 0, { minMs: 0 }),
+            );
+            const stopWatching = subscribeModelCatalogCache(client, () => {
+              if (!canRetry()) {
+                wake.resolve();
+              }
+            });
+            void completion.promise.then(
+              () => wake.resolve(),
+              () => wake.resolve(),
+            );
+            try {
+              await wake.promise;
+            } finally {
+              clearTimeout(timer);
+              stopWatching();
+            }
+            if (deadline !== undefined && duration !== undefined && deadline <= Date.now()) {
+              rejectTimeout(duration);
+              return;
+            }
+            if (!canRetry()) {
+              pending.reject(error);
+              return;
+            }
           }
         }
-        return result.value;
-      })
-      .catch((error: unknown) => {
-        const latest = cache.get(cacheKey);
-        if (refresh && latest?.inFlight === inFlight) {
-          delete latest.refreshEligibleAt;
-        }
-        throw error;
-      })
-      .finally(() => {
-        const latest = cache.get(cacheKey);
-        if (latest?.inFlight === inFlight) {
-          delete latest.inFlight;
-        }
-      }),
+      })()
+        .catch(pending.reject)
+        .finally(finishTransport);
+    },
   };
-  cache.set(cacheKey, {
-    expiresAt: cached?.expiresAt ?? 0,
-    ...(nextRefreshEligibleAt ? { refreshEligibleAt: nextRefreshEligibleAt } : {}),
-    result: cached?.result ?? { models: [] },
-    inFlight,
-    inFlightRejects: rejectOnFailure,
-    ...(refresh ? { inFlightRefresh: true } : {}),
+  controller.signal.addEventListener("abort", () => pending.reject(controller.signal.reason), {
+    once: true,
   });
-  return await subscribeToModelCatalogRequest(inFlight, opts.signal);
+  if (duration !== undefined) {
+    deadlineTimer = setTimeout(() => rejectTimeout(duration), duration);
+  }
+  return pending;
 }
 
-async function subscribeToModelCatalogRequest(
-  pending: ModelCatalogPendingRequest,
-  signal: AbortSignal | undefined,
+/** Cache exact Gateway projections for this connection until its lifecycle invalidates them. */
+export async function loadModelCatalog(
+  client: ModelCatalogClient,
+  options: ModelsListParams & Pick<GatewayProtocolRequestOptions, "signal" | "timeoutMs">,
 ): Promise<ModelCatalogResult> {
-  const subscriber = {};
-  pending.subscribers.add(subscriber);
-  if (!signal) {
-    try {
-      return await pending.promise;
-    } finally {
-      pending.subscribers.delete(subscriber);
+  const { signal, timeoutMs, ...requestOptions } = options;
+  signal?.throwIfAborted();
+  const params = modelCatalogParams(requestOptions);
+  if (!params.refresh) {
+    const result = peekModelCatalog(client, params);
+    if (result) {
+      return result;
     }
   }
-
-  let rejectAbort: (reason: unknown) => void = () => undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    rejectAbort = reject;
-  });
-  const onAbort = () => {
-    pending.subscribers.delete(subscriber);
-    // The request is shared: one retired page must not cancel another active
-    // consumer, while the final subscriber should stop the Gateway request.
-    if (pending.subscribers.size === 0) {
-      pending.controller?.abort(signal.reason);
+  const owner = getModelCatalogCache(client);
+  const key = modelCatalogKey(params);
+  const budgets =
+    owner.requests.get(key) ??
+    new Map<GatewayProtocolRequestOptions["timeoutMs"], ModelCatalogRequestLane>();
+  owner.requests.set(key, budgets);
+  const lane: ModelCatalogRequestLane = budgets.get(timeoutMs) ?? {};
+  budgets.set(timeoutMs, lane);
+  const releaseLane = () => {
+    if (!lane.active && !lane.queued) {
+      budgets.delete(timeoutMs);
+      if (budgets.size === 0) {
+        owner.requests.delete(key);
+      }
     }
-    rejectAbort(signal.reason);
   };
-  signal.addEventListener("abort", onAbort, { once: true });
-  if (signal.aborted) {
-    onAbort();
+  const existing = lane.queued ?? lane.active;
+  if (
+    existing &&
+    !existing.settled &&
+    !existing.controller.signal.aborted &&
+    (existing.preparing || (!params.refresh && owner.reads.has(existing.read)))
+  ) {
+    return await subscribeToSharedRequest(existing, {}, signal);
   }
-  try {
-    return await Promise.race([pending.promise, aborted]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-    pending.subscribers.delete(subscriber);
+  const adopting = lane.queued !== undefined;
+  const pending =
+    lane.queued ??
+    createModelCatalogRequest({
+      client,
+      scope: params,
+      timeoutMs,
+      cache: owner,
+      lane,
+      queued: lane.active !== undefined,
+      releaseLane,
+    });
+  if (lane.active) {
+    lane.queued = pending;
+  } else {
+    lane.active = pending;
   }
+  pending.preparing = true;
+  pending.refresh ||= params.refresh === true;
+  const subscription = subscribeToSharedRequest(pending, {}, signal);
+  if (params.refresh) {
+    invalidateModelCatalogCache(client);
+  }
+  if (modelCatalogCache.get(client) !== owner) {
+    pending.reject(new DOMException("Model catalog connection retired", "AbortError"));
+  } else if (adopting || params.refresh) {
+    owner.reads.delete(pending.read);
+    pending.read = beginModelCatalogRead(
+      client,
+      { ...params, ...(pending.refresh ? { refresh: true } : {}) },
+      pending.controller.signal,
+    );
+  }
+  pending.preparing = false;
+  if (lane.active === pending) {
+    pending.start();
+  }
+  return await subscription;
 }
 
-async function requestModels(
-  client: GatewayBrowserClient,
-  fallback: ModelCatalogResult | undefined,
-  agentId: string,
-  preparedOnly: boolean,
-  refresh: boolean,
-  rejectOnFailure: boolean,
-  signal: AbortSignal | undefined,
-): Promise<{ value: ModelCatalogResult; fresh: boolean }> {
-  try {
-    const params = {
-      view: "configured",
-      agentId,
-      ...(preparedOnly ? { preparedOnly: true } : {}),
-      ...(refresh ? { refresh: true } : {}),
-    };
-    const result = signal
-      ? await client.request<ModelCatalogResult>("models.list", params, { signal })
-      : await client.request<ModelCatalogResult>("models.list", params);
-    return { value: result, fresh: true };
-  } catch (error) {
-    if (rejectOnFailure) {
-      throw error;
+export function subscribeModelCatalogChanges(
+  gateway: ApplicationGateway,
+  listener: (invalidation: ModelCatalogInvalidation) => void,
+  scope?: ModelCatalogReadScope,
+): () => void {
+  return gateway.subscribeEvents((event) => {
+    const invalidation = modelCatalogEventInvalidation(event);
+    if (invalidation) {
+      listener(invalidation);
+    } else if (event.event === "models.snapshot" && scope) {
+      // SAFETY: The authenticated connect dispatcher emits this as ModelsSnapshotEvent.
+      const publication = event.payload as ModelsSnapshotEvent;
+      if (
+        modelCatalogKey(modelCatalogParams(scope)) ===
+        modelCatalogKey(modelCatalogParams(publication.scope))
+      ) {
+        listener("refresh");
+      }
     }
-    // Failed loads fall back without extending the TTL so the next call retries.
-    return { value: fallback ?? { models: [] }, fresh: false };
-  }
+  });
 }

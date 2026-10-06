@@ -13,7 +13,7 @@ import {
   startHostServer,
   startNpmRegistryServer,
 } from "./host-server.ts";
-import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
+import { runSmokeLane } from "./lane-runner.ts";
 import {
   packageBuildCommitFromTgz,
   packageVersionFromTgz,
@@ -179,85 +179,102 @@ export abstract class SmokeRunController<TOptions extends SmokeRunOptions & Smok
     snapshot: SnapshotInfo,
     vmName: string,
   ): Promise<void> {
-    [this.hostIp, this.hostPort] = await prepareSmokeRunHost(
-      this.options,
+    const hostIp = resolveHostIp(this.options.hostIp);
+    const hostPort = await resolveHostPort(
+      this.options.hostPort,
+      this.options.hostPortExplicit,
       defaultPort,
-      latestVersion,
-      this.runDir,
-      snapshot,
-      this.options.snapshotHint,
-      vmName,
     );
+    say(`VM: ${vmName}`);
+    say(`Snapshot hint: ${this.options.snapshotHint}`);
+    say(`Resolved snapshot: ${snapshot.name} [${snapshot.state}]`);
+    say(`Latest npm version: ${latestVersion}`);
+    say(`Current head: ${currentGitHeadShort()}`);
+    say(`Run logs: ${this.runDir}`);
+    this.hostIp = hostIp;
+    this.hostPort = hostPort;
   }
 
   protected async runLanesAndFinish(): Promise<void> {
-    await runSmokeLanesAndFinish(
-      this.options.mode,
-      this.options.json,
-      this.status,
-      async () => this.runFreshLane(),
-      async () => this.runUpgradeLane(),
-      async () => this.writeSummary(),
-      (pathLocal) => this.printSummary(pathLocal),
-    );
+    const { mode, json } = this.options;
+    const status = this.status;
+    for (const lane of ["fresh", "upgrade"] as const) {
+      if (mode !== lane && mode !== "both") {
+        continue;
+      }
+      await runSmokeLane(
+        lane,
+        () => (lane === "fresh" ? this.runFreshLane() : this.runUpgradeLane()),
+        (name, outcome) => {
+          status[name === "fresh" ? "freshMain" : "upgrade"] = outcome;
+        },
+      );
+    }
+    const summaryPath = await this.writeSummary();
+    if (json) {
+      process.stdout.write(await readFile(summaryPath, "utf8"));
+    } else {
+      this.printSummary(summaryPath);
+    }
+    if (status.freshMain === "fail" || status.upgrade === "fail") {
+      process.exitCode = 1;
+    }
   }
 
   protected async cleanupArtifacts(): Promise<void> {
-    await cleanupSmokeArtifacts({
-      keepServer: this.options.keepServer,
-      server: this.server,
-      tgzDir: this.tgzDir,
-    });
+    if (this.options.keepServer) {
+      return;
+    }
+    await this.server?.stop().catch(() => undefined);
+    await rm(this.tgzDir, { force: true, recursive: true }).catch(() => undefined);
   }
-}
-
-async function resolveSmokeHostConfig(
-  options: SmokeHostOptions,
-  defaultPort: number,
-): Promise<{ hostIp: string; hostPort: number }> {
-  return {
-    hostIp: resolveHostIp(options.hostIp),
-    hostPort: await resolveHostPort(options.hostPort, options.hostPortExplicit, defaultPort),
-  };
-}
-
-async function prepareSmokeRunHost(
-  options: SmokeHostOptions,
-  defaultPort: number,
-  latestVersion: string,
-  runDir: string,
-  snapshot: SnapshotInfo,
-  snapshotHint: string,
-  vmName: string,
-): Promise<readonly [hostIp: string, hostPort: number]> {
-  const host = await resolveSmokeHostConfig(options, defaultPort);
-  logSmokeRunStart({
-    latestVersion,
-    runDir,
-    snapshot,
-    snapshotHint,
-    vmName,
-  });
-  return [host.hostIp, host.hostPort];
-}
-
-function logSmokeRunStart(input: {
-  latestVersion: string;
-  runDir: string;
-  snapshot: SnapshotInfo;
-  snapshotHint: string;
-  vmName: string;
-}): void {
-  say(`VM: ${input.vmName}`);
-  say(`Snapshot hint: ${input.snapshotHint}`);
-  say(`Resolved snapshot: ${input.snapshot.name} [${input.snapshot.state}]`);
-  say(`Latest npm version: ${input.latestVersion}`);
-  say(`Current head: ${currentGitHeadShort()}`);
-  say(`Run logs: ${input.runDir}`);
 }
 
 export function npmRegistryEnv(registry?: string): Record<string, string> {
   return registry ? { NPM_CONFIG_REGISTRY: registry, npm_config_registry: registry } : {};
+}
+
+export function posixAgentTurnScript(input: {
+  command: string;
+  sessionIdExpression: string;
+  retrySessionIdExpression: string;
+  printOutput: "cat" | "print_log_tail";
+}): string {
+  return `agent_ok=false
+for attempt in 1 2; do
+  session_id=${input.sessionIdExpression}
+  if [ "$attempt" -gt 1 ]; then session_id=${input.retrySessionIdExpression}; fi
+  rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
+  output_file="$(mktemp)"
+  set +e
+  ${input.command} >"$output_file" 2>&1
+  rc=$?
+  set -e
+  ${input.printOutput} "$output_file"
+  if [ "$rc" -ne 0 ]; then
+    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
+      rm -f "$output_file"
+      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
+      continue
+    fi
+    rm -f "$output_file"
+    exit "$rc"
+  fi
+  if grep -Eq '"finalAssistant(Raw|Visible)Text"[[:space:]]*:[[:space:]]*"OK"' "$output_file"; then
+    agent_ok=true
+    rm -f "$output_file"
+    break
+  fi
+  rm -f "$output_file"
+  if [ "$attempt" -lt 2 ]; then
+    echo "agent turn attempt $attempt finished without OK response; retrying"
+    sleep 3
+  fi
+done
+if [ "$agent_ok" != true ]; then
+  echo "openclaw agent finished without OK response" >&2
+  exit 1
+fi`;
 }
 
 export function posixStopGatewayScript(managedCommand?: string): string {
@@ -289,7 +306,6 @@ export async function startSmokeArtifactServer(input: {
   port: number;
 }): Promise<HostServer> {
   const server = await startHostServer({
-    artifactPath: input.artifact.path,
     dir: input.dir,
     hostIp: input.hostIp,
     label: input.label,
@@ -413,89 +429,29 @@ export async function installSmokeRuntimeCompanions(input: {
   }
 }
 
-async function runRequestedSmokeLanes(input: {
-  mode: Mode;
-  runFresh: () => Promise<void>;
-  runLane: (name: "fresh" | "upgrade", fn: () => Promise<void>) => Promise<void>;
-  runUpgrade: () => Promise<void>;
-}): Promise<void> {
-  if (input.mode === "fresh" || input.mode === "both") {
-    await input.runLane("fresh", input.runFresh);
-  }
-  if (input.mode === "upgrade" || input.mode === "both") {
-    await input.runLane("upgrade", input.runUpgrade);
-  }
-}
-
-async function runSmokeLaneWithStatus(
-  name: "fresh" | "upgrade",
-  fn: () => Promise<void>,
-  statuses: Pick<SmokeLaneStatuses, "freshMain" | "upgrade">,
-): Promise<void> {
-  await runSmokeLane(name, fn, (lane, status) => setSmokeLaneStatus(statuses, lane, status));
-}
-
-function setSmokeLaneStatus(
-  statuses: Pick<SmokeLaneStatuses, "freshMain" | "upgrade">,
-  name: SmokeLane,
-  status: SmokeLaneStatus,
+export function assertDevChannelUpdate(
+  status: string,
+  targetCommit: string | undefined,
+  readCheckoutHead: () => string,
 ): void {
-  if (name === "fresh") {
-    statuses.freshMain = status;
-  } else {
-    statuses.upgrade = status;
+  const expectedBranch = targetCommit ? "HEAD" : "main";
+  for (const needle of [
+    '"installKind": "git"',
+    '"value": "dev"',
+    `"branch": "${expectedBranch}"`,
+  ]) {
+    if (!status.includes(needle)) {
+      throw new Error(`dev update status missing ${needle}`);
+    }
   }
-}
-
-async function finishSmokeRun(input: {
-  json: boolean;
-  printSummary: (summaryPath: string) => void;
-  status: Pick<SmokeLaneStatuses, "freshMain" | "upgrade">;
-  summaryPath: string;
-}): Promise<void> {
-  if (input.json) {
-    process.stdout.write(await readFile(input.summaryPath, "utf8"));
-  } else {
-    input.printSummary(input.summaryPath);
+  if (targetCommit) {
+    const checkoutHead = readCheckoutHead().replaceAll("\r", "").trim().split("\n").at(-1) ?? "";
+    if (checkoutHead !== targetCommit) {
+      throw new Error(
+        `dev update checkout head ${checkoutHead || "<empty>"} did not match ${targetCommit}`,
+      );
+    }
   }
-  if (input.status.freshMain === "fail" || input.status.upgrade === "fail") {
-    process.exitCode = 1;
-  }
-}
-
-async function runSmokeLanesAndFinish(
-  mode: Mode,
-  json: boolean,
-  status: Pick<SmokeLaneStatuses, "freshMain" | "upgrade">,
-  runFresh: () => Promise<void>,
-  runUpgrade: () => Promise<void>,
-  writeSummary: () => Promise<string>,
-  printSummary: (summaryPath: string) => void,
-): Promise<void> {
-  await runRequestedSmokeLanes({
-    mode,
-    runFresh,
-    runLane: async (name, fn) => runSmokeLaneWithStatus(name, fn, status),
-    runUpgrade,
-  });
-  await finishSmokeRun({
-    json,
-    printSummary,
-    status,
-    summaryPath: await writeSummary(),
-  });
-}
-
-async function cleanupSmokeArtifacts(input: {
-  keepServer: boolean;
-  server: HostServer | null;
-  tgzDir: string;
-}): Promise<void> {
-  if (input.keepServer) {
-    return;
-  }
-  await input.server?.stop().catch(() => undefined);
-  await rm(input.tgzDir, { force: true, recursive: true }).catch(() => undefined);
 }
 
 export async function expectedPackageTargetVersion(artifact: PackageArtifact): Promise<string> {
@@ -564,5 +520,5 @@ export function printSmokeTargetSummary(input: {
 }
 
 function currentGitHeadShort(): string {
-  return run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim();
+  return run("git", ["rev-parse", "--short", "HEAD"]).stdout.trim();
 }

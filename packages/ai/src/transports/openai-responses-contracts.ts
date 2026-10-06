@@ -2,7 +2,7 @@ import {
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
   type Api,
   type ProviderReplayState,
-} from "@openclaw/llm-core";
+} from "@openclaw/llm-core/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   FunctionTool,
@@ -17,7 +17,9 @@ import type {
   OpenAIApiReasoningEffort,
   OpenAIReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import type { OpenAIRequestReasoningEffort } from "../providers/openai-request-reasoning.js";
 import type { OpenAIResponsesCompactedWindow } from "./openai-responses-compaction-window.js";
+import { isResponsesServiceTierRejection } from "./openai-responses-service-tier.js";
 
 export const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 export const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -77,16 +79,33 @@ function readWebSocketServerError(value: unknown) {
     return undefined;
   }
   const details = isRecord(value.error) ? value.error : value;
-  if (typeof details.code !== "string" || typeof details.message !== "string") {
+  const code =
+    typeof details.code === "string"
+      ? details.code
+      : isResponsesServiceTierRejection(details)
+        ? "invalid_request_error"
+        : undefined;
+  if (!code || typeof details.message !== "string") {
     return undefined;
   }
   const rawStatus = value.status ?? value.status_code;
   return {
-    code: details.code,
+    code,
     message: details.message,
     param: typeof details.param === "string" ? details.param : null,
     status: typeof rawStatus === "number" ? rawStatus : undefined,
   };
+}
+
+// A continuation reference the server refuses to honor: the response expired or never
+// existed (`previous_response_not_found`), or the organization cannot reference stored
+// responses at all (Zero Data Retention rejects the `previous_response_id` parameter).
+// Both reject before any output is accepted, so the turn resends full history instead.
+export function isPreviousResponseRejection(error: { code?: unknown; param?: unknown }): boolean {
+  return (
+    error.code === "previous_response_not_found" ||
+    (error.code === "unsupported_parameter" && error.param === "previous_response_id")
+  );
 }
 
 export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
@@ -103,7 +122,8 @@ export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
     return undefined;
   }
   const ErrorClass =
-    details.code === "previous_response_not_found" ||
+    isPreviousResponseRejection(details) ||
+    isResponsesServiceTierRejection(details) ||
     details.code === "websocket_connection_limit_reached" ||
     details.code === "invalid_encrypted_content" ||
     details.code === "thinking_signature_invalid"
@@ -140,7 +160,7 @@ export type OpenAIResponsesCompactionReplayState = ProviderReplayState & {
   );
 
 export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
-  reasoning?: OpenAIReasoningEffort;
+  reasoning?: OpenAIRequestReasoningEffort;
   reasoningEffort?: OpenAIReasoningEffort;
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   replayResponsesItemIds?: boolean;
@@ -178,13 +198,42 @@ export const responsesPromptObserver = {
   },
 };
 
-export type OpenAIResponsesReplayContext = {
-  provider: string;
-  api: Api;
-  model: string;
-  baseUrlHash?: string;
-  sessionHash?: string;
-  authProfileHash?: string;
+const SERVICE_TIER_OBSERVER = Symbol("openaiResponsesServiceTierObserver");
+export type ResponsesServiceTierObservation =
+  | { requestedTier: string; responseTier: string; rejected?: false }
+  | { requestedTier: string; rejected: true };
+type ResponsesServiceTierObserver = (observation: ResponsesServiceTierObservation) => void;
+
+export const responsesServiceTierObserver = {
+  set(options: object, observer: ResponsesServiceTierObserver): void {
+    Reflect.set(options, SERVICE_TIER_OBSERVER, observer);
+  },
+  get(options: object) {
+    // SAFETY: Only set() writes this private symbol, with a typed service-tier observer.
+    return Reflect.get(options, SERVICE_TIER_OBSERVER) as ResponsesServiceTierObserver | undefined;
+  },
+  copy(source: object | undefined, target: object): void {
+    const observer = source && responsesServiceTierObserver.get(source);
+    if (observer) {
+      responsesServiceTierObserver.set(target, observer);
+    }
+  },
+  reject(options: object | undefined, requestedTier: string): void {
+    const observer = options && responsesServiceTierObserver.get(options);
+    observer?.({ requestedTier, rejected: true });
+  },
+  observe(options: object | undefined, requestedTier: unknown, responseTier: unknown): void {
+    const observer = options && responsesServiceTierObserver.get(options);
+    if (
+      observer &&
+      typeof requestedTier === "string" &&
+      /^[a-z0-9_-]{1,64}$/i.test(requestedTier) &&
+      typeof responseTier === "string" &&
+      /^[a-z0-9_-]{1,64}$/i.test(responseTier)
+    ) {
+      observer({ requestedTier, responseTier });
+    }
+  },
 };
 
 export type OpenAIResponsesRequestParams = {
@@ -194,6 +243,7 @@ export type OpenAIResponsesRequestParams = {
   instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
+  prompt_cache_options?: { ttl: "30m" };
   metadata?: Record<string, string>;
   previous_response_id?: string;
   store?: boolean;
@@ -202,7 +252,8 @@ export type OpenAIResponsesRequestParams = {
   top_p?: number;
   text?: ResponseCreateParamsStreaming["text"];
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
-  tools?: FunctionTool[];
+  tools?: Array<FunctionTool & { async?: boolean }>;
+  multi_agent?: { enabled?: boolean };
   tool_choice?: ResponseCreateParamsStreaming["tool_choice"];
   reasoning?:
     | { effort: OpenAIApiReasoningEffort }

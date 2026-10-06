@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { createSessionCapability } from "./index.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 import type { SessionDeleteOutcome } from "./session-capability.ts";
@@ -10,7 +11,7 @@ function row(name: string): GatewaySessionRow {
   return { key: `agent:main:${name}`, sessionId: `id-${name}`, kind: "direct", updatedAt: 1 };
 }
 
-export function createSessionDeletionHarness() {
+export function createSessionDeletionHarness(connectionBootstrap?: ConnectionBootstrapCoordinator) {
   const alpha = row("alpha");
   const beta = row("beta");
   const sibling = row("sibling");
@@ -43,7 +44,11 @@ export function createSessionDeletionHarness() {
     },
   );
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-  const sessions = createSessionCapability(gateway.gateway);
+  const sessions = createSessionCapability(
+    gateway.gateway,
+    { state: { selectedId: "main" }, subscribe: () => () => undefined },
+    { connectionBootstrap },
+  );
   return {
     ...gateway,
     sessions,

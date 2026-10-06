@@ -158,9 +158,13 @@ export function pinExecToolTarget(tool: AnyAgentTool, target: PinnedExecToolTarg
   const pinArgs = (args: unknown) => pinExecToolArgs(args, target, pinnedNode);
   const prepare = tool.prepareBeforeToolCallParams;
   const finalize = tool.finalizeBeforeToolCallParams;
+  const getExecutionTimeoutMs = tool.getExecutionTimeoutMs;
   return {
     ...tool,
     parameters: restrictExecToolParameters(tool.parameters, target.host, Boolean(pinnedNode)),
+    ...(getExecutionTimeoutMs
+      ? { getExecutionTimeoutMs: (args: unknown) => getExecutionTimeoutMs(pinArgs(args)) }
+      : {}),
     // The whole tool lifecycle sees only pinned arguments: preparation resolves
     // workdir/env against the pinned host, finalize's host-consistency checks
     // compare against the pinned host, and execution runs the pinned host —
@@ -202,11 +206,11 @@ function pinExecToolArgs(
   };
 }
 
-function restrictExecToolParameters(
-  parameters: AnyAgentTool["parameters"],
+function restrictExecToolParameters<T>(
+  parameters: T,
   host: PinnedExecToolTarget["host"],
   hasPinnedNode: boolean,
-): AnyAgentTool["parameters"] {
+): T {
   if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
     return parameters;
   }
@@ -228,9 +232,8 @@ function restrictExecToolParameters(
     ? rawRequired.filter((name) => typeof name !== "string" || includeParameter(name))
     : rawRequired;
   return {
-    ...schema,
+    ...parameters,
     properties,
     ...(Array.isArray(rawRequired) ? { required } : {}),
-    // SAFETY: this preserves the original schema shape and only removes properties and required names.
-  } as AnyAgentTool["parameters"];
+  };
 }

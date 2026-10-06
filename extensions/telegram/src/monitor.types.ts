@@ -1,4 +1,3 @@
-// Telegram type declarations define plugin contracts.
 import type {
   ChannelAccountSnapshot,
   ChannelRuntimeSurface,
@@ -17,17 +16,13 @@ export type MonitorTelegramOpts = {
   abortSignal?: AbortSignal;
   useWebhook?: boolean;
   webhookPath?: string;
-  webhookPort?: number;
+  legacyWebhook?: false | { port: number; host?: string };
   webhookSecret?: string;
-  webhookHost?: string;
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
   webhookCertPath?: string;
   botInfo?: TelegramBotInfo;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
-  isolatedIngress?: {
-    enabled?: boolean;
-  };
 };
 
 export type TelegramMonitorFn = (opts?: MonitorTelegramOpts) => Promise<void>;

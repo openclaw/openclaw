@@ -1,4 +1,3 @@
-/** CLI entrypoint for channel message actions. */
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -10,7 +9,6 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
-import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
@@ -24,31 +22,15 @@ import {
   resolveMessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
 } from "../infra/outbound/message-account-selection.js";
-import { resolveMessageActionOutcome } from "../infra/outbound/message-action-contracts.js";
+import {
+  resolveMessageActionMessageId,
+  resolveMessageActionOutcome,
+} from "../infra/outbound/message-action-contracts.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-function extractMessageId(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const record = payload as Record<string, unknown>;
-  const direct = normalizeOptionalString(record.messageId);
-  if (direct) {
-    return direct;
-  }
-  const result = record.result;
-  if (result && typeof result === "object") {
-    const nested = normalizeOptionalString((result as Record<string, unknown>).messageId);
-    if (nested) {
-      return nested;
-    }
-  }
-  return undefined;
-}
-
 function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
-  const messageId = extractMessageId(result.payload);
+  const messageId = resolveMessageActionMessageId(result.payload);
   const sendResult = result.kind === "send" ? result.sendResult : undefined;
   const outcome = resolveMessageActionOutcome(result);
   return {
@@ -70,7 +52,6 @@ function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>
   };
 }
 
-/** Resolves config/secrets, runs a channel message action, then renders JSON or text. */
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
@@ -86,7 +67,7 @@ export async function messageCommand(
     targets: opts.targets,
     accountId: opts.accountId,
   });
-  const explicitAccountId = validateExplicitMessageAccountSelection({
+  const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg: loadedRaw,
     channel: scope.channel,
     accountId: opts.accountId,
@@ -100,7 +81,7 @@ export async function messageCommand(
   // command runs, so the operation-local plan sees the canonical registry.
   const broadcastAccountPlan =
     normalizedActionInput === "broadcast" && !scope.channel && explicitAccountId
-      ? resolveMessageBroadcastAccountPlan({
+      ? await resolveMessageBroadcastAccountPlan({
           cfg: loadedRaw,
           accountId: explicitAccountId,
         })
@@ -119,19 +100,20 @@ export async function messageCommand(
     runtime,
     autoEnable: true,
   });
-  const agentId = resolveAmbientOwnerAgentId(cfg);
-  const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(
+  const agentId = resolveAmbientOwnerAgentId(cfg, undefined, {
+    surface: "message CLI",
+    hint: `Run ${formatCliCommand("openclaw config set agents.defaults.systemAgent.agentId <id>")} with a configured agent ID.`,
+  });
+  const action = CHANNEL_MESSAGE_ACTION_NAMES.find(
     (name) => normalizeLowercaseStringOrEmpty(name) === normalizedActionInput,
   );
-  if (!actionMatch) {
+  if (!action) {
     throw new Error(
       `Unknown message action "${actionInput}". Use one of ${CHANNEL_MESSAGE_ACTION_NAMES.join(
         ", ",
       )}. Example: ${formatCliCommand("openclaw message send --channel <channel> --target <id> --text <message>")}.`,
     );
   }
-  const action = actionMatch as ChannelMessageActionName;
-
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
   // Keep the gateway client identity explicit so channel plugins can distinguish

@@ -1,4 +1,3 @@
-// Shared skill status rendering and classification helpers.
 import { html, nothing } from "lit";
 import type { SkillStatusEntry } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -47,9 +46,11 @@ export function renderSkillStatusChips(params: {
       <span class="chip ${available ? "chip-ok" : "chip-warn"}">
         ${available ? t("skillStatus.eligible") : t("skillStatus.blocked")}
       </span>
-      ${skill.disabled
-        ? html` <span class="chip chip-warn">${t("skillStatus.disabled")}</span> `
-        : nothing}
+      ${
+        skill.disabled
+          ? html` <span class="chip chip-warn">${t("skillStatus.disabled")}</span> `
+          : nothing
+      }
     </div>
   `;
 }

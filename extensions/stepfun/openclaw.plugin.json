@@ -1,5 +1,6 @@
 {
   "id": "stepfun",
+  "categories": ["models"],
   "name": "StepFun",
   "activation": {
     "onStartup": false
@@ -20,6 +21,10 @@
     ]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "stepfun": "stepfun-ai",
+      "stepfun-plan": "stepfun-ai-step-plan"
+    },
     "providers": {
       "stepfun": {
         "baseUrl": "https://api.stepfun.ai/v1",

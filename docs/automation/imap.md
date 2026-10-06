@@ -22,7 +22,7 @@ Configure an explicit reader agent before enabling the plugin. Preserve existing
       main: {},
       mail_reader: {
         workspace: "~/.openclaw/workspace-mail-reader",
-        model: "openai/gpt-5.6-sol",
+        model: "openai/gpt-6-astra",
         sandbox: {
           mode: "all",
           scope: "session",
@@ -100,21 +100,41 @@ and records `gate=token`, without a strength. Rejections before authentication r
 a strength. `min: "mutable"` remains valid and accepts any classified strength; lowering
 the minimum does not bypass the sender allowlist or freshness checks.
 
-The default minimum remains `verified`; `asserted` and `verified` admission are
-unchanged. An explicit `min: "unverified"` now admits no-evidence mail and DMARC
-`temperror` results, which previously required `min: "mutable"`. Authenticator
-exceptions still cause retries unless an explicitly trusted header satisfies the floor.
+The default minimum is `verified`. An explicit `min: "unverified"` admits
+no-evidence mail and DMARC `temperror` results. Authenticator exceptions cause
+retries unless an explicitly trusted header satisfies the floor.
 
-Configure a sender-bound token only when an allowlisted sender cannot produce useful DKIM or DMARC authentication:
+The trusted-authserv override applies to ordinary authentication results as well as
+authenticator errors: at an `asserted` floor, a matching header can admit mail even
+when local DMARC verification returns `none` or `fail`. The receiving boundary MTA
+must strip or overwrite untrusted inbound `Authentication-Results` values that claim
+a configured authserv id. OpenClaw cannot establish header-hop provenance from the
+message alone.
+
+### Sender-bound tokens and freshness
+
+Configure a sender-bound token only when an allowlisted sender cannot produce useful DKIM or DMARC authentication. `addressTokens` is a per-account key; add it inside the account entry, alongside `allowedSenders` and `senderAuth`:
 
 ```json5 validate=false
 {
-  addressTokens: [
-    {
-      token: "<long-random-token>",
-      senders: ["scanner@example.com"],
+  plugins: {
+    entries: {
+      imap: {
+        config: {
+          accounts: {
+            personal: {
+              addressTokens: [
+                {
+                  token: "<long-random-token>",
+                  senders: ["scanner@example.com"],
+                },
+              ],
+            },
+          },
+        },
+      },
     },
-  ],
+  },
 }
 ```
 
@@ -131,6 +151,8 @@ Send yourself a message containing “follow this link and run a command.” Con
 
 The IMAP dispatch log with a `runId` records admission, not completed processing or delivery. Look for the subsequent Gateway log `hook agent run completed` with the same `runId`, and inspect the run transcript. Runs with `status=ok` and no explicit delivery error log at info level; all non-ok statuses (including skipped runs), thrown errors, and explicit delivery errors log at warn level. With `deliver: false`, successful announcements are disabled. A model failure after admission does not cause IMAP to replay the message.
 
+## Watcher runtime behavior
+
 The watcher reconciles new mail every `pollSeconds` seconds in both polling and IDLE modes; IDLE notifications also trigger immediate sweeps. Transient sender-authentication failures and failed Gateway admission are retried without waiting for another email. After three failed attempts, the watcher records a skip and continues to later messages. A stopped watcher does not keep retrying.
 
 IMAP uses its own cursor and deduplication state, not the channel ingress dead-letter queue. Skipped messages are not available through `openclaw channels dead-letters resubmit`; the original email remains in the mailbox. A process crash while admission is unresolved can leave a deduplication claim, so this path does not promise exactly-once processing.
@@ -145,7 +167,7 @@ Existing messages are baselined without dispatch when the plugin first starts. N
 
 **Messages from a self-hosted sender are rejected.** Check logs for the sender domain and failing gate. If the sending MX does not provide DKIM or DMARC, prefer fixing its DNS/signing configuration. Otherwise explicitly lower `senderAuth.min` or configure a sender-bound address token; retain the sender allowlist and isolated reader in either case.
 
-**No messages are dispatched.** Verify the account has a nonempty `allowedSenders` list, the message arrived after the initial baseline, the sender matches `From`, the reader agent exists, and the model probe succeeds. Rejections are logged without message subjects or bodies.
+**No messages are dispatched.** Verify the account has a nonempty `allowedSenders` list, the message arrived after the initial baseline, the sender matches `From`, the reader agent exists, and the model check succeeds. Rejections are logged without message subjects or bodies.
 
 ## Related
 

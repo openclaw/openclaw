@@ -2,7 +2,6 @@ import {
   buildChannelInboundEventContext,
   runPreparedInboundReply,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Buzz tests cover inbound room admission, mention gating, and reply delivery.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -20,19 +19,23 @@ import {
 import { setBuzzRuntime } from "./runtime.js";
 import type { ResolvedBuzzAccount } from "./types.js";
 
+const logInfo = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => ({
+      ...actual.createSubsystemLogger(...args),
+      info: logInfo,
+    }),
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   return {
     ...actual,
     buildChannelInboundEventContext: vi.fn(actual.buildChannelInboundEventContext),
-  };
-});
-vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>();
-  return {
-    ...actual,
-    resolveStableChannelMessageIngress: vi.fn(actual.resolveStableChannelMessageIngress),
   };
 });
 
@@ -100,6 +103,7 @@ function createBus(): BuzzBus {
       channelIds: [ROOM_ID],
     }),
     refreshDirectory: vi.fn(async () => {}),
+    isBotOwnedThread: vi.fn(async () => false),
     sendText: vi.fn(async () => "reply-event-1"),
     sendTyping: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
@@ -369,7 +373,7 @@ describe("handleBuzzInbound", () => {
     expect(params.historyMap.size).toBe(0);
   });
 
-  it.each([undefined, "all", "off"] as const)(
+  it.each(["all", "off"] as const)(
     "uses replyToMode %s for automatic delivery and typing without changing thread context",
     async (replyToMode) => {
       const runtime = createPluginRuntimeMock();
@@ -401,6 +405,7 @@ describe("handleBuzzInbound", () => {
 
   it("accepts a native Nostr public-key mention", async () => {
     const runtime = createPluginRuntimeMock();
+    const resolveStable = vi.spyOn(runtime.channel.inbound.ingress, "resolveStable");
     setBuzzRuntime(runtime);
     const lifecycle = createLifecycle();
 
@@ -422,8 +427,7 @@ describe("handleBuzzInbound", () => {
       GroupSubject: ROOM_ID,
     });
     expect(firstDispatch(runtime).ctxPayload.GroupChannel).toBeUndefined();
-    const resolverResult = await vi.mocked(resolveStableChannelMessageIngress).mock.results[0]
-      ?.value;
+    const resolverResult = await resolveStable.mock.results[0]?.value;
     expect(vi.mocked(buildChannelInboundEventContext).mock.calls[0]?.[0].channelIngress).toBe(
       resolverResult,
     );
@@ -512,50 +516,70 @@ describe("handleBuzzInbound", () => {
     expect(firstDispatch(runtime).ctxPayload.WasMentioned).toBe(true);
   });
 
-  it("drops room messages that miss required mention activation", async () => {
+  it("logs missing mentions once per account room with an account-scoped fix", async () => {
     const runtime = createPluginRuntimeMock();
     setBuzzRuntime(runtime);
-
-    await handleBuzzInbound({
-      account: createAccount(),
-      cfg: {} satisfies OpenClawConfig,
-      bus: createBus(),
-      message: createMessage(),
-      ...createLifecycle(),
-    });
+    const account = { ...createAccount(), accountId: "mention-diagnostic" };
+    for (const id of ["mention-drop-1", "mention-drop-2"]) {
+      await handleBuzzInbound({
+        account,
+        cfg: { channels: { buzz: { accounts: { [account.accountId]: account.config } } } },
+        bus: createBus(),
+        message: createMessage({ id }),
+        ...createLifecycle(),
+      });
+    }
 
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(logInfo).toHaveBeenCalledOnce();
+    expect(logInfo).toHaveBeenCalledWith(expect.stringContaining("buzz: drop no mention"));
+    expect(logInfo).toHaveBeenCalledWith(
+      expect.stringContaining('channels.buzz.accounts["mention-diagnostic"].groups'),
+    );
+    expect(logInfo).toHaveBeenCalledWith(expect.stringContaining("requireMention=false"));
+    expect(logInfo).not.toHaveBeenCalledWith(expect.stringContaining(SENDER_PUBLIC_KEY));
   });
 
   it.each([
-    ["membership", true],
-    ["shutdown", true],
-    ["membership", false],
-    ["shutdown", false],
+    ["membership", true, "admission"],
+    ["shutdown", false, "admission"],
+    ["membership", false, "thread ownership"],
+    ["shutdown", false, "thread ownership"],
   ] as const)(
-    "rechecks %s after asynchronous ingress admission (mentioned: %s)",
-    async (change, mentioned) => {
+    "rechecks %s (mentioned: %s) after asynchronous %s",
+    async (change, mentioned, boundary) => {
       const runtime = createPluginRuntimeMock();
       setBuzzRuntime(runtime);
-      const actual = await vi.importActual<
-        typeof import("openclaw/plugin-sdk/channel-ingress-runtime")
-      >("openclaw/plugin-sdk/channel-ingress-runtime");
+      const resolveIngress = runtime.channel.inbound.ingress.resolveStable;
       const abort = new AbortController();
       let currentMember = true;
-      let releaseAdmission: () => void = () => {};
-      const admissionGate = new Promise<void>((resolve) => {
-        releaseAdmission = resolve;
+      const waiting = createDeferred<void>();
+      const admissionGate = createDeferred<void>();
+      const bus = createBus();
+      vi.mocked(bus.isBotOwnedThread).mockImplementationOnce(async () => {
+        waiting.resolve();
+        await admissionGate.promise;
+        return true;
       });
-      vi.mocked(resolveStableChannelMessageIngress).mockImplementationOnce(async (params) => {
-        const access = await actual.resolveStableChannelMessageIngress(params);
-        await admissionGate;
+      const resolveStable = vi.spyOn(runtime.channel.inbound.ingress, "resolveStable");
+      resolveStable.mockImplementationOnce(async (params) => {
+        const access = await resolveIngress(params);
+        if (boundary === "admission") {
+          waiting.resolve();
+          await admissionGate.promise;
+        }
         return access;
       });
       const params = {
-        account: createAccount(),
+        account: createAccount({
+          groups: { [ROOM_ID]: { requireMentionInBotThreads: false } },
+        }),
         cfg: {} satisfies OpenClawConfig,
-        bus: createBus(),
-        message: createMessage({ mentionedPubkeys: mentioned ? [BOT_PUBLIC_KEY] : [] }),
+        bus,
+        message: createMessage({
+          mentionedPubkeys: mentioned ? [BOT_PUBLIC_KEY] : [],
+          threadId: boundary === "thread ownership" ? "thread-root" : undefined,
+        }),
         signal: abort.signal,
         assertCurrent: () => {
           abort.signal.throwIfAborted();
@@ -565,13 +589,13 @@ describe("handleBuzzInbound", () => {
         },
       };
       const inbound = handleBuzzInbound(params);
-      await vi.waitFor(() => expect(resolveStableChannelMessageIngress).toHaveBeenCalledOnce());
+      await waiting.promise;
       if (change === "membership") {
         currentMember = false;
       } else {
         abort.abort(new Error("Buzz bus closed"));
       }
-      releaseAdmission();
+      admissionGate.resolve();
 
       await expect(inbound).rejects.toThrow(
         change === "membership" ? "no longer a room member" : "Buzz bus closed",

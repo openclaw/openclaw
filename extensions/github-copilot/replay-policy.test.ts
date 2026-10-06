@@ -16,6 +16,7 @@ describe("buildGithubCopilotReplayPolicy", () => {
     // transcript ending on an assistant turn. Core only strips that trailing
     // prefill turn when validateAnthropicTurns is set.
     expect(buildPolicy("anthropic-messages", "claude-opus-5")).toMatchObject({
+      appendOnlyRuntimeContext: false,
       validateAnthropicTurns: true,
       sanitizeMode: "full",
       repairToolUseResultPairing: true,
@@ -26,15 +27,20 @@ describe("buildGithubCopilotReplayPolicy", () => {
 
   it("drops replayed thinking for thinking-preserving Claude ids", () => {
     for (const modelId of [
+      "claude-opus-5.5",
       "claude-opus-5",
+      "claude-sonnet-5.5",
       "claude-sonnet-5",
       "claude-fable-5",
+      "claude-fable-5-1",
+      "claude-mythos-5-1",
       "claude-opus-4.8",
       "claude-sonnet-4.6",
       "claude-haiku-4.5",
     ]) {
       expect(buildPolicy("anthropic-messages", modelId)).toMatchObject({
         dropThinkingBlocks: true,
+        appendOnlyRuntimeContext: false,
       });
     }
   });

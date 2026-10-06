@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { inspectCuaDriverArtifacts } from "./driver-artifact-verification.js";
 
 const temporaryDirectories: string[] = [];
@@ -13,8 +14,6 @@ function writeJson(pathname: string, value: unknown): void {
 
 function createArtifactFixture(
   options: {
-    platformKey?: "linux-x64-gnu" | "win32-x64-msvc";
-    sdkVersion?: string;
     platformVersion?: string;
     omitPlatformPackage?: boolean;
     expectedDigest?: string;
@@ -22,11 +21,9 @@ function createArtifactFixture(
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cua-artifacts-"));
   temporaryDirectories.push(root);
-  const platformKey = options.platformKey ?? "linux-x64-gnu";
+  const platformKey = "linux-x64-gnu";
   const acceptedVersion = "0.20.0";
-  const nativeFile = platformKey.startsWith("linux")
-    ? "libcua_driver_sdk.so"
-    : "cua_driver_sdk.dll";
+  const nativeFile = "libcua_driver_sdk.so";
   const nativeContents = "accepted native artifact";
   const expectedDigest =
     options.expectedDigest ?? createHash("sha256").update(nativeContents).digest("hex");
@@ -42,7 +39,7 @@ function createArtifactFixture(
   };
   writeJson(sdkManifestPath, {
     name: "@trycua/cua-driver",
-    version: options.sdkVersion ?? acceptedVersion,
+    version: acceptedVersion,
   });
   writeJson(platformManifestPath, {
     name: platformPackageName,
@@ -67,17 +64,19 @@ afterEach(() => {
 });
 
 describe("CUA Driver artifact verification", () => {
-  it("accepts the pinned SDK and native file digest", () => {
-    const fixture = createArtifactFixture();
+  const inspect = (
+    options: Parameters<typeof createArtifactFixture>[0] = {},
+    linuxLibc: "gnu" | "musl" = "gnu",
+  ) =>
+    inspectCuaDriverArtifacts({
+      platform: "linux",
+      arch: "x64",
+      linuxLibc,
+      ...createArtifactFixture(options),
+    });
 
-    expect(
-      inspectCuaDriverArtifacts({
-        platform: "linux",
-        arch: "x64",
-        linuxLibc: "gnu",
-        ...fixture,
-      }),
-    ).toEqual({
+  it("accepts the pinned SDK and native file digest", () => {
+    expect(inspect()).toEqual({
       ok: true,
       applicable: true,
       version: "0.20.0",
@@ -85,58 +84,33 @@ describe("CUA Driver artifact verification", () => {
     });
   });
 
-  it("reports an actionable typed diagnostic when the native package is absent", () => {
-    const fixture = createArtifactFixture({ omitPlatformPackage: true });
-
-    const result = inspectCuaDriverArtifacts({
-      platform: "linux",
-      arch: "x64",
-      linuxLibc: "gnu",
-      ...fixture,
-    });
-
-    expect(result).toMatchObject({ ok: false, code: "COMPUTER_DRIVER_PACKAGE_MISSING" });
-    expect(result.ok ? "" : result.diagnostic).toContain("Reinstall OpenClaw on this node host");
-  });
-
-  it("refuses SDK and platform package version skew", () => {
-    const fixture = createArtifactFixture({ platformVersion: "0.19.3" });
-
-    const result = inspectCuaDriverArtifacts({
-      platform: "linux",
-      arch: "x64",
-      linuxLibc: "gnu",
-      ...fixture,
-    });
-
-    expect(result).toMatchObject({ ok: false, code: "COMPUTER_DRIVER_VERSION_MISMATCH" });
-    expect(result.ok ? "" : result.diagnostic).toContain("resolved @trycua/cua-driver@0.20.0");
-  });
-
-  it("refuses a native file that does not match the accepted digest", () => {
-    const fixture = createArtifactFixture({ expectedDigest: "0".repeat(64) });
-
-    const result = inspectCuaDriverArtifacts({
-      platform: "linux",
-      arch: "x64",
-      linuxLibc: "gnu",
-      ...fixture,
-    });
-
-    expect(result).toMatchObject({ ok: false, code: "COMPUTER_DRIVER_DIGEST_MISMATCH" });
-    expect(result.ok ? "" : result.diagnostic).toContain("do not run or replace");
+  it.each([
+    {
+      name: "missing native package",
+      options: { omitPlatformPackage: true },
+      code: "COMPUTER_DRIVER_PACKAGE_MISSING",
+      diagnostic: "Reinstall OpenClaw on this node host",
+    },
+    {
+      name: "SDK and platform version skew",
+      options: { platformVersion: "0.19.3" },
+      code: "COMPUTER_DRIVER_VERSION_MISMATCH",
+      diagnostic: "resolved @trycua/cua-driver@0.20.0",
+    },
+    {
+      name: "native digest mismatch",
+      options: { expectedDigest: "0".repeat(64) },
+      code: "COMPUTER_DRIVER_DIGEST_MISMATCH",
+      diagnostic: "do not run or replace",
+    },
+  ])("diagnoses $name", ({ options, code, diagnostic }) => {
+    const result = inspect(options);
+    expect(result).toMatchObject({ ok: false, code });
+    expect(result.ok ? "" : result.diagnostic).toContain(diagnostic);
   });
 
   it("rejects Linux hosts without a published glibc package", () => {
-    const fixture = createArtifactFixture();
-
-    const result = inspectCuaDriverArtifacts({
-      platform: "linux",
-      arch: "x64",
-      linuxLibc: "musl",
-      ...fixture,
-    });
-
+    const result = inspect({}, "musl");
     expect(result).toMatchObject({ ok: false, code: "COMPUTER_DRIVER_PLATFORM_UNSUPPORTED" });
     expect(result.ok ? "" : result.diagnostic).toContain("glibc-based Linux");
   });
@@ -147,14 +121,40 @@ describe("verifyInstalledCuaDriverArtifacts (real resolution)", () => {
   // threw PATH_NOT_EXPORTED and every real install reported
   // COMPUTER_DRIVER_PACKAGE_MISSING even with the packages present.
   it("resolves the installed SDK package through import conditions", async () => {
-    const { verifyInstalledCuaDriverArtifacts } = await import("./driver-artifacts.js");
-    const result = verifyInstalledCuaDriverArtifacts();
-    if (process.platform === "linux" || process.platform === "win32") {
-      expect(result).toMatchObject({ ok: true, applicable: true });
-    } else if (!result.ok) {
-      // Other hosts are out of the fulfiller's scope but must never report a
-      // missing package for an installed SDK.
-      expect(result.code).not.toBe("COMPUTER_DRIVER_PACKAGE_MISSING");
+    vi.resetModules();
+    const artifactVerification = await import("./driver-artifact-verification.js");
+    const inspect = vi.spyOn(artifactVerification, "inspectCuaDriverArtifacts");
+    try {
+      const { verifyInstalledCuaDriverArtifacts } = await import("./driver-artifacts.js");
+      const result = verifyInstalledCuaDriverArtifacts();
+      if (process.platform === "linux" || process.platform === "win32") {
+        expect(result).toMatchObject({ ok: true, applicable: true });
+      } else if (!result.ok) {
+        // Other hosts are out of the fulfiller's scope but must never report a
+        // missing package for an installed SDK.
+        expect(result.code).not.toBe("COMPUTER_DRIVER_PACKAGE_MISSING");
+      }
+
+      // macOS does not verify native digests, but must still exercise the real
+      // dependency owner used by Linux/Windows isolated installs.
+      const inspection = inspect.mock.lastCall?.[0];
+      const resolvePackageJson = inspection?.resolvePackageJson;
+      const sdkManifestPath = resolvePackageJson?.("@trycua/cua-driver");
+      if (!sdkManifestPath || !resolvePackageJson) {
+        throw new Error("Installed CUA Driver SDK resolution was not observed");
+      }
+      const platformSuffix =
+        process.platform === "linux"
+          ? `-${inspection?.linuxLibc}`
+          : process.platform === "win32"
+            ? "-msvc"
+            : "";
+      const platformPackage = `@trycua/cua-driver-${process.platform}-${process.arch}${platformSuffix}`;
+      expect(resolvePackageJson(platformPackage)).toBe(
+        createRequire(sdkManifestPath).resolve(`${platformPackage}/package.json`),
+      );
+    } finally {
+      inspect.mockRestore();
     }
   });
 });

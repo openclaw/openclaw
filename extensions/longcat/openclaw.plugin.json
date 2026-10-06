@@ -1,5 +1,6 @@
 {
   "id": "longcat",
+  "categories": ["models"],
   "name": "LongCat",
   "description": "OpenClaw LongCat provider plugin.",
   "doctorContract": {
@@ -18,6 +19,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "longcat": "longcat"
+    },
     "providers": {
       "longcat": {
         "baseUrl": "https://api.longcat.chat/openai",

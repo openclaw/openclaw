@@ -1,13 +1,13 @@
 // Gateway/device Ed25519 identity API backed by canonical shared SQLite state.
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
-import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import {
+  cacheProcessDeviceIdentity,
+  readProcessDeviceIdentity,
+} from "./device-identity-process-cache.js";
+import {
+  assertNoPendingLegacyIdentity,
   generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
-  PRIMARY_DEVICE_IDENTITY_KEY,
   readStoredDeviceIdentity,
   readStoredDeviceIdentityReadOnly,
   resolveDeviceIdentityStore,
@@ -15,20 +15,15 @@ import {
   type DeviceIdentityStoreOptions,
   type StoredDeviceIdentity,
 } from "./device-identity-store.js";
-import {
-  normalizeEd25519PublicKeyBase64Url,
-  publicKeyRawBase64UrlFromEd25519Pem,
-  signEd25519Payload,
-  verifyEd25519Signature,
-} from "./ed25519-signature.js";
-import { pruneMapToMaxSize } from "./map-size.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
+import { normalizeEd25519PublicKeyBase64Url, verifyEd25519Signature } from "./ed25519-signature.js";
+import { pathMayExistSync } from "./path-existence.js";
 
 export type { DeviceIdentity } from "./device-identity-store.js";
-
-const LEGACY_DEVICE_IDENTITY_RELATIVE_PATH = path.join("identity", "device.json");
-const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
-const NATIVE_CLAIM_SUFFIX = ".native-importing";
+export {
+  normalizeEd25519PublicKeyBase64Url as normalizeDevicePublicKeyBase64Url,
+  publicKeyRawBase64UrlFromEd25519Pem as publicKeyRawBase64UrlFromPem,
+  signEd25519Payload as signDevicePayload,
+} from "./ed25519-signature.js";
 
 function toDeviceIdentity(stored: StoredDeviceIdentity): DeviceIdentity {
   return {
@@ -38,127 +33,45 @@ function toDeviceIdentity(stored: StoredDeviceIdentity): DeviceIdentity {
   };
 }
 
-function pathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
-/** Exact retired file owned by Doctor migration code. */
-function resolveLegacyDeviceIdentityPath(options: DeviceIdentityStoreOptions = {}): string {
-  const { databasePath } = resolveDeviceIdentityStore(options);
-  return path.join(
-    resolveOpenClawStateDirForDatabasePath(databasePath),
-    LEGACY_DEVICE_IDENTITY_RELATIVE_PATH,
-  );
-}
-
-function assertNoPendingLegacyIdentity(options: DeviceIdentityStoreOptions): void {
-  const { identityKey } = resolveDeviceIdentityStore(options);
-  if (identityKey !== PRIMARY_DEVICE_IDENTITY_KEY) {
-    return;
-  }
-  const legacyPath = resolveLegacyDeviceIdentityPath(options);
-  if (
-    // Claims first, source last: both migration owners restore claim -> source atomically.
-    pathMayExist(`${legacyPath}${DOCTOR_CLAIM_SUFFIX}`) ||
-    pathMayExist(`${legacyPath}${NATIVE_CLAIM_SUFFIX}`) ||
-    pathMayExist(legacyPath)
-  ) {
-    throw new Error(
-      `Legacy device identity exists at ${legacyPath}. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
-    );
-  }
-}
-
-function withDeviceIdentityCoordinator<T>(
-  options: DeviceIdentityStoreOptions,
-  operation: (
-    resolved: ReturnType<typeof resolveDeviceIdentityStore>,
-    resolvedOptions: DeviceIdentityStoreOptions,
-  ) => T,
-): T {
+/** Load a valid canonical identity or atomically create its SQLite row. */
+export function loadOrCreateDeviceIdentity(
+  options: DeviceIdentityStoreOptions = {},
+): DeviceIdentity {
   const resolved = resolveDeviceIdentityStore(options);
   const resolvedOptions: DeviceIdentityStoreOptions = {
     ...options,
     path: resolved.databasePath,
     identityKey: resolved.identityKey,
   };
-  const coordinator = acquireDeviceIdentityCoordinator({
-    databasePath: resolved.databasePath,
-    stateDir: resolveOpenClawStateDirForDatabasePath(resolved.databasePath),
-  });
-  let result: T;
-  try {
-    result = operation(resolved, resolvedOptions);
-  } catch (operationError) {
-    let releaseFailed = false;
-    let releaseError: unknown;
-    try {
-      coordinator.release();
-    } catch (error) {
-      releaseFailed = true;
-      releaseError = error;
-    }
-    if (releaseFailed) {
-      throw createSqliteLifecycleAggregateError(
-        [operationError, releaseError],
-        "device identity operation and coordinator release both failed",
-        operationError,
-      );
-    }
-    throw operationError;
-  }
-  coordinator.release();
-  return result;
-}
-
-function loadOrCreateDeviceIdentityOwned(options: DeviceIdentityStoreOptions): DeviceIdentity {
-  const { databasePath } = resolveDeviceIdentityStore(options);
   // A downgrade can recreate retired JSON after SQLite migration. Once this profile has
   // a canonical row, keep it authoritative and leave the retired source for Doctor.
-  const existing = pathMayExist(databasePath) ? readStoredDeviceIdentity(options) : null;
+  const existing = pathMayExistSync(resolved.databasePath)
+    ? readStoredDeviceIdentity(resolvedOptions)
+    : null;
   if (existing) {
     return toDeviceIdentity(existing);
   }
-  assertNoPendingLegacyIdentity(options);
+  assertNoPendingLegacyIdentity(resolvedOptions);
 
   // Generate outside the write transaction. The transaction rereads the row
   // before inserting so concurrent runtimes converge on one authoritative key.
   const candidate = generateStoredDeviceIdentity();
-  return toDeviceIdentity(insertStoredDeviceIdentityIfAbsent(candidate, options));
+  return toDeviceIdentity(insertStoredDeviceIdentityIfAbsent(candidate, resolvedOptions));
 }
-
-/** Load a valid canonical identity or atomically create its SQLite row. */
-export function loadOrCreateDeviceIdentity(
-  options: DeviceIdentityStoreOptions = {},
-): DeviceIdentity {
-  return withDeviceIdentityCoordinator(options, (_resolved, resolvedOptions) =>
-    loadOrCreateDeviceIdentityOwned(resolvedOptions),
-  );
-}
-
-const processDeviceIdentities = new Map<string, DeviceIdentity>();
-const MAX_PROCESS_DEVICE_IDENTITIES = 32;
 
 /** Keep one authoritative identity stable for the lifetime of a state-dir process. */
 export function loadOrCreateProcessDeviceIdentity(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity {
-  return withDeviceIdentityCoordinator(options, (resolved, resolvedOptions) => {
-    const cacheKey = `${resolved.databasePath}\0${resolved.identityKey}`;
-    const cached = processDeviceIdentities.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const identity = loadOrCreateDeviceIdentityOwned(resolvedOptions);
-    pruneMapToMaxSize(processDeviceIdentities, MAX_PROCESS_DEVICE_IDENTITIES - 1);
-    processDeviceIdentities.set(cacheKey, identity);
-    return identity;
-  });
+  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
+  const cacheKey = `${databasePath}\0${identityKey}`;
+  const cached = readProcessDeviceIdentity(cacheKey);
+  // A process-stable identity needs no database admission on a warm read.
+  if (cached) {
+    return cached;
+  }
+  const identity = loadOrCreateDeviceIdentity({ ...options, path: databasePath, identityKey });
+  return cacheProcessDeviceIdentity(cacheKey, identity);
 }
 
 /** Load a valid persisted identity without creating or mutating SQLite state. */
@@ -173,16 +86,6 @@ export function loadDeviceIdentityIfPresent(
   return null;
 }
 
-/** Sign a UTF-8 payload with a PEM Ed25519 private key and return base64url bytes. */
-export function signDevicePayload(privateKeyPem: string, payload: string): string {
-  return signEd25519Payload(privateKeyPem, payload);
-}
-
-/** Normalize PEM or raw base64/base64url public keys to canonical raw base64url bytes. */
-export function normalizeDevicePublicKeyBase64Url(publicKey: string): string | null {
-  return normalizeEd25519PublicKeyBase64Url(publicKey);
-}
-
 /** Derive the stable device id from PEM or raw base64/base64url public key material. */
 export function deriveDeviceIdFromPublicKey(publicKey: string): string | null {
   try {
@@ -195,11 +98,6 @@ export function deriveDeviceIdFromPublicKey(publicKey: string): string | null {
   } catch {
     return null;
   }
-}
-
-/** Export a PEM Ed25519 public key as canonical raw base64url bytes. */
-export function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string {
-  return publicKeyRawBase64UrlFromEd25519Pem(publicKeyPem);
 }
 
 /** Verify a UTF-8 payload signature against PEM or raw base64/base64url public key material. */

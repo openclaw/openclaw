@@ -1,7 +1,7 @@
-// Whatsapp plugin module implements auth store behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
@@ -11,13 +11,14 @@ import {
   defaultRuntime,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
 import {
   assertWebCredsPathRegularFileOrMissing,
   hasWebCredsSync,
   isWhatsAppBaileysAuthFileName,
   readWebCredsJsonRaw,
-  readWebCredsJsonRawSync,
+  readWebCredsJsonRawSync as readCredsJsonRaw,
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
   statWebCredsFileSync,
@@ -28,8 +29,8 @@ import {
   type CredsQueueWaitResult,
 } from "./creds-persistence.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
-import { resolveUserPath, type WebChannel } from "./text-runtime.js";
-export { hasWebCredsSync, resolveWebCredsBackupPath, resolveWebCredsPath };
+import type { WebChannel } from "./targets-runtime.js";
+export { hasWebCredsSync, readCredsJsonRaw, resolveWebCredsBackupPath, resolveWebCredsPath };
 
 export const WHATSAPP_AUTH_UNSTABLE_CODE = "whatsapp-auth-unstable";
 
@@ -51,10 +52,6 @@ export function resolveDefaultWebAuthDir(): string {
 }
 
 export const WA_WEB_AUTH_DIR = resolveDefaultWebAuthDir();
-
-export function readCredsJsonRaw(filePath: string): string | null {
-  return readWebCredsJsonRawSync(filePath);
-}
 
 async function waitForWebAuthBarrier(
   authDir: string,
@@ -96,11 +93,7 @@ export async function restoreCredsFromBackupIfNeeded(
   try {
     const credsPath = resolveWebCredsPath(authDir);
     const backupPath = resolveWebCredsBackupPath(authDir);
-    try {
-      await assertWebCredsPathRegularFileOrMissing(credsPath);
-    } catch {
-      return false;
-    }
+    await assertWebCredsPathRegularFileOrMissing(credsPath);
     const raw = readCredsJsonRaw(credsPath);
     if (raw && isValidJson(raw)) {
       return false;
@@ -137,38 +130,19 @@ export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()
   const resolvedAuthDir = resolveUserPath(authDir);
   const credsPath = resolveWebCredsPath(resolvedAuthDir);
   const raw = await readWebCredsJsonRaw(credsPath);
-  if (!raw) {
-    return false;
-  }
-  try {
-    JSON.parse(raw);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function resolveWebAuthState(params: {
-  linked: boolean;
-  barrierResult: CredsQueueWaitResult;
-}): WhatsAppWebAuthState {
-  if (params.barrierResult === "timed_out") {
-    return "unstable";
-  }
-  return params.linked ? "linked" : "not-linked";
+  return raw !== null && isValidJson(raw);
 }
 
 async function readWebAuthStateCore(
   authDir: string,
   context: string,
-): Promise<{ authDir: string; linked: boolean; state: WhatsAppWebAuthState }> {
+): Promise<{ authDir: string; state: WhatsAppWebAuthState }> {
   const resolvedAuthDir = resolveUserPath(authDir);
   const barrierResult = await waitForWebAuthBarrier(resolvedAuthDir, context);
   const linked = await webAuthExists(resolvedAuthDir);
   return {
     authDir: resolvedAuthDir,
-    linked,
-    state: resolveWebAuthState({ linked, barrierResult }),
+    state: barrierResult === "timed_out" ? "unstable" : linked ? "linked" : "not-linked",
   };
 }
 
@@ -276,12 +250,7 @@ async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): P
     const backupStats = await fs.lstat(resolveWebCredsBackupPath(authDir)).catch(() => null);
     return backupStats?.isFile() === true;
   } catch (error) {
-    const codeValue =
-      error && typeof error === "object" && "code" in error
-        ? (error as { code?: unknown }).code
-        : undefined;
-    const code = typeof codeValue === "string" ? codeValue : "";
-    return code !== "ENOENT";
+    return extractErrorCode(error) !== "ENOENT";
   }
 }
 
@@ -386,7 +355,6 @@ export async function logoutWeb(params: {
 }
 
 export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
-  // Read the cached WhatsApp Web identity (jid + E.164) from disk if present.
   try {
     const credsPath = resolveWebCredsPath(resolveUserPath(authDir));
     const raw = readCredsJsonRaw(credsPath);
@@ -455,10 +423,6 @@ export async function readWebSelfIdentityForDecision(
   };
 }
 
-/**
- * Return the age (in milliseconds) of the cached WhatsApp web auth state, or null when missing.
- * Helpful for heartbeats/observability to spot stale credentials.
- */
 export function getWebAuthAgeMs(authDir: string = resolveDefaultWebAuthDir()): number | null {
   const stats = statWebCredsFileSync(resolveWebCredsPath(resolveUserPath(authDir)));
   return stats ? Math.max(0, Date.now() - stats.mtimeMs) : null;
@@ -469,7 +433,6 @@ export function logWebSelfId(
   runtime: RuntimeEnv = defaultRuntime,
   includeChannelPrefix = false,
 ) {
-  // Human-friendly log of the currently linked personal web session.
   const { e164, jid, lid } = readWebSelfId(authDir);
   const parts = [jid ? `jid ${jid}` : null, lid ? `lid ${lid}` : null].filter(
     (value): value is string => Boolean(value),

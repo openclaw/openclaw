@@ -5,12 +5,12 @@ import {
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerLaunchPlan } from "../worker/launch-descriptor.js";
-import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
 import {
   nodeWorkerPlanHash,
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorIdentity,
-} from "./node-worker-supervisor-contract.js";
+} from "../worker/node-supervisor-protocol.js";
+import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
 
 const TEST_BUNDLE_HASH = "a".repeat(64);
 export const TEST_WORKER_CREDENTIAL = 'node worker/"credential\\secret?';
@@ -35,6 +35,7 @@ let retained = false;
 let currentTurn;
 let disposed = false;
 let started = false;
+let lineageFds = [];
 let resolveStart;
 const start = new Promise((resolve) => { resolveStart = resolve; });
 const hardTerminate = () => {
@@ -46,7 +47,7 @@ const hardTerminate = () => {
     });
     return;
   }
-  process.kill(-process.pid, "SIGKILL");
+  process.kill(process.pid, "SIGKILL");
 };
 const onMessage = (message) => {
   if (
@@ -54,13 +55,20 @@ const onMessage = (message) => {
     typeof message !== "object" ||
     message === null ||
     Array.isArray(message) ||
-    Object.keys(message).length !== 1 ||
-    message.type !== "openclaw-worker-start-v1"
+    Object.keys(message).some((key) => key !== "type" && key !== "lineageFds" && key !== "nativeProcessOwner") ||
+    message.type !== "openclaw-worker-start-v1" ||
+    (message.nativeProcessOwner !== undefined &&
+      (typeof message.nativeProcessOwner !== "string" || !message.nativeProcessOwner.startsWith("file:"))) ||
+    (Object.hasOwn(message, "lineageFds") && (
+      !Array.isArray(message.lineageFds) || message.lineageFds.length === 0 ||
+      message.lineageFds.some((fd) => !Number.isSafeInteger(fd) || fd < 3)
+    ))
   ) {
     hardTerminate();
     return;
   }
   started = true;
+  lineageFds = message.lineageFds ?? [];
   resolveStart();
 };
 const onDisconnect = () => {
@@ -122,16 +130,22 @@ if (mode === "admission-rearm") {
   }
 } else if (mode === "wait") {
   return;
-} else if (mode === "tree") {
+} else if (mode === "tree" || mode === "tree-cancel-reject") {
   grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
   fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "grandchild.pid"), String(grandchild.pid));
-} else if (mode === "background-start") {
+} else if (mode === "escaped-tree") {
+  grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true, stdio: ["ignore", "ignore", "ignore", ...lineageFds],
+  });
+  fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "grandchild.pid"), String(grandchild.pid));
+} else if (mode === "background-start" || mode.startsWith("background-start:")) {
+  const port = mode === "background-start" ? 0 : Number(mode.slice("background-start:".length));
   grandchild = spawn(process.execPath, ["-e", [
     "const server = require('node:http').createServer((req, res) => res.end('preview-ready'));",
-    "server.listen(0, '127.0.0.1', () => process.stdout.write(JSON.stringify({",
+    "server.listen(Number(process.argv[1]), '127.0.0.1', () => process.stdout.write(JSON.stringify({",
     "pid: process.pid, url: 'http://127.0.0.1:' + server.address().port,",
     "}) + '\\n'));",
-  ].join("\n")], { stdio: ["ignore", "pipe", "inherit"] });
+  ].join("\n"), String(port)], { stdio: ["ignore", "pipe", "inherit"] });
   background = await new Promise((resolve, reject) => {
     grandchild.once("error", reject);
     const output = createInterface({ input: grandchild.stdout });
@@ -178,7 +192,8 @@ if (mode === "admission-rearm") {
   const credential = descriptor.admission.credential;
   finish(descriptor, {
     ...completedResult,
-    transcriptLeafId: "raw " + credential + " encoded " + encodeURIComponent(credential),
+    transcriptLeafId: "raw " + credential + " encoded " + encodeURIComponent(credential) +
+      (descriptor.assignment.github ? " github " + descriptor.assignment.github.token : ""),
   });
 } else if (mode === "overflow") {
   fs.writeSync(1, "x".repeat(70 * 1024));
@@ -207,9 +222,16 @@ lines.on("line", (line) => {
   if (request.type === "cancel") {
     const descriptor = currentTurn;
     if (!descriptor || descriptor.assignment.turnId !== request.turnId) return;
-    const settle = () => finish(descriptor, {
-      status: "failed", reason: "turn-failed", transcriptLeafId: null, transcriptNextSeq: 1,
-    }, Boolean(background));
+    const settle = () => {
+      if (descriptor.assignment.prompt === "tree-cancel-reject") {
+        fs.writeSync(2, "worker live event rejected: invalid-event\n");
+        exitWorker(1);
+        return;
+      }
+      finish(descriptor, {
+        status: "failed", reason: "turn-failed", transcriptLeafId: null, transcriptNextSeq: 1,
+      }, Boolean(background));
+    };
     if (grandchild && !background) {
       grandchild.once("exit", settle);
       grandchild.kill("SIGKILL");

@@ -1,4 +1,5 @@
 import {
+  applyMarkdownTextEdits,
   FormatCapabilityProfile,
   markdownToIR,
   renderMarkdownWithAttributedRanges,
@@ -49,34 +50,14 @@ function codeDelimiter(content: string): string {
   return "`".repeat(longestRun + 1);
 }
 
-type TextEdit = { start: number; end: number; text: string };
-
-function applyTextEdits(text: string, edits: TextEdit[]) {
-  const ordered = edits.toSorted((left, right) => left.start - right.start);
-  let rendered = "";
-  let cursor = 0;
-  for (const edit of ordered) {
-    rendered += text.slice(cursor, edit.start) + edit.text;
-    cursor = edit.end;
-  }
-  rendered += text.slice(cursor);
-  return {
-    text: rendered,
-    mapOffset: (offset: number) =>
-      offset +
-      ordered.reduce(
-        (delta, edit) =>
-          delta + (edit.end <= offset ? edit.text.length - edit.end + edit.start : 0),
-        0,
-      ),
-  };
-}
-
 function restoreCodeMarkers(
   text: string,
   ranges: Array<{ start: number; length: number; styles: IMessageFormatStyle[] }>,
   codeRanges: Array<{ start: number; length: number }>,
 ): { text: string; ranges: IMessageFormatRange[] } {
+  if (codeRanges.length === 0) {
+    return { text, ranges };
+  }
   const edits = codeRanges.map((range) => {
     const end = range.start + range.length;
     const content = text.slice(range.start, end);
@@ -84,14 +65,13 @@ function restoreCodeMarkers(
     const padding = content.startsWith("`") || content.endsWith("`") ? " " : "";
     return { start: range.start, end, text: `${marker}${padding}${content}${padding}${marker}` };
   });
-  const edited = applyTextEdits(text, edits);
+  const { text: rendered, mapOffset } = applyMarkdownTextEdits(text, edits);
   return {
-    text: edited.text,
-    ranges: ranges.map((range) => ({
-      ...range,
-      start: edited.mapOffset(range.start),
-      length: edited.mapOffset(range.start + range.length) - edited.mapOffset(range.start),
-    })),
+    text: rendered,
+    ranges: ranges.map((range) => {
+      const start = mapOffset(range.start);
+      return { ...range, start, length: mapOffset(range.start + range.length) - start };
+    }),
   };
 }
 
@@ -112,11 +92,11 @@ export function extractMarkdownFormatRuns(input: string): {
     { styleMap: IMESSAGE_STYLE_MAP },
     IMESSAGE_FORMAT_PROFILE,
   );
-  const code = renderMarkdownWithAttributedRanges(
-    ir,
-    { styleMap: { code: "code" } },
-    IMESSAGE_CODE_PROFILE,
-  );
+  // Fallback projection can shift inline-code spans, but never creates them.
+  const codeRanges = ir.styles.some((span) => span.style === "code")
+    ? renderMarkdownWithAttributedRanges(ir, { styleMap: { code: "code" } }, IMESSAGE_CODE_PROFILE)
+        .ranges
+    : [];
   return restoreCodeMarkers(
     rendered.text,
     rendered.ranges.map(({ start, length, style }) => ({
@@ -124,6 +104,6 @@ export function extractMarkdownFormatRuns(input: string): {
       length,
       styles: [style],
     })),
-    code.ranges,
+    codeRanges,
   );
 }

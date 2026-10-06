@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
-  acquireReadOnlyPreparedModelRuntime,
   prepareModelRuntimeSnapshot,
   PreparedModelRuntimeOwnerNotPublishedError,
 } from "../agents/prepared-model-runtime.js";
@@ -25,8 +24,8 @@ const primary = "pin-alpha/exact-supported";
 const fallback = "pin-beta/exact-supported";
 const providerIds = ["pin-alpha", "pin-beta", "pin-unrelated"];
 
-function clearRuntimeState() {
-  resetPreparedModelRuntimeSnapshotsForTest();
+async function clearRuntimeState() {
+  await resetPreparedModelRuntimeSnapshotsForTest();
   clearPluginLoaderCache();
 }
 
@@ -35,7 +34,13 @@ async function withProviderFixtures(
     config: OpenClawConfig;
     state: OpenClawTestState;
     imported: (provider: string) => boolean;
+    resolved: (provider: string) => unknown;
   }) => Promise<void>,
+  options: {
+    aliases?: Record<string, string>;
+    runtimeAliases?: Record<string, string>;
+    provider?: string;
+  } = {},
 ) {
   await withOpenClawTestState(
     {
@@ -47,12 +52,36 @@ async function withProviderFixtures(
     },
     async (state) => {
       const imported = (provider: string) => fs.existsSync(state.path(`${provider}.imported`));
-      const plugins = providerIds.map((id) => {
+      const resolved = (provider: string): unknown => {
+        const file = state.path(`${provider}.resolved`);
+        return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : undefined;
+      };
+      const normalizationProvider = options.provider ?? "pin-alpha";
+      const fixtureProviderIds = [normalizationProvider, "pin-beta", "pin-unrelated"];
+      const plugins = fixtureProviderIds.map((id) => {
+        const modelContexts =
+          id === normalizationProvider && (options.aliases || options.runtimeAliases)
+            ? {
+                "exact-supported": 65536,
+                middle: 32000,
+                final: 4096,
+                ...(options.runtimeAliases
+                  ? {
+                      entry: 12000,
+                      "runtime-selected": 48000,
+                      "middle-runtime": 64000,
+                      "final-runtime": 96000,
+                    }
+                  : {}),
+              }
+            : { "exact-supported": 32000 };
         const plugin = writePlugin({
           id,
           dir: state.path("plugins", id),
           body: `
 const fs = require("node:fs");
+const modelContexts = ${JSON.stringify(modelContexts)};
+const runtimeAliases = ${JSON.stringify(id === normalizationProvider ? options.runtimeAliases : undefined)};
 fs.writeFileSync(${JSON.stringify(state.path(`${id}.imported`))}, "loaded");
 module.exports = {
   id: ${JSON.stringify(id)},
@@ -61,11 +90,19 @@ module.exports = {
       id: ${JSON.stringify(id)},
       label: ${JSON.stringify(id)},
       auth: [],
+      ...(runtimeAliases ? { normalizeModelId({ modelId }) { return runtimeAliases[modelId]; } } : {}),
+      normalizeResolvedModel({ model }) {
+        fs.writeFileSync(${JSON.stringify(state.path(`${id}.resolved`))}, JSON.stringify({
+          provider: model.provider, id: model.id, contextWindow: model.contextWindow,
+        }));
+        return model;
+      },
       resolveDynamicModel({ modelId }) {
         if (modelId === "resolution-error") {
           throw new Error("fixture dynamic resolution failed");
         }
-        if (modelId !== "exact-supported") return undefined;
+        const contextWindow = modelContexts[modelId];
+        if (contextWindow === undefined) return undefined;
         return {
           id: modelId,
           name: modelId,
@@ -74,7 +111,7 @@ module.exports = {
           baseUrl: "https://provider.invalid/v1",
           reasoning: false,
           input: ["text"],
-          contextWindow: 32000,
+          contextWindow,
           maxTokens: 4096,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         };
@@ -90,6 +127,9 @@ module.exports = {
             configSchema: { type: "object", additionalProperties: false, properties: {} },
             providers: [id],
             modelCatalog: { providers: { [id]: { models: [{ id: "catalog-model" }] } } },
+            ...(id === normalizationProvider && options.aliases
+              ? { modelIdNormalization: { providers: { [id]: { aliases: options.aliases } } } }
+              : {}),
           }),
         );
         return plugin;
@@ -97,94 +137,134 @@ module.exports = {
       const config: OpenClawConfig = {
         agents: {
           defaults: { workspace: state.workspaceDir, model: { primary } },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
         plugins: {
-          allow: [...providerIds],
+          allow: fixtureProviderIds,
           load: { paths: plugins.map((plugin) => plugin.file) },
-          entries: Object.fromEntries(providerIds.map((id) => [id, { enabled: true }])),
+          entries: Object.fromEntries(fixtureProviderIds.map((id) => [id, { enabled: true }])),
         },
       };
       try {
-        await run({ config, state, imported });
+        await run({ config, state, imported, resolved });
       } finally {
-        clearRuntimeState();
+        await clearRuntimeState();
       }
     },
   );
 }
 
 describe("config model validation with provider runtime", () => {
-  beforeEach(() => {
-    clearRuntimeState();
+  beforeEach(async () => {
+    await clearRuntimeState();
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       throw new Error("Unexpected network request during config model validation");
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     try {
       expect(globalThis.fetch).not.toHaveBeenCalled();
     } finally {
       vi.restoreAllMocks();
-      clearRuntimeState();
+      await clearRuntimeState();
     }
   });
 
   afterAll(cleanupPluginLoaderFixturesForTest);
 
-  it("resolves an uncataloged fixture pin when its provider runtime is prepared", async () => {
-    await withProviderFixtures(async ({ config, state, imported }) => {
-      const lease = await acquireReadOnlyPreparedModelRuntime({
-        config,
-        agentId: "main",
-        agentDir: state.agentDir(),
-        workspaceDir: state.workspaceDir,
-        loadRuntimePlugins: true,
-        runtimePluginSelections: [{ provider: "pin-alpha", modelId: "exact-supported" }],
-      });
-      try {
-        const prepared = lease.snapshot;
-        expect(prepared.modelCatalog.entries).not.toContainEqual(
-          expect.objectContaining({ provider: "pin-alpha", id: "exact-supported" }),
-        );
-        const result = await resolveModelAsync(
-          "pin-alpha",
-          "exact-supported",
-          state.agentDir(),
+  it("materializes a cold fallback alias exactly once", async () => {
+    await withProviderFixtures(
+      async ({ config, imported, resolved }) => {
+        config.agents!.defaults!.model = { primary, fallbacks: ["pin-alpha/middle"] };
+        const original = structuredClone(config);
+        expect(providerIds.some(imported)).toBe(false);
+
+        const result = await checkTouchedTextModelRefs({
           config,
-          {
-            ...prepared.createStores(),
-            agentId: "main",
-            workspaceDir: state.workspaceDir,
-            preparedModelRuntime: prepared,
-          },
-        );
-        expect(result.error).toBeUndefined();
-        expect(result.model).toMatchObject({ provider: "pin-alpha", id: "exact-supported" });
-        expect(imported("pin-alpha")).toBe(true);
-        expect(imported("pin-beta")).toBe(false);
+          touchedPaths: [["agents", "defaults", "model", "fallbacks"]],
+        });
+
+        expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+        expect(resolved("pin-alpha")).toEqual({
+          provider: "pin-alpha",
+          id: "final",
+          contextWindow: 4096,
+        });
+        expect(config).toEqual(original);
         expect(imported("pin-unrelated")).toBe(false);
-      } finally {
-        lease.release();
-      }
-    });
+      },
+      { aliases: { entry: "middle", middle: "final" } },
+    );
   });
 
-  it("accepts a fresh supported exact primary without changing the input or loading unrelated plugins", async () => {
-    await withProviderFixtures(async ({ config, imported }) => {
-      const original = structuredClone(config);
-      expect(providerIds.some(imported)).toBe(false);
+  it.each([
+    { ambient: "matching", expected: "middle-runtime", contextWindow: 64000 },
+    { ambient: "foreign", expected: "middle", contextWindow: 32000 },
+  ])(
+    "applies manifest normalization before runtime hooks for fallback ($ambient)",
+    async ({ ambient, expected, contextWindow }) => {
+      await withProviderFixtures(
+        async ({ config, state, imported, resolved }) => {
+          config.agents!.defaults!.model = { primary, fallbacks: ["pin-alpha/entry"] };
+          const original = structuredClone(config);
+          const ambientConfig = structuredClone(config);
+          if (ambient === "foreign") {
+            ambientConfig.plugins!.entries!["pin-alpha"] = { enabled: false };
+          }
+          loadOpenClawPlugins({
+            config: ambientConfig,
+            workspaceDir: state.workspaceDir,
+            onlyPluginIds: [ambient === "matching" ? "pin-alpha" : "pin-beta"],
+            activate: true,
+          });
 
-      const result = await checkTouchedTextModelRefs({
-        config,
-        touchedPaths: [["agents", "defaults", "model", "primary"]],
-      });
+          const result = await checkTouchedTextModelRefs({
+            config,
+            touchedPaths: [["agents", "defaults", "model", "fallbacks"]],
+          });
 
-      expect(config).toEqual(original);
-      expect(imported("pin-unrelated")).toBe(false);
-      expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
-    });
+          expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+          expect(resolved("pin-alpha")).toEqual({
+            provider: "pin-alpha",
+            id: expected,
+            contextWindow,
+          });
+          expect(config).toEqual(original);
+          expect(imported("pin-unrelated")).toBe(false);
+        },
+        {
+          aliases: { entry: "middle", middle: "final" },
+          runtimeAliases: {
+            entry: "runtime-selected",
+            middle: "middle-runtime",
+            final: "final-runtime",
+          },
+        },
+      );
+    },
+  );
+
+  it("normalizes an unqualified primary through the default provider before validation", async () => {
+    await withProviderFixtures(
+      async ({ config, resolved, imported }) => {
+        config.agents!.defaults!.model = { primary: "entry" };
+        const original = structuredClone(config);
+        const result = await checkTouchedTextModelRefs({
+          config,
+          touchedPaths: [["agents", "defaults", "model", "primary"]],
+        });
+        expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+        expect(resolved(DEFAULT_PROVIDER)).toEqual({
+          provider: DEFAULT_PROVIDER,
+          id: "middle",
+          contextWindow: 32000,
+        });
+        expect(config).toEqual(original);
+        expect(imported("pin-unrelated")).toBe(false);
+      },
+      { provider: DEFAULT_PROVIDER, aliases: { entry: "middle", middle: "final" } },
+    );
   });
 
   it.each([

@@ -3,6 +3,7 @@ name: OpenClaw Scheduled Live And E2E Checks
 on:
   schedule:
     - cron: "23 4 * * *"
+    - cron: "41 6 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -20,6 +21,7 @@ env:
 
 jobs:
   live_and_openwebui_checks:
+    if: github.repository == 'openclaw/openclaw' && (github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *')
     permissions:
       actions: read
       contents: read
@@ -37,6 +39,25 @@ jobs:
       shared_image_artifact_namespace: scheduled-live
       shared_image_policy: no-push-artifact
     secrets:
+      AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+      AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+      BASETEN_API_KEY: ${{ secrets.BASETEN_API_KEY }}
+      OPENCLAW_LIVE_R2_ACCOUNT_ID: ${{ secrets.OPENCLAW_LIVE_R2_ACCOUNT_ID }}
+      OPENCLAW_LIVE_R2_BUCKET: ${{ secrets.OPENCLAW_LIVE_R2_BUCKET }}
+      OPENCLAW_LIVE_R2_ACCESS_KEY_ID: ${{ secrets.OPENCLAW_LIVE_R2_ACCESS_KEY_ID }}
+      OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY: ${{ secrets.OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY }}
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      FEATHERLESS_API_KEY: ${{ secrets.FEATHERLESS_API_KEY }}
+      OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN: ${{ secrets.OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN }}
+      OPENCLAW_GOOGLE_MEET_LIVE_MEETING: ${{ secrets.OPENCLAW_GOOGLE_MEET_LIVE_MEETING }}
+      OPENCLAW_GOOGLE_MEET_CLIENT_ID: ${{ secrets.OPENCLAW_GOOGLE_MEET_CLIENT_ID }}
+      OPENCLAW_GOOGLE_MEET_CLIENT_SECRET: ${{ secrets.OPENCLAW_GOOGLE_MEET_CLIENT_SECRET }}
+      OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: ${{ secrets.OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN }}
+      GRADIUM_API_KEY: ${{ secrets.GRADIUM_API_KEY }}
+      INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+      VOLCENGINE_TTS_API_KEY: ${{ secrets.VOLCENGINE_TTS_API_KEY }}
+      OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: ${{ secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -49,11 +70,13 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIE_API_KEY: ${{ secrets.KIE_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
       MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
       MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      NOVITA_API_KEY: ${{ secrets.NOVITA_API_KEY }}
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
       OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
@@ -64,6 +87,7 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PIXVERSE_API_KEY: ${{ secrets.PIXVERSE_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
@@ -84,3 +108,24 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+
+  weekly_upgrade_survivors:
+    if: github.repository == 'openclaw/openclaw' && github.event_name == 'schedule' && github.event.schedule == '41 6 * * 1'
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ github.sha }}
+      include_repo_e2e: false
+      include_release_path_suites: false
+      include_openwebui: false
+      include_live_suites: false
+      allow_unreleased_changelog: true
+      docker_lanes: update-migration
+      published_upgrade_survivor_baselines: 2026.7.1 2026.8.1
+      published_upgrade_survivor_scenarios: mobile-pairing-reconnect watchos-direct-node
+      shared_image_artifact_namespace: scheduled-upgrade-survivors
+      shared_image_policy: no-push-artifact

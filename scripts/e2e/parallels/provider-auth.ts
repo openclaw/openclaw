@@ -62,72 +62,39 @@ export function resolveParallelsModelTimeoutSeconds(platform?: Platform): number
   return readPositiveIntEnv("OPENCLAW_PARALLELS_MODEL_TIMEOUT_S", defaultSeconds);
 }
 
-function providerTimeoutConfigJson(
-  modelId: string,
-  platform: Platform,
-  timeoutSeconds = resolveParallelsModelTimeoutSeconds(platform),
-): string {
-  const providerId = providerIdFromModelId(modelId);
-  if (providerId !== "openai") {
-    return "";
-  }
-  const modelName = modelId.slice("openai/".length).trim();
-  if (!modelName) {
-    return "";
-  }
-  return JSON.stringify({
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-    models: [
-      {
-        contextWindow: 1_047_576,
-        id: modelName,
-        maxTokens: 32_768,
-        name: modelName,
-      },
-    ],
-    timeoutSeconds,
-  });
-}
-
-function modelTransportConfigJson(modelId: string): string {
-  if (providerIdFromModelId(modelId) !== "openai") {
-    return "";
-  }
-  return JSON.stringify({
-    alias: "GPT",
-    params: {
-      transport: "sse",
-    },
-  });
-}
-
-function configPathMapKey(key: string): string {
-  return `[${JSON.stringify(key)}]`;
-}
-
 export function modelProviderConfigBatchJson(
   modelId: string,
   platform: Platform,
   timeoutSeconds = resolveParallelsModelTimeoutSeconds(platform),
 ): string {
+  if (providerIdFromModelId(modelId) !== "openai") {
+    return "";
+  }
   const commands: Array<{ path: string; value: unknown }> = [];
-  const providerId = providerIdFromModelId(modelId);
-  const providerConfig = providerTimeoutConfigJson(modelId, platform, timeoutSeconds);
-  if (providerId && providerConfig) {
+  const modelName = modelId.slice("openai/".length).trim();
+  if (modelName) {
     commands.push({
-      path: `models.providers.${providerId}`,
-      value: JSON.parse(providerConfig) as unknown,
+      path: "models.providers.openai",
+      value: {
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          {
+            contextWindow: 1_047_576,
+            id: modelName,
+            maxTokens: 32_768,
+            name: modelName,
+          },
+        ],
+        timeoutSeconds,
+      },
     });
   }
-  const modelTransportConfig = modelTransportConfigJson(modelId);
-  if (modelTransportConfig) {
-    commands.push({
-      path: `agents.defaults.models${configPathMapKey(modelId)}`,
-      value: JSON.parse(modelTransportConfig) as unknown,
-    });
-  }
-  return commands.length === 0 ? "" : JSON.stringify(commands);
+  commands.push({
+    path: `agents.defaults.models[${JSON.stringify(modelId)}]`,
+    value: { alias: "GPT", params: { transport: "sse" } },
+  });
+  return JSON.stringify(commands);
 }
 
 export function parseProvider(value: string): Provider {
@@ -168,9 +135,13 @@ export function resolveLatestVersion(
   const userConfigPath = path.join(userConfigDir, "npmrc");
   try {
     writeFile(userConfigPath, "", "utf8");
-    return runCommand("npm", ["view", "openclaw", "version", "--userconfig", userConfigPath], {
-      quiet: true,
-    }).stdout.trim();
+    return runCommand("npm", [
+      "view",
+      "openclaw",
+      "version",
+      "--userconfig",
+      userConfigPath,
+    ]).stdout.trim();
   } finally {
     removeDir(userConfigDir, { force: true, recursive: true });
   }

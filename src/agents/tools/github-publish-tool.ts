@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
 import {
   GitHubPublicationBodySchema,
   GitHubPublicationTitleSchema,
@@ -20,7 +21,7 @@ export function createGitHubPublishTool(
     label: "GitHub Publish",
     name: "github_publish",
     description:
-      "Publish the current session-owned Git worktree through the Gateway. Call only after the work is complete. On cloud or remote-exec sessions this records a durable request; finish the turn so authoritative reconciliation can complete before the Gateway commits, pushes through an exact HTTPS path, and creates or reuses a draft pull request. If the workspace is busy or reconciliation has not completed, the request stays queued and the Gateway publishes automatically once the workspace is consistent; the result is posted into the session transcript. Credentials never enter tool arguments or the worker.",
+      "Publish the current session's repository changes as a draft pull request. Supports local workspaces and cloud repository sessions without a Gateway checkout. Call when the source changes are ready, then finish the turn so its changes can be saved. The Gateway publishes the accepted workspace, creates or reuses the draft pull request, and posts the result into the session transcript without resuming the agent. If review, CI, or landing remains in the authorized task, arrange a continuation before ending the turn; a publication receipt is not completion of that work. Requests wait while the workspace is busy or recovering. Publication credentials stay on the Gateway.",
     parameters: Type.Object(
       {
         title: Type.Optional(GitHubPublicationTitleSchema),
@@ -35,9 +36,11 @@ export function createGitHubPublishTool(
       if (!caller?.sessionKey) {
         throw new Error("GitHub publication requires the current Gateway session.");
       }
+      // The persisted assistant turn keeps replays stable, even when recovery runs them again.
+      const assistantTurnId = getAgentToolAssistantTurnId();
       const result = await callGateway<SessionGitHubPublicationResult>("sessions.github.publish", {
         sessionKey: caller.sessionKey,
-        idempotencyKey: toolCallId,
+        idempotencyKey: assistantTurnId ? `${assistantTurnId}:${toolCallId}` : toolCallId,
         ...(input.title ? { title: input.title } : {}),
         ...(input.body ? { body: input.body } : {}),
       });

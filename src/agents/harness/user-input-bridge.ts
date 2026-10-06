@@ -1,25 +1,11 @@
 import { markReplyPayloadForSourceSuppressionDelivery } from "../../auto-reply/reply-payload.js";
+import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-
-export type AgentHarnessUserInputOption = {
-  label: string;
-  description?: string;
-};
-
-export type AgentHarnessUserInputQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  multiSelect?: boolean;
-  isOther?: boolean;
-  isSecret?: boolean;
-  options?: readonly AgentHarnessUserInputOption[] | null;
-};
-
-export type AgentHarnessUserInputAnswers = {
-  answers: Record<string, { answers: string[] }>;
-};
+import type {
+  AgentHarnessUserInputAnswers,
+  AgentHarnessUserInputQuestion,
+} from "./user-input-types.js";
 
 export type AgentHarnessUserInputPromptOptions = {
   intro?: string;
@@ -108,16 +94,14 @@ function buildAgentHarnessQuestionPresentation(params: {
     return undefined;
   }
   // The question stays in its own leading text block so reaction/native
-  // adapters can keep it while replacing the tap-only guidance below.
+  // adapters can keep it while replacing the reply guidance below.
   const optionGuidance = [
     ...options.map(
       (option) =>
         `- ${formatText(option.label)}${option.description ? `: ${formatText(option.description)}` : ""}`,
     ),
     "",
-    question.isOther
-      ? "Tap an option, or reply with the option text or your own answer."
-      : "Tap an option, or reply with the option number or text.",
+    questionReplyGuidance(params.questions),
   ].join("\n");
   return {
     blocks: [
@@ -126,12 +110,16 @@ function buildAgentHarnessQuestionPresentation(params: {
       {
         type: "buttons",
         buttons: [
+          // Navigation must not resolve the question before the external step completes.
+          ...(question.url
+            ? [{ label: "Open link", action: { type: "url" as const, url: question.url } }]
+            : []),
           ...options.map((option) => ({
             label: formatText(option.label),
             action: {
               type: "question" as const,
               questionId: params.questionId,
-              optionValue: option.label,
+              optionValue: option.value ?? option.label,
             },
           })),
           ...(question.isOther
@@ -169,7 +157,7 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
   const [question] = params.questions;
   const candidateOptionValues =
     params.questions.length === 1 && question && !question.multiSelect && !question.isSecret
-      ? (question.options?.map((option) => option.label) ?? [])
+      ? (question.options?.map((option) => option.value ?? option.label) ?? [])
       : [];
   const normalizedOptionValues = candidateOptionValues.map((option) => option.trim().toLowerCase());
   const optionValues =
@@ -216,7 +204,14 @@ export async function deliverAgentHarnessQuestionPrompt(
   signal?.throwIfAborted();
   const payload = buildAgentHarnessQuestionPromptPayload({ questionId, questions, options });
   if (params.onBlockReply) {
-    await params.onBlockReply(payload, signal ? { abortSignal: signal } : undefined);
+    // The agent cannot finish until this prompt is answered. Give channel delivery
+    // an independent stable intent so it does not wait behind the blocked stream.
+    await runWithQuestionChannelDeliveries([questionId], () =>
+      params.onBlockReply?.(payload, {
+        ...(signal ? { abortSignal: signal } : {}),
+        deliveryIntentId: `block-reply:v1:agent-question:${questionId}`,
+      }),
+    );
     return;
   }
   signal?.throwIfAborted();
@@ -271,17 +266,17 @@ function normalizeAgentHarnessUserInputAnswers(
     return [declaredAnswer];
   }
   const normalized = answer
-    .split(/[,;\n]/u)
+    .split(question.answerFormat === "lines" ? /\r?\n/u : /[,;\n]/u)
     .map((part) => normalizeAgentHarnessUserInputAnswer(part, question))
     .filter((part): part is string => Boolean(part));
-  return [...new Set(normalized)];
+  return question.presentation === "form" ? normalized : [...new Set(normalized)];
 }
 
 export function normalizeAgentHarnessUserInputAnswer(
   answer: string,
   question: AgentHarnessUserInputQuestion,
 ): string | undefined {
-  const trimmed = answer.trim();
+  const trimmed = question.presentation === "form" ? answer : answer.trim();
   const declaredAnswer = normalizeAgentHarnessUserInputOption(trimmed, question);
   if (declaredAnswer) {
     return declaredAnswer;
@@ -303,13 +298,15 @@ function normalizeAgentHarnessUserInputOption(
   const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
   const indexed = optionIndex >= 0 ? options[optionIndex] : undefined;
   if (indexed) {
-    return indexed.label;
+    return indexed.value ?? indexed.label;
   }
-  const exact = options.find((option) => option.label.toLowerCase() === trimmed.toLowerCase());
-  if (exact) {
-    return exact.label;
-  }
-  return undefined;
+  const selected = options.find(
+    (option) =>
+      option.value === answer ||
+      ((!question.isOther || option.value === undefined) &&
+        option.label.toLowerCase() === trimmed.toLowerCase()),
+  );
+  return selected ? (selected.value ?? selected.label) : undefined;
 }
 
 function parseKeyedAnswers(inputText: string): Map<string, string> {

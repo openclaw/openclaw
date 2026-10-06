@@ -1,56 +1,8 @@
-/* ===========================================
-   Config Page
-   ===========================================
-
-   The schema-driven form itself renders through the settings design
+/* The schema-driven form itself renders through the settings design
    language (settings-section/settings-group/settings-row; see
    ui/src/styles/settings.css). This file keeps only the config page
    chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
    pieces layered on top of the settings primitives. */
-
-/* Mode Toggle */
-.config-mode-toggle {
-  display: flex;
-  padding: 3px;
-  background: var(--bg-elevated);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  gap: 1px;
-}
-
-:root[data-theme-mode="light"] .config-mode-toggle {
-  background: white;
-}
-
-.config-mode-toggle__btn {
-  flex: 1;
-  padding: 6px 12px;
-  border: none;
-  border-radius: calc(var(--radius-md) - 3px);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
-.config-mode-toggle__btn:hover:not(.active) {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.config-mode-toggle__btn.active {
-  background: var(--primary);
-  color: var(--primary-foreground);
-  box-shadow: 0 1px 3px var(--accent-subtle);
-}
-
-/* ===========================================
-   Lead column (toolbar / banner / nav above the form)
-   =========================================== */
 
 /* Mirrors the .settings-page column so config chrome lines up with it. */
 .config-lead {
@@ -63,7 +15,12 @@
   gap: var(--space-3);
 }
 
-/* Toolbar: mode toggle / section tabs */
+.session-source__icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
 .config-toolbar {
   display: flex;
   align-items: center;
@@ -72,7 +29,6 @@
   gap: var(--space-2) var(--space-3);
 }
 
-/* Raw mode file operations (open / discard / save) */
 .config-raw-actions {
   display: flex;
   align-items: center;
@@ -93,7 +49,7 @@
 .config-action-spinner svg {
   width: 14px;
   height: 14px;
-  animation: spin 0.7s linear infinite;
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -102,7 +58,6 @@
   }
 }
 
-/* Diff Panel */
 .config-diff {
   margin: 12px 20px 0;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
@@ -138,7 +93,7 @@
 }
 
 .config-diff[open] .config-diff__chevron {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .config-diff__content {
@@ -156,10 +111,6 @@
   background: var(--bg-elevated);
   font-size: 11.5px;
   font-family: var(--mono);
-}
-
-:root[data-theme-mode="light"] .config-diff__item {
-  background: white;
 }
 
 .config-diff__path {
@@ -189,7 +140,6 @@
   color: var(--ok);
 }
 
-/* Content Area */
 .config-content {
   flex: 1;
   overflow-y: auto;
@@ -239,10 +189,6 @@
   min-width: 0;
   flex: 1 1 420px;
 }
-
-/* ===========================================
-   Appearance custom pickers (theme + text scale)
-   =========================================== */
 
 .settings-theme-grid {
   display: grid;
@@ -296,8 +242,6 @@
 .settings-theme-card__icon svg {
   width: 18px;
   height: 18px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .settings-theme-card__label {
@@ -393,6 +337,34 @@
   --theme-chip-accent-2: #8fd6a5;
 }
 
+.settings-theme-card--crt,
+.settings-accent-theme--crt {
+  --theme-chip-bg: #090a09;
+  --theme-chip-accent: #e8e8e8;
+  --theme-chip-accent-2: #ffcf5c;
+}
+
+.settings-theme-card--manuscript,
+.settings-accent-theme--manuscript {
+  --theme-chip-bg: #211e18;
+  --theme-chip-accent: #8fa8e0;
+  --theme-chip-accent-2: #cfa85e;
+}
+
+.settings-theme-card--rose,
+.settings-accent-theme--rose {
+  --theme-chip-bg: #191724;
+  --theme-chip-accent: #ebbcba;
+  --theme-chip-accent-2: #f6c177;
+}
+
+.settings-theme-card--miami,
+.settings-accent-theme--miami {
+  --theme-chip-bg: #140f1e;
+  --theme-chip-accent: #f472b6;
+  --theme-chip-accent-2: #5fd7e8;
+}
+
 :root[data-theme-mode="light"] :is(.settings-theme-card--claw, .settings-accent-theme--claw) {
   --theme-chip-bg: #faf9f7;
   --theme-chip-accent: #bd4531;
@@ -435,6 +407,31 @@
   --theme-chip-bg: #f4f7f4;
   --theme-chip-accent: #10693a;
   --theme-chip-accent-2: #2f6b47;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--crt, .settings-accent-theme--crt) {
+  --theme-chip-bg: #f5f5f4;
+  --theme-chip-accent: #1f1f1f;
+  --theme-chip-accent-2: #7a5d10;
+}
+
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--manuscript, .settings-accent-theme--manuscript) {
+  --theme-chip-bg: #f6f1e4;
+  --theme-chip-accent: #31549b;
+  --theme-chip-accent-2: #7d6118;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--rose, .settings-accent-theme--rose) {
+  --theme-chip-bg: #faf4ed;
+  --theme-chip-accent: #9c4f66;
+  --theme-chip-accent-2: #286983;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--miami, .settings-accent-theme--miami) {
+  --theme-chip-bg: #f7f3f6;
+  --theme-chip-accent: #b0246f;
+  --theme-chip-accent-2: #0f6f7d;
 }
 /* stylelint-enable color-no-hex */
 
@@ -530,6 +527,18 @@
   height: 15px;
 }
 
+.settings-accent-swatch__reset {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--theme-chip-bg);
+}
+
+.settings-accent-swatch__reset svg {
+  width: 16px;
+  height: 16px;
+}
+
 @media (forced-colors: active) {
   .settings-accent-swatch__picker {
     color: CanvasText;
@@ -574,7 +583,6 @@
   color: var(--accent);
   font-size: 12px;
   font-weight: 600;
-  text-decoration: none;
 }
 
 .settings-theme-import__external:hover {
@@ -585,8 +593,6 @@
 .settings-theme-import__external svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   flex: 0 0 auto;
 }
 
@@ -606,8 +612,9 @@
   gap: 6px;
 }
 
-.settings-theme-import__label {
-  font-size: 12px; /* was 11px */
+.settings-theme-import__label,
+.settings-theme-import__meta-label {
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -644,14 +651,6 @@
 .settings-theme-import__meta {
   display: grid;
   gap: 4px;
-}
-
-.settings-theme-import__meta-label {
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
 }
 
 .settings-theme-import__meta-value {
@@ -723,7 +722,7 @@
 
 .settings-text-scale__label {
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   line-height: 1.2;
 }
 
@@ -745,7 +744,6 @@
   min-width: 32px;
 }
 
-/* Loading State */
 .config-loading {
   display: flex;
   flex-direction: column;
@@ -762,20 +760,9 @@
   border: 2.5px solid var(--border);
   border-top-color: var(--accent);
   border-radius: var(--radius-full);
-  animation: spin 0.7s linear infinite;
+  animation: btn-spinner-spin 0.7s linear infinite;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* ===========================================
-   Form specifics layered on settings rows
-   =========================================== */
-
-/* Inline validation/unsupported-node message inside a settings-row. */
 .cfg-field__error {
   font-size: 12px;
   color: var(--danger);
@@ -828,7 +815,6 @@
   border-color: var(--danger);
 }
 
-/* Redacted click-to-reveal inputs/textareas. */
 .cfg-redacted {
   opacity: 0.7;
 }
@@ -858,33 +844,6 @@
   background: var(--bg-hover);
 }
 
-.cfg-object[open] > .cfg-object__summary .cfg-object__chevron {
-  transform: rotate(180deg);
-}
-
-/* Hint tags (searchable via tag: filters). */
-.cfg-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.cfg-tag {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  padding: 2px 8px;
-  font-size: 12px; /* was 11px */
-  color: var(--muted);
-  background: var(--bg-elevated);
-  white-space: nowrap;
-}
-
-:root[data-theme-mode="light"] .cfg-tag {
-  background: white;
-}
-
 @media (hover: none) and (pointer: coarse) {
   .settings-theme-import__input,
   .config-raw-field textarea {
@@ -892,14 +851,12 @@
   }
 }
 
-/* MCP */
 .mcp-page {
   display: grid;
   gap: 14px;
   margin-top: 12px;
 }
 
-/* Memory */
 .memory-page {
   display: grid;
   gap: 0;
@@ -908,7 +865,7 @@
 /* Memory subviews vary substantially in height. Keep the shared hero anchored
    when switching between a view that needs the content scrollbar and one that
    does not. */
-.shell--settings .content:has(.memory-page) {
+.shell--settings .content.content--memory-page {
   scrollbar-gutter: stable;
 }
 
@@ -920,7 +877,7 @@
 /* Overview and Memories render a .settings-page descendant, while Dreams does
    not. Keep the shared header on the settings-page padding rhythm regardless
    of which tab is active so its title and actions do not jump by one space. */
-.shell--settings .content:has(.memory-page) .content-header.hub-page-header {
+.shell--settings .content.content--memory-page .content-header.hub-page-header {
   max-width: 1120px;
   padding-inline: var(--settings-header-inline-padding, var(--space-4));
 }
@@ -1005,13 +962,6 @@
   color: var(--danger);
 }
 
-.mcp-server-loading {
-  padding: var(--space-4);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-/* Advanced Settings accordion navigation, rendered by view.ts. */
 .config-accordion-nav {
   margin-bottom: 20px;
 }
@@ -1067,7 +1017,7 @@
 }
 
 .config-accordion-group__chevron--open {
-  transform: rotate(180deg);
+  transform: rotate(90deg);
 }
 
 .config-accordion-group__items {

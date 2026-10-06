@@ -43,12 +43,13 @@ openclaw_plugins_cleanup_fixture_servers() {
   done
 }
 
+# Use explicit statuses: Bash 5.2 bare returns inside EXIT cleanup reuse the original failure.
 openclaw_plugins_signal_fixture_process() {
   local pid="$1"
   local signal="$2"
   if kill -0 -- "-$pid" >/dev/null 2>&1; then
     kill "-$signal" -- "-$pid" >/dev/null 2>&1 || true
-    return
+    return 0
   fi
   kill "-$signal" "$pid" >/dev/null 2>&1 || true
 }
@@ -66,11 +67,11 @@ openclaw_plugins_stop_fixture_process() {
   interval="$(openclaw_plugins_read_nonnegative_decimal_env OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS 0.25)" || return $?
   if declare -F openclaw_e2e_stop_process >/dev/null 2>&1; then
     openclaw_e2e_stop_process "$pid"
-    return
+    return "$?"
   fi
   openclaw_plugins_signal_fixture_process "$pid" TERM
   for _ in $(seq 1 "$attempts"); do
-    ! openclaw_plugins_fixture_process_alive "$pid" && { wait "$pid" >/dev/null 2>&1 || true; return; }
+    ! openclaw_plugins_fixture_process_alive "$pid" && { wait "$pid" >/dev/null 2>&1 || true; return 0; }
     sleep "$interval"
   done
   openclaw_plugins_signal_fixture_process "$pid" KILL
@@ -140,40 +141,6 @@ openclaw_plugins_fixture_exit_trap() {
   exit "$status"
 }
 
-record_fixture_plugin_trust() {
-  local plugin_id="$1"
-  local plugin_root="$2"
-  local enabled="$3"
-  node scripts/e2e/lib/plugins/assertions.mjs record-fixture-plugin-trust "$plugin_id" "$plugin_root" "$enabled"
-}
-
-write_demo_fixture_plugin() {
-  local dir="$1"
-  node scripts/e2e/lib/fixture.mjs plugin-demo "$dir"
-}
-
-write_fixture_plugin() {
-  local dir="$1"
-  local id="$2"
-  local version="$3"
-  local method="$4"
-  local name="$5"
-
-  node scripts/e2e/lib/fixture.mjs plugin "$dir" "$id" "$version" "$method" "$name"
-}
-
-write_fixture_plugin_with_cli() {
-  local dir="$1"
-  local id="$2"
-  local version="$3"
-  local method="$4"
-  local name="$5"
-  local cli_root="$6"
-  local cli_output="$7"
-
-  node scripts/e2e/lib/fixture.mjs plugin-cli "$dir" "$id" "$version" "$method" "$name" "$cli_root" "$cli_output"
-}
-
 pack_fixture_plugin_with_cli_registry_dependency() {
   local pack_dir="$1"
   local output_tgz="$2"
@@ -198,16 +165,6 @@ pack_fake_is_number_package() {
   tar -czf "$output_tgz" -C "$pack_dir" package
 }
 
-write_fixture_plugin_with_vendored_dependency() {
-  local dir="$1"
-  local id="$2"
-  local version="$3"
-  local method="$4"
-  local name="$5"
-
-  node scripts/e2e/lib/fixture.mjs plugin-vendored-dep "$dir" "$id" "$version" "$method" "$name"
-}
-
 pack_fixture_plugin() {
   local pack_dir="$1"
   local output_tgz="$2"
@@ -217,7 +174,7 @@ pack_fixture_plugin() {
   local name="$6"
 
   mkdir -p "$pack_dir/package"
-  write_fixture_plugin "$pack_dir/package" "$id" "$version" "$method" "$name"
+  node scripts/e2e/lib/fixture.mjs plugin "$pack_dir/package" "$id" "$version" "$method" "$name"
   tar -czf "$output_tgz" -C "$pack_dir" package
 }
 
@@ -230,7 +187,7 @@ pack_fixture_plugin_with_invalid_extension_entry() {
   local name="$6"
 
   mkdir -p "$pack_dir/package"
-  write_fixture_plugin "$pack_dir/package" "$id" "$version" "$method" "$name"
+  node scripts/e2e/lib/fixture.mjs plugin "$pack_dir/package" "$id" "$version" "$method" "$name"
   node --input-type=module - "$pack_dir/package/package.json" <<'NODE'
 import fs from "node:fs";
 
@@ -263,6 +220,8 @@ start_npm_fixture_registry() {
   for _ in $(seq 1 100); do
     if [[ -s "$server_port_file" ]]; then
       export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$server_port_file")"
+      # Override both spellings so an inherited prerelease registry cannot win in npm.
+      export npm_config_registry="$NPM_CONFIG_REGISTRY"
       return 0
     fi
     if ! kill -0 "$server_pid" 2>/dev/null; then
@@ -275,10 +234,4 @@ start_npm_fixture_registry() {
   openclaw_plugins_print_fixture_log "$server_log"
   echo "Timed out waiting for npm fixture registry." >&2
   return 1
-}
-
-write_claude_bundle_fixture() {
-  local bundle_root="$1"
-
-  node scripts/e2e/lib/fixture.mjs claude-bundle "$bundle_root"
 }

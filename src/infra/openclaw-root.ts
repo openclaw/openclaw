@@ -1,10 +1,46 @@
-// Resolves the OpenClaw package root from runtime and package metadata.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPluginCache } from "../plugins/plugin-cache.js";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
 
-const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
+type PackageRootOptions = { cwd?: string; argv1?: string; moduleUrl?: string };
+
+const PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN =
+  /^(.*?)([\\/])node_modules\2\.pnpm\2openclaw@[^\\/]+\2node_modules\2openclaw\2.+$/;
+
+/** Keeps replacement and respawn on pnpm's stable package link. */
+export function rewritePnpmVersionedOpenClawEntryPath(entryPath: string): string {
+  return entryPath.replace(
+    PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN,
+    "$1$2node_modules$2openclaw$2openclaw.mjs",
+  );
+}
+
+/** Capture an installation path while its link still belongs to the running package. */
+export function resolveOpenClawInstallationRootSync(
+  runningRoot: string,
+  argv1: string | undefined,
+): string {
+  const launcherRoot = argv1 ? findPackageRootSync(path.dirname(path.resolve(argv1))) : null;
+  const pnpmRoot = path.dirname(
+    rewritePnpmVersionedOpenClawEntryPath(path.join(runningRoot, "openclaw.mjs")),
+  );
+  for (const candidate of [launcherRoot, pnpmRoot]) {
+    if (!candidate || candidate === runningRoot) {
+      continue;
+    }
+    try {
+      if (
+        openClawRootFsSync.realpathSync(candidate) === openClawRootFsSync.realpathSync(runningRoot)
+      ) {
+        return candidate;
+      }
+    } catch {
+      // A missing or unrelated stable link cannot identify this installation.
+    }
+  }
+  return runningRoot;
+}
 
 function parsePackageName(raw: string): string | null {
   const parsed = JSON.parse(raw) as { name?: unknown };
@@ -46,7 +82,7 @@ function readPackageNameSync(dir: string): string | null {
 async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
   for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = await readPackageName(current);
-    if (name && CORE_PACKAGE_NAMES.has(name)) {
+    if (name === "openclaw") {
       return current;
     }
   }
@@ -56,7 +92,7 @@ async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string 
 function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
   for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = readPackageNameSync(current);
-    if (name && CORE_PACKAGE_NAMES.has(name)) {
+    if (name === "openclaw") {
       return current;
     }
   }
@@ -90,7 +126,7 @@ function candidateDirsFromArgv1(argv1: string): string[] {
   if (cached) {
     return [...cached];
   }
-  const normalized = path.resolve(argv1);
+  const normalized = cacheKey;
   const candidates: string[] = [];
 
   // Resolve symlinks for version managers (nvm, fnm, n, Homebrew/Linuxbrew)
@@ -118,13 +154,9 @@ function candidateDirsFromArgv1(argv1: string): string[] {
   return [...deduped];
 }
 
-export async function resolveOpenClawPackageRoot(opts: {
-  cwd?: string;
-  argv1?: string;
-  moduleUrl?: string;
-}): Promise<string | null> {
+export async function resolveOpenClawPackageRoot(opts: PackageRootOptions): Promise<string | null> {
   const candidates = buildCandidates(opts);
-  const cacheKey = createPackageRootCacheKey(candidates);
+  const cacheKey = candidates.join("\0");
   const searches = getPluginCache().sdk.packageSearches;
   const cached = searches.get(cacheKey);
   if (cached?.all) {
@@ -150,13 +182,9 @@ export async function resolveOpenClawPackageRoot(opts: {
 // pick the first root that actually contains it: an installed package root can resolve first but
 // omit files the npm allowlist drops (e.g. scripts/), so stopping at root[0] would skip a valid
 // source-checkout cwd that still has them.
-export function resolveOpenClawPackageRootsSync(opts: {
-  cwd?: string;
-  argv1?: string;
-  moduleUrl?: string;
-}): string[] {
+export function resolveOpenClawPackageRootsSync(opts: PackageRootOptions): string[] {
   const candidates = buildCandidates(opts);
-  const cacheKey = createPackageRootCacheKey(candidates);
+  const cacheKey = candidates.join("\0");
   const searches = getPluginCache().sdk.packageSearches;
   const cached = searches.get(cacheKey)?.all;
   if (cached) {
@@ -175,15 +203,31 @@ export function resolveOpenClawPackageRootsSync(opts: {
   return [...roots];
 }
 
-export function resolveOpenClawPackageRootSync(opts: {
-  cwd?: string;
-  argv1?: string;
-  moduleUrl?: string;
-}): string | null {
-  return resolveOpenClawPackageRootsSync(opts)[0] ?? null;
+export function resolveOpenClawPackageRootSync(opts: PackageRootOptions): string | null {
+  const candidates = buildCandidates(opts);
+  const cacheKey = candidates.join("\0");
+  const searches = getPluginCache().sdk.packageSearches;
+  const cached = searches.get(cacheKey);
+  if (cached?.all) {
+    return cached.all[0] ?? null;
+  }
+  if (cached?.first !== undefined) {
+    return cached.first;
+  }
+  for (const candidate of candidates) {
+    const found = findPackageRootSync(candidate);
+    if (found) {
+      // Cache only the selected root; Doctor may still request the complete inventory.
+      searches.set(cacheKey, { first: found });
+      return found;
+    }
+  }
+
+  searches.set(cacheKey, { first: null });
+  return null;
 }
 
-function buildCandidates(opts: { cwd?: string; argv1?: string; moduleUrl?: string }): string[] {
+function buildCandidates(opts: PackageRootOptions): string[] {
   const candidates: string[] = [];
 
   if (opts.moduleUrl) {
@@ -204,19 +248,5 @@ function buildCandidates(opts: { cwd?: string; argv1?: string; moduleUrl?: strin
 }
 
 function dedupeCandidates(candidates: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const deduped: string[] = [];
-  for (const candidate of candidates) {
-    const resolved = path.resolve(candidate);
-    if (seen.has(resolved)) {
-      continue;
-    }
-    seen.add(resolved);
-    deduped.push(resolved);
-  }
-  return deduped;
-}
-
-function createPackageRootCacheKey(candidates: readonly string[]): string {
-  return candidates.join("\0");
+  return [...new Set(candidates.map((candidate) => path.resolve(candidate)))];
 }

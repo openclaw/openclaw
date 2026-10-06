@@ -5,13 +5,6 @@ import PeekabooAutomationKit
 import PeekabooFoundation
 import SwiftUI
 
-enum QuickChatWindowActivationPolicy: Equatable, Sendable {
-    case regular
-    case accessory
-    case prohibited
-    case unknown
-}
-
 struct QuickChatWindowCandidateInput: Equatable, Sendable {
     let windowID: Int
     let processID: Int32
@@ -19,7 +12,7 @@ struct QuickChatWindowCandidateInput: Equatable, Sendable {
     let appName: String
     let title: String
     let bounds: CGRect
-    let activationPolicy: QuickChatWindowActivationPolicy
+    let activationPolicy: ServiceApplicationActivationPolicy
     let isRenderable: Bool
 }
 
@@ -72,15 +65,9 @@ enum QuickChatWindowPickerLogic {
     }
 }
 
-private enum QuickChatCapturePickerMode {
+enum QuickChatCapturePickerMode {
     case window
     case area
-}
-
-private final class QuickChatWindowPickerPanel: NSPanel {
-    override var canBecomeKey: Bool {
-        true
-    }
 }
 
 @MainActor
@@ -99,7 +86,7 @@ final class QuickChatWindowPicker {
     private let permissionStatusProvider: PermissionStatusProvider
     private let permissionGrantProvider: PermissionGrantProvider
 
-    private var panels: [QuickChatWindowPickerPanel] = []
+    private var panels: [QuickChatPanel] = []
     private var escapeMonitor: Any?
     private var operationID = UUID()
     private var captureTask: Task<Void, Never>?
@@ -137,15 +124,7 @@ final class QuickChatWindowPicker {
         self.permissionGrantProvider = permissionGrantProvider
     }
 
-    func beginWindow() async {
-        await self.begin(mode: .window)
-    }
-
-    func beginArea() async {
-        await self.begin(mode: .area)
-    }
-
-    private func begin(mode: QuickChatCapturePickerMode) async {
+    func begin(mode: QuickChatCapturePickerMode) async {
         guard !self.isInteractionActive, self.captureTask == nil, self.model.canCaptureWindow else { return }
         let operationID = UUID()
         self.operationID = operationID
@@ -204,10 +183,7 @@ final class QuickChatWindowPicker {
         self.operationID = UUID()
         self.discoveryTask?.cancel()
         self.discoveryTask = nil
-        if let captureTask = self.captureTask {
-            captureTask.cancel()
-            self.captureTask = nil
-        }
+        SimpleTaskSupport.stop(task: &self.captureTask)
         if let pipelineID = self.activePipelineID {
             self.activePipelineID = nil
             self.model.cancelCapturePipeline(pipelineID)
@@ -216,6 +192,11 @@ final class QuickChatWindowPicker {
     }
 
     private func requestScreenRecordingPermission(mode: QuickChatCapturePickerMode) async {
+        guard AppLaunchRuntimePlan.current.allowsActivation else {
+            PermissionManager.reportDeferredRequest()
+            self.model.setCaptureFailure()
+            return
+        }
         let alert = NSAlert()
         alert.messageText = mode == .window
             ? String(localized: "Allow OpenClaw to capture windows")
@@ -224,7 +205,7 @@ final class QuickChatWindowPicker {
         alert.addButton(withTitle: String(localized: "Grant Access"))
         alert.addButton(withTitle: String(localized: "Cancel"))
         // This alert is user-initiated; only its affirmative action may trigger TCC.
-        if alert.runModal() == .alertFirstButtonReturn {
+        if await AppActivation.shared.response(to: alert) == .alertFirstButtonReturn {
             await self.permissionGrantProvider()
         }
     }
@@ -240,7 +221,7 @@ final class QuickChatWindowPicker {
         for application in applications {
             // Only regular apps can contribute picker candidates; querying accessory or
             // prohibited processes just burns their per-request timeout.
-            let policy = Self.activationPolicy(application.activationPolicy)
+            let policy = application.activationPolicy ?? .unknown
             guard policy == .regular, application.processIdentifier != ownProcessID else { continue }
             try Task.checkCancellation()
             guard let output = try? await self.applicationService.listWindows(
@@ -299,28 +280,13 @@ final class QuickChatWindowPicker {
                         height: clipped.height))
             }
 
-            let panel = QuickChatWindowPickerPanel(
-                contentRect: screen.frame,
-                styleMask: [.nonactivatingPanel, .borderless],
-                backing: .buffered,
-                defer: false)
-            panel.isOpaque = false
-            panel.backgroundColor = .clear
-            panel.hasShadow = false
-            panel.level = NSWindow.Level(rawValue: max(
-                NSWindow.Level.screenSaver.rawValue,
-                NSWindow.Level.floating.rawValue))
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-            panel.hidesOnDeactivate = false
-            panel.isFloatingPanel = true
-            panel.isExcludedFromWindowsMenu = true
-            panel.ignoresMouseEvents = false
+            let panel = Self.makeOverlayPanel(frame: screen.frame)
             panel.contentView = NSHostingView(rootView: QuickChatWindowPickerView(
                 candidates: localCandidates,
                 onSelect: { [weak self] candidate in self?.select(candidate) },
                 onCancel: { [weak self] in self?.cancel() }))
             self.panels.append(panel)
-            panel.makeKeyAndOrderFront(nil)
+            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         }
 
         self.installEscapeMonitor()
@@ -343,22 +309,7 @@ final class QuickChatWindowPicker {
 
         for (screen, displayBounds) in displays {
             let screenFrame = screen.frame
-            let panel = QuickChatWindowPickerPanel(
-                contentRect: screenFrame,
-                styleMask: [.nonactivatingPanel, .borderless],
-                backing: .buffered,
-                defer: false)
-            panel.isOpaque = false
-            panel.backgroundColor = .clear
-            panel.hasShadow = false
-            panel.level = NSWindow.Level(rawValue: max(
-                NSWindow.Level.screenSaver.rawValue,
-                NSWindow.Level.floating.rawValue))
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-            panel.hidesOnDeactivate = false
-            panel.isFloatingPanel = true
-            panel.isExcludedFromWindowsMenu = true
-            panel.ignoresMouseEvents = false
+            let panel = Self.makeOverlayPanel(frame: screenFrame)
             panel.acceptsMouseMovedEvents = true
             panel.contentView = QuickChatAreaPickerView(
                 frame: CGRect(origin: .zero, size: screenFrame.size),
@@ -370,11 +321,31 @@ final class QuickChatWindowPicker {
                 },
                 onCancel: { [weak self] in self?.cancel() })
             self.panels.append(panel)
-            panel.makeKeyAndOrderFront(nil)
+            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         }
 
         self.installEscapeMonitor()
         return true
+    }
+
+    private static func makeOverlayPanel(frame: NSRect) -> QuickChatPanel {
+        let panel = QuickChatPanel(
+            contentRect: frame,
+            styleMask: [.nonactivatingPanel, .borderless],
+            backing: .buffered,
+            defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = NSWindow.Level(rawValue: max(
+            NSWindow.Level.screenSaver.rawValue,
+            NSWindow.Level.floating.rawValue))
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.hidesOnDeactivate = false
+        panel.isFloatingPanel = true
+        panel.isExcludedFromWindowsMenu = true
+        panel.ignoresMouseEvents = false
+        return panel
     }
 
     private func installEscapeMonitor() {
@@ -386,81 +357,21 @@ final class QuickChatWindowPicker {
     }
 
     private func select(_ candidate: QuickChatWindowCandidate) {
-        guard self.isInteractionActive, self.captureTask == nil,
-              let presentationID = self.model.activePresentationID,
-              let pipelineID = self.model.beginCapturePipeline()
-        else { return }
-        self.activePipelineID = pipelineID
-        let operationID = self.operationID
-        // Overlays must be gone before capture or the screenshot can include picker chrome.
-        self.finishInteraction(invalidateOperation: false)
-
-        self.captureTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await Task.sleep(for: .milliseconds(80))
-                guard self.operationID == operationID,
-                      self.model.activePresentationID == presentationID,
-                      !Task.isCancelled
-                else {
-                    // Guard failure implies cancel() ran: it already reset the pipeline state,
-                    // and a newer pipeline may hold .sending now — do not touch the model here.
-                    self.clearCaptureTask(for: operationID)
-                    return
-                }
-                _ = try await WindowListMapper.shared.snapshot(forceRefresh: true)
-                let refreshed = try await self.windowService.listWindows(target: .windowId(candidate.windowID))
-                guard let window = refreshed.first(where: { $0.windowID == candidate.windowID }),
-                      WindowFiltering.isRenderable(window, mode: .capture)
-                else { throw QuickChatWindowPickerError.windowUnavailable }
-                let result = try await self.screenCaptureService.captureWindow(
-                    windowID: CGWindowID(candidate.windowID))
-                guard self.operationID == operationID,
-                      self.model.activePresentationID == presentationID,
-                      !Task.isCancelled
-                else {
-                    self.clearCaptureTask(for: operationID)
-                    return
-                }
-                let accepted = await self.model.sendCapturedImage(
-                    pipelineID: pipelineID,
-                    data: result.imageData,
-                    label: QuickChatWindowPickerLogic.labelText(
-                        appName: candidate.appName,
-                        title: candidate.title),
-                    fileName: QuickChatModel.screenshotFileName(appName: candidate.appName))
-                guard accepted,
-                      self.operationID == operationID,
-                      self.model.activePresentationID == presentationID
-                else {
-                    self.clearCaptureTask(for: operationID)
-                    return
-                }
-                try? await Task.sleep(for: .seconds(0.45))
-                let stillCurrent = self.operationID == operationID &&
-                    self.model.activePresentationID == presentationID &&
-                    self.model.sendState == .sent
-                self.clearCaptureTask(for: operationID)
-                if stillCurrent {
-                    self.onSendAccepted()
-                }
-            } catch is CancellationError {
-                self.clearCaptureTask(for: operationID)
-            } catch {
-                // Token-guarded: a stale operation's failure cannot touch a newer pipeline.
-                self.model.failCapturePipeline(pipelineID)
-                self.clearCaptureTask(for: operationID)
-            }
+        self.captureImage(
+            mode: .window,
+            label: QuickChatWindowPickerLogic.labelText(appName: candidate.appName, title: candidate.title),
+            fileName: QuickChatModel.screenshotFileName(appName: candidate.appName))
+        { [windowService, screenCaptureService] in
+            _ = try await WindowListMapper.shared.snapshot(forceRefresh: true)
+            let refreshed = try await windowService.listWindows(target: .windowId(candidate.windowID))
+            guard let window = refreshed.first(where: { $0.windowID == candidate.windowID }),
+                  WindowFiltering.isRenderable(window, mode: .capture)
+            else { throw QuickChatWindowPickerError.windowUnavailable }
+            return try await screenCaptureService.captureWindow(windowID: CGWindowID(candidate.windowID)).imageData
         }
     }
 
     private func selectArea(localRect: CGRect, screenFrame: CGRect, displayBounds: CGRect) {
-        guard self.isInteractionActive, self.captureTask == nil,
-              let presentationID = self.model.activePresentationID,
-              let pipelineID = self.model.beginCapturePipeline()
-        else { return }
-        self.activePipelineID = pipelineID
-        let operationID = self.operationID
         let appKitRect = CGRect(
             x: screenFrame.minX + localRect.minX,
             y: screenFrame.minY + localRect.minY,
@@ -470,49 +381,60 @@ final class QuickChatWindowPicker {
             appKitRect: appKitRect,
             screenFrame: screenFrame,
             displayBounds: displayBounds)
+        self.captureImage(
+            mode: .area,
+            label: String(localized: "Selected area"),
+            fileName: "area-screenshot.jpg")
+        { [screenCaptureService] in
+            try await screenCaptureService.captureArea(captureRect).imageData
+        }
+    }
 
-        // Keep the Quick Chat panel hidden while only the overlay windows disappear;
-        // restoring it before capture would put the bar into the selected screenshot.
-        self.tearDownOverlays()
+    private func captureImage(
+        mode: QuickChatCapturePickerMode,
+        label: String,
+        fileName: String,
+        capture: @escaping @MainActor () async throws -> Data)
+    {
+        guard self.isInteractionActive, self.captureTask == nil,
+              let presentationID = self.model.activePresentationID,
+              let pipelineID = self.model.beginCapturePipeline()
+        else { return }
+        self.activePipelineID = pipelineID
+        let operationID = self.operationID
+        // Area capture must keep the composer hidden until its pixels are captured.
+        // Both paths remove their picker overlays before the capture settles.
+        if mode == .area {
+            self.tearDownOverlays()
+        } else {
+            self.finishInteraction(invalidateOperation: false)
+        }
         self.captureTask = Task { [weak self] in
             guard let self else { return }
+            defer { self.clearCaptureTask(for: operationID) }
             do {
                 try await Task.sleep(for: .milliseconds(80))
                 guard self.operationID == operationID,
                       self.model.activePresentationID == presentationID,
                       !Task.isCancelled
-                else {
-                    self.clearCaptureTask(for: operationID)
-                    return
-                }
-                let result = try await self.screenCaptureService.captureArea(captureRect)
+                else { return }
+                let data = try await capture()
                 guard self.operationID == operationID,
                       self.model.activePresentationID == presentationID,
                       !Task.isCancelled
-                else {
-                    self.clearCaptureTask(for: operationID)
-                    return
+                else { return }
+                if mode == .area {
+                    self.finishInteraction(invalidateOperation: false)
                 }
-                // Pixels are captured; restore the bar now (kept hidden only so it could
-                // not appear inside the selected region) so image processing and the
-                // chat.send round-trip show progress instead of a vanished panel.
-                self.finishInteraction(invalidateOperation: false)
                 let accepted = await self.model.sendCapturedImage(
                     pipelineID: pipelineID,
-                    data: result.imageData,
-                    label: String(localized: "Selected area"),
-                    fileName: "area-screenshot.jpg")
+                    data: data,
+                    label: label,
+                    fileName: fileName)
                 guard accepted,
                       self.operationID == operationID,
                       self.model.activePresentationID == presentationID
-                else {
-                    self.clearCaptureTask(for: operationID)
-                    if self.operationID == operationID {
-                        self.finishInteraction(invalidateOperation: false)
-                    }
-                    return
-                }
-                self.finishInteraction(invalidateOperation: false)
+                else { return }
                 try? await Task.sleep(for: .seconds(0.45))
                 let stillCurrent = self.operationID == operationID &&
                     self.model.activePresentationID == presentationID &&
@@ -522,11 +444,12 @@ final class QuickChatWindowPicker {
                     self.onSendAccepted()
                 }
             } catch is CancellationError {
-                self.clearCaptureTask(for: operationID)
+                return
             } catch {
+                // A stale operation cannot fail or restore a newer capture's presentation.
                 self.model.failCapturePipeline(pipelineID)
                 self.clearCaptureTask(for: operationID)
-                if self.operationID == operationID {
+                if mode == .area, self.operationID == operationID {
                     self.finishInteraction(invalidateOperation: false)
                 }
             }
@@ -557,17 +480,6 @@ final class QuickChatWindowPicker {
             panel.orderOut(nil)
         }
         self.panels.removeAll()
-    }
-
-    private static func activationPolicy(
-        _ policy: ServiceApplicationActivationPolicy?) -> QuickChatWindowActivationPolicy
-    {
-        switch policy {
-        case .regular: .regular
-        case .accessory: .accessory
-        case .prohibited: .prohibited
-        case .unknown, nil: .unknown
-        }
     }
 }
 
