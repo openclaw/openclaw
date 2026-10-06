@@ -17,14 +17,9 @@ type CanonicalDirListResult =
   | { ok: true; entries: CanonicalDirListEntry[]; total: number }
   | { ok: false; code: "CANONICAL_PATH_CHANGED" | "READ_ERROR" };
 
-export async function listCanonicalDirectory(input: {
-  directoryPath: string;
-  expectedCanonicalPath: string;
-  expectedDevice: string;
-  expectedInode: string;
-  maxEntries: number;
-  offset: number;
-}): Promise<CanonicalDirListResult> {
+export async function listCanonicalDirectory(
+  input: Parameters<typeof createCanonicalDirListCommand>[0],
+): Promise<CanonicalDirListResult> {
   // The worker binds cwd before validating it. Relative listing and metadata
   // reads therefore stay on that directory object if its path is replaced.
   const result = await runCommandBuffered(createCanonicalDirListCommand(input), {

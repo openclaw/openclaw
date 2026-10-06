@@ -56,16 +56,6 @@ export type FeishuWebhookInvoker = (
   params?: { needCheck?: boolean },
 ) => Promise<{ kind: "durable" | "non-durable"; value: unknown }>;
 
-type FeishuDurableIngress = {
-  invoke: Lark.EventDispatcher["invoke"];
-  invokeWebhook: FeishuWebhookInvoker;
-  resolveLifecycle: (data: unknown) => FeishuIngressLifecycle | undefined;
-  setSocketTerminator: (terminate: (() => void) | undefined) => void;
-  start: () => void;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
-
 type FeishuLifecycleSource = {
   lifecycle?: FeishuIngressLifecycle;
   replayClaim?: ChannelReplayClaimHandle;
@@ -350,7 +340,7 @@ export function buildFeishuFlushIngressLifecycle(
   };
 }
 
-export function createFeishuDurableIngress(options: FeishuIngressOptions): FeishuDurableIngress {
+export function createFeishuDurableIngress(options: FeishuIngressOptions) {
   let socketTerminator: (() => void) | undefined;
   const activeLifecycles = new Map<string, FeishuIngressLifecycle>();
 
@@ -487,11 +477,11 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
   return {
     invoke,
     invokeWebhook,
-    resolveLifecycle: (data) => {
+    resolveLifecycle: (data: unknown) => {
       const eventId = isRecord(data) ? normalizeNullableString(data.event_id) : null;
       return eventId ? activeLifecycles.get(eventId) : undefined;
     },
-    setSocketTerminator: (terminate) => {
+    setSocketTerminator: (terminate: (() => void) | undefined) => {
       socketTerminator = terminate;
     },
     start: monitor.start,

@@ -197,7 +197,7 @@ After either proof, stop only the Gateway, app/node, and fixture processes you l
 
 ### Windows and Linux (experimental, direct SDK)
 
-The bundled `cua-computer` plugin loads its Gateway policy by default on every platform. Local computer control remains opt-in on Windows and Linux; loading the policy alone does not start a native driver, register local computer commands, or probe local driver artifacts. macOS keeps its default CUA integration with the app-owned daemon. Explicitly disabling the plugin also disables its cloud computer policy.
+The bundled `cua-computer` plugin loads its Gateway policy by default on every platform. Local computer control remains opt-in on Windows and Linux; loading the policy alone does not start a native driver, register local computer commands, or check local driver artifacts. macOS keeps its default CUA integration with the app-owned daemon. Explicitly disabling the plugin also disables its cloud computer policy.
 
 To enable the experimental Windows or Linux node fulfiller, which uses the pinned CUA Driver SDK contract directly:
 

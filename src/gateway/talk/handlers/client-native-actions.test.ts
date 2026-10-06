@@ -509,7 +509,7 @@ describe("native Talk action ownership through public plugin registration", () =
               voiceSessionId,
             );
             expect(session.isStreaming).toBe(true);
-            const inserted = vi.spyOn(session.agent, "steer");
+            const inserted = vi.spyOn(session.agent, "admitSteeringMessage");
             const realSteer = session.steer.bind(session);
             const delivered = createDeferredCore();
             let insertionsBeforeTransition: number | undefined;

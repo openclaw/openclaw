@@ -21,6 +21,7 @@ import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-pause.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import {
   adoptPausedSubagentRunForFollowUp,
   markRequesterTurnYielded,
@@ -30,7 +31,6 @@ import {
 } from "../registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 import { rowToSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import { testing as registryTesting } from "../registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";

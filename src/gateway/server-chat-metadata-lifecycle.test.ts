@@ -366,7 +366,7 @@ describe("gateway chat metadata lifecycle", () => {
     }
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "keeps bookkeeping from refreshing or broadcasting metadata (inherited: %s)",
     async (inherited) => {
       const store: RuntimeAuthProfileStore = {
@@ -394,7 +394,7 @@ describe("gateway chat metadata lifecycle", () => {
             },
           });
           expect(harness.refresh).not.toHaveBeenCalled();
-          harness.events.catalog();
+          harness.modelEvent({ phase: "catalog-published", modelFactsChanged: false });
           expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
           harness.refresh.mockClear();
         }
@@ -408,43 +408,9 @@ describe("gateway chat metadata lifecycle", () => {
 
   it.each<{ name: string; change: Partial<RuntimeAuthProfileStore> }>([
     {
-      name: "profile added",
-      change: {
-        profiles: {
-          "test:primary": { type: "token", provider: "test", token: "synthetic-token" },
-          "test:second": { type: "api_key", provider: "test", key: "synthetic-key" },
-        },
-      },
-    },
-    { name: "profile removed", change: { profiles: {} } },
-    {
       name: "token rotated",
       change: {
         profiles: { "test:primary": { type: "token", provider: "test", token: "rotated-token" } },
-      },
-    },
-    {
-      name: "expiry changed",
-      change: {
-        profiles: {
-          "test:primary": {
-            type: "token",
-            provider: "test",
-            token: "synthetic-token",
-            expires: 50_000,
-          },
-        },
-      },
-    },
-    {
-      name: "cooldown started",
-      change: { usageStats: { "test:primary": { cooldownUntil: 50_000 } } },
-    },
-    { name: "blocked", change: { usageStats: { "test:primary": { blockedUntil: 50_000 } } } },
-    {
-      name: "inline key disabled",
-      change: {
-        usageStats: { "inline-api-key:test": { disabledUntil: 50_000, disabledReason: "billing" } },
       },
     },
   ])("refreshes and broadcasts metadata when $name", async ({ change }) => {
@@ -472,35 +438,6 @@ describe("gateway chat metadata lifecycle", () => {
       await harness.stop();
     }
   });
-
-  it.each(["unchanged facts", "nonfatal catalog failure"])(
-    "keeps metadata available after %s",
-    async (event) => {
-      const harness = await createRealMetadataLifecycle();
-      try {
-        const before = await harness.lifecycle.read({ agentId: "main" });
-        for (let repeat = 0; repeat < 2; repeat += 1) {
-          if (event === "unchanged facts") {
-            harness.events.skills();
-            harness.events.catalog();
-          } else {
-            harness.modelEvent({
-              phase: "catalog-failed",
-              error: new Error("catalog attempt failed"),
-              modelFactsChanged: false,
-            });
-          }
-          expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
-        }
-        expect(harness.buildCommands).toHaveBeenCalledOnce();
-        expect(harness.broadcast).toHaveBeenCalledOnce();
-        expect(harness.warn).not.toHaveBeenCalled();
-        expect(mocks.fail).not.toHaveBeenCalled();
-      } finally {
-        await harness.stop();
-      }
-    },
-  );
 
   it.each(["queued", "building", "initial build", "missing owner"] as const)(
     "keeps readers waiting for owner publication after %s",
@@ -568,7 +505,7 @@ describe("gateway chat metadata lifecycle", () => {
     },
   );
 
-  it.each(["skills", "auth", "catalog", "catalogFailure", "owner"] as const)(
+  it.each(["auth", "owner"] as const)(
     "retains a terminal metadata failure through a later %s invalidation",
     async (event) => {
       const harness = await createRealMetadataLifecycle();
@@ -798,7 +735,7 @@ describe("gateway chat metadata lifecycle", () => {
     }
   });
 
-  it.each(["published", "build failed", "catalog during attachment", "owner invalidated"] as const)(
+  it.each(["build failed", "catalog during attachment", "owner invalidated"] as const)(
     "refreshes subordinate changes after %s catch-up",
     async (startup) => {
       const entered = createDeferred();

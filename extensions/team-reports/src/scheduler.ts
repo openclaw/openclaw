@@ -12,12 +12,7 @@ const STOP_TIMEOUT_MS = 30_000;
 const STARTUP_GRACE_MS = 5 * 60_000;
 type RunKind = "closed-day" | "intraday" | "manual";
 type ActiveRun = { id: string; controller: AbortController; done: Promise<void> };
-export type TeamReportsHealth = {
-  running: boolean;
-  lastRun?: { status: "ok" | "error"; kind: RunKind; finishedAtMs: number };
-  nextDueMs?: number;
-  warnings: number;
-};
+export type TeamReportsHealth = Awaited<ReturnType<TeamReportsScheduler["health"]>>;
 
 function nextClosedDayDue(nowMs: number, schedule: TeamReportsConfig["schedule"]): number {
   const random = Math.random();
@@ -108,7 +103,7 @@ export class TeamReportsScheduler {
     };
   }
 
-  async health(): Promise<TeamReportsHealth> {
+  async health() {
     const finished = [
       ...(await this.options.store.listRuns(1, { status: "ok" })),
       ...(await this.options.store.listRuns(1, { status: "error" })),

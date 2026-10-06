@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -10,7 +10,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import {
-  collectSessionMaintenancePreserveKeys,
+  prepareSessionMaintenancePreservation,
   registerSessionMaintenancePreserveKeysProvider,
 } from "./store-maintenance-preserve.js";
 import {
@@ -384,7 +384,10 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     });
     const unregisterProvider =
       "providerKeys" in scenario
-        ? registerSessionMaintenancePreserveKeysProvider(() => scenario.providerKeys)
+        ? registerSessionMaintenancePreserveKeysProvider(async () => ({
+            capture: () => scenario.providerKeys,
+            dispose() {},
+          }))
         : undefined;
 
     try {
@@ -667,7 +670,7 @@ describe("capEntryCount", () => {
     expect(store.old?.archivedAt).toEqual(expect.any(Number));
   });
 
-  it("normalizes runtime-provided preserve keys to match lowercased store keys", () => {
+  it("normalizes runtime-provided preserve keys to match lowercased store keys", async () => {
     const now = Date.now();
     const childKey = "agent:main:subagent:child";
     const store = makeStore([
@@ -677,13 +680,16 @@ describe("capEntryCount", () => {
     ]);
     // Provider returns the key in mixed case + with surrounding whitespace;
     // normalization must match the lowercased store key during maintenance.
-    const unregister = registerSessionMaintenancePreserveKeysProvider(() => [
-      "  Agent:Main:Subagent:CHILD  ",
-    ]);
+    const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+      capture: () => ["  Agent:Main:Subagent:CHILD  "],
+      dispose() {},
+    }));
 
+    onTestFinished(unregister);
+    const preservation = await prepareSessionMaintenancePreservation("synthetic-pruning-store");
     try {
       const evicted = capEntryCount(store, 2, {
-        preserveKeys: collectSessionMaintenancePreserveKeys(),
+        preserveKeys: new Set(preservation.capture().providerKeys),
       });
 
       expect(evicted).toBe(1);
@@ -692,26 +698,33 @@ describe("capEntryCount", () => {
       expect(store["recent-1"]?.archivedAt).toBeUndefined();
       expect(store.old?.archivedAt).toEqual(expect.any(Number));
     } finally {
+      preservation.dispose();
       unregister();
     }
   });
 
-  it("can temporarily exceed the cap when every candidate is runtime-protected", () => {
+  it("can temporarily exceed the cap when every candidate is runtime-protected", async () => {
     const now = Date.now();
     const store = makeStore([
       ["agent:main:subagent:child-a", makeEntry(now - 2)],
       ["agent:main:subagent:child-b", makeEntry(now - 1)],
     ]);
-    const unregister = registerSessionMaintenancePreserveKeysProvider(() => Object.keys(store));
+    const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+      capture: () => Object.keys(store),
+      dispose() {},
+    }));
 
+    onTestFinished(unregister);
+    const preservation = await prepareSessionMaintenancePreservation("synthetic-pruning-store");
     try {
       const evicted = capEntryCount(store, 1, {
-        preserveKeys: collectSessionMaintenancePreserveKeys(),
+        preserveKeys: new Set(preservation.capture().providerKeys),
       });
 
       expect(evicted).toBe(0);
       expect(Object.keys(store)).toHaveLength(2);
     } finally {
+      preservation.dispose();
       unregister();
     }
   });

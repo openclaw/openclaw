@@ -29,7 +29,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
-  sameDefaultInferenceRoute,
   type SystemAgentConfigSnapshot,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
@@ -93,7 +92,7 @@ export async function runSetupInferenceTurn(params: {
     deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
   )();
   const failed = (status: SetupInferenceFailureStatus, error: string): SetupTurnFailure => {
-    setupInferenceLog.warn("Inference setup probe failed.", {
+    setupInferenceLog.warn("Inference setup check failed.", {
       event: "setup_inference_probe_failed",
       provider: route.provider,
       model: route.model,
@@ -482,7 +481,7 @@ export async function verifySetupInference(
   const latestRoute = latestConfig
     ? await projectInferenceRoute(latestConfig, params.agentId, routeOptions)
     : undefined;
-  if (!latestRoute || !sameDefaultInferenceRoute(baselineRoute, latestRoute)) {
+  if (!latestRoute || !isDeepStrictEqual(baselineRoute, latestRoute)) {
     return {
       ok: false,
       status: "unknown",
@@ -646,7 +645,7 @@ export async function verifySetupInferenceConfig(
       );
       if (
         !currentRoute ||
-        !sameDefaultInferenceRoute(
+        !isDeepStrictEqual(
           baselineRoute!,
           await projectInferenceRoute(currentConfig, route.agentId, {
             modelTarget: params.modelTarget,

@@ -52,7 +52,7 @@ export async function finishAlreadyCurrentUpdate(
     managedServiceRoot?: string;
     legacyConfigPlan?: LegacyConfigUpdatePlan;
     callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
-    runtimeTarget?: { version: string; nodeEngine: string | null };
+    runtimeTarget?: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
     stop: () => void;
     refuseUpdate: RefuseUpdate;
   },

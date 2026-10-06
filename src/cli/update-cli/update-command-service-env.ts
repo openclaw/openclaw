@@ -221,12 +221,12 @@ export function resolveUpdatedInstallCommandEnv(params?: {
   });
 }
 
-export function resolveOwnedManagedUpdateEnv(params: {
-  processEnv?: NodeJS.ProcessEnv;
-  serviceEnv: NodeJS.ProcessEnv;
-  serviceDefinitionEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
-}): NodeJS.ProcessEnv {
+export function resolveOwnedManagedUpdateEnv(
+  params: NonNullable<Parameters<typeof resolveUpdatedInstallCommandEnv>[0]> & {
+    serviceEnv: NodeJS.ProcessEnv;
+    serviceDefinitionEnv?: NodeJS.ProcessEnv;
+  },
+): NodeJS.ProcessEnv {
   const resolved = resolveUpdatedInstallCommandEnv(params);
   return applyManagedServiceSelectorEnv(
     resolved,

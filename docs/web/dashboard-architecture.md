@@ -391,7 +391,7 @@ that Actions metadata, including private repository data accessible to the
 agent, is shared with the widget/session audience.
 
 Author guidance is conditional on a usable connected agent identity, not a
-tool-construction-time probe. `board.widget.put` verifies and revalidates that
+tool-construction-time check. `board.widget.put` verifies and revalidates that
 identity before saving HTML (including materialized Canvas documents) or
 registered widgets declaring this host capability. The same preparation owner
 serves pinning and reads, including source-config preview-credential scrubbing

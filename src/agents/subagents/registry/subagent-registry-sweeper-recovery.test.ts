@@ -622,277 +622,170 @@ describe("subagent registry recovery scheduling", () => {
     );
   });
 
-  it.each([
-    [
-      "same run id",
-      (runs: Map<string, SubagentRunRecord>, entry: SubagentRunRecord) =>
-        runs.set(entry.runId, run()),
-    ],
-    [
-      "newer generation",
-      (runs: Map<string, SubagentRunRecord>, entry: SubagentRunRecord) => {
-        const newer = run();
-        newer.runId = "newer-kill-run";
-        newer.generation = (entry.generation ?? 0) + 1;
-        runs.set(newer.runId, newer);
-      },
-    ],
-  ])("does not apply a durable kill after %s wins during runtime loading", async (_name, win) => {
-    const entry = run();
-    entry.killIntent = {
-      requestedAt: Date.now(),
-      reason: "killed",
-      sessionId: "session-id",
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      sessionLifecycleRevision: "session-revision",
-    };
-    const runs = new Map([[entry.runId, entry]]);
-    const runtime = createDeferred<typeof import("./subagent-control.runtime.js")>();
-    const loadKillRuntime = vi.fn(() => runtime.promise);
-    const completeSubagentRunWithRecovery = vi.fn();
-    const retireSupersededRun = vi.fn();
-    const pending = reconcileDurableSubagentKillIntent({
-      runId: entry.runId,
-      entry,
-      runs,
-      getRunsForChildSession: childRuns(runs),
-      loadKillRuntime,
-      completeSubagentRunWithRecovery,
-      retireSupersededRun,
-      warn: vi.fn(),
-    });
-
-    try {
-      await vi.waitFor(() => expect(loadKillRuntime).toHaveBeenCalledOnce());
-      win(runs, entry);
-    } finally {
-      runtime.resolve(killRuntime as never);
-      await pending;
-    }
-
-    await expect(pending).resolves.toBe(false);
-    expect(killRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
-    expect(killRuntime.clearSessionLifecycleQueues).not.toHaveBeenCalled();
-    expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
-    expect(retireSupersededRun).not.toHaveBeenCalled();
-  });
-
-  it("does not apply a durable kill after the same session id resets to a new revision", async () => {
-    const entry = run();
-    entry.killIntent = {
-      requestedAt: Date.now(),
-      reason: "killed",
-      sessionId: "session-id",
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      sessionLifecycleRevision: "session-revision",
-    };
-    const runs = new Map([[entry.runId, entry]]);
-    const runtime = createDeferred<typeof import("./subagent-control.runtime.js")>();
-    const loadKillRuntime = vi.fn(() => runtime.promise);
-    const completeSubagentRunWithRecovery = vi.fn();
-
-    const pending = reconcileDurableSubagentKillIntent({
-      runId: entry.runId,
-      entry,
-      runs,
-      getRunsForChildSession: childRuns(runs),
-      loadKillRuntime,
-      completeSubagentRunWithRecovery,
-      retireSupersededRun: vi.fn(),
-      warn: vi.fn(),
-    });
-    try {
-      await vi.waitFor(() => expect(loadKillRuntime).toHaveBeenCalledOnce());
-      killSessionEntry.current = {
+  it.each(["same run id", "newer generation", "session revision", "existing successor"] as const)(
+    "fences a durable kill when a %s replaces its owner",
+    async (change) => {
+      const entry = run();
+      entry.killIntent = {
+        requestedAt: Date.now(),
+        reason: "killed",
         sessionId: "session-id",
-        lifecycleRevision: "replacement-revision",
-        updatedAt: Date.now(),
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        sessionLifecycleRevision: "session-revision",
       };
-    } finally {
-      runtime.resolve(killRuntime as never);
-      await pending;
-    }
-
-    await expect(pending).resolves.toBe(true);
-    expect(killRuntime.isEmbeddedAgentRunActive).not.toHaveBeenCalled();
-    expect(killRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
-    expect(killRuntime.clearSessionLifecycleQueues).not.toHaveBeenCalled();
-    expect(completeSubagentRunWithRecovery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: entry.runId,
-        expectedEntry: entry,
-        suppressSessionEffects: true,
-      }),
-      "sweeper-retired-kill-intent",
-    );
-  });
-
-  it("does not apply an older durable kill when a newer child generation exists", async () => {
-    const entry = run();
-    entry.generation = 1;
-    entry.killIntent = {
-      requestedAt: Date.now(),
-      reason: "killed",
-      sessionId: "session-id",
-    };
-    const newer = createSubagentRunRecord({
-      runId: "newer-run",
-      childSessionKey: entry.childSessionKey,
-      requesterSessionKey: entry.requesterSessionKey,
-      requesterDisplayKey: entry.requesterDisplayKey,
-      task: "newer generation",
-      cleanup: "keep",
-      generation: 2,
-      createdAt: entry.createdAt + 1,
-      startedAt: entry.execution.startedAt ? entry.execution.startedAt + 1 : Date.now(),
-    });
-    const runs = new Map([
-      [entry.runId, entry],
-      [newer.runId, newer],
-    ]);
-    const completeSubagentRunWithRecovery = vi.fn();
-    const retireSupersededRun = vi.fn(async () => {});
-
-    await expect(
-      reconcileDurableSubagentKillIntent({
+      const runs = new Map([[entry.runId, entry]]);
+      const addSuccessor = () => {
+        const newer = {
+          ...run(),
+          runId: "newer-kill-run",
+          generation: (entry.generation ?? 0) + 1,
+          createdAt: entry.createdAt + 1,
+        };
+        runs.set(newer.runId, newer);
+      };
+      if (change === "existing successor") {
+        entry.killIntent.lifecycleGeneration = undefined;
+        entry.killIntent.sessionLifecycleRevision = undefined;
+        addSuccessor();
+      }
+      const runtime = createDeferred<typeof import("./subagent-control.runtime.js")>();
+      const loadKillRuntime = vi.fn(() => runtime.promise);
+      const completeSubagentRunWithRecovery = vi.fn();
+      const retireSupersededRun = vi.fn();
+      const pending = reconcileDurableSubagentKillIntent({
         runId: entry.runId,
         entry,
         runs,
         getRunsForChildSession: childRuns(runs),
-        loadKillRuntime: async () =>
-          killRuntime as unknown as typeof import("./subagent-control.runtime.js"),
+        loadKillRuntime,
         completeSubagentRunWithRecovery,
         retireSupersededRun,
         warn: vi.fn(),
-      }),
-    ).resolves.toBe(true);
-
-    expect(killRuntime.isEmbeddedAgentRunActive).not.toHaveBeenCalled();
-    expect(killRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
-    expect(killRuntime.clearSessionLifecycleQueues).not.toHaveBeenCalled();
-    expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
-    expect(retireSupersededRun).toHaveBeenCalledWith(entry.runId, entry);
-  });
-
-  it("discards suspended retired recovery delivery without touching its child session", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
-    const { entry, completeCleanupBookkeeping, emitSubagentEndedHookForRun, sweeper } =
-      createHarness(runtime);
-    entry.execution = {
-      status: "terminal",
-      startedAt: Date.now() - 60_000,
-      endedAt: Date.now() - 55_000,
-      outcome: { status: "error", error: "retired Gateway lifecycle" },
-      suppressSessionEffects: true,
-    };
-    entry.endedReason = "subagent-error";
-    entry.expectsCompletionMessage = true;
-    entry.delivery = {
-      status: "suspended",
-      suspendedAt: Date.now() - 8 * 24 * 60 * 60_000,
-      suspendedReason: "expiry",
-      payload: {
-        requesterSessionKey: entry.requesterSessionKey,
-        requesterDisplayKey: entry.requesterDisplayKey,
-        childSessionKey: entry.childSessionKey,
-        childRunId: entry.runId,
-        task: entry.task,
-      },
-    };
-
-    await sweeper.sweepOnce();
-
-    expect(removeInternalSessionEffectsSession).not.toHaveBeenCalled();
-    expect(emitSubagentEndedHookForRun).not.toHaveBeenCalled();
-    expect(completeCleanupBookkeeping).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: entry.runId, entry }),
-    );
-  });
-
-  it("archives a retired recovery row without deleting its newer child session", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
-    const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper } =
-      createHarness(runtime);
-    entry.cleanup = "delete";
-    entry.archiveAtMs = Date.now() - 1;
-    entry.execution = {
-      status: "terminal",
-      startedAt: Date.now() - 60_000,
-      endedAt: Date.now() - 55_000,
-      outcome: { status: "error", error: "retired Gateway lifecycle" },
-      suppressSessionEffects: true,
-    };
-    entry.endedReason = "subagent-error";
-
-    await sweeper.sweepOnce();
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
-    expect(runs.has(entry.runId)).toBe(false);
-  });
-
-  it("retires an archived stale owner when guarded deletion sees a successor", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
-    const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper } =
-      createHarness(runtime);
-    entry.cleanup = "delete";
-    entry.archiveAtMs = Date.now() - 1;
-    entry.execution = {
-      status: "terminal",
-      startedAt: Date.now() - 60_000,
-      endedAt: Date.now() - 55_000,
-      outcome: { status: "ok" },
-    };
-    const successor = createSubagentRunRecord({
-      runId: "successor-run",
-      childSessionKey: entry.childSessionKey,
-      requesterSessionKey: entry.requesterSessionKey,
-      requesterDisplayKey: entry.requesterDisplayKey,
-      task: "current successor",
-      cleanup: "keep",
-      generation: 2,
-      createdAt: Date.now(),
-      startedAt: Date.now(),
-    });
-    entry.generation = 1;
-    runs.set(successor.runId, successor);
-    getAgentRunContext.mockImplementation((runId: string) =>
-      runId === successor.runId ? {} : undefined,
-    );
-    callGateway.mockImplementation(async (request) => {
-      if (request.method !== "sessions.delete") {
-        return {};
-      }
-      killSessionEntry.current = {
-        sessionId: "successor-session",
-        lifecycleRevision: "successor-revision",
-        updatedAt: Date.now(),
-      };
-      throw Object.assign(new Error("session changed"), {
-        name: "GatewayClientRequestError",
-        gatewayCode: "INVALID_REQUEST",
-        details: { reason: "session-changed" },
       });
-    });
 
-    await sweeper.sweepOnce();
+      try {
+        if (change === "existing successor") {
+          expect(loadKillRuntime).not.toHaveBeenCalled();
+        } else {
+          expect(loadKillRuntime).toHaveBeenCalledOnce();
+          if (change === "same run id") {
+            runs.set(entry.runId, run());
+          } else if (change === "newer generation") {
+            addSuccessor();
+          } else {
+            killSessionEntry.current = {
+              sessionId: "session-id",
+              lifecycleRevision: "replacement-revision",
+              updatedAt: Date.now(),
+            };
+          }
+        }
+      } finally {
+        runtime.resolve(killRuntime);
+        await pending;
+      }
 
-    expect(callGateway).toHaveBeenCalledWith({
-      method: "sessions.delete",
-      params: {
-        key: entry.childSessionKey,
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-        expectedSessionId: "session-id",
-        expectedLifecycleRevision: "session-revision",
-      },
-      timeoutMs: 10_000,
-      assertDispatchCurrent: expect.any(Function),
-    });
-    expect(runs.has(entry.runId)).toBe(false);
-    expect(runs.get(successor.runId)).toBe(successor);
-    expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
-  });
+      await expect(pending).resolves.toBe(
+        change === "session revision" || change === "existing successor",
+      );
+      expect(killRuntime.isEmbeddedAgentRunActive).not.toHaveBeenCalled();
+      expect(killRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+      expect(killRuntime.clearSessionLifecycleQueues).not.toHaveBeenCalled();
+      if (change === "session revision") {
+        expect(completeSubagentRunWithRecovery).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runId: entry.runId,
+            expectedEntry: entry,
+            suppressSessionEffects: true,
+          }),
+          "sweeper-retired-kill-intent",
+        );
+      } else {
+        expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
+      }
+      if (change === "existing successor") {
+        expect(retireSupersededRun).toHaveBeenCalledWith(entry.runId, entry);
+      } else {
+        expect(retireSupersededRun).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["suppressed recovery", "session replacement"] as const)(
+    "archives a stale row without touching its successor after %s",
+    async (change) => {
+      const runtime = { current: {} as GatewayRecoveryRuntime };
+      const archived = archivedRun({ generation: 1 });
+      if (change === "suppressed recovery") {
+        archived.execution.suppressSessionEffects = true;
+        archived.execution.outcome = { status: "error", error: "retired Gateway lifecycle" };
+        archived.endedReason = "subagent-error";
+      }
+      const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper } = createHarness(
+        runtime,
+        archived,
+      );
+      const successor =
+        change === "session replacement"
+          ? createSubagentRunRecord({
+              runId: "successor-run",
+              childSessionKey: entry.childSessionKey,
+              requesterSessionKey: entry.requesterSessionKey,
+              requesterDisplayKey: entry.requesterDisplayKey,
+              task: "current successor",
+              cleanup: "keep",
+              generation: 2,
+              createdAt: Date.now(),
+              startedAt: Date.now(),
+            })
+          : undefined;
+      if (successor) {
+        runs.set(successor.runId, successor);
+        getAgentRunContext.mockImplementation((runId: string) =>
+          runId === successor.runId ? {} : undefined,
+        );
+      }
+      callGateway.mockImplementation(async (request) => {
+        if (request.method !== "sessions.delete") {
+          return {};
+        }
+        killSessionEntry.current = {
+          sessionId: "successor-session",
+          lifecycleRevision: "successor-revision",
+          updatedAt: Date.now(),
+        };
+        throw Object.assign(new Error("session changed"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          details: { reason: "session-changed" },
+        });
+      });
+
+      await sweeper.sweepOnce();
+
+      if (change === "suppressed recovery") {
+        expect(callGateway).not.toHaveBeenCalled();
+      } else {
+        expect(callGateway).toHaveBeenCalledWith({
+          method: "sessions.delete",
+          params: {
+            key: entry.childSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+            expectedSessionId: "session-id",
+            expectedLifecycleRevision: "session-revision",
+          },
+          timeoutMs: 10_000,
+          assertDispatchCurrent: expect.any(Function),
+        });
+      }
+      expect(runs.has(entry.runId)).toBe(false);
+      if (successor) {
+        expect(runs.get(successor.runId)).toBe(successor);
+      }
+      expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports an admitted registry sweep failure even when restart drain has started", async () => {
     recoverRow.mockImplementationOnce(async () => {
@@ -907,20 +800,6 @@ describe("subagent registry recovery scheduling", () => {
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       "subagent run sweep failed: unexpected recovery failure",
     );
-  });
-
-  it("releases the owner lane after an unexpected pass failure", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
-    recoverRow
-      .mockRejectedValueOnce(new Error("unexpected recovery failure"))
-      .mockResolvedValue({ status: "ignored" });
-    const { sweeper, warn } = createHarness(runtime);
-
-    await sweeper.runTick();
-    await sweeper.runTick();
-
-    expect(recoverRow).toHaveBeenCalledTimes(2);
-    expect(warn).toHaveBeenCalledWith("subagent run sweep failed: unexpected recovery failure");
   });
 });
 

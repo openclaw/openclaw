@@ -41,14 +41,17 @@ import { resolveAgentsApiReasoningEffort } from "./agentsapi-reasoning.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
 import type { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
-import { recordAgentsApiNativeToolTranscript } from "./agentsapi-transcript.js";
+import {
+  bindAgentsApiTranscriptAuthority,
+  recordAgentsApiNativeToolTranscript,
+} from "./agentsapi-transcript.js";
 import { agentsApiConfigSchema, resolveAgentsApiEnvironment } from "./config.js";
 
 export async function runAgentsApiAttempt(
   params: AgentHarnessAttemptParamsV2,
   binding: AgentsApiBinding | undefined,
   bind: (binding: AgentsApiBinding) => Promise<void>,
-  assertOwnerCurrent: () => void,
+  assertOwnerCurrent: Parameters<typeof bindAgentsApiTranscriptAuthority>[0],
   assertHarnessCurrent: () => void,
   target: ReturnType<typeof requireAgentsApiSessionTarget>,
   readPluginConfig: () => unknown,
@@ -68,10 +71,7 @@ export async function runAgentsApiAttempt(
     state: cancellationState,
   });
   const { controller } = cancellation;
-  const assertCurrent = () => {
-    assertOwnerCurrent();
-    controller.signal.throwIfAborted();
-  };
+  const assertCurrent = bindAgentsApiTranscriptAuthority(assertOwnerCurrent, controller.signal);
   let finalizingProjection = false;
   let finalizingProjectionSignal: AbortSignal | undefined;
   const assertProjectionCurrent = () => {

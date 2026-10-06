@@ -150,6 +150,11 @@
       "label": "Realtime Stream Path",
       "advanced": true
     },
+    "realtime.idleHangupMs": {
+      "label": "Realtime Speech Idle Hangup (ms)",
+      "help": "Ends an active realtime call after neither side speaks for this long. Unset disables speech-idle hangup.",
+      "advanced": true
+    },
     "realtime.instructions": {
       "label": "Realtime Instructions",
       "advanced": true
@@ -604,6 +609,10 @@
           },
           "streamPath": {
             "type": "string"
+          },
+          "idleHangupMs": {
+            "type": "integer",
+            "minimum": 1
           },
           "instructions": {
             "type": "string"

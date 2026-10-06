@@ -650,8 +650,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "x_search",
       "memory_search",
       "memory_get",
+      "voice_call",
     ]);
+    expect(consultParams.toolBindings).toEqual({
+      voice_call: { kind: "active-call", callId: "call-1" },
+    });
     expect(consultParams.extraSystemPrompt).toContain("one or two bounded read-only queries");
+    expect(consultParams.extraSystemPrompt).toContain('bound call id is "call-1"');
     expect(consultParams.prompt).toContain("Caller: Can you check shipment status?");
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
   });

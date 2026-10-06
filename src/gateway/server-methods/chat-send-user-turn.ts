@@ -112,7 +112,7 @@ function buildChatSendPromptMedia(
 }
 
 /** Assemble transcript media and the portable inbound context after attachment preparation. */
-export async function prepareChatSendUserTurn(params: {
+export function prepareChatSendUserTurn(params: {
   request: Pick<
     NormalizedChatSendRequest,
     | "clientInfo"
@@ -206,13 +206,7 @@ export async function prepareChatSendUserTurn(params: {
       : undefined;
   const { originatingChannel, originatingTo, accountId, messageThreadId, explicitDeliverRoute } =
     admission.originatingRoute;
-  const creation = request.systemInputProvenance
-    ? resolveOperatorSessionCreation(client)
-    : await prepareSkillLibrarySessionCreation(
-        client,
-        params.getConfig ?? session.cfg ?? {},
-        resolveOperatorSessionCreation(client),
-      );
+  const creation = resolveOperatorSessionCreation(client);
   admission.assertWorkAdmissionCurrent?.();
   const sandbox = session.cfg ? resolveCreatorSandbox(session.cfg, creation) : undefined;
   // Current and historical turns must reach the single LLM timestamp boundary
@@ -297,6 +291,17 @@ export async function prepareChatSendUserTurn(params: {
     prepareSessionParticipantInput(ctx, participant, userTurn.baseInput.timestamp);
   }
   return {
+    prepareSessionCreation: async () => {
+      if (!request.systemInputProvenance) {
+        const prepared = await prepareSkillLibrarySessionCreation(
+          client,
+          params.getConfig ?? session.cfg ?? {},
+          creation,
+        );
+        admission.assertWorkAdmissionCurrent?.();
+        ctx.SessionCreation = { ...prepared, ...(sandbox ? { sandbox } : {}) };
+      }
+    },
     applyApprovedText: (text: string) => {
       if (text === request.inboundMessage.trim()) {
         return;

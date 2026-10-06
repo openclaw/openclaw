@@ -53,8 +53,8 @@ does not depend on the browser returning.
 When an update replaces the bundled Control UI, an open tab reloads after the
 Gateway reports the new build. Automatic recovery for that reported build and
 manual reloads share a bounded document-readiness check, so a transient failed
-probe does not immediately strand the tab. Generic lazy-chunk failures make one
-automatic probe and leave further recovery to the visible retry action. The
+check does not immediately strand the tab. Generic lazy-chunk failures make one
+automatic check and leave further recovery to the visible retry action. The
 browser still limits automatic navigation to one reload per target build. If the
 Gateway remains unavailable, use the visible reload action once it is reachable.
 
@@ -382,7 +382,7 @@ when it is very short). For example, a 5-second job nominally leaves 1.875
 seconds each for drain and cleanup after its 1.25-second exit margin; a
 15-second job leaves 5 seconds of drain, 6.25 seconds for cleanup, and a
 3.75-second margin. **This reduces cleanup time for custom jobs below 20
-seconds.** The default systemd 90-second deadline is unaffected. The probe can
+seconds.** The default systemd 90-second deadline is unaffected. The check can
 consume up to three 2-second calls; a very slow inspection can leave no drain.
 
 If a Node-recovery or compile-cache launcher is the job's PID, its own child
@@ -472,11 +472,11 @@ restart and verification. Unchanged plugins do not run another full Doctor pass.
 
 After activation, the updater verifies that the managed service is running and
 owns its port, the Gateway hello handshake matches the expected version/build
-identity, a 12-probe health settle passes, plugins and channels are healthy, and
+identity, a 12-check health settle passes, plugins and channels are healthy, and
 `/readyz` returns HTTP 200. Update verification does not use model inference.
 Startup receives the update's existing per-step `--timeout` budget (1800 seconds
 by default), including migration and listener initialization, followed by the
-12-probe settle window. On the first update from an older release, the old updater
+12-check settle window. On the first update from an older release, the old updater
 invokes the newly installed CLI but does not pass that readiness budget. The
 candidate recognizes the existing update marker and, once the managed process is
 running, uses the five-minute startup watchdog instead of the standalone
@@ -562,7 +562,7 @@ generation across unchanged configuration and schemas and supplies a verified
 recovery decision, the helper starts and verifies it instead of leaving it
 stopped. Helper recovery verifies service liveness, version/build identity,
 plugin activation, and channel health. It does not repeat the separate `/readyz`
-probe. That report field remains unverified.
+check. That report field remains unverified.
 The run then finishes `rolled-back` with the previous version and measured
 downtime. Missing recovery proof, migrated state, or failed restoration still
 requires repair before restart. A service that is observed stopped is recorded
@@ -627,6 +627,10 @@ Three complementary mechanisms mark sessions whose turn did not finish:
 Agents still undergoing database startup inspection retain their recovery work.
 When admission finishes, the same startup recovery owner scans their stores with
 the original cutoff, so newly admitted turns are not mistaken for crash orphans.
+Inbound channel turns, including unacknowledged messages replayed after a crash,
+wait for their agent's writable admission before recording session metadata or
+dispatching. Other agents remain available, and stopping the channel or Gateway
+cancels the wait.
 
 A failed store scan leaves that store eligible for the scheduled retry while
 other stores continue recovery. `openclaw status` and `openclaw doctor` show

@@ -10,7 +10,7 @@ import {
   SqliteSnapshotCleanupError,
 } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "../infra/sqlite-readonly-location.js";
-import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
+import type { AsyncPreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
@@ -80,7 +80,11 @@ const stateSnapshotReads = resolveGlobalSingleton(
   Symbol.for("openclaw.stateSnapshotReads"),
   () =>
     new AsyncLocalStorage<
-      RetainedReadScope & { location: string; cleanupRoot?: string; env: NodeJS.ProcessEnv }
+      RetainedReadScope & {
+        location: string;
+        cleanupRoot?: string;
+        env: NodeJS.ProcessEnv;
+      }
     >(),
 );
 
@@ -105,12 +109,14 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   const env = options.env ?? process.env;
   const callerSignal = getAsyncWorkSignal();
   const controller = new AbortController();
+  const assertHostAdmission = () =>
+    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
   let closeSnapshotWork: ((reason: unknown) => void) | undefined;
   const run = async () => {
     let admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>;
-    let prepared: PreparedSqliteReadOnlyLocation;
+    let prepared: AsyncPreparedSqliteReadOnlyLocation;
     try {
-      openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+      assertHostAdmission();
       admission = captureOpenClawStateDatabaseReadAdmission(pathname);
       controller.signal.throwIfAborted();
       if (
@@ -126,10 +132,12 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         });
       }
     } catch (error) {
-      throw new Error(
-        `Cannot read shared state for discovery: ${pathname}. Retry after the current state operation completes. ${String(error)}`,
+      const failure = new Error(
+        `Cannot read shared state for discovery: ${pathname}. Retry after the current state operation completes.`,
         { cause: error },
       );
+      failure.message += ` ${String(failure.cause)}`;
+      throw failure;
     }
     const releaseSource = retainSnapshotTempDirectory(
       prepared.cleanupRoot ?? path.dirname(prepared.location),
@@ -150,7 +158,11 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
           { cause },
         );
       }),
-      { location: prepared.location, cleanupRoot: prepared.cleanupRoot, env },
+      {
+        location: prepared.location,
+        cleanupRoot: prepared.cleanupRoot,
+        env,
+      },
     );
     const lifecycle = stateSnapshotReads.run(snapshot, () => bindRetainedReadScope(snapshot));
     closeSnapshotWork = lifecycle.abort;
@@ -162,7 +174,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     try {
       return await lifecycle.run(async () => {
         controller.signal.throwIfAborted();
-        openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+        assertHostAdmission();
         admission.assertCurrent();
         return await operation();
       });
@@ -415,6 +427,7 @@ function startExistingOpenClawStateRead(
     mapError,
     signal,
     preferIndependentWarmRead,
+    onChunk,
   }: OpenClawStateReadOptions = {},
 ): OpenClawStateReadCompletion {
   const receipt: OpenClawStateReadReceipt = { phase: "before-read" };
@@ -430,6 +443,7 @@ function startExistingOpenClawStateRead(
         signal,
         current || live,
         preferIndependentWarmRead,
+        onChunk,
       );
     // Active writer observations use the retained worker connection, not a new
     // artifact-preserving copy. Admission and canonical close still own it.
@@ -453,6 +467,7 @@ function startRetainedOpenClawStateRead(
   signal?: AbortSignal,
   currentRead = false,
   preferIndependentWarmRead?: true,
+  onChunk?: OpenClawStateReadOptions["onChunk"],
 ): OpenClawStateReadCompletion {
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
@@ -486,6 +501,7 @@ function startRetainedOpenClawStateRead(
       context,
       preserveArtifacts,
       preferIndependentWarmRead,
+      onChunk,
       controller,
       signal: readSignal,
       receipt,

@@ -65,7 +65,7 @@ function resolveGatewayProbeWarning(error: unknown): string | undefined {
   if (!isGatewaySecretRefUnavailableError(error)) {
     throw error;
   }
-  return `${error.path} SecretRef is unresolved in this command path; probing without configured auth credentials.`;
+  return `${error.path} SecretRef is unresolved in this command path; checking without configured auth credentials.`;
 }
 
 /** Resolves synchronous probe auth, throwing when configured secrets cannot be read. */

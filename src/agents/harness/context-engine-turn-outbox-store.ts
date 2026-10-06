@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+import type { IncognitoSessionActor } from "../../config/sessions/session-incognito-actor.js";
+import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -14,7 +16,6 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -123,15 +124,27 @@ export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
 export function openContextEngineTurnOutboxWorkerStore(target: {
   agentId: string;
   path: string;
+  sessionKey?: string;
+  sessionId?: string;
   incognito?: {
-    actor: IncognitoAgentDatabaseExecution;
+    actor: IncognitoSessionActor;
     authority: IncognitoSessionAuthority;
     sessionKey: string;
     sessionId: string;
   };
 }): ContextEngineTurnOutboxWorkerStore {
-  const captured = { ...target, incognito: target.incognito ? { ...target.incognito } : undefined };
-  const incognito = captured.incognito;
+  const captured = { ...target };
+  const binding =
+    target.incognito ??
+    captureIncognitoSessionOperation({
+      ...target,
+      storePath: target.path,
+    });
+  const incognito = binding && {
+    ...binding,
+    sessionKey: target.incognito?.sessionKey ?? target.sessionKey,
+    sessionId: target.incognito?.sessionId ?? target.sessionId,
+  };
   if (
     incognito &&
     (incognito.actor.agentId !== captured.agentId || incognito.actor.path !== captured.path)
@@ -141,7 +154,11 @@ export function openContextEngineTurnOutboxWorkerStore(target: {
   const executeActor =
     incognito &&
     (() => {
-      const { actor, authority, sessionKey, sessionId } = incognito;
+      const { actor, authority } = incognito;
+      const { sessionKey, sessionId } = incognito;
+      if (!sessionKey || !sessionId) {
+        throw new Error("Incognito outbox requires its captured session target");
+      }
       const scoped = <Input extends object>(input: Input) => ({ ...input, sessionKey, sessionId });
       const commands: {
         [Key in keyof ContextEngineTurnOutboxWorkerOperations]: (
@@ -221,7 +238,13 @@ export function openContextEngineTurnOutboxWorkerStore(target: {
     command: Extract<OutboxCommand, { type: Type }>,
   ) => {
     if (executeActor) {
-      return executeActor<Type>(command);
+      return executeActor<Type>(command).then((value) => {
+        if (command.type === "listPendingSessions" || command.type === "readNextPending") {
+          incognito?.authority.assertCurrent();
+          incognito?.actor.assertReadable();
+        }
+        return value;
+      });
     }
     // SAFETY: executeContextEngineTurnOutboxCommand returns each command type's declared output.
     return runContextEngineTurnOutboxCommand(captured, command) as Promise<
@@ -229,6 +252,16 @@ export function openContextEngineTurnOutboxWorkerStore(target: {
     >;
   };
   return {
+    ...(incognito
+      ? {
+          retain: <T>(operation: () => Promise<T>) =>
+            incognito.actor.sessions.withSharedState(operation),
+          assertReadable() {
+            incognito.authority.assertCurrent();
+            incognito.actor.assertReadable();
+          },
+        }
+      : {}),
     prepareRun: (input) => run({ type: "prepareRun", input }),
     listPendingSessions: (input) => run({ type: "listPendingSessions", input }),
     readNextPending: (input) => run({ type: "readNextPending", input }),

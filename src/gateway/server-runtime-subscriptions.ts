@@ -43,6 +43,7 @@ import {
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import {
   bindChatAbortTerminalDispatch,
+  isCurrentChatAbortTerminalDispatch,
   markChatAbortTerminalPersistenceError,
   type ChatAbortTerminalDispatch,
 } from "./chat-abort-lifecycle-internal.js";
@@ -220,16 +221,25 @@ export function startGatewayEventSubscriptions(params: {
       });
     }
   };
+  const settleTrackedTerminalEntry = (
+    runId: string,
+    entry: ChatAbortControllerEntry,
+    persisted: boolean,
+    error?: unknown,
+  ) => {
+    entry.projectSessionTerminalPending = false;
+    entry.projectSessionTerminalPersistence = undefined;
+    entry.projectSessionTerminalPersisted = persisted;
+    markChatAbortTerminalPersistenceError(entry, error);
+    if (entry.registrationCleanupRequested === true) {
+      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+    }
+  };
   const settleTrackedTerminal = (run: { runId: string; clientRunId: string }) => {
     for (const candidateRunId of trackedRunIds(run.runId, run.clientRunId)) {
       const entry = params.chatAbortControllers.get(candidateRunId);
-      if (!entry || entry.projectSessionTerminalPersistence) {
-        continue;
-      }
-      entry.projectSessionTerminalPending = false;
-      entry.projectSessionTerminalPersisted = false;
-      if (entry.registrationCleanupRequested === true) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, candidateRunId, entry);
+      if (entry && !entry.projectSessionTerminalPersistence) {
+        settleTrackedTerminalEntry(candidateRunId, entry, false);
       }
     }
   };
@@ -263,34 +273,26 @@ export function startGatewayEventSubscriptions(params: {
         if (entry.projectSessionTerminalPersistence !== run.persistence) {
           return;
         }
-        // Maintenance can retire the registration before its write settles.
-        // Captured drain targets still need this exact owner's final facts.
-        entry.projectSessionTerminalPending = false;
-        entry.projectSessionTerminalPersistence = undefined;
-        entry.projectSessionTerminalPersisted = persisted;
-        markChatAbortTerminalPersistenceError(entry, error);
-        if (params.chatAbortControllers.get(candidateRunId) !== entry) {
-          return;
+        if (params.chatAbortControllers.get(candidateRunId) === entry) {
+          if (persisted) {
+            params.restartRecoveryCandidates.delete(candidateRunId);
+          } else if (
+            entry.controlUiVisible !== false &&
+            lifecycleGeneration &&
+            sessionKey &&
+            sessionId
+          ) {
+            params.restartRecoveryCandidates.set(candidateRunId, {
+              runId: candidateRunId,
+              lifecycleGeneration,
+              sessionKey,
+              sessionId,
+              observedAt,
+            });
+          }
         }
-        if (persisted) {
-          params.restartRecoveryCandidates.delete(candidateRunId);
-        } else if (
-          entry.controlUiVisible !== false &&
-          lifecycleGeneration &&
-          sessionKey &&
-          sessionId
-        ) {
-          params.restartRecoveryCandidates.set(candidateRunId, {
-            runId: candidateRunId,
-            lifecycleGeneration,
-            sessionKey,
-            sessionId,
-            observedAt,
-          });
-        }
-        if (entry.registrationCleanupRequested === true) {
-          removeChatAbortControllerEntry(params.chatAbortControllers, candidateRunId, entry);
-        }
+        // Captured drain targets still need final facts after registry retirement.
+        settleTrackedTerminalEntry(candidateRunId, entry, persisted, error);
       };
       void run.persistence.then(
         () => settle(true),
@@ -438,7 +440,7 @@ export function startGatewayEventSubscriptions(params: {
     }
     let failedDispatchCleanup: (() => void) | undefined;
     let terminalPreparation: Promise<void> | undefined;
-    let terminalEntries: ChatAbortControllerEntry[] | undefined;
+    let terminalEntries: Map<string, ChatAbortControllerEntry> | undefined;
     void sessionObserver
       .handleEventAsync(evt)
       .catch((error: unknown) => params.log.warn("Session observer event failed", { error }));
@@ -472,7 +474,7 @@ export function startGatewayEventSubscriptions(params: {
           entry.projectSessionTerminalPending = terminal;
           entry.projectSessionTerminalObservedAt = observedAt;
           if (terminal) {
-            (terminalEntries ??= []).push(entry);
+            (terminalEntries ??= new Map()).set(candidateRunId, entry);
           }
         }
       }
@@ -587,11 +589,26 @@ export function startGatewayEventSubscriptions(params: {
       onFailure: (error) => {
         if (terminalDispatch) {
           terminalDispatch.failure = { error };
+          for (const [runId, entry] of terminalEntries ?? []) {
+            if (
+              isCurrentChatAbortTerminalDispatch(entry, terminalDispatch) &&
+              entry.projectSessionTerminalPending === true &&
+              !entry.projectSessionTerminalPersistence
+            ) {
+              // Failed dispatch cannot adopt a write later. Keep the failure for
+              // cancellation callers, but release its now-ownerless reservation.
+              settleTrackedTerminalEntry(runId, entry, false, error);
+            }
+          }
         }
         failedDispatchCleanup?.();
       },
     });
-    bindChatAbortTerminalDispatch(terminalEntries, dispatch, terminalDispatch);
+    bindChatAbortTerminalDispatch(
+      terminalEntries ? [...terminalEntries.values()] : undefined,
+      dispatch,
+      terminalDispatch,
+    );
     agentEventDispatches.add(dispatch);
     void dispatch.then(() => agentEventDispatches.delete(dispatch));
   });

@@ -3,6 +3,7 @@ import { lstatSync } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
+import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
@@ -12,6 +13,7 @@ import {
   requireGit,
   resolveGitMetadataPath,
   runGit,
+  WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
 import { canonicalPathKey } from "./orphan-paths.js";
 import { WorktreeBranchMovedError } from "./removal-errors.js";
@@ -89,21 +91,35 @@ export async function prepareSnapshotBranchDeletion(
   return deletionOptions;
 }
 
-/** Once destructive deletion starts, its allocation owner joins it without a deadline. */
+/** Join admitted deletion through its own deadline, independently of caller cancellation. */
 export async function removeManagedCheckout(
   record: ManagedWorktreeRecord,
   git: WorktreeGitPolicy,
   requireLossless: boolean | undefined,
+  budget: "bounded" | "recovery",
   assertCurrent?: () => void,
+  queueSignal?: AbortSignal,
 ): Promise<void> {
-  const removed = await runOutsideCommandProcessScope(() =>
-    git.run(
-      record.repoRoot,
-      ["worktree", "remove", ...(requireLossless ? [] : ["--force"]), "--", record.path],
-      { beforeRun: assertCurrent, killProcessTree: true, waitForExit: true },
-    ),
+  const removed = await withContentGitSlot(
+    () =>
+      runOutsideCommandProcessScope(() =>
+        git.run(
+          record.repoRoot,
+          ["worktree", "remove", ...(requireLossless ? [] : ["--force"]), "--", record.path],
+          {
+            beforeRun: assertCurrent,
+            killProcessTree: true,
+            lowerPriority: true,
+            // Explicit recover-removal must not interrupt a previously partial deletion again.
+            ...(budget === "recovery"
+              ? { waitForExit: true }
+              : { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS }),
+          },
+        ),
+      ),
+    queueSignal,
   );
-  if (removed.code !== 0) {
+  if (removed.termination !== "exit" || removed.code !== 0) {
     throw commandError("git worktree remove", removed);
   }
 }

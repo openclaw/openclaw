@@ -66,28 +66,6 @@ function resolveFetchRequest(input: RequestInfo | URL, init?: RequestInit) {
   };
 }
 
-async function buildManagedMcpResponse(
-  response: Response,
-  release: () => Promise<void>,
-  refreshTimeout?: () => void,
-): Promise<Response> {
-  if (!response.body) {
-    void release();
-  }
-  // A body-less foreign Response exposes no bounded reader. Never materialize it
-  // with text() or arrayBuffer() before the transport's response cap can apply.
-  return new Response(
-    response.body
-      ? wrapGuardedBodyStream({ body: response.body, cleanup: release, refreshTimeout })
-      : null,
-    {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    },
-  );
-}
-
 function buildMcpHttpFetchWithRedirectPolicy(
   params: McpHttpFetchParams,
   redirectPolicy: "replay" | "reject",
@@ -130,8 +108,22 @@ function buildMcpHttpFetchWithRedirectPolicy(
       ...(policy ? { policy } : {}),
       ...(needsCustomDispatcher ? { resolveDispatcherPolicy: resolveCustomDispatcherPolicy } : {}),
     };
-    const guarded = await fetchWithSsrFGuard(guardedFetchOptions);
-    return await buildManagedMcpResponse(guarded.response, guarded.release, guarded.refreshTimeout);
+    const { response, release, refreshTimeout } = await fetchWithSsrFGuard(guardedFetchOptions);
+    if (!response.body) {
+      void release();
+    }
+    // A body-less foreign Response exposes no bounded reader. Never materialize it
+    // with text() or arrayBuffer() before the transport's response cap can apply.
+    return new Response(
+      response.body
+        ? wrapGuardedBodyStream({ body: response.body, cleanup: release, refreshTimeout })
+        : null,
+      {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      },
+    );
   };
 }
 

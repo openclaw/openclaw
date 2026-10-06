@@ -26,7 +26,7 @@ import {
   prepareProjectRegistration,
   registerPreparedProjectRegistry,
 } from "./project-registration.js";
-import { listProjectRegistry, resolveProjectCloneRefreshOwner } from "./project-registry.js";
+import { listProjectRegistry } from "./project-registry.js";
 import type { ProjectRegistryIdentity, ProjectRegistryRecord } from "./project-registry.types.js";
 
 const PROJECT_CLONE_LEASE_MS = 30_000;
@@ -223,7 +223,14 @@ export async function refreshProjectClone(
       };
       // Removal and registration share this lease. Re-read now so a queued stale record cannot
       // authorize network, object-store, or ref effects after checkout ownership changes.
-      const current = await resolveProjectCloneRefreshOwner(selectedProject, lease, context);
+      const { runWithOpenClawStateLeaseWorker } =
+        await import("../state/openclaw-state-lease-worker-operation.js");
+      const current = await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
+        scope.execute({
+          type: "projects.resolveRefreshOwner",
+          input: { project: selectedProject, lease: identity },
+        }),
+      );
       assertRefreshCurrent();
       if (!current) {
         throw new ProjectCloneError(

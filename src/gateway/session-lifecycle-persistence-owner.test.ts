@@ -158,6 +158,29 @@ describe("session lifecycle persistence owner", () => {
     expect(drained).toBe(true);
   });
 
+  it("settles a start before a following terminal while shutdown drains both", async () => {
+    const releaseStart = createDeferred();
+    const phases: unknown[] = [];
+    persistLifecycle.mockImplementation(async (params: PersistenceParams) => {
+      if (params.event.data?.phase === "start") {
+        await releaseStart.promise;
+      }
+      phases.push(params.event.data?.phase);
+    });
+    const { owner, scheduler } = fixture();
+    const start = owner.persist({
+      ...terminal,
+      event: { ...terminal.event, data: { phase: "start", startedAt: 1_000 } },
+    });
+    const end = owner.observe(terminal);
+    scheduler.beginClose();
+    const draining = owner.drain();
+    expect(persistLifecycle).toHaveBeenCalledOnce();
+    releaseStart.resolve();
+    await Promise.all([start, end, draining]);
+    expect(phases).toEqual(["start", "end"]);
+  });
+
   it.each([false, true])(
     "settles a start before its terminal while draining (global alias: %s)",
     async (globalAlias) => {

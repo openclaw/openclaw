@@ -207,6 +207,9 @@ describe("worktrees cli", () => {
           ]
         : [],
       issueCount: partial ? 1 : 0,
+      eligibleCount: partial ? 2 : 0,
+      deferredCount: 0,
+      failedCount: partial ? 1 : 0,
       protectedCount: 0,
       protectionReasons: {},
       orphansRetired: 0,

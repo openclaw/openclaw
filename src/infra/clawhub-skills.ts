@@ -2,6 +2,8 @@ import type { SkillsDetailResult } from "@openclaw/gateway-protocol";
 // ClawHub skill metadata, trust, install resolution, cards, and telemetry.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { SkillsSearchResult } from "../../packages/gateway-protocol/src/schema/skills-search.js";
 import {
   ClawHubRequestError,
   createClawHubError,
@@ -30,33 +32,7 @@ export const CLAWHUB_SKILLS_SH_TRUST_LABEL = "Not scanned by ClawHub" as const;
 export const CLAWHUB_SKILLS_SH_REF_PREFIX = "skills-sh:" as const;
 export type ClawHubSkillsShTrustState = typeof CLAWHUB_SKILLS_SH_TRUST_STATE;
 
-export type ClawHubSkillSearchResult = {
-  score: number;
-  slug: string;
-  registry: string;
-  /**
-   * Reference install must send back. Search returns the same slug for several publishers, so
-   * the bare slug alone resolves to 409 AMBIGUOUS_SKILL_SLUG. This names the result's own
-   * source: rewriting an external reference into `@owner/slug` would install a different skill.
-   */
-  installRef: string;
-  /**
-   * Set only for sources ClawHub serves install-only, so clients install directly instead of
-   * opening a detail card that cannot resolve. Absence means the ordinary review-then-install
-   * flow, which is what every released Gateway already implies by omitting this field.
-   */
-  installOnly?: true;
-  trustState?: ClawHubSkillsShTrustState;
-  // Search may return the same slug for multiple publishers; exact install refs need this handle.
-  ownerHandle?: string | null;
-  /** Official status comes from ClawHub's canonical search result, never the handle. */
-  official?: boolean;
-  displayName: string;
-  summary?: string;
-  icon?: string | null;
-  version?: string;
-  updatedAt?: number;
-};
+export type ClawHubSkillSearchResult = SchemaContract<SkillsSearchResult["results"][number]>;
 
 /** Source variants ClawHub resolves search results from. Anything else is unidentifiable. */
 const CLAWHUB_NATIVE_SOURCE_KIND = "clawhub";

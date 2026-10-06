@@ -7,6 +7,7 @@ import type {
   BoardWriteOperations,
 } from "../../boards/sqlite-board-operations.js";
 import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
+import type { MessageToolRunOutcomeInsert } from "../../infra/message-tool-run-outcome-store.kernel.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { readSessionProgressCard } from "../../session-cards/progress-card-store.js";
 import type { ProgressCardWorkerOperations } from "../../session-cards/progress-card-store.worker.js";
@@ -88,6 +89,7 @@ export type IncognitoSideDataOperations = {
   };
   "session.heartbeat.persist": HeartbeatOutcomeWorkerOperations["persist"];
   "session.heartbeat.claim": HeartbeatOutcomeWorkerOperations["claim"];
+  "session.messageToolOutcome.record": { input: MessageToolRunOutcomeInsert; output: void };
   "session.progressCard.get": {
     input: { sessionKey: string };
     output: ReturnType<typeof readSessionProgressCard>;
@@ -103,6 +105,7 @@ export function isIncognitoSideDataWrite(type: keyof IncognitoSideDataOperations
     type === "session.acp.entry" ||
     type === "session.category.apply" ||
     type === "session.reaction.set" ||
+    type === "session.messageToolOutcome.record" ||
     type === "session.progressCard.put" ||
     type === "session.boards.applyOps" ||
     type === "session.boards.putWidget" ||
@@ -115,7 +118,10 @@ export function isIncognitoSideDataWrite(type: keyof IncognitoSideDataOperations
 export function incognitoSideDataKeys(
   command: SqliteWorkerCommand<IncognitoSideDataOperations>,
 ): string[] {
-  if (command.type === "session.heartbeat.persist") {
+  if (
+    command.type === "session.heartbeat.persist" ||
+    command.type === "session.messageToolOutcome.record"
+  ) {
     return [command.input.session_key];
   }
   if (command.type === "session.catalog.read") {

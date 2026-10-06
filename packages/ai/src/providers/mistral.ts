@@ -110,9 +110,9 @@ interface MistralOptions extends StreamOptions {
 }
 
 export const streamMistral: StreamFunction<"mistral-conversations", MistralOptions> = (
-  model: Model<"mistral-conversations">,
-  context: Context,
-  options?: MistralOptions,
+  model,
+  context,
+  options,
 ) => {
   const stream = new AssistantMessageEventStream();
 
@@ -193,9 +193,9 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 };
 
 export const streamSimpleMistral: StreamFunction<"mistral-conversations", SimpleStreamOptions> = (
-  model: Model<"mistral-conversations">,
-  context: Context,
-  options?: SimpleStreamOptions,
+  model,
+  context,
+  options,
 ) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 

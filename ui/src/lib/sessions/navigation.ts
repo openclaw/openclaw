@@ -39,15 +39,6 @@ type SessionNavigationInput = {
   compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
 };
 
-type SessionNavigation = {
-  currentSessionKey: string;
-  selectedAgentId: string;
-  defaultAgentId: string;
-  selectedSession?: GatewaySessionRow;
-  visibleSessions: GatewaySessionRow[];
-  activeRowKey: string | null;
-};
-
 export type SessionScopeHost = {
   assistantAgentId?: string | null;
   agentsList?: {
@@ -225,7 +216,7 @@ export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySe
   return updatedDiff !== 0 ? updatedDiff : a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
 }
 
-export function resolveSessionNavigation(input: SessionNavigationInput): SessionNavigation {
+export function resolveSessionNavigation(input: SessionNavigationInput) {
   const currentSessionKey = resolveSessionKey(input.sessionKey, input.hello);
   const defaultAgentId = resolveUiSelectedGlobalAgentId({
     assistantAgentId: input.assistantAgentId,

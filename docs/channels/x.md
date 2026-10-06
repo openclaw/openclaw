@@ -174,6 +174,21 @@ when that setting is absent or false, skills are enabled, or sandbox mode is
 active. Channel status reports the required correction as
 `guestModeBlockedReason`; maintainer mentions continue normally.
 
+Guest mode also requires a queue mode that cannot steer or interrupt an active
+turn. Set the channel override before enabling guests:
+
+```json5
+{
+  messages: { queue: { byChannel: { x: "followup" } } },
+}
+```
+
+`collect` is also supported. Without a channel override, `messages.queue.mode`
+must be `followup` or `collect`; the default `steer` and explicit `interrupt`
+block guest admission before thread expansion. The **X replies** page shows
+the required setting in its existing guest-readiness message. Changing the
+queue mode back to either unsafe value blocks subsequent guest mentions.
+
 Core owns path and symlink containment and rejects reads outside the session
 root with `Path escapes sandbox root`. Keep guest channel sessions in their
 initial permissions: do not grant full permission, widen their session root,

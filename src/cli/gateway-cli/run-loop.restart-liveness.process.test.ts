@@ -102,6 +102,17 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
   const directory = tempDirs.make("openclaw-restart-liveness-");
   const home = path.join(directory, "home");
   fs.mkdirSync(home);
+  const pendingClose = closeFailure === "pending";
+  const bin = path.join(directory, "bin");
+  if (pendingClose) {
+    fs.mkdirSync(bin);
+    // This fixture owns a short native deadline, independent of the service policy.
+    fs.writeFileSync(
+      path.join(bin, "launchctl"),
+      `#!/bin/sh\nprintf '\\tstate = SIGTERMed\\n\\texit timeout = 10\\n\\tpid = %s\\n' "$(cat "$0.pid")"\n`,
+      { mode: 0o755 },
+    );
+  }
   const faultPath = path.join(directory, "startup-fault");
   const logFile = path.join(directory, "gateway.jsonl");
   const stateDir = path.join(directory, "state");
@@ -126,15 +137,13 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
     ],
     {
       env: {
-        PATH: process.env.PATH,
+        PATH: pendingClose ? `${bin}${path.delimiter}${process.env.PATH ?? ""}` : process.env.PATH,
         HOME: home,
         TMPDIR: directory,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: path.join(directory, "openclaw.json"),
         OPENCLAW_NO_RESPAWN: "1",
-        ...(closeFailure === "pending"
-          ? { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway.test" }
-          : {}),
+        ...(pendingClose ? { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway.test" } : {}),
         NODE_DISABLE_COMPILE_CACHE: "1",
         TSX_DISABLE_CACHE: "1",
         ESBUILD_WORKER_THREADS: "0",
@@ -145,6 +154,10 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
   const closed = once(child, "close");
   children.set(child, closed);
   void closed.catch(() => {});
+  if (pendingClose) {
+    // Native queries may run through the spawn broker, so report the fixture's PID.
+    fs.writeFileSync(path.join(bin, "launchctl.pid"), String(child.pid));
+  }
   let output = "";
   child.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString()));
   child.stderr?.on("data", (chunk: Buffer) => (output += chunk.toString()));
