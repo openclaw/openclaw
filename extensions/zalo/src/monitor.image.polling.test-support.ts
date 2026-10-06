@@ -168,54 +168,64 @@ describe("Zalo polling image handling", () => {
   });
 
   it("dispatches an unavailable notice when the inbound image download fails", async () => {
+    const processed = Promise.withResolvers<void>();
     saveRemoteMediaMock.mockRejectedValueOnce(new Error("expired image URL"));
     getUpdatesMock
       .mockResolvedValueOnce({
         ok: true,
         result: createImageUpdate({ caption: "/reset" }),
       })
-      .mockImplementation(() => new Promise(() => {}));
+      .mockImplementation(() => {
+        processed.resolve();
+        return new Promise(() => {});
+      });
 
     const { abort, run } = await startImageMonitor();
 
-    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1), {
-      timeout: 5_000,
-    });
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        RawBody: "/reset",
-        CommandBody: "/reset",
-        BodyForAgent: "/reset\n\n[zalo image attachment unavailable]",
-        media: [expect.objectContaining({ kind: "image" })],
-      }),
-    );
-
-    abort.abort();
-    await run;
+    try {
+      await processed.promise;
+      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
+      expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          RawBody: "/reset",
+          CommandBody: "/reset",
+          BodyForAgent: "/reset\n\n[zalo image attachment unavailable]",
+          media: [expect.objectContaining({ kind: "image" })],
+        }),
+      );
+    } finally {
+      abort.abort();
+      await run;
+    }
   });
 
   it("keeps failed media-only command text empty while preserving the native image fact", async () => {
+    const processed = Promise.withResolvers<void>();
     saveRemoteMediaMock.mockRejectedValueOnce(new Error("expired image URL"));
     getUpdatesMock
       .mockResolvedValueOnce({ ok: true, result: createImageUpdate() })
-      .mockImplementation(() => new Promise(() => {}));
+      .mockImplementation(() => {
+        processed.resolve();
+        return new Promise(() => {});
+      });
 
     const { abort, run } = await startImageMonitor({}, "zalo-image-media-only-failure");
 
-    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1), {
-      timeout: 5_000,
-    });
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        RawBody: "",
-        CommandBody: "",
-        BodyForAgent: "[zalo image attachment unavailable]",
-        media: [expect.objectContaining({ kind: "image" })],
-      }),
-    );
-
-    abort.abort();
-    await run;
+    try {
+      await processed.promise;
+      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
+      expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          RawBody: "",
+          CommandBody: "",
+          BodyForAgent: "[zalo image attachment unavailable]",
+          media: [expect.objectContaining({ kind: "image" })],
+        }),
+      );
+    } finally {
+      abort.abort();
+      await run;
+    }
   });
 
   it("times out inbound image downloads when photo_url headers never arrive", async () => {
@@ -256,6 +266,7 @@ describe("Zalo polling image handling", () => {
     };
     saveRemoteMediaMock.mockImplementation(saveRemoteMediaWithHeaderTimeout);
 
+    const processed = Promise.withResolvers<void>();
     getUpdatesMock
       .mockResolvedValueOnce({
         ok: true,
@@ -264,7 +275,10 @@ describe("Zalo polling image handling", () => {
           photoUrl: stallUrl,
         }),
       })
-      .mockImplementation(() => new Promise(() => {}));
+      .mockImplementation(() => {
+        processed.resolve();
+        return new Promise(() => {});
+      });
 
     const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule("zalo-image-polling");
     const abort = new AbortController();
@@ -282,24 +296,28 @@ describe("Zalo polling image handling", () => {
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1), {
-      timeout: 5_000,
-    });
-    const elapsedMs = Date.now() - started;
-    expect(elapsedMs).toBeGreaterThanOrEqual(headerTimeoutMs - 50);
-    expect(elapsedMs).toBeLessThan(headerTimeoutMs + 5_000);
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        BodyForAgent: "stalled photo\n\n[zalo image attachment unavailable]",
-        media: [expect.objectContaining({ kind: "image" })],
-      }),
-    );
-
-    abort.abort();
-    await run;
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    try {
+      await processed.promise;
+      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
+      const elapsedMs = Date.now() - started;
+      expect(elapsedMs).toBeGreaterThanOrEqual(headerTimeoutMs - 50);
+      expect(elapsedMs).toBeLessThan(headerTimeoutMs + 5_000);
+      expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          BodyForAgent: "stalled photo\n\n[zalo image attachment unavailable]",
+          media: [expect.objectContaining({ kind: "image" })],
+        }),
+      );
+    } finally {
+      abort.abort();
+      try {
+        await run;
+      } finally {
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    }
   });
 
   it.each([
