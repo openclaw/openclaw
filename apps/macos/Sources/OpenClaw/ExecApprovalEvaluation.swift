@@ -93,9 +93,9 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
 
     init(portable: OpenClawSystemRunApprovalPolicySnapshot) {
         self.init(
-            security: ExecSecurity(rawValue: portable.security.rawValue)!,
-            ask: ExecAsk(rawValue: portable.ask.rawValue)!,
-            askFallback: ExecSecurity(rawValue: portable.askFallback.rawValue)!,
+            security: portable.security,
+            ask: portable.ask,
+            askFallback: portable.askFallback,
             autoAllowSkills: portable.autoAllowSkills,
             allowlist: portable.allowlistRules.map { rule in
                 ExecAllowlistEntry(
@@ -103,29 +103,6 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
                     source: rule.source?.rawValue,
                     argPattern: rule.argPattern)
             })
-    }
-
-    var portable: OpenClawSystemRunApprovalPolicySnapshot {
-        OpenClawSystemRunApprovalPolicySnapshot(
-            security: .init(rawValue: self.security.rawValue)!,
-            ask: .init(rawValue: self.ask.rawValue)!,
-            askFallback: .init(rawValue: self.askFallback.rawValue)!,
-            autoAllowSkills: self.autoAllowSkills,
-            allowlistRules: self.allowlistRules.map { rule in
-                OpenClawSystemRunApprovalPolicySnapshot.Rule(
-                    pattern: Self.portableString(rule.match.pattern),
-                    argPattern: rule.match.argPattern.isEmpty
-                        ? nil
-                        : Self.portableString(rule.match.argPattern),
-                    source: rule.source == "allow-always" ? .allowAlways : nil)
-            })
-    }
-
-    private static func portableString(_ data: Data) -> String {
-        guard let value = String(data: data, encoding: .utf8) else {
-            preconditionFailure("exec approval match keys must contain UTF-8 strings")
-        }
-        return value
     }
 
     func isCurrent(_ current: Self) -> Bool {
@@ -335,12 +312,5 @@ enum ExecApprovalEvaluator {
             }
             return trustedBinsByName[executableName]?.contains(resolvedPath) == true
         }
-    }
-
-    static func _testIsSkillAutoAllowed(
-        _ resolutions: [ExecCommandResolution],
-        trustedBinsByName: [String: Set<String>]) -> Bool
-    {
-        self.isSkillAutoAllowed(resolutions, trustedBinsByName: trustedBinsByName)
     }
 }

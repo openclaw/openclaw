@@ -13,29 +13,7 @@ const SERVICE_PREFIXES = ["imessage:", "sms:", "auto:"] as const;
 const CHAT_TARGET_PREFIX_RE =
   /^(chat_id:|chatid:|chat:|chat_guid:|chatguid:|guid:|chat_identifier:|chatidentifier:|chatident:)/i;
 
-function normalizeIMessageHandle(raw: string, allowContactName = false): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lowered.startsWith("imessage:")) {
-    return normalizeIMessageHandle(trimmed.slice("imessage:".length));
-  }
-  if (lowered.startsWith("sms:")) {
-    return normalizeIMessageHandle(trimmed.slice("sms:".length));
-  }
-  if (lowered.startsWith("auto:")) {
-    return normalizeIMessageHandle(trimmed.slice("auto:".length));
-  }
-  if (CHAT_TARGET_PREFIX_RE.test(trimmed)) {
-    const prefix = trimmed.match(CHAT_TARGET_PREFIX_RE)?.[0];
-    if (!prefix) {
-      return "";
-    }
-    const value = trimmed.slice(prefix.length).trim();
-    return `${normalizeLowercaseStringOrEmpty(prefix)}${value}`;
-  }
+export function normalizeIMessageHandleValue(trimmed: string): string | undefined {
   if (trimmed.includes("@")) {
     return normalizeLowercaseStringOrEmpty(trimmed);
   }
@@ -47,7 +25,28 @@ function normalizeIMessageHandle(raw: string, allowContactName = false): string 
   if (normalized) {
     return normalized;
   }
-  return allowContactName ? trimmed.replace(/\s+/g, "") : "";
+  return undefined;
+}
+
+function normalizeIMessageHandle(raw: string, allowContactName = false): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  for (const prefix of SERVICE_PREFIXES) {
+    if (lowered.startsWith(prefix)) {
+      return normalizeIMessageHandle(trimmed.slice(prefix.length));
+    }
+  }
+  const prefix = trimmed.match(CHAT_TARGET_PREFIX_RE)?.[0];
+  if (prefix) {
+    const value = trimmed.slice(prefix.length).trim();
+    return `${normalizeLowercaseStringOrEmpty(prefix)}${value}`;
+  }
+  return (
+    normalizeIMessageHandleValue(trimmed) ?? (allowContactName ? trimmed.replace(/\s+/g, "") : "")
+  );
 }
 
 export function normalizeIMessageMessagingTarget(raw: string): string | undefined {

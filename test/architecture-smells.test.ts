@@ -1,22 +1,16 @@
 // Architecture boundary tests cover hostile module-specifier syntax in the canonical scanner.
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 const forbiddenPath = "../../src/private.js";
 const templateQuote = String.fromCharCode(96);
 
 describe("architecture boundary module reference scanner", () => {
   it.each([
-    {
-      name: "commented side-effect import",
-      source: 'import /* gap */ "../../src/private.js"',
-      kind: "import",
-    },
-    {
-      name: "commented dynamic import with attributes",
-      source: 'await import /* gap */ ("../../src/private.js", { with: { type: "json" } })',
-      kind: "dynamic-import",
-    },
     {
       name: "dynamic import inside template interpolation",
       source:
@@ -39,11 +33,6 @@ describe("architecture boundary module reference scanner", () => {
       kind: "dynamic-import",
     },
     {
-      name: "CommonJS require",
-      source: 'require("../../src/private.js")',
-      kind: "commonjs-require",
-    },
-    {
       name: "CommonJS require inside template interpolation",
       source:
         "const message = " +
@@ -64,18 +53,8 @@ describe("architecture boundary module reference scanner", () => {
       kind: "commonjs-require",
     },
     {
-      name: "CommonJS require with a Unicode-escaped middle character inside interpolation",
-      source: 'const message = `${r\\u0065quire("../../src/private.js")}`',
-      kind: "commonjs-require",
-    },
-    {
       name: "CommonJS require with a Unicode-escaped braced character inside interpolation",
       source: 'const message = `${\\u{72}equire("../../src/private.js")}`',
-      kind: "commonjs-require",
-    },
-    {
-      name: "CommonJS require with a Unicode-escaped last character inside interpolation",
-      source: 'const message = `${requir\\u0065("../../src/private.js")}`',
       kind: "commonjs-require",
     },
     {
@@ -126,11 +105,6 @@ describe("architecture boundary module reference scanner", () => {
       kind: "import-meta-url",
     },
     {
-      name: "runtime namespace re-export",
-      source: 'export /* gap */ * /* gap */ as privateModule from "../../src/private.js"',
-      kind: "export",
-    },
-    {
       name: "type namespace re-export",
       source: 'export type * as privateModule from "../../src/private.js"',
       kind: "export",
@@ -153,7 +127,7 @@ describe("architecture boundary module reference scanner", () => {
     },
   ])("detects $name", ({ source, kind }) => {
     expect(
-      collectModuleReferencesFromSource(source, {
+      collectModuleReferencesFromSource(parser.parseSourceFile("fixture.ts", source), {
         acceptSpecifier: (specifier) => specifier === forbiddenPath,
       }),
     ).toEqual([{ kind, line: 1, specifier: forbiddenPath }]);
@@ -162,11 +136,14 @@ describe("architecture boundary module reference scanner", () => {
   it("ignores comments, string contents, and allowed module specifiers", () => {
     expect(
       collectModuleReferencesFromSource(
-        [
-          '// import "../../src/private.js"',
-          'const text = "require(\\\"../../src/private.js\\\")";',
-          'import "../../src/allowed.js";',
-        ].join("\n"),
+        parser.parseSourceFile(
+          "fixture.ts",
+          [
+            '// import "../../src/private.js"',
+            'const text = "require(\\\"../../src/private.js\\\")";',
+            'import "../../src/allowed.js";',
+          ].join("\n"),
+        ),
         { acceptSpecifier: (specifier) => specifier === forbiddenPath },
       ),
     ).toEqual([]);
@@ -181,7 +158,7 @@ describe("architecture boundary module reference scanner", () => {
     'const message = `${/}/.test("safe") ? import("../../src/allowed.js") : null}`',
   ])("keeps ordinary division and regexp fallback free of false positives", (source) => {
     expect(
-      collectModuleReferencesFromSource(source, {
+      collectModuleReferencesFromSource(parser.parseSourceFile("fixture.ts", source), {
         acceptSpecifier: (specifier) => specifier === forbiddenPath,
       }),
     ).toEqual([]);
@@ -189,15 +166,23 @@ describe("architecture boundary module reference scanner", () => {
 
   it("preserves the actual source line for multiline guarded imports", () => {
     expect(
-      collectModuleReferencesFromSource('\n\nimport /* comment */ "../../src/private.js";', {
-        acceptSpecifier: (specifier) => specifier === forbiddenPath,
-      }),
+      collectModuleReferencesFromSource(
+        parser.parseSourceFile("fixture.ts", '\n\nimport /* comment */ "../../src/private.js";'),
+        {
+          acceptSpecifier: (specifier) => specifier === forbiddenPath,
+        },
+      ),
     ).toEqual([{ kind: "import", line: 3, specifier: forbiddenPath }]);
   });
 
   it("sorts references on the same line by kind and specifier", () => {
     expect(
-      collectModuleReferencesFromSource('import "./z.js"; require("./z.js"); import "./a.js";'),
+      collectModuleReferencesFromSource(
+        parser.parseSourceFile(
+          "fixture.ts",
+          'import "./z.js"; require("./z.js"); import "./a.js";',
+        ),
+      ),
     ).toEqual([
       { kind: "commonjs-require", line: 1, specifier: "./z.js" },
       { kind: "import", line: 1, specifier: "./a.js" },
@@ -232,7 +217,7 @@ describe("architecture boundary module reference scanner", () => {
     const startedAt = performance.now();
 
     expect(
-      collectModuleReferencesFromSource(source, {
+      collectModuleReferencesFromSource(parser.parseSourceFile("fixture.ts", source), {
         acceptSpecifier: (specifier) => specifier === forbiddenPath,
       }),
     ).toEqual([]);

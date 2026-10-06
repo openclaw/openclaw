@@ -1,6 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { statRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
@@ -32,7 +35,6 @@ import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { loadedCronStoreFromRows } from "../cron/store/row-codec.js";
 import type { CronJobRow } from "../cron/store/schema.js";
 import { isSystemMonitorDeclaration } from "../cron/system-owned-declaration.js";
-import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
 import {
   compileSqliteQueryBindings,
   executeSqliteQuerySync,
@@ -48,6 +50,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { digestClawBytes } from "./digest.js";
 import type { ClawMonitorCleanupGateway, ClawMonitorSnapshot } from "./monitor-cleanup-contract.js";
 import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
@@ -92,6 +95,7 @@ export function synthesizeOrphanInstall(params: {
     agentId: params.agentId,
     workspace: params.workspace ?? "",
     agentConfigDigest: "sha256:missing",
+    agentOrigin: "created",
     agentOwnedPaths: [],
     status: "partial",
     addedAtMs: updatedAtMs,
@@ -220,29 +224,20 @@ export async function workspaceContainsUntrackedEntries(
       parent = next;
     }
   }
-  const walk = async (absoluteDir: string, relativeDir = ""): Promise<boolean> => {
-    const entries = await fs.readdir(absoluteDir, { withFileTypes: true });
-    for (const entry of entries) {
-      const relativeEntry = path.join(relativeDir, entry.name);
-      if (entry.isDirectory() && !entry.isSymbolicLink()) {
-        if (!trackedDirectories.has(path.normalize(relativeEntry))) {
-          return true;
-        }
-        if (await walk(path.join(absoluteDir, entry.name), relativeEntry)) {
-          return true;
-        }
-        continue;
-      }
-      if (!tracked.has(path.normalize(relativeEntry))) {
+  try {
+    await fs.stat(workspaceRoot);
+    const workspace = await fsSafeRoot(workspaceRoot);
+    for await (const entry of workspace.walk("", { symlinkPolicy: "include" })) {
+      const expected = entry.kind === "directory" ? trackedDirectories : tracked;
+      if (!expected.has(path.normalize(entry.relativePath))) {
         return true;
       }
     }
     return false;
-  };
-  try {
-    return await walk(workspaceRoot);
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+    const filesystemError = error as NodeJS.ErrnoException;
+    // A missing child leaves the remaining workspace entries unexamined.
+    return filesystemError.code !== "ENOENT" || filesystemError.path !== workspaceRoot;
   }
 }
 
@@ -371,7 +366,7 @@ async function inspectDigestOwnedWorkspaceFile(
       return { state: "missing" };
     }
     const content = await workspace.readBytes(record.path, { maxBytes });
-    const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+    const digest = digestClawBytes(content);
     return {
       state: digest === record.contentDigest ? "unchanged" : "modified",
     };
@@ -469,14 +464,24 @@ export async function removeClawWorkspaceFile(
     if (!(await workspace.exists(record.path))) {
       return { path: record.path, action: "missing" };
     }
+    const moveFile = (source: string, target: string) =>
+      workspace.move(source, target, {
+        overwrite: false,
+        assertBeforeMutation: () => {
+          // Keep file admission separate from authority: restoration survives ownership loss.
+          if (statRegularFileSync(path.join(workspace.rootReal, source)).missing) {
+            throw new Error("Claw workspace file no longer exists");
+          }
+        },
+      });
     const stagedPath = `${record.path}.openclaw-claw-remove-${randomUUID()}`;
     assertCurrent();
-    await workspace.move(record.path, stagedPath, { overwrite: false });
+    await moveFile(record.path, stagedPath);
     let outcome: Result<void, unknown>;
     try {
       const content = await workspace.readBytes(stagedPath, { maxBytes });
       assertCurrent();
-      const digest = `sha256:${createHash("sha256").update(content).digest("hex")}`;
+      const digest = digestClawBytes(content);
       if (digest === record.contentDigest) {
         await workspace.remove(stagedPath);
         return { path: record.path, action: "deleted" };
@@ -487,7 +492,7 @@ export async function removeClawWorkspaceFile(
     }
     // Undo this attempt's staging even after ownership loss; never replace new content.
     try {
-      await workspace.move(stagedPath, record.path, { overwrite: false });
+      await moveFile(stagedPath, record.path);
     } catch (error) {
       throw new AggregateError(
         [...(outcome.ok ? [] : [outcome.error]), error],

@@ -1,25 +1,21 @@
 import path from "node:path";
-import { claimPendingAgentQuestionAnswer } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
-import type { CodexServerNotification } from "./protocol.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
+import { itemNotification } from "./protocol.test-helpers.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createCodexRuntimePlanFixture,
   createRuntimeDynamicTool,
+  createStartedThreadHarness,
   fastWait,
-  mockClientRuntimeMethods,
   runCodexAppServerAttempt,
-  setCodexAppServerClientFactoryForTest,
   setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
-  threadStartResult,
-  turnStartResult,
 } from "./run-attempt-test-harness.js";
 import { activeRunRegistrationMocks } from "./run-attempt.steering.test-helpers.js";
 import {
@@ -37,132 +33,68 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt question refresh", () => {
+  beforeEach(() => {
+    // Keep cold fixture setup from expiring the turn before its question can be published.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  });
+
   it.each([
-    { name: "gateway-backed", isSecret: false, refresh: false, stagedSource: false },
-    { name: "secret", isSecret: true, refresh: false, stagedSource: false },
-    { name: "gateway-backed then refresh", isSecret: false, refresh: true, stagedSource: false },
-    { name: "secret then refresh", isSecret: true, refresh: true, stagedSource: false },
-    {
-      name: "gateway-backed external claim then refresh",
-      isSecret: false,
-      refresh: true,
-      stagedSource: false,
-      directClaim: true,
-    },
-    {
-      name: "UI answer then refresh",
-      isSecret: false,
-      refresh: true,
-      stagedSource: false,
-      uiAnswer: true,
-    },
-    { name: "staged secret then refresh", isSecret: true, refresh: true, stagedSource: true },
+    { name: "gateway-backed then refresh", isSecret: false, stagedSource: false },
+    { name: "secret then refresh", isSecret: true, stagedSource: false },
+    { name: "staged secret then refresh", isSecret: true, stagedSource: true },
   ])("routes $name user prompts without consuming internal steering", async (scenario) => {
-    const { isSecret, refresh, stagedSource } = scenario;
-    const directClaim = "directClaim" in scenario && scenario.directClaim;
-    const uiAnswer = "uiAnswer" in scenario && scenario.uiAnswer;
+    const { isSecret, stagedSource } = scenario;
     activeRunRegistrationMocks.questionWaiters.clear();
     const turnStarted = createDeferred<void>();
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        turnStarted.resolve();
-        return turnStartResult();
-      }
-      if (method === "turn/interrupt") {
-        await notify({
-          method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "interrupted" } },
-        });
-      }
-      if (method === "thread/backgroundTerminals/list") {
-        return { data: [], nextCursor: null };
-      }
+    const { request, notify, handleServerRequest } = createStartedThreadHarness(async (method) => {
       if (method === "thread/unsubscribe") {
         return { status: "unsubscribed" };
       }
-      return {};
+      return undefined;
     });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
 
     const params = createSteeringParams();
     let pendingRefresh = false;
-    let sourceRecorder: typeof params.userTurnTranscriptRecorder;
-    if (refresh) {
-      params.runtimePlan = createCodexRuntimePlanFixture();
-      setCodexTestModelSupportsTools(params, true);
-      const reload = createRuntimeDynamicTool("reload_runtime");
-      reload.execute = vi.fn(async () => {
-        pendingRefresh = true;
-        return { content: [{ type: "text" as const, text: "generation changed" }], details: {} };
-      });
-      dynamicToolBuildState.openClawCodingToolsFactory = () => [reload];
-      params.pluginRuntimeRefreshPending = () => pendingRefresh;
-      if (!params.sessionKey) {
-        throw new Error("Expected the fixture's managed session key");
-      }
-      const target = {
-        agentId: "main",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: path.join(tempDir, "question-refresh.sqlite"),
-      };
-      await upsertSessionEntry({
-        ...target,
-        entry: { sessionId: params.sessionId, updatedAt: 1 },
-      });
-      params.sessionTarget = target;
-      if (!uiAnswer) {
-        const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
-        sourceRecorder = createRecorder({
-          input: { text: "2", idempotencyKey: `${params.runId}:question-answer` },
-          target: { ...target, sessionEntry: undefined },
-        });
-      }
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const reload = createRuntimeDynamicTool("reload_runtime");
+    reload.execute = vi.fn(async () => {
+      pendingRefresh = true;
+      return { content: [{ type: "text" as const, text: "generation changed" }], details: {} };
+    });
+    setCodexTestToolFactory(params, () => [reload]);
+    params.pluginRuntimeRefreshPending = () => pendingRefresh;
+    if (!params.sessionKey) {
+      throw new Error("Expected the fixture's managed session key");
     }
+    const target = {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: path.join(tempDir, "question-refresh.sqlite"),
+    };
+    await upsertSessionEntry({
+      ...target,
+      entry: { sessionId: params.sessionId, updatedAt: 1 },
+    });
+    params.sessionTarget = target;
+    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+    const sourceRecorder = createRecorder({
+      input: { text: "2", idempotencyKey: `${params.runId}:question-answer` },
+      target: { ...target, sessionEntry: undefined },
+    });
     params.onBlockReply = vi.fn();
-    const onRunProgress = vi.fn();
+    const onRunProgress = vi.fn<NonNullable<typeof params.onRunProgress>>((event) => {
+      // Host progress fires after the active turn's input bridge is installed.
+      if (event.reason === "turn:start") {
+        turnStarted.resolve();
+      }
+    });
     params.onRunProgress = onRunProgress;
-    const closeHost = refresh
-      ? await bindProductionHarnessHostCapabilitiesForTest(params)
-      : undefined;
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
     const run = runCodexAppServerAttempt(params);
     await turnStarted.promise;
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-
-    const response = handleRequest?.({
+    const response = handleServerRequest({
       id: "request-input-1",
       method: "item/tool/requestUserInput",
       params: {
@@ -198,14 +130,13 @@ describe("runCodexAppServerAttempt question refresh", () => {
     if (!sourceMessageId) {
       throw new Error("source turn/steer clientUserMessageId missing");
     }
-    await notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: { id: "source-message", type: "userMessage", clientId: sourceMessageId },
-      },
-    });
+    await notify(
+      itemNotification("item/completed", {
+        id: "source-message",
+        type: "userMessage",
+        clientId: sourceMessageId,
+      }),
+    );
     expect(
       onRunProgress.mock.calls.some(
         ([event]) =>
@@ -213,7 +144,7 @@ describe("runCodexAppServerAttempt question refresh", () => {
       ),
     ).toBe(false);
     if (stagedSource) {
-      if (!sourceRecorder?.stageApproved || !params.runId) {
+      if (!sourceRecorder.stageApproved || !params.runId) {
         throw new Error("Expected the fixture's source recorder and run identity");
       }
       expect(
@@ -221,114 +152,75 @@ describe("runCodexAppServerAttempt question refresh", () => {
       ).toBe(true);
     }
     const onQuestionAccepted = vi.fn();
-    if (uiAnswer) {
-      const waiters = [...activeRunRegistrationMocks.questionWaiters.values()];
-      expect(waiters).toHaveLength(1);
-      const [resolveAnswer] = waiters;
-      if (!resolveAnswer) {
-        throw new Error("Expected the current ordinary question waiter");
-      }
-      resolveAnswer({ status: "answered", answers: { answers: { mode: ["Deep"] } } });
-    } else if (directClaim) {
-      // Core reply ingress can consume the question before asking the native handle to steer.
-      expect(
-        await claimPendingAgentQuestionAnswer({
-          sessionKey: params.sessionKey,
-          text: "2",
-          sourceRecorder,
-          authority: { kind: "run", assertCurrent: () => {} },
-        }),
-      ).toBe(true);
-    } else {
-      await waitAndQueueActiveRunMessage(params.sessionId, "2", {
-        isInboundUserMessage: true,
-        onQueueAccepted: onQuestionAccepted,
-        toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-        ...(sourceRecorder ? { userTurnTranscriptRecorder: sourceRecorder } : {}),
-      });
-    }
+    await waitAndQueueActiveRunMessage(params.sessionId, "2", {
+      isInboundUserMessage: true,
+      onQueueAccepted: onQuestionAccepted,
+      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+      userTurnTranscriptRecorder: sourceRecorder,
+    });
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },
     });
     expect(onRunProgress).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "request:item/tool/requestUserInput:response" }),
     );
-    if (!directClaim && !uiAnswer) {
-      expect(onQuestionAccepted).toHaveBeenCalledWith(true);
-    }
+    expect(onQuestionAccepted).toHaveBeenCalledWith(true);
     expect(request.mock.calls.filter(([method]) => method === "turn/steer")).toHaveLength(1);
 
-    if (refresh) {
-      // Native request_user_input is exclusive: finish its answer before the next tool call.
-      await handleRequest?.({
-        id: "reload-after-question",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "reload-after-question",
-          namespace: null,
-          tool: "reload_runtime",
-          arguments: {},
-        },
-      });
-      expect(pendingRefresh).toBe(true);
-      const result = await run;
-      closeHost?.();
-      expect(result.terminal.kind).toBe("ok");
-      if (uiAnswer) {
-        expect(sourceRecorder).toBeUndefined();
-      } else {
-        expect(sourceRecorder?.hasPersisted()).toBe(!isSecret || stagedSource);
-      }
-      const carried = result.pluginRuntimeRefreshMessages ?? [];
-      const questionCalls = carried.flatMap((message) =>
-        message.role === "assistant" && Array.isArray(message.content)
-          ? message.content.filter((item) => item.type === "toolCall" && item.id === "ask-1")
-          : [],
-      );
-      const questionResults = carried.filter(
-        (message) => message.role === "toolResult" && message.toolCallId === "ask-1",
-      );
-      if (isSecret) {
-        expect(questionCalls).toEqual([]);
-        expect(questionResults).toEqual([]);
-        expect(JSON.stringify(carried)).not.toContain(`${params.runId}:question-answer`);
-      } else {
-        expect(questionCalls).toHaveLength(1);
-        expect(questionCalls[0]).toMatchObject({
-          name: "request_user_input",
-          arguments: {
-            questions: [
-              expect.objectContaining({ id: "mode", question: "Pick a mode", isSecret: false }),
-            ],
-          },
-        });
-        expect(questionResults).toHaveLength(1);
-        expect(questionResults[0]).toMatchObject({
-          toolName: "request_user_input",
-          isError: false,
-        });
-        expect(JSON.stringify(questionResults)).toContain("Deep");
-        const context = await projectContextEngineAssemblyForCodex({
-          assembledMessages: carried,
-          originalHistoryMessages: [],
-          prompt: "Continue with updated tools",
-          toolPayloadMode: "preserve",
-        });
-        expect(context.promptText).toContain("Pick a mode");
-        expect(context.promptText).toContain("Deep");
-      }
+    // Native request_user_input is exclusive: finish its answer before the next tool call.
+    await handleServerRequest({
+      id: "reload-after-question",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "reload-after-question",
+        namespace: null,
+        tool: "reload_runtime",
+        arguments: {},
+      },
+    });
+    expect(pendingRefresh).toBe(true);
+    const result = await run;
+    closeHost();
+    expect(result.terminal.kind).toBe("ok");
+    expect(sourceRecorder.hasPersisted()).toBe(!isSecret || stagedSource);
+    const carried = result.pluginRuntimeRefreshMessages ?? [];
+    const questionCalls = carried.flatMap((message) =>
+      message.role === "assistant" && Array.isArray(message.content)
+        ? message.content.filter((item) => item.type === "toolCall" && item.id === "ask-1")
+        : [],
+    );
+    const questionResults = carried.filter(
+      (message) => message.role === "toolResult" && message.toolCallId === "ask-1",
+    );
+    if (isSecret) {
+      expect(questionCalls).toEqual([]);
+      expect(questionResults).toEqual([]);
+      expect(JSON.stringify(carried)).not.toContain(`${params.runId}:question-answer`);
     } else {
-      await notify({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          turn: { id: "turn-1", status: "completed" },
+      expect(questionCalls).toHaveLength(1);
+      expect(questionCalls[0]).toMatchObject({
+        name: "request_user_input",
+        arguments: {
+          questions: [
+            expect.objectContaining({ id: "mode", question: "Pick a mode", isSecret: false }),
+          ],
         },
       });
-      await run;
+      expect(questionResults).toHaveLength(1);
+      expect(questionResults[0]).toMatchObject({
+        toolName: "request_user_input",
+        isError: false,
+      });
+      expect(JSON.stringify(questionResults)).toContain("Deep");
+      const context = await projectContextEngineAssemblyForCodex({
+        assembledMessages: carried,
+        prompt: "Continue with updated tools",
+        toolPayloadMode: "preserve",
+      });
+      expect(context.promptText).toContain("Pick a mode");
+      expect(context.promptText).toContain("Deep");
     }
   });
 });

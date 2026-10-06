@@ -1,9 +1,7 @@
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -13,6 +11,7 @@ import type {
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  getSessionKysely,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
@@ -30,6 +29,19 @@ export function readCommittedTranscriptMessageSequence(
   return committedTranscriptMessageSequences.get(message);
 }
 
+/** Installs the executor's final active cursors on the exact acknowledged result objects. */
+export function installCommittedTranscriptMessageSequences(
+  messages: readonly TranscriptMessageAppendResult<unknown>[],
+  sequences: readonly (number | undefined)[],
+): void {
+  for (const [index, message] of messages.entries()) {
+    const sequence = sequences[index];
+    if (sequence !== undefined) {
+      committedTranscriptMessageSequences.set(message, sequence);
+    }
+  }
+}
+
 /** Captures atomic turn cursors from the final projection before SQLite commits. */
 export function rememberCommittedTranscriptMessageSequencesInTransaction(
   database: OpenClawAgentDatabase,
@@ -43,14 +55,7 @@ export function rememberCommittedTranscriptMessageSequencesInTransaction(
   if (appendedMessages.length === 0) {
     return;
   }
-  const db = getNodeSqliteKysely<
-    Pick<
-      OpenClawAgentKyselyDatabase,
-      | "session_transcript_active_events"
-      | "session_transcript_index_state"
-      | "transcript_event_identities"
-    >
-  >(database.db);
+  const db = getSessionKysely(database.db);
   const projection = executeSqliteQueryTakeFirstSync(
     database.db,
     db

@@ -1,59 +1,32 @@
-// Media Generation Core tests cover catalog behavior.
 import { describe, expect, it } from "vitest";
-import {
-  listMediaGenerationProviderModels,
-  synthesizeMediaGenerationCatalogEntries,
-} from "./catalog.js";
+import { synthesizeMediaGenerationCatalogEntries } from "./catalog.js";
 
 describe("media-generation catalog", () => {
-  it("synthesizes stable static rows from provider defaults and models", () => {
-    const capabilities = {
-      generate: { enabled: true },
-      edit: { enabled: true, maxInputImages: 2 },
-    };
+  it("synthesizes unique static rows with a trimmed default model", () => {
+    const capabilities = { generate: { enabled: true } };
 
     const rows = synthesizeMediaGenerationCatalogEntries({
       kind: "image_generation",
       provider: {
         id: "example",
         label: "Example",
-        defaultModel: "default-image",
+        defaultModel: " default-image ",
         models: ["default-image", "alternate-image", "  ", "alternate-image"],
         capabilities,
       },
-      modes: ["generate", "edit"],
     });
 
+    const metadata = {
+      kind: "image_generation",
+      provider: "example",
+      label: "Example",
+      source: "static",
+      capabilities,
+    };
     expect(rows).toEqual([
-      {
-        kind: "image_generation",
-        provider: "example",
-        model: "default-image",
-        label: "Example",
-        source: "static",
-        default: true,
-        capabilities,
-        modes: ["generate", "edit"],
-      },
-      {
-        kind: "image_generation",
-        provider: "example",
-        model: "alternate-image",
-        label: "Example",
-        source: "static",
-        capabilities,
-        modes: ["generate", "edit"],
-      },
+      { ...metadata, model: "default-image", default: true },
+      { ...metadata, model: "alternate-image" },
     ]);
-  });
-
-  it("lists unique provider models in display order", () => {
-    expect(
-      listMediaGenerationProviderModels({
-        defaultModel: "video-default",
-        models: ["video-default", "video-pro"],
-      }),
-    ).toEqual(["video-default", "video-pro"]);
   });
 
   it("uses per-model capabilities and modes when provided", () => {
@@ -96,29 +69,6 @@ describe("media-generation catalog", () => {
         capabilities: alternateCapabilities,
         modes: ["imageToVideo"],
       }),
-    ]);
-  });
-
-  it("marks a trimmed default model as the catalog default", () => {
-    expect(
-      synthesizeMediaGenerationCatalogEntries({
-        kind: "video_generation",
-        provider: {
-          id: "example",
-          defaultModel: " video-default ",
-          models: ["video-default"],
-          capabilities: {},
-        },
-      }),
-    ).toEqual([
-      {
-        kind: "video_generation",
-        provider: "example",
-        model: "video-default",
-        source: "static",
-        default: true,
-        capabilities: {},
-      },
     ]);
   });
 });

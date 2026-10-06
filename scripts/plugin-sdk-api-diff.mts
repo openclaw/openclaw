@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,10 +17,12 @@ import {
   type PluginSdkApiDiffSurface,
 } from "../src/plugin-sdk/api-diff.ts";
 import { runTasksWithConcurrency } from "../src/utils/run-with-concurrency.js";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { isConstrainedCiCheckHost } from "./lib/local-check-runtime.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmPreflightSdkSelectors } from "./openclaw-npm-extended-stable-release.mjs";
 import {
+  createPluginSdkApiDiffSet,
   createPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidenceSet,
 } from "./plugin-sdk-api-release-evidence.mjs";
@@ -241,6 +244,14 @@ async function renderWorker(argv: string[]): Promise<boolean> {
   if (!repoRoot || !outputPath || argv.length !== 4) {
     throw new Error("Invalid Plugin SDK API renderer invocation");
   }
+  // Tagged revisions retain their checked-in declaration inputs.
+  if (
+    !["state", "agent"].every((name) =>
+      existsSync(path.join(repoRoot, `src/state/openclaw-${name}-db.generated.d.ts`)),
+    )
+  ) {
+    await ensureKyselyTypes(repoRoot);
+  }
   await writeFile(outputPath, JSON.stringify(await renderPluginSdkApiRoot(repoRoot)));
   return true;
 }
@@ -313,7 +324,7 @@ async function main(): Promise<void> {
     })
       ? 1
       : 2;
-    const rendered = await runTasksWithConcurrency({
+    const prepared = await runTasksWithConcurrency({
       limit,
       errorMode: "stop",
       // Drain aborted siblings before removing their registered worktrees.
@@ -325,9 +336,38 @@ async function main(): Promise<void> {
         addedWorktrees.push(worktree);
         git(worktree, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
         git(worktree, ["checkout", "--detach", commit]);
+        const installStartedAt = performance.now();
+        console.error(`[plugin-sdk-api-diff] ${commit} install started`);
         await installRevisionDependencies(worktree, abortController.signal);
+        console.error(
+          `[plugin-sdk-api-diff] ${commit} install completed in ${Math.round(performance.now() - installStartedAt)}ms`,
+        );
+        return worktree;
+      }),
+    });
+    if (prepared.hasError) {
+      throw prepared.firstError;
+    }
+    // pnpm can hardlink revision dependencies into its shared store. Finish every
+    // install before any compiler snapshots those files, or a sibling install can
+    // change inode metadata while the declaration renderer is proving immutability.
+    const rendered = await runTasksWithConcurrency({
+      limit,
+      errorMode: "stop",
+      throwOnError: false,
+      onTaskError: () => abortController.abort(),
+      tasks: commits.map((commit, index) => async () => {
+        const worktree = prepared.results[index];
+        if (!worktree) {
+          throw new Error(`Plugin SDK API worktree is missing for ${commit}`);
+        }
         const renderPath = path.join(temporaryRoot, `${commit}.json`);
+        const renderStartedAt = performance.now();
+        console.error(`[plugin-sdk-api-diff] ${commit} render started`);
         await renderRevision(repoRoot, worktree, renderPath, abortController.signal);
+        console.error(
+          `[plugin-sdk-api-diff] ${commit} render completed in ${Math.round(performance.now() - renderStartedAt)}ms`,
+        );
         surfaces.set(commit, parsePluginSdkApiDiffSurface(await fs.readFile(renderPath, "utf8")));
       }),
     });
@@ -382,8 +422,10 @@ async function main(): Promise<void> {
     process.stdout.write(report);
     if (args.jsonPath) {
       const diff = args.bases
-        ? Object.fromEntries(
-            comparisons.map((comparison) => [comparison.selector, comparison.diff]),
+        ? createPluginSdkApiDiffSet(
+            Object.fromEntries(
+              comparisons.map((comparison) => [comparison.selector, comparison.diff]),
+            ),
           )
         : primary.diff;
       await writeFile(args.jsonPath, `${JSON.stringify(diff, null, 2)}\n`);

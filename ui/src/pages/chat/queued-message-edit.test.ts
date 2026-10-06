@@ -14,20 +14,16 @@ import {
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { applyChatAgentsList } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
-import {
-  admitQueuedMessageForSession,
-  removeQueuedMessageWithoutReleasing,
-  subscribeChatOutboxProjection,
-  syncVisibleChatQueueProjection,
-  updateQueuedMessage,
-} from "./chat-queue.ts";
+import { admitQueuedMessageForSession, updateQueuedMessage } from "./chat-queue.ts";
 import {
   moveQueuedChatMessage,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
@@ -60,8 +56,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function trackOutboxProjection(host: Parameters<typeof subscribeChatOutboxProjection>[0]) {
-  const unsubscribe = subscribeChatOutboxProjection(host);
+function trackOutboxProjection(
+  host: Parameters<ReturnType<typeof chatOutboxOwner>["subscribe"]>[0],
+) {
+  const unsubscribe = chatOutboxOwner(host).subscribe(host);
   outboxSubscriptions.push(unsubscribe);
   return unsubscribe;
 }
@@ -184,9 +182,12 @@ describe("queued message edit round-trip", () => {
     expect(host.chatError).toBeNull();
   });
 
-  it("leaves the queue untouched when the edit is cancelled", () => {
-    const { host } = queueHost([{}, {}, {}]);
+  it("leaves composer attachments untouched when an edit is cancelled", () => {
+    const original = stageQueuedImage("att-original");
+    const added = stageQueuedImage("att-added");
+    const { host } = queueHost([{}, { attachments: [original] }, {}]);
     host.chatMessage = "separate composer draft";
+    host.chatAttachments = [added];
     beginQueuedMessageEdit(host as never, "queued-2");
     updateQueuedMessageEdit(host as never, "half-typed replacement");
 
@@ -194,35 +195,29 @@ describe("queued message edit round-trip", () => {
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2", "message 3"]);
     expect(host.chatMessage).toBe("separate composer draft");
-    expect(host.chatAttachments).toEqual([]);
     expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
-  });
-
-  it("leaves composer attachments untouched when an edit is cancelled", () => {
-    const original = stageQueuedImage("att-original");
-    const added = stageQueuedImage("att-added");
-    const { host } = queueHost([{ attachments: [original] }]);
-    host.chatAttachments = [added];
-    beginQueuedMessageEdit(host as never, "queued-1");
-
-    expect(cancelQueuedMessageEdit(host as never)).toBe(true);
-
-    expect(storedOrder(host)).toEqual(["message 1"]);
     expect(getChatAttachmentDataUrl(original)).not.toBeNull();
     expect(getChatAttachmentDataUrl(added)).not.toBeNull();
     expect(host.chatAttachments).toEqual([added]);
   });
 
-  it("replaces the row in the same slot when the edited message is sent", async () => {
-    const { host } = queueHost([{}, {}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-2");
-    updateQueuedMessageEdit(host as never, "message 2, corrected");
-
-    await submitQueuedEdit(host);
-
-    expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
-    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
-  });
+  it.each(["corrected prompt", "/review-this", "!echo hello"])(
+    "keeps an edited row's place and only eligible frozen context: %s",
+    async (draft) => {
+      const workContext = { page: "chat", title: "Original work" };
+      const { host } = queueHost([{}, { workContext }, {}], {
+        getWorkContext: () => ({ page: "chat", title: "Later work" }),
+      });
+      beginQueuedMessageEdit(host, "queued-2");
+      updateQueuedMessageEdit(host, draft);
+      await submitQueuedEdit(host);
+      expect(storedOrder(host)).toEqual(["message 1", draft, "message 3"]);
+      expect(host.chatQueue[1]?.workContext).toEqual(
+        draft === "corrected prompt" ? workContext : undefined,
+      );
+      expect(isQueuedMessageBeingEdited(host, "queued-2")).toBe(false);
+    },
+  );
 
   it.each(["steer", "interrupt"] as const)(
     "keeps an explicitly queued edit behind earlier messages while the composer defaults to %s",
@@ -261,7 +256,7 @@ describe("queued message edit round-trip", () => {
     },
   );
 
-  it.each(["/stop", "/compact", "stop"])(
+  it.each(["/compact", "stop"])(
     "keeps the source row and rejects a command-like inline edit: %s",
     async (command) => {
       const sendRequest = vi.fn(() => ({ status: "started" as const }));
@@ -309,9 +304,13 @@ describe("queued message edit round-trip", () => {
         host.sessionKey = "agent:main:elsewhere";
         expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
       }
-      const stalePane = makeChatHost({ connected: false, sessionKey: SESSION_KEY });
+      const stalePane = makeChatHost({
+        client: host.client,
+        connected: false,
+        sessionKey: SESSION_KEY,
+      });
       if (mutation === "remove") {
-        removeQueuedMessageWithoutReleasing(stalePane as never, "queued-1");
+        chatOutboxOwner(stalePane).remove(stalePane as never, "queued-1");
       } else {
         expect(
           updateQueuedMessage(stalePane as never, "queued-1", (item) => ({
@@ -395,6 +394,7 @@ describe("queued message edit round-trip", () => {
     await submitQueuedEdit(host);
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
+    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
     const replacement = listStoredChatOutboxes(host as never)[0]?.queue[1];
     expect(replacement?.attachments?.map((attachment) => attachment.id)).toEqual(["att-kept"]);
     expect(replacement?.replyToId).toBe("reply-source");
@@ -451,7 +451,7 @@ describe("queued message edit round-trip", () => {
     }
   });
 
-  it("reports when a peer reorder crosses the row another pane is editing", () => {
+  it("clears a peer reorder conflict when the edit closes and the move succeeds", () => {
     const { host, unsubscribe } = queueHost([{}, {}, {}]);
     const peer = makeChatHost({
       client: host.client,
@@ -466,8 +466,29 @@ describe("queued message edit round-trip", () => {
       expect(moveQueuedChatMessage(peer as never, "queued-3", "queued-1")).toBe("rejected");
       expect(peer.chatError).toBe(QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
       expect(storedOrder(peer)).toEqual(["message 1", "message 2", "message 3"]);
+      expect(cancelQueuedMessageEdit(host as never)).toBe(true);
+      expect(moveQueuedChatMessage(peer as never, "queued-3", "queued-1")).toBe("moved");
+      expect(storedOrder(peer)).toEqual(["message 3", "message 1", "message 2"]);
+      expect(peer.chatError).toBeNull();
+      expect(peer.lastError).toBeNull();
     } finally {
       stopPeer();
+      unsubscribe();
+    }
+  });
+
+  it("preserves other operations' storage errors when a queue move succeeds", () => {
+    const { host, unsubscribe } = queueHost([{}, {}]);
+    try {
+      host.lastError = "History could not be refreshed";
+      host.chatError = OFFLINE_QUEUE_STORAGE_ERROR;
+
+      expect(moveQueuedChatMessage(host as never, "queued-2", "queued-1")).toBe("moved");
+
+      expect(storedOrder(host)).toEqual(["message 2", "message 1"]);
+      expect(host.lastError).toBe("History could not be refreshed");
+      expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
+    } finally {
       unsubscribe();
     }
   });
@@ -527,7 +548,12 @@ describe("queued message edit round-trip", () => {
   });
 
   it("cannot retire a row in the outbox a global agent switch left behind", async () => {
-    const host = makeChatHost({ assistantAgentId: "lily", connected: false, sessionKey: "global" });
+    const host = makeChatHost({
+      assistantAgentId: "lily",
+      connected: false,
+      requestHandlers: {},
+      sessionKey: "global",
+    });
     const unsubscribe = trackOutboxProjection(host as never);
     expect(
       admitQueuedMessageForSession(
@@ -606,7 +632,7 @@ describe("queued message edit round-trip", () => {
           applyChatAgentsList(host, { ...agentsList, mainKey: "current" }, host.client!);
         }
         host.sessionKey = "agent:main:current";
-        syncVisibleChatQueueProjection(host);
+        chatOutboxOwner(host).syncHost(host);
         expect(host.chatQueue).toEqual([]);
         const active = activeQueuedMessageEdit(host);
         render(
@@ -635,7 +661,7 @@ describe("queued message edit round-trip", () => {
         // Returning the real routing facts restores the original owner, not a renamed token.
         applyChatAgentsList(host, agentsList, host.client!);
         host.sessionKey = SESSION_KEY;
-        syncVisibleChatQueueProjection(host);
+        chatOutboxOwner(host).syncHost(host);
         expect(activeQueuedMessageEdit(host)?.draftText).toBe("Unsaved original correction");
         expect(cancelQueuedMessageEdit(host)).toBe(true);
         expect(listStoredChatOutboxes(host)).toEqual(originalOutboxes);
@@ -646,16 +672,4 @@ describe("queued message edit round-trip", () => {
       }
     },
   );
-
-  it("leaves the edit behind when the pane routes to another session", () => {
-    const { host } = queueHost([{}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-1");
-
-    host.sessionKey = "agent:other";
-
-    // Neither the badge nor the drain block may follow the operator elsewhere,
-    // and the stale edit must not lock the composer in the new session either.
-    expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
-    expect(cancelQueuedMessageEdit(host as never)).toBe(false);
-  });
 });

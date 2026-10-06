@@ -1,7 +1,10 @@
 /** Builds dry-run cron delivery labels for CLI/UI list surfaces. */
+import type { Result } from "@openclaw/normalization-core/result";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
   tryResolveCronJobEffectiveAgentId,
@@ -12,8 +15,13 @@ import {
   prepareCronDeliveryTargetContexts,
   resolveDeliveryTarget,
   requiresExternalCronDelivery,
+  type DeliveryTargetResolution,
 } from "./isolated-agent/delivery-target.js";
 import { resolveCronDeliverySessionKey } from "./session-target.js";
+import {
+  CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+  hasCanonicalCronDeliveryMode,
+} from "./store/delivery-codec.js";
 import type { CronDeliveryPreview, CronJob } from "./types.js";
 
 type CronDeliveryPreviewJob = Pick<CronJob, "delivery" | "payload" | "sessionTarget"> &
@@ -55,6 +63,11 @@ type CronDeliveryPreviewParams = {
 };
 
 function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
+  if (!hasCanonicalCronDeliveryMode(params.job.delivery)) {
+    return {
+      preview: { label: "delivery requires review", detail: CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE },
+    };
+  }
   const agentId = tryResolveCronJobEffectiveAgentId(
     params.job,
     params.defaultAgentId ?? tryResolveAmbientOwnerAgentId(params.cfg),
@@ -96,22 +109,36 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
 async function resolvePreparedCronDeliveryPreview(
   cfg: OpenClawConfig,
   prepared: ReturnType<typeof prepareCronDeliveryPreview>,
-  sessionContext?: CronDeliveryTargetContext,
+  sessionContext?: Result<CronDeliveryTargetContext, unknown>,
 ): Promise<CronDeliveryPreview> {
   if (prepared.preview) {
     return prepared.preview;
   }
   const { plan, requestedChannel, agentId, sessionTarget, deliverySessionKey } = prepared;
-  const resolved = await resolveDeliveryTarget(
-    cfg,
-    agentId,
-    {
-      ...plan,
-      sessionTarget,
-      sessionKey: deliverySessionKey,
-    },
-    { dryRun: true, ...(sessionContext ? { sessionContext } : {}) },
-  );
+  let resolved: DeliveryTargetResolution;
+  try {
+    if (sessionContext && !sessionContext.ok) {
+      throw sessionContext.error;
+    }
+    resolved = await resolveDeliveryTarget(
+      cfg,
+      agentId,
+      {
+        ...plan,
+        sessionTarget,
+        sessionKey: deliverySessionKey,
+      },
+      { dryRun: true, ...(sessionContext ? { sessionContext: sessionContext.value } : {}) },
+    );
+  } catch (error) {
+    if (!(error instanceof SessionMetadataUnavailableError)) {
+      throw error;
+    }
+    return {
+      label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
+      detail: `delivery preview unavailable: ${formatErrorMessage(error)}`,
+    };
+  }
   if (!resolved.ok) {
     if (
       sessionTarget === "current" &&
@@ -174,12 +201,9 @@ export async function resolveCronDeliveryPreviews(params: {
   const entries = await Promise.all(
     params.jobs.map(async (job, index) => {
       const context = contextByIndex.get(index);
-      if (context && !context.ok) {
-        throw context.error;
-      }
       return [
         job.id,
-        await resolvePreparedCronDeliveryPreview(params.cfg, prepared[index]!, context?.value),
+        await resolvePreparedCronDeliveryPreview(params.cfg, prepared[index]!, context),
       ] as const;
     }),
   );

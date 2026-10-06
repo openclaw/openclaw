@@ -1,4 +1,3 @@
-// Shared directive parsing helpers used by model and auth directive handlers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentModelPrimaryWriteTarget } from "../../agents/agent-scope.js";
 import type { StickyModelSelectionDispatchOutcome } from "../../agents/sticky-model-selection.js";
@@ -10,13 +9,11 @@ import {
   sessionSnapshotChangesApplied,
 } from "../../config/sessions/session-snapshot-merge.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
 
 export const DIRECTIVE_ACK_MESSAGES = {
@@ -43,25 +40,7 @@ export const DIRECTIVE_ACK_MESSAGES = {
   },
 } as const;
 
-export const formatDirectiveAck = (text: string): string => {
-  return prefixSystemMessage(text);
-};
-
-const formatOptionsLine = (options: string) => `Options: ${options}.`;
-export const withOptions = (line: string, options: string) =>
-  `${line}\n${formatOptionsLine(options)}`;
-
-export const formatElevatedRuntimeHint = () =>
-  `${SYSTEM_MARK} Runtime is direct; sandboxing does not apply.`;
-
-export const formatInternalExecPersistenceDeniedText = () =>
-  "Exec defaults require operator.admin for gateway callers; skipped persistence.";
-
-export const formatInternalVerbosePersistenceDeniedText = () =>
-  "Verbose defaults require operator.admin for gateway callers; skipped persistence.";
-
-export const formatInternalVerboseCurrentReplyOnlyText = () =>
-  "Verbose logging set for the current reply only.";
+export const withOptions = (line: string, options: string) => `${line}\nOptions: ${options}.`;
 
 export function formatModelSelectionScopeAck(params: {
   isDefault: boolean;
@@ -173,16 +152,6 @@ export function resolveDirectiveTouchedSessionFields(params: {
 }
 
 export type IgnoredSessionDirectiveFlag = Extract<keyof InlineDirectives, `has${string}Directive`>;
-
-export function rejectSessionDirectiveTransaction(
-  persistenceState: HandleDirectiveOnlyParams["persistenceState"],
-  errorText: string,
-): ReplyPayload {
-  if (persistenceState) {
-    persistenceState.outcome = { kind: "rejected", errorText };
-  }
-  return { text: errorText, isError: true };
-}
 
 /** Keeps the first informational/denied acknowledgement while validating the remaining hints. */
 export async function acknowledgeIgnoredSessionDirective(params: {
@@ -365,7 +334,7 @@ export async function persistSessionDirectiveSnapshot(params: {
   return { status: sessionChangesApplied && modelSelectionApplied ? "applied" : "conflict" };
 }
 
-const formatElevatedEvent = (level: ElevatedLevel) => {
+export const formatElevatedEvent = (level: SessionEntry["elevatedLevel"]) => {
   if (level === "full") {
     return "Elevated FULL - exec runs on host with auto-approval.";
   }
@@ -375,7 +344,7 @@ const formatElevatedEvent = (level: ElevatedLevel) => {
   return "Elevated OFF - exec stays in sandbox.";
 };
 
-const formatReasoningEvent = (level: ReasoningLevel) => {
+export const formatReasoningEvent = (level: SessionEntry["reasoningLevel"]) => {
   if (level === "stream") {
     return "Reasoning STREAM - emit live <think>.";
   }
@@ -384,29 +353,6 @@ const formatReasoningEvent = (level: ReasoningLevel) => {
   }
   return "Reasoning OFF - hide <think>.";
 };
-
-export function enqueueModeSwitchEvents(params: {
-  enqueueSystemEvent: (text: string, meta: { sessionKey: string; contextKey: string }) => void;
-  sessionEntry: { elevatedLevel?: string | null; reasoningLevel?: string | null };
-  sessionKey: string;
-  elevatedChanged?: boolean;
-  reasoningChanged?: boolean;
-}): void {
-  if (params.elevatedChanged) {
-    const nextElevated = (params.sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
-    params.enqueueSystemEvent(formatElevatedEvent(nextElevated), {
-      sessionKey: params.sessionKey,
-      contextKey: "mode:elevated",
-    });
-  }
-  if (params.reasoningChanged) {
-    const nextReasoning = (params.sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
-    params.enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
-      sessionKey: params.sessionKey,
-      contextKey: "mode:reasoning",
-    });
-  }
-}
 
 export function formatElevatedUnavailableText(params: {
   runtimeSandboxed: boolean;

@@ -18,6 +18,24 @@ function render(
 }
 
 describe("public session document", () => {
+  it("adds only a protected login handoff, including unavailable conversations", () => {
+    const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
+    const html = render([], { entryUrl });
+    expect(html).toContain(`href="${entryUrl}"`);
+    expect(html).toContain("Log in");
+    expect(html).not.toContain('http-equiv="refresh"');
+    expect(html).toContain('data-public-refresh="true"');
+    expect(html).toContain('redirect:"error"');
+    expect(html).not.toMatch(/new WebSocket|bootstrap|sessions.list/);
+    const unavailable = render([], {
+      entryUrl,
+      title: "Conversation unavailable",
+      unavailable: true,
+    });
+    expect(unavailable).toContain("not publicly available");
+    expect(unavailable).not.toContain("Public · Read-only");
+    expect(unavailable).not.toContain('http-equiv="refresh"');
+  });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
     const html = render([
       { role: "system", content: "private system instructions" },
@@ -218,5 +236,30 @@ describe("public session document", () => {
     expect(html).toContain('property="og:title" content="A shared conversation"');
     expect(html).toContain('aria-label="Conversation"');
     expect(html).toContain('name="referrer" content="no-referrer"');
+  });
+
+  it("truncates titles and messages without splitting UTF-16 surrogate pairs", () => {
+    const title = `${"a".repeat(199)}😀 trailing`;
+    const html = render([{ role: "user", content: `${"b".repeat(32_767)}😀 UNIQUE_TAIL_MARKER` }], {
+      title,
+    });
+    expect(html).toContain(`<title>${"a".repeat(199)} · OpenClaw</title>`);
+    expect(html).toContain(`property="og:title" content="${"a".repeat(199)}"`);
+    expect(html).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(html).toContain("Message shortened for this public view.");
+    expect(html).toContain("b".repeat(32_767));
+    expect(html).not.toContain("UNIQUE_TAIL_MARKER");
+    expect(html).not.toContain("😀");
+  });
+
+  it("keeps whole characters when the document budget leaves one code unit", () => {
+    const html = render([
+      { role: "user", content: "🙂 visible tail" },
+      { role: "user", content: "b".repeat(32_767) },
+      ...Array.from({ length: 7 }, () => ({ role: "user", content: "a".repeat(32_768) })),
+    ]);
+    expect(html.isWellFormed()).toBe(true);
+    expect(html).not.toContain("visible tail");
+    expect(html).toContain("Message shortened for this public view.");
   });
 });

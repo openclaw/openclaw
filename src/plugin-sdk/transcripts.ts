@@ -4,29 +4,12 @@
 export type {
   TranscriptImportRequest,
   TranscriptOccupancyWatchRequest,
-  TranscriptOccupancyWatchHandle,
   TranscriptParticipant,
-  TranscriptSessionDescriptor,
   TranscriptSourceKind,
-  TranscriptSourceLocator,
   TranscriptSourceAccessControl,
   TranscriptSourceProvider,
-  TranscriptSourceStatus,
   TranscriptStartRequest,
-  TranscriptToolAction,
-  TranscriptToolCaller,
-  TranscriptsStartResult,
-  TranscriptStopRequest,
-  TranscriptsStopResult,
   TranscriptUtterance,
 } from "../transcripts/provider-types.js";
-export {
-  getTranscriptSourceProvider,
-  listTranscriptSourceProviders,
-  normalizeTranscriptSourceProviderId,
-} from "../transcripts/provider-registry.js";
+export { normalizeTranscriptSourceProviderId } from "../transcripts/provider-registry.js";
 export { resolveTranscriptsConfig } from "../transcripts/config.js";
-export {
-  createMeetingTranscriptSourceProvider,
-  type MeetingTranscriptSourceRuntime,
-} from "../meeting-bot/transcripts-bridge.js";

@@ -108,6 +108,11 @@ async function docker(args, options) {
   return await run("docker", args, options);
 }
 
+async function fileOwnership(filePath) {
+  const { uid, gid, mode } = await fs.stat(filePath);
+  return { uid, gid, mode: mode & 0o777 };
+}
+
 async function listTaskContainers() {
   // Container names can shorten the configured prefix; the scope label stays exact.
   const { stdout } = await docker([
@@ -164,9 +169,23 @@ async function startFixtureServer() {
   };
 }
 
+const gatewayIdentity = { uid: process.geteuid(), gid: process.getegid() };
+const fixtureOwnership = {
+  gateway: gatewayIdentity,
+  workspace: await fileOwnership(workspaceDir),
+  nestedData: await fileOwnership(path.join(root, "nested data")),
+};
+process.stdout.write(
+  `${JSON.stringify({ stage: "fixture-ownership", workspaceAccess, ...fixtureOwnership })}\n`,
+);
+assert.notEqual(gatewayIdentity.uid, 0, "Gateway fixture must use the image's non-root user");
+for (const { uid, gid, mode } of [fixtureOwnership.workspace, fixtureOwnership.nestedData]) {
+  assert.deepEqual({ uid, gid }, gatewayIdentity, "bind source owner differs from Gateway user");
+  assert.equal(mode, 0o755, "bind source permissions must not mask ownership mismatches");
+}
+
 await fs.mkdir(process.env.HOME, { recursive: true });
 await fs.mkdir(stateDir, { recursive: true });
-await fs.mkdir(workspaceDir, { recursive: true });
 await fs.writeFile(path.join(workspaceDir, "USER.md"), marker);
 await fs.writeFile(path.join(root, "nested data", "proof.txt"), marker);
 await fs.mkdir(path.join(root, "skill-source", "mount-proof"), { recursive: true });
@@ -265,6 +284,22 @@ try {
       script: 'printf %s "$2" > "$1"',
       args: [write.filePath, `${marker}-exec`],
     });
+    if (workspaceAccess === "rw") {
+      const { stdout } = await docker([
+        "inspect",
+        "--format",
+        "{{.Config.User}}",
+        first.containerName,
+      ]);
+      const sandboxUser = stdout.trim();
+      const roundtrip = await fileOwnership(path.join(workspaceDir, "roundtrip.txt"));
+      process.stdout.write(
+        `${JSON.stringify({ stage: "roundtrip-ownership", workspaceAccess, sandboxUser, roundtrip })}\n`,
+      );
+      assert.equal(sandboxUser, `${gatewayIdentity.uid}:${gatewayIdentity.gid}`);
+      assert.deepEqual({ uid: roundtrip.uid, gid: roundtrip.gid }, gatewayIdentity);
+      assert.equal(roundtrip.mode, 0o600, "roundtrip must remain private to its owner");
+    }
     assert.equal(
       (await first.fsBridge.readFile({ filePath: write.filePath })).toString(),
       `${marker}-exec`,

@@ -1,16 +1,66 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { Insertable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { createChannelIngressQueue } from "./ingress-queue.js";
+  createChannelIngressQueue,
+  type ChannelIngressQueue,
+  type ChannelIngressQueueClaimRef,
+} from "./ingress-queue.js";
 
 export type IngressDrainTestPayload = { text: string };
+
+/** Observe the real commit, not just invocation of a queue write. */
+export function observeChannelIngressQueueWrite<TCompletedMetadata>(
+  queue: Pick<
+    ChannelIngressQueue<unknown, unknown, TCompletedMetadata>,
+    "complete" | "release" | "fail"
+  >,
+  method: "complete" | "release" | "fail",
+  eventId?: string,
+): Promise<boolean> {
+  const committed = createDeferredCore<boolean>();
+  const observe = (
+    id: string | ChannelIngressQueueClaimRef,
+    result: Promise<boolean>,
+    restore: () => void,
+  ) => {
+    if (eventId === undefined || (typeof id === "string" ? id : id.id) === eventId) {
+      restore();
+      committed.resolve(result);
+    }
+    return result;
+  };
+  switch (method) {
+    case "complete": {
+      const write = queue.complete;
+      queue.complete = (...args) =>
+        observe(args[0], write.apply(queue, args), () => {
+          queue.complete = write;
+        });
+      break;
+    }
+    case "release": {
+      const write = queue.release;
+      queue.release = (...args) =>
+        observe(args[0], write.apply(queue, args), () => {
+          queue.release = write;
+        });
+      break;
+    }
+    case "fail": {
+      const write = queue.fail;
+      queue.fail = (...args) =>
+        observe(args[0], write.apply(queue, args), () => {
+          queue.fail = write;
+        });
+      break;
+    }
+  }
+  return committed.promise;
+}
 
 export function createTestIngressQueue(
   stateDir: string,
@@ -23,20 +73,16 @@ export function createTestIngressQueue(
     channelId: "test",
     accountId: "a",
     stateDir,
+    now: () => Date.now(),
     ...options,
   });
 }
 
 export async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
-  const stateDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-ingress-drain-"),
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-ingress-drain-", applyEnv: false },
+    ({ stateDir }) => fn(stateDir),
   );
-  try {
-    return await fn(stateDir);
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
 }
 
 export function seedPendingBacklog(stateDir: string, total: number): void {

@@ -1,6 +1,5 @@
-// Channel setup wizard modal: renders gateway wizard steps (note/select/text/
-// confirm/multiselect) plus the WhatsApp QR linking phase after config write.
 import { html, nothing, type TemplateResult } from "lit";
+import type { WizardStep } from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
 import {
   renderWizardBusyButton,
@@ -9,7 +8,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
-import type { ChannelWizardState, ChannelWizardStep } from "./wizard-controller.ts";
+import type { ChannelWizardState } from "./wizard-controller.ts";
 
 type ChannelWizardViewProps = {
   wizard: ChannelWizardState;
@@ -24,7 +23,6 @@ type ChannelWizardViewProps = {
   onToggleSecretVisibility: () => void;
   onAnswer: (value: unknown) => void;
   onClose: () => void;
-  // WhatsApp QR linking phase (wizard done + channel === whatsapp).
   whatsappQrDataUrl: string | null;
   whatsappMessage: string | null;
   whatsappConnected: boolean | null;
@@ -37,29 +35,27 @@ function stepIsBusy(props: ChannelWizardViewProps): boolean {
   return props.wizard.phase === "step" && props.wizard.busy;
 }
 
-function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) {
+function renderNoteStep(step: WizardStep, props: ChannelWizardViewProps) {
   const message = step.message?.trim() ?? "";
-  if (step.executor === "gateway") {
-    return html`
-      ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
-      ${message ? html`<div class="channels-wizard__message">${message}</div>` : nothing}
-      <div class="channels-wizard__footer">
-        <button type="button" class="btn" @click=${() => props.onClose()}>
-          ${t("common.cancel")}
-        </button>
-        ${renderWizardBusyButton(message || t("channels.setup.working"))}
-      </div>
-    `;
-  }
+  const gatewayOwned = step.executor === "gateway";
   const looksLikeCode = message.includes("{") || message.includes("  ");
-  const outputClass = `channels-wizard__output${looksLikeCode ? " channels-wizard__output--code" : ""}`;
+  const outputClass = gatewayOwned
+    ? "channels-wizard__message"
+    : `channels-wizard__output${looksLikeCode ? " channels-wizard__output--code" : ""}`;
   return html`
     ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
     ${message ? html`<div class=${outputClass}>${message}</div>` : nothing}
     <div class="channels-wizard__footer">
       ${
-        stepIsBusy(props)
-          ? renderWizardBusyButton(t("channels.setup.working"))
+        gatewayOwned
+          ? html`<button type="button" class="btn" @click=${() => props.onClose()}>
+              ${t("common.cancel")}
+            </button>`
+          : nothing
+      }
+      ${
+        gatewayOwned || stepIsBusy(props)
+          ? renderWizardBusyButton((gatewayOwned && message) || t("channels.setup.working"))
           : html`<button type="button" class="btn primary" @click=${() => props.onAnswer(null)}>
               ${t("channels.setup.continue")}
             </button>`
@@ -68,7 +64,7 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
   `;
 }
 
-function renderStepBody(step: ChannelWizardStep, props: ChannelWizardViewProps) {
+function renderStepBody(step: WizardStep, props: ChannelWizardViewProps) {
   if (step.type === "note" || step.type === "progress" || step.type === "action") {
     return renderNoteStep(step, props);
   }
@@ -82,6 +78,10 @@ function renderStepBody(step: ChannelWizardStep, props: ChannelWizardViewProps) 
           : step.initialValue,
     busy: stepIsBusy(props),
     inputId: "channel-wizard-text-input",
+    validationErrorId:
+      props.wizard.phase === "step" && props.wizard.validationError
+        ? "channel-wizard-validation-error"
+        : undefined,
     presentation: "channels",
     channelSelect: props.wizard.phase === "step" && props.wizard.channel === null,
     answerLabel: t("channels.setup.continue"),
@@ -99,12 +99,12 @@ function renderStepBody(step: ChannelWizardStep, props: ChannelWizardViewProps) 
 function renderWhatsAppLinking(props: ChannelWizardViewProps) {
   const connected = props.whatsappConnected === true;
   return html`
-    <div class="channels-wizard__message">
+    <div class="channels-wizard__message" role="status">
       ${connected ? t("channels.setup.whatsappLinked") : t("channels.setup.whatsappScanTitle")}
     </div>
     ${
       props.whatsappMessage
-        ? html`<div class="channels-wizard__note">${props.whatsappMessage}</div>`
+        ? html`<div class="channels-wizard__note" role="status">${props.whatsappMessage}</div>`
         : nothing
     }
     ${
@@ -178,7 +178,7 @@ function renderDoneBody(channels: readonly string[], props: ChannelWizardViewPro
   }
   const changed = channels.length > 0;
   return html`
-    <div class="channels-wizard__message">
+    <div class="channels-wizard__message" role="status">
       ${t(changed ? "channels.setup.doneTitle" : "channels.setup.doneNoChangesTitle")}
     </div>
     <div class="channels-wizard__note">
@@ -192,7 +192,7 @@ function renderDoneBody(channels: readonly string[], props: ChannelWizardViewPro
   `;
 }
 
-function renderExternalStepLink(step: ChannelWizardStep | null) {
+function renderExternalStepLink(step: WizardStep | null) {
   if (!step?.externalUrl) {
     return nothing;
   }
@@ -228,7 +228,7 @@ export function renderChannelWizard(
     </div>`;
   } else if (wizard.phase === "error") {
     body = html`
-      <div class="channels-wizard__error">${wizard.message}</div>
+      <div class="channels-wizard__error" role="alert">${wizard.message}</div>
       <div class="channels-wizard__footer">
         <button type="button" class="btn" @click=${() => props.onClose()}>
           ${t("common.close")}
@@ -241,7 +241,13 @@ export function renderChannelWizard(
     body = html`
       ${
         wizard.phase === "step" && wizard.validationError
-          ? html`<div class="channels-wizard__error">${wizard.validationError}</div>`
+          ? html`<div
+              id="channel-wizard-validation-error"
+              class="channels-wizard__error"
+              role="alert"
+            >
+              ${wizard.validationError}
+            </div>`
           : nothing
       }
       ${renderStepBody(step, props)}

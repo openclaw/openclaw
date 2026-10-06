@@ -1,43 +1,25 @@
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-// Matrix plugin module implements approval reactions behavior.
-import { createApprovalReactionTargetStore } from "openclaw/plugin-sdk/approval-reaction-runtime";
+import {
+  createApprovalReactionTargetStore,
+  type ApprovalReactionDecisionBinding,
+} from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/routing";
 import { getOptionalMatrixRuntime } from "./runtime.js";
 
 // Matrix keeps its own reaction emoji set (checkmark/cross render reliably across
 // Matrix clients), so decision resolution stays local instead of using the SDK bindings.
-const MATRIX_APPROVAL_REACTION_META = {
-  "allow-once": {
-    emoji: "✅",
-    label: "Allow once",
-  },
-  "allow-always": {
-    emoji: "♾️",
-    label: "Allow always",
-  },
-  deny: {
-    emoji: "❌",
-    label: "Deny",
-  },
-} satisfies Record<ExecApprovalReplyDecision, { emoji: string; label: string }>;
-
-const MATRIX_APPROVAL_REACTION_ORDER = [
-  "allow-once",
-  "allow-always",
-  "deny",
-] as const satisfies readonly ExecApprovalReplyDecision[];
+const MATRIX_APPROVAL_REACTION_BINDINGS: readonly ApprovalReactionDecisionBinding[] = [
+  { decision: "allow-once", emoji: "✅", label: "Allow once" },
+  { decision: "allow-always", emoji: "♾️", label: "Allow always" },
+  { decision: "deny", emoji: "❌", label: "Deny" },
+];
 
 const PERSISTENT_NAMESPACE = "matrix.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
-
-type MatrixApprovalReactionBinding = {
-  decision: ExecApprovalReplyDecision;
-  emoji: string;
-  label: string;
-};
 
 type MatrixApprovalReactionResolution = {
   approvalId: string;
@@ -91,7 +73,9 @@ function readPersistedTarget(target: unknown): MatrixApprovalReactionTarget | nu
     !Array.isArray(value.allowedDecisions) ||
     !roomId ||
     !eventId ||
-    (value.approvalKind !== "exec" && value.approvalKind !== "plugin")
+    (value.approvalKind !== "exec" &&
+      value.approvalKind !== "plugin" &&
+      value.approvalKind !== "system-agent")
   ) {
     return null;
   }
@@ -132,13 +116,7 @@ function pruneMatrixApprovalReactionTargetIndex(): void {
       matrixApprovalReactionTargetIndex.delete(key);
     }
   }
-  while (matrixApprovalReactionTargetIndex.size > PERSISTENT_MAX_ENTRIES) {
-    const oldestKey = matrixApprovalReactionTargetIndex.keys().next().value;
-    if (!oldestKey) {
-      return;
-    }
-    matrixApprovalReactionTargetIndex.delete(oldestKey);
-  }
+  pruneMapToMaxSize(matrixApprovalReactionTargetIndex, PERSISTENT_MAX_ENTRIES);
 }
 
 function buildReactionTargetKey(accountId: string, roomId: string, eventId: string): string | null {
@@ -153,14 +131,10 @@ function buildReactionTargetKey(accountId: string, roomId: string, eventId: stri
 
 export function listMatrixApprovalReactionBindings(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
-): MatrixApprovalReactionBinding[] {
+): ApprovalReactionDecisionBinding[] {
   const allowed = new Set(allowedDecisions);
-  return MATRIX_APPROVAL_REACTION_ORDER.filter((decision) => allowed.has(decision)).map(
-    (decision) => ({
-      decision,
-      emoji: MATRIX_APPROVAL_REACTION_META[decision].emoji,
-      label: MATRIX_APPROVAL_REACTION_META[decision].label,
-    }),
+  return MATRIX_APPROVAL_REACTION_BINDINGS.filter(({ decision }) => allowed.has(decision)).map(
+    (binding) => Object.assign({}, binding),
   );
 }
 
@@ -182,16 +156,11 @@ function resolveMatrixApprovalReactionDecision(
   if (!normalizedReaction) {
     return null;
   }
-  const allowed = new Set(allowedDecisions);
-  for (const decision of MATRIX_APPROVAL_REACTION_ORDER) {
-    if (!allowed.has(decision)) {
-      continue;
-    }
-    if (MATRIX_APPROVAL_REACTION_META[decision].emoji === normalizedReaction) {
-      return decision;
-    }
-  }
-  return null;
+  return (
+    listMatrixApprovalReactionBindings(allowedDecisions).find(
+      ({ emoji }) => emoji === normalizedReaction,
+    )?.decision ?? null
+  );
 }
 
 export async function registerMatrixApprovalReactionTarget(params: {
@@ -217,7 +186,9 @@ export async function registerMatrixApprovalReactionTarget(params: {
   if (
     !key ||
     !approvalId ||
-    (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
+    (params.approvalKind !== "exec" &&
+      params.approvalKind !== "plugin" &&
+      params.approvalKind !== "system-agent") ||
     allowedDecisions.length === 0
   ) {
     return;

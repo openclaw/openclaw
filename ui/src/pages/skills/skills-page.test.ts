@@ -32,7 +32,10 @@ const remoteSkill = {
   displayName: "Calendar",
 };
 
-function mountSkills(request: (method: string, params?: unknown) => Promise<unknown>) {
+function mountSkills(
+  request: (method: string, params?: unknown) => Promise<unknown>,
+  surface: "discovery" | "settings" = "discovery",
+) {
   const client = { request } as unknown as GatewayBrowserClient;
   const connection = createApplicationGateway({
     client,
@@ -61,6 +64,13 @@ function mountSkills(request: (method: string, params?: unknown) => Promise<unkn
     gateway: connection.gateway,
     agents,
     agentSelection: createAgentSelectionCapability(connection.gateway, agents),
+    settingsAgentSelection: createAgentSelectionCapability(
+      connection.gateway,
+      agents,
+      undefined,
+      undefined,
+      { requireConfiguredAgent: true },
+    ),
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
   const host = createApplicationContextProvider(context);
@@ -69,14 +79,15 @@ function mountSkills(request: (method: string, params?: unknown) => Promise<unkn
     surface: "discovery" | "settings";
     updateComplete: Promise<boolean>;
   };
-  page.surface = "discovery";
+  page.surface = surface;
+  const selection =
+    surface === "settings" ? context.settingsAgentSelection : context.agentSelection;
   page.routeData = {
     gateway: connection.gateway,
     gatewaySnapshot: connection.gateway.snapshot,
     agents,
-    agentsList,
     selectedAgentId: "main",
-    selection: context.agentSelection.state,
+    selectionIntentRevision: selection.intentRevision,
     report: { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] },
     error: null,
   };
@@ -88,6 +99,24 @@ function mountSkills(request: (method: string, params?: unknown) => Promise<unkn
 afterEach(() => document.body.replaceChildren());
 
 describe("Skills discovery lifecycle", () => {
+  it("shows a settings heading with its four actions in one row below it", async () => {
+    const { page } = mountSkills(
+      async (method) => (method === "skills.library.list" ? personalLibrary : { skills: [] }),
+      "settings",
+    );
+    await waitForFast(() =>
+      expect(
+        page.querySelectorAll<HTMLButtonElement>(".plugins-toolbar button").length,
+      ).toBeGreaterThanOrEqual(4),
+    );
+
+    expect(page.querySelector(".content-header h1")?.textContent).toBe("Skills");
+    const actions = page.querySelector(".plugins-toolbar");
+    expect(
+      Array.from(actions?.querySelectorAll("button") ?? [], (button) => button.textContent?.trim()),
+    ).toEqual(["Search skills", "Workshop", "Create skill", "Import skill"]);
+  });
+
   it("opens Plugins and Skill workshop from the shared tabs", async () => {
     const { page, context } = mountSkills(async (method) =>
       method === "skills.library.list" ? personalLibrary : { results: [] },
@@ -160,6 +189,33 @@ describe("Skills discovery lifecycle", () => {
     page.querySelector<HTMLButtonElement>('[aria-label="Skill settings"]')!.click();
     expect(context.navigate).toHaveBeenCalledWith("skill-settings", { search: "?agent=research" });
   });
+  it("keeps Settings scope independent of discovery and rejects an older route snapshot", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "skills.library.list") {
+        return { ...personalLibrary, defaultTarget: "workspace" };
+      }
+      if (method === "skills.status") {
+        const agentId = (params as { agentId: string }).agentId;
+        return { skills: [createSkill({ name: `${agentId}-only`, skillKey: `${agentId}-only` })] };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const { page, context } = mountSkills(request, "settings");
+    await page.updateComplete;
+    context.settingsAgentSelection.set("research");
+    await waitForFast(() => expect(page.textContent).toContain("research-only"));
+    expect(page.querySelector("openclaw-agent-select")).toBeNull();
+    context.agentSelection.set("research");
+    context.agentSelection.set("main");
+    page.routeData = { ...page.routeData };
+    await page.updateComplete;
+    expect(page.textContent).toContain("research-only");
+    expect(context.settingsAgentSelection.state.selectedId).toBe("research");
+    expect(request.mock.calls.filter(([method]) => method === "skills.status")).toEqual([
+      ["skills.status", { agentId: "research" }],
+    ]);
+  });
+
   it("reloads empty-query results after a same-client reconnect and ignores the previous search", async () => {
     const staleSearch = deferred<{ results: (typeof remoteSkill)[] }>();
     const search = vi

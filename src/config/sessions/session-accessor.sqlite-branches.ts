@@ -1,127 +1,99 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   readOpenClawAgentDatabaseIdentity,
   type OpenClawAgentDatabaseIdentity,
 } from "../../state/openclaw-agent-db-identity.js";
-import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
-  retainOpenClawAgentDatabaseReadOnly,
+  withFreshOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
-} from "../../state/openclaw-agent-db-readonly.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
-import { readSessionBranchSummaries } from "./session-accessor.sqlite-branch-summaries.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+} from "../../state/openclaw-agent-db-readonly-open.js";
 import {
-  getSessionKysely,
-  normalizeSqliteSessionKey,
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
-import type {
-  SessionBranchListParams,
-  SessionBranchListResult,
-  SessionBranchSummary,
-} from "./session-accessor.types.js";
-import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+  adoptOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseValidation,
+} from "../../state/openclaw-agent-db-validation-cache.js";
+import { readSessionBranchSummaries } from "./session-accessor.sqlite-branch-summaries.js";
+import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import {
+  readSessionTranscriptHotWatermark,
+  type SessionTranscriptWatermark,
+} from "./session-accessor.sqlite-transcript-watermark-read.js";
+import type { SessionBranchSummary } from "./session-accessor.types.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
+import type {
+  SessionBranchSummaryReadResult,
+  SessionBranchSummarySnapshot,
+} from "./session-history-read.types.js";
 
-const SESSION_BRANCH_CACHE_MAX_ENTRIES = 32;
+export type { SessionBranchSummaryReadResult } from "./session-history-read.types.js";
 
-type SessionBranchWatermark = { generation: string | null; maxSeq: number | null };
-type SessionBranchCacheEntry = SessionBranchWatermark & {
-  branches: SessionBranchSummary[];
+const SESSION_BRANCH_CACHE_MAX_ENTRIES = 64;
+
+type SessionBranchCacheEntry = SessionBranchSummarySnapshot & {
   identity: OpenClawAgentDatabaseIdentity;
 };
 
 export type SessionBranchSummaryReadRequest = {
   database: { agentId: string; path: string };
   databaseIdentity: string;
+  validation?: OpenClawAgentDatabaseValidation;
   sessionKey: string;
   sessionId: string;
   lifecycleRevision?: string;
+  previous?: SessionBranchSummarySnapshot;
 };
-export type SessionBranchSummaryReadResult =
-  | ({ status: "ok"; branches: SessionBranchSummary[] } & SessionBranchWatermark)
-  | { status: "missing-session" | "failed" };
-
-// Host and worker isolates share this policy, each retaining only their compact derived results.
+// The host retains compact summaries across read-worker retirement.
 const sessionBranchCache = new Map<string, SessionBranchCacheEntry>();
 
 function sessionBranchCacheKey(databasePath: string, sessionId: string): string {
   return `${databasePath}\0${sessionId}`;
 }
 
-function cloneSessionBranchSummaries(branches: readonly SessionBranchSummary[]) {
+export function cloneSessionBranchSummaries(branches: readonly SessionBranchSummary[]) {
   return branches.map((branch) => ({ ...branch }));
 }
 
-function readCachedSessionBranchSummaries(
+export function readCachedSessionBranchSummaries(
   database: OpenClawAgentReadOnlyDatabase,
   sessionId: string,
-  watermark: SessionBranchWatermark,
-): SessionBranchSummary[] | undefined {
+  watermark: SessionTranscriptWatermark,
+): SessionBranchCacheEntry | undefined {
   const cacheKey = sessionBranchCacheKey(database.path, sessionId);
   const cached = sessionBranchCache.get(cacheKey);
   if (
     !cached ||
     cached.identity !== readOpenClawAgentDatabaseIdentity(database).identity ||
     cached.generation !== watermark.generation ||
-    cached.maxSeq !== watermark.maxSeq
+    (cached.maxSeq !== watermark.maxSeq &&
+      !(cached.maxSeq !== null && watermark.maxSeq !== null && cached.maxSeq < watermark.maxSeq))
   ) {
     return undefined;
   }
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, cached);
-  return cached.branches;
+  return cached;
 }
 
-function cacheSessionBranchSummaries(
+export function cacheSessionBranchSummaries(
   database: OpenClawAgentReadOnlyDatabase,
   sessionId: string,
-  snapshot: SessionBranchWatermark & { branches: SessionBranchSummary[] },
+  snapshot: SessionBranchSummarySnapshot,
 ): void {
   const cacheKey = sessionBranchCacheKey(database.path, sessionId);
   sessionBranchCache.delete(cacheKey);
   sessionBranchCache.set(cacheKey, {
-    branches: snapshot.branches,
-    generation: snapshot.generation,
-    maxSeq: snapshot.maxSeq,
+    ...snapshot,
     identity: readOpenClawAgentDatabaseIdentity(database).identity,
   });
   pruneMapToMaxSize(sessionBranchCache, SESSION_BRANCH_CACHE_MAX_ENTRIES);
 }
 
-function readSessionBranchWatermark(
-  database: Pick<OpenClawAgentReadOnlyDatabase, "db">,
-  sessionId: string,
-): SessionBranchWatermark {
-  const db = getSessionKysely(database.db);
-  const maxSeq = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => eb.fn.max<number>("seq").as("max_seq"))
-      .where("session_id", "=", sessionId),
-  )?.max_seq;
-  const generation = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_rewrite_watermarks")
-      .select("generation")
-      .where("session_id", "=", sessionId),
-  )?.generation;
-  return { generation: generation ?? null, maxSeq: maxSeq ?? null };
-}
-
-function readSessionBranchSnapshot(
+export function readSessionBranchSnapshot(
   database: OpenClawAgentReadOnlyDatabase,
   expected: Pick<
     SessionBranchSummaryReadRequest,
-    "sessionKey" | "sessionId" | "lifecycleRevision"
+    "sessionKey" | "sessionId" | "lifecycleRevision" | "previous"
   > & {
     databaseIdentity?: string;
   },
@@ -135,7 +107,7 @@ function readSessionBranchSnapshot(
       ) {
         return { status: "failed" };
       }
-      const entry = readSessionEntryRow(database, expected.sessionKey)?.entry;
+      const entry = readSessionEntryRow(database, expected.sessionKey, "list")?.entry;
       if (!entry?.sessionId) {
         return { status: "missing-session" };
       }
@@ -147,13 +119,25 @@ function readSessionBranchSnapshot(
       }
       assertSessionTranscriptHot(database.db, expected.sessionId);
       // The watermark and rows must describe the same snapshot, even when a peer appends.
-      const watermark = readSessionBranchWatermark(database, expected.sessionId);
-      const cached = readCachedSessionBranchSummaries(database, expected.sessionId, watermark);
-      const branches = cached ?? readSessionBranchSummaries(database, expected.sessionId);
-      if (!cached) {
-        cacheSessionBranchSummaries(database, expected.sessionId, { ...watermark, branches });
-      }
-      return { status: "ok", ...watermark, branches: cloneSessionBranchSummaries(branches) };
+      const watermark = readSessionTranscriptHotWatermark(database, expected.sessionId);
+      const previous = expected.previous;
+      const cached =
+        previous?.generation === watermark.generation &&
+        previous.maxSeq !== null &&
+        watermark.maxSeq !== null &&
+        previous.maxSeq <= watermark.maxSeq
+          ? previous
+          : undefined;
+      const summaries =
+        cached?.maxSeq === watermark.maxSeq
+          ? cached
+          : readSessionBranchSummaries(database, expected.sessionId, cached);
+      return {
+        status: "ok",
+        ...watermark,
+        appendSafe: summaries.appendSafe,
+        branches: cloneSessionBranchSummaries(summaries.branches),
+      };
     },
     { operationLabel: "session branch summaries read" },
   );
@@ -164,7 +148,10 @@ export function readSessionBranchSummariesInWorker(
   request: SessionBranchSummaryReadRequest,
 ): SessionBranchSummaryReadResult {
   const result = withFreshOpenClawAgentDatabaseReadOnly(
-    (database) => readSessionBranchSnapshot(database, request),
+    (database) =>
+      request.validation && !adoptOpenClawAgentDatabaseValidation(database, request.validation)
+        ? { status: "failed" as const }
+        : readSessionBranchSnapshot(database, request),
     request.database,
   );
   return result.found ? result.value : { status: "missing-session" };
@@ -176,98 +163,5 @@ export function invalidateSessionBranchCache(
 ): void {
   for (const sessionId of uniqueStrings(sessionIds)) {
     sessionBranchCache.delete(sessionBranchCacheKey(databasePath, sessionId));
-  }
-}
-
-export async function listSessionBranches(
-  params: SessionBranchListParams,
-): Promise<SessionBranchListResult> {
-  const sourceKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
-  const resolved = resolveSqliteScope({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    sessionKey: sourceKey,
-    ...(params.storePath ? { storePath: params.storePath } : {}),
-  });
-  try {
-    const retained = retainOpenClawAgentDatabaseReadOnly(toDatabaseOptions(resolved));
-    if (!retained.found) {
-      return { status: "missing-session" };
-    }
-    const { database, claim } = retained;
-    const completion = createDeferredCore();
-    const controller = new AbortController();
-    let unregister = () => {};
-    try {
-      const selected = readSessionEntryRow(database, sourceKey)?.entry;
-      if (!selected?.sessionId) {
-        return { status: "missing-session" };
-      }
-      const expected = {
-        sessionKey: sourceKey,
-        sessionId: selected.sessionId,
-        lifecycleRevision: selected.lifecycleRevision,
-      };
-      const assertCurrent = () => {
-        controller.signal.throwIfAborted();
-        claim.assertCurrent();
-      };
-      unregister = registerOpenClawAgentDatabaseAsyncResource({
-        agentId: database.agentId,
-        path: database.path,
-        revoke: () => controller.abort(new Error("Session branch read was revoked")),
-        close: () => completion.promise,
-      });
-      return await readRestoredSessionTranscript(
-        { ...params, agentId: resolved.agentId, sessionId: selected.sessionId },
-        async (): Promise<SessionBranchListResult> => {
-          assertCurrent();
-          const watermark = readSessionBranchWatermark(database, selected.sessionId);
-          const cached = readCachedSessionBranchSummaries(database, selected.sessionId, watermark);
-          let snapshot: SessionBranchSummaryReadResult;
-          if (cached) {
-            snapshot = { status: "ok", ...watermark, branches: cached };
-          } else if (typeof claim.identity === "symbol") {
-            // Incognito transcripts live only in this process's in-memory database.
-            snapshot = readSessionBranchSnapshot(database, expected);
-          } else {
-            const { runSessionBranchSummaryWorkerRequest } =
-              await import("./session-transcript-worker-runtime.js");
-            assertCurrent();
-            snapshot = await runSessionBranchSummaryWorkerRequest(
-              {
-                database: { agentId: database.agentId, path: database.path },
-                databaseIdentity: claim.identity,
-                ...expected,
-              },
-              controller.signal,
-            );
-          }
-          assertCurrent();
-          const current = readSessionEntryRow(database, sourceKey)?.entry;
-          if (
-            current?.sessionId !== expected.sessionId ||
-            current.lifecycleRevision !== expected.lifecycleRevision
-          ) {
-            return { status: "failed" };
-          }
-          if (snapshot.status !== "ok") {
-            return snapshot;
-          }
-          // Keep the worker's exact watermark; an append during the read invalidates the next lookup.
-          cacheSessionBranchSummaries(database, selected.sessionId, snapshot);
-          return { status: "ok", branches: cloneSessionBranchSummaries(snapshot.branches) };
-        },
-      );
-    } finally {
-      try {
-        claim.release();
-      } finally {
-        completion.resolve();
-        unregister();
-      }
-    }
-  } catch {
-    return { status: "failed" };
   }
 }

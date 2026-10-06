@@ -3,6 +3,7 @@ import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { telegramOutbound, telegramPlugin } from "../extensions/telegram/api.js";
+import { getOrCreateAccountThrottler } from "../extensions/telegram/test-api.js";
 import {
   announceRestartRecoveryResumption,
   isRestartRecoveryDeliveryCurrent,
@@ -23,7 +24,22 @@ import { createDeferredCore } from "../src/shared/deferred.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 
-// Only external HTTP is substituted: Gateway ownership and Telegram's client/throttler remain real.
+type TelegramApiTransformer = ReturnType<typeof getOrCreateAccountThrottler>["transformer"];
+
+function createImmediateSerialThrottler(): TelegramApiTransformer {
+  let tail = Promise.resolve();
+  return (prev, method, payload, signal) => {
+    const result = tail.then(() => prev(method, payload, signal));
+    tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+}
+
+// External HTTP and rate delays are substituted; Gateway ownership, Telegram's client, and the
+// serialized account queue remain real.
 describe("recovery notice final transport fence", () => {
   it.each([
     "allowed",
@@ -33,7 +49,7 @@ describe("recovery notice final transport fence", () => {
     "runtime policy revoked",
     "automatic delivery revoked",
     "owner retired",
-  ] as const)("checks %s after a real account throttle wait", async (mode) => {
+  ] as const)("checks %s after a real serialized account queue wait", async (mode) => {
     await withOpenClawTestState({ prefix: "notice-http-" }, async (state) => {
       const blocked = createDeferredCore<ServerResponse>();
       const preDispatch = createDeferredCore();
@@ -85,14 +101,16 @@ describe("recovery notice final transport fence", () => {
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);
       });
+      const botToken = "123:notice-" + state.stateDir.split("/").at(-1);
       const cfg: OpenClawConfig = {
         channels: {
           telegram: {
-            botToken: "123:notice-" + state.stateDir.split("/").at(-1),
+            botToken,
             apiRoot: "http://127.0.0.1:" + (server.address() as AddressInfo).port,
           },
         },
       };
+      getOrCreateAccountThrottler(botToken, createImmediateSerialThrottler);
       let currentCfg = cfg;
       const sessionKey = "agent:main:telegram:direct:123";
       const storePath = path.join(state.stateDir, "sessions.json");
@@ -283,15 +301,17 @@ describe("recovery typing final transport fence", () => {
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);
       });
+      const botToken = "123:typing-" + state.stateDir.split("/").at(-1);
       const cfg: OpenClawConfig = {
         agents: { defaults: { timeoutSeconds: 30 } },
         channels: {
           telegram: {
-            botToken: "123:typing-" + state.stateDir.split("/").at(-1),
+            botToken,
             apiRoot: "http://127.0.0.1:" + (server.address() as AddressInfo).port,
           },
         },
       };
+      getOrCreateAccountThrottler(botToken, createImmediateSerialThrottler);
       let currentCfg = cfg;
       const scope = {
         storePath: path.join(state.stateDir, "sessions.json"),

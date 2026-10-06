@@ -41,26 +41,11 @@ function parseQaLabUpArgs(argv: readonly string[]) {
   }).values;
 }
 
-export const qaLabUpTesting = {
-  runQaLabUp,
-};
-
-type QaLabRuntime = typeof import("../extensions/qa-lab/src/cli.runtime.ts");
-
-type QaLabUpDeps = {
-  loadRuntime?: () => Promise<Pick<QaLabRuntime, "runQaDockerUpCommand">>;
-  writeStdout?: (text: string) => void;
-};
-
-async function loadQaLabRuntime(): Promise<Pick<QaLabRuntime, "runQaDockerUpCommand">> {
-  return await import("../extensions/qa-lab/src/cli.runtime.ts");
-}
-
-async function runQaLabUp(argv: readonly string[], deps: QaLabUpDeps = {}): Promise<number> {
-  const values = parseQaLabUpArgs(argv);
+async function runQaLabUp(): Promise<number> {
+  const values = parseQaLabUpArgs(process.argv.slice(2));
 
   if (values.help) {
-    (deps.writeStdout ?? ((text: string) => process.stdout.write(text)))(usage());
+    process.stdout.write(usage());
     return 0;
   }
 
@@ -81,7 +66,7 @@ async function runQaLabUp(argv: readonly string[], deps: QaLabUpDeps = {}): Prom
   const gatewayPort = parsePort(values["gateway-port"], "--gateway-port");
   const qaLabPort = parsePort(values["qa-lab-port"], "--qa-lab-port");
 
-  const { runQaDockerUpCommand } = await (deps.loadRuntime ?? loadQaLabRuntime)();
+  const { runQaDockerUpCommand } = await import("../extensions/qa-lab/src/cli.runtime.ts");
 
   await runQaDockerUpCommand({
     outputDir: values["output-dir"],
@@ -96,18 +81,11 @@ async function runQaLabUp(argv: readonly string[], deps: QaLabUpDeps = {}): Prom
   return 0;
 }
 
-async function main(argv: readonly string[]): Promise<number> {
-  return await runQaLabUp(argv);
-}
-
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2)).then(
-    (code) => {
-      process.exitCode = code;
-    },
-    (error: unknown) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exitCode = 1;
-    },
-  );
+  try {
+    process.exitCode = await runQaLabUp();
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  }
 }

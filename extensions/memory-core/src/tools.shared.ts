@@ -1,4 +1,3 @@
-// Memory Core plugin module implements tools.shared behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   AnyAgentTool,
@@ -34,30 +33,20 @@ export async function getMemoryManagerContextWithPurpose(params: {
 }): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
-      debug?: NonNullable<MemorySearchManagerResult["debug"]>;
+      debug: MemorySearchManagerResult["debug"];
     }
   | {
       error: string | undefined;
     }
 > {
   const { getMemorySearchManager } = await loadMemoryToolRuntime();
-  const startedAt = Date.now();
   const { manager, debug, error } = await getMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId,
     purpose: params.purpose,
     ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
   });
-  return manager
-    ? {
-        manager,
-        debug: {
-          backend: debug?.backend ?? "builtin",
-          purpose: debug?.purpose ?? params.purpose ?? "default",
-          managerMs: debug?.managerMs ?? Math.max(0, Date.now() - startedAt),
-        },
-      }
-    : { error };
+  return manager ? { manager, debug } : { error };
 }
 
 export function createMemoryTool(params: {
@@ -76,6 +65,7 @@ export function createMemoryTool(params: {
     name: params.contract.name,
     description: params.contract.describe(ctx.sources),
     parameters: params.contract.parameters,
+    prepareArguments: params.contract.prepareArguments,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
       const latestCtx = params.options.getConfig ? resolveMemoryToolContext(params.options) : ctx;
       // A live getter makes missing or disabled current config a revocation.

@@ -1,17 +1,14 @@
 // Pure helpers for custom session groups and their sidebar section tokens.
 // Catalog storage and member updates live on the gateway (sessions.groups.*);
 // the SessionCapability mirrors the catalog into state.groups.
-
-import { moveArrayEntry } from "../array-order.ts";
+import type {
+  SessionGroup,
+  SessionGroupDefaults,
+} from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 
 const BUILT_IN_SESSION_SECTION_IDS = new Set(["ungrouped", "groups", "work"]);
 
-export type SessionGroupSettings = {
-  name: string;
-  position: number;
-  cwd?: string;
-  worktree?: boolean;
-};
+export type SessionGroupSettings = SessionGroup & SessionGroupDefaults;
 
 export function readSessionCustomGroups(payload: unknown): SessionGroupSettings[] {
   const groups = (payload as { groups?: unknown } | null)?.groups;
@@ -36,6 +33,7 @@ export function readSessionCustomGroups(payload: unknown): SessionGroupSettings[
   });
 }
 
+/** Replace defaults from a complete snapshot, retaining only catalog names and positions. */
 export function mergeSessionGroupDefaults(
   groups: readonly SessionGroupSettings[],
   payload: unknown,
@@ -56,7 +54,7 @@ export function mergeSessionGroupDefaults(
       });
     }
   }
-  return groups.map((group) => ({ ...group, ...defaults.get(group.name) }));
+  return groups.map(({ name, position }) => ({ name, position, ...defaults.get(name) }));
 }
 
 export function readSidebarSectionOrder(payload: unknown): string[] {
@@ -78,38 +76,14 @@ export function normalizeSessionSectionOrderTokens(value: unknown): string[] | n
       continue;
     }
     const trimmed = entry.trim();
-    // Catalog-backed sections (session catalog providers) order alongside the
-    // built-ins and custom categories, so their ids must survive normalization.
-    const catalogName = trimmed.startsWith("catalog:")
-      ? trimmed.slice("catalog:".length).trim()
-      : "";
-    if (catalogName) {
-      const catalogSectionId = `catalog:${catalogName}`;
-      if (!normalized.includes(catalogSectionId)) {
-        normalized.push(catalogSectionId);
-      }
-      continue;
-    }
-    let token: string | null = null;
-    if (BUILT_IN_SESSION_SECTION_IDS.has(trimmed)) {
-      token = trimmed;
-    } else if (trimmed.startsWith("category:")) {
-      const name = trimmed.slice("category:".length).trim();
-      token = name ? `category:${name}` : null;
-    }
+    const prefix = ["catalog:", "category:"].find((candidate) => trimmed.startsWith(candidate));
+    const name = prefix ? trimmed.slice(prefix.length).trim() : "";
+    const token = prefix
+      ? name && `${prefix}${name}`
+      : BUILT_IN_SESSION_SECTION_IDS.has(trimmed) && trimmed;
     if (token && !normalized.includes(token)) {
       normalized.push(token);
     }
   }
   return normalized;
-}
-
-/** Move one entry relative to another while preserving every other entry. */
-export function moveSessionOrderEntry(
-  order: readonly string[],
-  source: string,
-  target: string,
-  position: "before" | "after",
-): string[] {
-  return moveArrayEntry(order, source, target, position);
 }

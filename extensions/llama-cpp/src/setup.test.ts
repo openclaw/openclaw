@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -277,7 +278,7 @@ describe("llama.cpp managed setup", () => {
 
       await runLlamaCppSetup(ctx);
 
-      expect(await fs.readFile(destination)).toEqual(payload);
+      assert.deepStrictEqual(await fs.readFile(destination), payload);
       expect(release).toHaveBeenCalledOnce();
       expect(stopped).toHaveBeenCalledExactlyOnceWith("Managed llama.cpp server prepared");
       expect(mocks.downloadFetch).toHaveBeenCalledOnce();
@@ -517,6 +518,12 @@ describe("llama.cpp managed setup", () => {
     const ctx = authContext(true);
 
     await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+    expect(ctx.prompter.note).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /embedding-only.*0\.3 GB.*memory\.search\.provider.*local.*models auth login --provider llama-cpp --method local/su,
+      ),
+      "Setup skipped",
+    );
     expect(ctx.prompter.confirm).not.toHaveBeenCalled();
     expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
   });

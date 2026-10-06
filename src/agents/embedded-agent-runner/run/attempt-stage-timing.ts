@@ -1,19 +1,10 @@
 import { isMainThread, threadId } from "node:worker_threads";
 import {
-  createStageTimingTracker,
+  type createStageTimingTracker,
   formatStageTimings,
   type StageTimingSummary,
 } from "../../../shared/stage-timing.js";
 
-type EmbeddedRunStageSummary = StageTimingSummary;
-
-/** Lightweight monotonic-ish stage tracker used for embedded run startup diagnostics. */
-type EmbeddedRunStageTracker = {
-  mark: (name: string) => void;
-  snapshot: () => EmbeddedRunStageSummary;
-};
-
-/** Canonical stage names for dispatch-time embedded attempt diagnostics. */
 export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
   workspace: "attempt-workspace",
   prompt: "attempt-prompt",
@@ -24,21 +15,8 @@ export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
 const EMBEDDED_RUN_STAGE_WARN_TOTAL_MS = 10_000;
 const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
 
-/**
- * Creates an append-only stage tracker. `mark` records time since the previous
- * mark while `snapshot` reports current total elapsed time without mutating the
- * recorded stage list.
- */
-export function createEmbeddedRunStageTracker(options?: {
-  now?: () => number;
-}): EmbeddedRunStageTracker {
-  const { mark, snapshot } = createStageTimingTracker(options?.now ?? Date.now);
-  return { mark, snapshot };
-}
-
-/** Returns true when either total runtime or any single stage exceeds warning thresholds. */
 export function shouldWarnEmbeddedRunStageSummary(
-  summary: EmbeddedRunStageSummary,
+  summary: StageTimingSummary,
   options?: {
     totalThresholdMs?: number;
     stageThresholdMs?: number;
@@ -52,11 +30,6 @@ export function shouldWarnEmbeddedRunStageSummary(
   );
 }
 
-/**
- * Builds the shared "emit stage summary" closure used by run startup and
- * attempt prep: warn when thresholds trip, trace otherwise, stay silent when
- * neither applies.
- */
 export function createEmbeddedRunStageSummaryEmitter(options: {
   label: string;
   log: {
@@ -66,7 +39,7 @@ export function createEmbeddedRunStageSummaryEmitter(options: {
   };
   runId: string;
   sessionId?: string;
-  tracker: EmbeddedRunStageTracker;
+  tracker: ReturnType<typeof createStageTimingTracker>;
 }): (phase: string) => void {
   return (phase) => {
     const summary = options.tracker.snapshot();
@@ -86,11 +59,7 @@ export function createEmbeddedRunStageSummaryEmitter(options: {
   };
 }
 
-/** Formats stage timing into compact log text for startup/attempt diagnostics. */
-export function formatEmbeddedRunStageSummary(
-  prefix: string,
-  summary: EmbeddedRunStageSummary,
-): string {
+export function formatEmbeddedRunStageSummary(prefix: string, summary: StageTimingSummary): string {
   const stages = formatStageTimings(summary.stages);
   return `${prefix} pid=${process.pid} threadId=${threadId} isMainThread=${isMainThread} totalMs=${summary.totalMs} stages=${stages}`;
 }

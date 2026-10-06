@@ -1,4 +1,3 @@
-/** Applies model override tokens embedded in reset/new command text. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -25,93 +24,6 @@ import {
 } from "./model-selection-directive.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 
-/** Result of applying a reset-message model override. */
-type ResetModelResult = {
-  selection?: ModelDirectiveSelection;
-  cleanedBody?: string;
-};
-
-async function loadResetModelCatalog(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-}): Promise<ModelCatalogEntry[]> {
-  const { readPreparedModelCatalog } = await import("../../agents/prepared-model-catalog.js");
-  return readPreparedModelCatalog({
-    config: params.cfg,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    readOnly: true,
-  });
-}
-
-async function applySelectionToSession(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  defaultProvider: string;
-  selection: ModelDirectiveSelection;
-  sessionEntry?: SessionEntry;
-  sessionEntryHandle?: ReplySessionEntryHandle;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-}): Promise<boolean> {
-  const { selection, sessionEntryHandle, sessionStore, sessionKey, storePath } = params;
-  const sessionEntry = sessionEntryHandle?.getCurrent() ?? params.sessionEntry;
-  if (!sessionEntry || !sessionKey) {
-    return true;
-  }
-  const initialSessionEntry = { ...sessionEntry };
-  const nextSessionEntry = { ...sessionEntry };
-  applyModelOverrideWithAuthProfileCompatibility({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    entry: nextSessionEntry,
-    currentProvider:
-      sessionEntry.providerOverride?.trim() ||
-      sessionEntry.modelProvider?.trim() ||
-      params.defaultProvider,
-    selection,
-    explicitDefaultSelection: selection.isDefault,
-  });
-  let appliedEntry = nextSessionEntry;
-  let selectionApplied = true;
-  if (storePath) {
-    const { persistReplySessionEntry } = await import("./session-entry-persistence.js");
-    const persistence = await persistReplySessionEntry({
-      storePath,
-      sessionKey,
-      initialEntry: initialSessionEntry,
-      entry: nextSessionEntry,
-      touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
-      requireModelSelectionUnlocked: true,
-    });
-    if (persistence.status === "lifecycle-invalidated") {
-      throw new SessionWorkStartInvalidatedError(persistence.error);
-    }
-    if (persistence.status === "model-selection-locked") {
-      throw new ModelSelectionLockedError();
-    }
-    const persistedEntry = persistence.entry;
-    appliedEntry = persistedEntry;
-    selectionApplied = sessionModelOverrideChangesApplied({
-      initial: initialSessionEntry,
-      next: nextSessionEntry,
-      current: persistedEntry,
-    });
-  }
-  adoptPersistedSessionSnapshot(sessionEntry, appliedEntry);
-  if (sessionEntryHandle) {
-    sessionEntryHandle.replaceCurrent(sessionEntry);
-  } else if (sessionStore) {
-    sessionStore[sessionKey] = sessionEntry;
-  }
-  return selectionApplied;
-}
-
-/** Applies a valid reset model override to session state and returns the cleaned body. */
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -130,7 +42,7 @@ export async function applyResetModelOverride(params: {
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
   modelCatalog?: ModelCatalogEntry[];
-}): Promise<ResetModelResult> {
+}): Promise<{ selection?: ModelDirectiveSelection; cleanedBody?: string }> {
   if (!params.resetTriggered) {
     return {};
   }
@@ -139,25 +51,28 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const tokens = rawBody.split(/\s+/).filter(Boolean);
+  const tokens = rawBody.split(/\s+/);
   const [first, second] = tokens;
   if (!first) {
     return {};
   }
 
-  const catalog =
-    params.modelCatalog ??
-    (await loadResetModelCatalog({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-    }));
+  let catalog = params.modelCatalog;
+  if (!catalog) {
+    const { readPreparedModelCatalog } = await import("../../agents/prepared-model-catalog.js");
+    catalog = await readPreparedModelCatalog({
+      config: params.cfg,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      readOnly: true,
+    });
+  }
   const modelPolicy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
     defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
+    defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
     agentId: params.agentId,
   });
   const allowedModelKeys = modelPolicy.allowedKeys;
@@ -226,25 +141,63 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const cleanedBody = tokens.slice(consumed).join(" ").trim();
+  const cleanedBody = tokens.slice(consumed).join(" ");
   params.sessionCtx.commandText = cleanedBody;
   params.sessionCtx.agentText = cleanedBody;
   params.sessionCtx.BodyStripped = cleanedBody;
   params.sessionCtx.BodyForCommands = cleanedBody;
 
-  const selectionApplied = await applySelectionToSession({
+  const agentDir =
+    params.agentDir ??
+    resolveAgentDir(params.cfg, params.agentId ?? resolveDefaultAgentId(params.cfg));
+  const { sessionEntryHandle, sessionStore, sessionKey, storePath } = params;
+  const sessionEntry = sessionEntryHandle?.getCurrent() ?? params.sessionEntry;
+  if (!sessionEntry || !sessionKey) {
+    return { selection, cleanedBody };
+  }
+  const initialSessionEntry = { ...sessionEntry };
+  const nextSessionEntry = { ...sessionEntry };
+  applyModelOverrideWithAuthProfileCompatibility({
     cfg: params.cfg,
-    agentDir:
-      params.agentDir ??
-      resolveAgentDir(params.cfg, params.agentId ?? resolveDefaultAgentId(params.cfg)),
-    defaultProvider: params.defaultProvider,
+    agentDir,
+    entry: nextSessionEntry,
+    currentProvider:
+      sessionEntry.providerOverride?.trim() ||
+      sessionEntry.modelProvider?.trim() ||
+      params.defaultProvider,
     selection,
-    sessionEntry: params.sessionEntry,
-    sessionEntryHandle: params.sessionEntryHandle,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
+    explicitDefaultSelection: selection.isDefault,
   });
-
+  let appliedEntry = nextSessionEntry;
+  let selectionApplied = true;
+  if (storePath) {
+    const { persistReplySessionEntry } = await import("./session-entry-persistence.js");
+    const persistence = await persistReplySessionEntry({
+      storePath,
+      sessionKey,
+      initialEntry: initialSessionEntry,
+      entry: nextSessionEntry,
+      touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
+      requireModelSelectionUnlocked: true,
+    });
+    if (persistence.status === "lifecycle-invalidated") {
+      throw new SessionWorkStartInvalidatedError(persistence.error);
+    }
+    if (persistence.status === "model-selection-locked") {
+      throw new ModelSelectionLockedError();
+    }
+    appliedEntry = persistence.entry;
+    selectionApplied = sessionModelOverrideChangesApplied({
+      initial: initialSessionEntry,
+      next: nextSessionEntry,
+      current: appliedEntry,
+    });
+  }
+  adoptPersistedSessionSnapshot(sessionEntry, appliedEntry);
+  if (sessionEntryHandle) {
+    sessionEntryHandle.replaceCurrent(sessionEntry);
+  } else if (sessionStore) {
+    sessionStore[sessionKey] = sessionEntry;
+  }
   return { selection: selectionApplied ? selection : undefined, cleanedBody };
 }

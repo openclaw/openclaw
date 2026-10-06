@@ -1,6 +1,10 @@
 // Handshake auth helpers classify browser security context, pairing locality, and connect auth details.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
+  buildDeviceAuthPayload,
+  buildDeviceAuthPayloadV3,
+} from "../../../../packages/gateway-client/src/device-auth.js";
+import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
@@ -8,7 +12,6 @@ import type { ConnectParams } from "../../../../packages/gateway-protocol/src/in
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
-import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
 import {
   isLoopbackAddress,
   isLoopbackHost,
@@ -45,15 +48,10 @@ export function isNativeAppUiClient(client: ConnectParams["client"]): boolean {
 }
 
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
-  const trimmedOrigin = requestOrigin?.trim();
-  if (!trimmedOrigin) {
-    return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
-  }
-  try {
-    return `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}${normalizeLowercaseStringOrEmpty(new URL(trimmedOrigin).origin)}`;
-  } catch {
-    return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
-  }
+  const origin = URL.parse(requestOrigin?.trim() ?? "")?.origin;
+  return origin
+    ? `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}${normalizeLowercaseStringOrEmpty(origin)}`
+    : BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
 }
 
 export function resolveHandshakeBrowserSecurityContext(params: {
@@ -156,15 +154,7 @@ function isSharedSecretLoopbackLocalEquivalent(params: {
 }
 
 function resolveOriginHost(origin?: string): string {
-  const trimmed = origin?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    return new URL(trimmed).hostname;
-  } catch {
-    return "";
-  }
+  return URL.parse(origin?.trim() ?? "")?.hostname ?? "";
 }
 
 function isControlUiBrowserContainerLocalEquivalent(params: {
@@ -268,23 +258,6 @@ function resolveSignatureToken(connectParams: ConnectParams): string | null {
   );
 }
 
-function buildUnauthorizedHandshakeContext(params: {
-  authProvided: AuthProvidedKind;
-  canRetryWithDeviceToken: boolean;
-  recommendedNextStep:
-    | "retry_with_device_token"
-    | "update_auth_configuration"
-    | "update_auth_credentials"
-    | "wait_then_retry"
-    | "review_auth_configuration";
-}) {
-  return {
-    authProvided: params.authProvided,
-    canRetryWithDeviceToken: params.canRetryWithDeviceToken,
-    recommendedNextStep: params.recommendedNextStep,
-  };
-}
-
 export function resolveDeviceSignaturePayloadVersion(params: {
   device: {
     id: string;
@@ -357,47 +330,35 @@ export function resolveUnauthorizedHandshakeContext(params: {
     authProvided === "token" &&
     !params.connectAuth?.deviceToken;
   if (canRetryWithDeviceToken) {
-    return buildUnauthorizedHandshakeContext({
+    return {
       authProvided,
       canRetryWithDeviceToken,
       recommendedNextStep: "retry_with_device_token",
-    });
+    };
   }
+  let recommendedNextStep: ReturnType<
+    typeof resolveUnauthorizedHandshakeContext
+  >["recommendedNextStep"];
   switch (params.failedAuth.reason) {
     case "token_missing":
     case "token_missing_config":
+    case "token_redacted_config":
+    case "password_redacted_config":
     case "password_missing":
     case "password_missing_config":
-      return buildUnauthorizedHandshakeContext({
-        authProvided,
-        canRetryWithDeviceToken,
-        recommendedNextStep: "update_auth_configuration",
-      });
+      recommendedNextStep = "update_auth_configuration";
+      break;
     case "token_mismatch":
     case "password_mismatch":
     case "device_token_mismatch":
-      return buildUnauthorizedHandshakeContext({
-        authProvided,
-        canRetryWithDeviceToken,
-        recommendedNextStep: "update_auth_credentials",
-      });
-    case "scope_mismatch":
-      return buildUnauthorizedHandshakeContext({
-        authProvided,
-        canRetryWithDeviceToken,
-        recommendedNextStep: "review_auth_configuration",
-      });
+      recommendedNextStep = "update_auth_credentials";
+      break;
     case "rate_limited":
-      return buildUnauthorizedHandshakeContext({
-        authProvided,
-        canRetryWithDeviceToken,
-        recommendedNextStep: "wait_then_retry",
-      });
+      recommendedNextStep = "wait_then_retry";
+      break;
     default:
-      return buildUnauthorizedHandshakeContext({
-        authProvided,
-        canRetryWithDeviceToken,
-        recommendedNextStep: "review_auth_configuration",
-      });
+      recommendedNextStep = "review_auth_configuration";
+      break;
   }
+  return { authProvided, canRetryWithDeviceToken, recommendedNextStep };
 }

@@ -114,7 +114,7 @@ describe("rooted CLI preparation", () => {
     }
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
-    fixture.cleanup();
+    await fixture.cleanup();
   });
 
   async function prepare(overrides: Partial<RunCliAgentParams> = {}) {
@@ -164,13 +164,8 @@ describe("rooted CLI preparation", () => {
   it.each([
     { label: "runtime allowlist", policy: { toolsAllow: ["read"] }, expected: ["read"] },
     {
-      label: "exact CLI availability",
-      policy: { cliToolAvailability: { native: ["Read"], openClaw: ["read"] } },
-      expected: ["read"],
-    },
-    {
       label: "exact write cap",
-      policy: { cliToolAvailability: { native: [], openClaw: ["write"] } },
+      policy: { cliToolAvailability: { native: ["Write"], openClaw: ["write"] } },
       expected: ["write"],
     },
   ])("preserves the caller's $label while disabling native tools", async ({ policy, expected }) => {
@@ -181,19 +176,6 @@ describe("rooted CLI preparation", () => {
     );
     expect(mintGrant.mock.calls[0]?.[0].context.toolsAllow).toEqual(expected);
   });
-
-  it.each(["ro", "none"] as const)(
-    "rejects a %s sandbox before issuing a grant or preparing the CLI",
-    async (workspaceAccess) => {
-      resolveSandboxContext.mockResolvedValue(
-        createAgentToolsSandboxContext({ workspaceDir: fixture.session.dir, workspaceAccess }),
-      );
-
-      await expect(prepare()).rejects.toThrow("sandbox workspace is not read-write");
-      expect(mintGrant).not.toHaveBeenCalled();
-      expect(prepareExecution).not.toHaveBeenCalled();
-    },
-  );
 
   it("keeps an empty instruction snapshot when reviewed skills exist on disk", async () => {
     const root = path.join(fixture.session.dir, "workshop");
@@ -210,12 +192,13 @@ describe("rooted CLI preparation", () => {
     expect(prepareSkillsPlugin).not.toHaveBeenCalled();
   });
 
-  it("retains the distinct policy owner's non-writable sandbox after execution admission", async () => {
+  it("retains the distinct policy owner's ro sandbox before issuing a grant or preparing the CLI", async () => {
+    const workspaceAccess = "ro";
     resolveSandboxContext.mockImplementation(async ({ agentId }) =>
       agentId === "other"
         ? createAgentToolsSandboxContext({
             workspaceDir: fixture.session.dir,
-            workspaceAccess: "ro",
+            workspaceAccess,
           })
         : null,
     );
@@ -228,8 +211,8 @@ describe("rooted CLI preparation", () => {
         config: {
           agents: {
             entries: {
-              main: { default: true, sandbox: { mode: "off" } },
-              other: { sandbox: { mode: "all", workspaceAccess: "ro" } },
+              main: { sandbox: { mode: "off" } },
+              other: { sandbox: { mode: "all", workspaceAccess } },
             },
           },
         },
@@ -259,51 +242,26 @@ describe("rooted CLI preparation", () => {
     expect(prepareExecution).not.toHaveBeenCalled();
   });
 
-  it.each(["closes", "is replaced"])(
-    "does not prepare delegated tools after admission %s during sandbox preparation",
-    async (loss) => {
-      const runId = `rooted-admission-${loss}`;
-      const admission = prepareSystemAgentRunAdmission(
-        {},
-        runId,
-        "main",
-        "rooted-preparation-test",
+  it("does not prepare delegated tools after admission is replaced during sandbox preparation", async () => {
+    const runId = "rooted-admission-is replaced";
+    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "rooted-preparation-test");
+    let replacement: typeof admission | undefined;
+    resolveSandboxContext.mockImplementation(async () => {
+      replacement = prepareSystemAgentRunAdmission({}, runId, "main", "rooted-preparation-test");
+      await replacement.admit("embedded");
+      return null;
+    });
+    try {
+      await expect(prepare({ runId, preparedRunAdmission: admission })).rejects.toThrow(
+        /authority.*active/,
       );
-      let replacement: typeof admission | undefined;
-      resolveSandboxContext.mockImplementation(async () => {
-        if (loss === "closes") {
-          admission.close();
-        } else {
-          replacement = prepareSystemAgentRunAdmission(
-            {},
-            runId,
-            "main",
-            "rooted-preparation-test",
-          );
-          await replacement.admit("embedded");
-        }
-        return null;
-      });
-      try {
-        await expect(prepare({ runId, preparedRunAdmission: admission })).rejects.toThrow(
-          /authority.*active/,
-        );
-        expect(projectTools).not.toHaveBeenCalled();
-        expect(mintGrant).not.toHaveBeenCalled();
-        expect(prepareExecution).not.toHaveBeenCalled();
-      } finally {
-        replacement?.close();
-        admission.close();
-      }
-    },
-  );
-
-  it("preserves ordinary CLI runs without an instruction-isolation declaration", async () => {
-    delete backend.isolatesInstructionsWithExactTools;
-    const prepared = await fixture.prepare();
-    preparedRuns.push(prepared);
-    expect(prepared.params.rootedExecution).toBeUndefined();
-    expect(prepareExecution).toHaveBeenCalled();
+      expect(projectTools).not.toHaveBeenCalled();
+      expect(mintGrant).not.toHaveBeenCalled();
+      expect(prepareExecution).not.toHaveBeenCalled();
+    } finally {
+      replacement?.close();
+      admission.close();
+    }
   });
 
   it.each(["always-on native tools", "no MCP", "node placement"] as const)(

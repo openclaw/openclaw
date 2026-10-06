@@ -34,6 +34,20 @@ case_dir=""
 uid=1501
 interrupted=false
 
+prepare_install_prefix() {
+  mkdir -p "$1"
+  # npm project installs need lifecycle approval for the exact runtime and package.
+  node -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const [prefix, ...specs] = process.argv.slice(1);
+    fs.writeFileSync(path.join(prefix, "package.json"), JSON.stringify({
+      private: true,
+      allowScripts: Object.fromEntries(specs.map((spec) => [spec, true])),
+    }));
+  ' "$@"
+}
+
 fleet() (
   cd "$scratch"
   exec timeout --foreground 180s sudo -n setpriv --reuid="$uid" --regid="$uid" --groups="$socket_gid" \
@@ -229,6 +243,7 @@ run_previous_default_case() {
 # canonical package and selected Node version in an accessible test-owned prefix.
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz fleet-cache "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 sha256sum "$PACKAGE_TGZ"
+prepare_install_prefix "$scratch/host-runtime" "node@$node_version" "$PACKAGE_TGZ"
 timeout --foreground 600s npm install --prefix "$scratch/host-runtime" --no-save --no-package-lock \
   --no-audit --no-fund "node@$node_version" smol-toml@1.8.0 "$PACKAGE_TGZ"
 node_bin="$scratch/host-runtime/node_modules/node/bin/node"
@@ -265,6 +280,7 @@ run_case root-invoker 0 /home/node/.openclaw/cache '' ''
 
 (
   umask 022
+  prepare_install_prefix "$scratch/previous-runtime" openclaw@2026.8.2
   timeout --foreground 600s npm install --prefix "$scratch/previous-runtime" --no-save --no-package-lock \
     --no-audit --no-fund openclaw@2026.8.2
 )

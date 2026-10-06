@@ -1,18 +1,25 @@
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import * as execRunner from "../../process/exec-runner.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { InvalidWorktreeBaseRefError } from "./base-ref.js";
+import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function git(cwd: string, ...args: string[]): Promise<void> {
-  await execFileAsync("git", ["-C", cwd, ...args]);
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 }
 
 describe("ManagedWorktreeService branch discovery", () => {
@@ -22,6 +29,8 @@ describe("ManagedWorktreeService branch discovery", () => {
 
   beforeEach(async () => {
     root = tempDirs.make("openclaw-worktree-branches-", await fs.realpath(os.tmpdir()));
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", path.join(root, "global.gitconfig"));
     const template = path.join(root, "git-template");
     repo = path.join(root, "repo");
     await fs.mkdir(path.join(template, "hooks"), { recursive: true });
@@ -38,8 +47,76 @@ describe("ManagedWorktreeService branch discovery", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("fetches the default base without advancing an explicitly selectable local branch", async () => {
+    const localHead = await git(repo, "rev-parse", "HEAD");
+    const remoteHead = await git(
+      repo,
+      "commit-tree",
+      "HEAD^{tree}",
+      "-p",
+      "HEAD",
+      "-m",
+      "remote update",
+    );
+    const remote = path.join(root, "remote.git");
+    await git(root, "clone", "--bare", repo, remote);
+    await git(repo, "remote", "add", "origin", remote);
+    await git(repo, "fetch", "origin");
+    await git(repo, "remote", "set-head", "origin", "-a");
+    await git(remote, "update-ref", "refs/heads/main", remoteHead, localHead);
+
+    const explicit = await service.create({ repoRoot: repo, name: "local-base", baseRef: "main" });
+    expect(await git(explicit.path, "rev-parse", "HEAD")).toBe(localHead);
+    expect(await git(repo, "rev-parse", "origin/main")).toBe(localHead);
+
+    const defaultBase = await service.create({ repoRoot: repo, name: "remote-base" });
+    expect(defaultBase.baseRef).toBe("origin/main");
+    expect(await git(defaultBase.path, "rev-parse", "HEAD")).toBe(remoteHead);
+    expect(await git(repo, "rev-parse", "main")).toBe(localHead);
+  });
+
+  it("falls back from a pruned remote HEAD only when no explicit base was requested", async () => {
+    useInProcessWorktreeCapacityTransport();
+    const disk = fsSync.statfsSync(root);
+    vi.spyOn(fsSync, "statfsSync").mockReturnValue({
+      type: disk.type,
+      files: disk.files,
+      frsize: disk.frsize,
+      ffree: disk.ffree,
+      bsize: 4096,
+      blocks: 1024 ** 4 / 4096,
+      bavail: (100 * 1024 ** 3) / 4096,
+      bfree: (100 * 1024 ** 3) / 4096,
+    });
+    const remote = path.join(root, "remote.git");
+    await git(root, "clone", "--bare", repo, remote);
+    await git(repo, "remote", "add", "origin", remote);
+    await git(repo, "fetch", "origin");
+    await git(repo, "remote", "set-head", "origin", "-a");
+    const localHead = await git(repo, "rev-parse", "HEAD");
+    await git(remote, "branch", "-m", "main", "next");
+    await git(repo, "config", "fetch.prune", "true");
+    await git(repo, "config", "remote.origin.followRemoteHEAD", "never");
+
+    const created = await service.create({ repoRoot: repo, name: "default-base" });
+
+    expect(created.baseRef).toBe("HEAD");
+    expect(await git(created.path, "rev-parse", "HEAD")).toBe(localHead);
+    expect(await git(repo, "symbolic-ref", "refs/remotes/origin/HEAD")).toBe(
+      "refs/remotes/origin/main",
+    );
+    await expect(
+      service.create({ repoRoot: repo, name: "explicit-base", baseRef: "origin/HEAD" }),
+    ).rejects.toThrow(InvalidWorktreeBaseRefError);
+    expect(await git(repo, "branch", "--list", "openclaw/explicit-base")).toBe("");
+    expect(await service.listRegistryRecords()).toEqual([created]);
   });
 
   it("reports Git, plain-directory, and unavailable repository status", async () => {
@@ -67,6 +144,26 @@ describe("ManagedWorktreeService branch discovery", () => {
         includeRepositoryStatus: true,
       }),
     ).resolves.toEqual({ branches: [], repositoryStatus: "unavailable" });
+
+    const unborn = path.join(root, "unborn");
+    await fs.mkdir(unborn);
+    await git(unborn, "init", "-b", "main", `--template=${path.join(root, "git-template")}`);
+    await expect(
+      service.listRepositoryBranches(unborn, { includeRepositoryStatus: true }),
+    ).resolves.toEqual({ branches: [], repositoryStatus: "not_git" });
+    await expect(service.listRepositoryBranches(unborn)).rejects.toThrow(
+      "Create an initial commit, then retry.",
+    );
+    await expect(service.create({ repoRoot: unborn, name: "requires-commit" })).rejects.toThrow(
+      "Create an initial commit, then retry.",
+    );
+
+    for (const ref of ["broken-ref\n", `${"a".repeat(40)}\n`]) {
+      await fs.writeFile(path.join(unborn, ".git", "refs", "heads", "main"), ref);
+      await expect(
+        service.listRepositoryBranches(unborn, { includeRepositoryStatus: true }),
+      ).resolves.toEqual({ branches: [], repositoryStatus: "unavailable" });
+    }
   });
 
   it.skipIf(process.platform !== "win32")(
@@ -98,6 +195,158 @@ describe("ManagedWorktreeService branch discovery", () => {
       }
     },
   );
+
+  it("reuses unchanged branch inventories and observes loose, packed, tag, and HEAD changes", async () => {
+    const linked = path.join(root, "linked");
+    await git(repo, "worktree", "add", "-b", "tasks/selected", linked, "HEAD");
+    const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+    const first = await service.listRepositoryBranches(linked);
+    expect(first.headBranch).toBe("tasks/selected");
+    run.mockClear();
+    expect(await service.listRepositoryBranches(linked)).toEqual(first);
+    expect(run).toHaveBeenCalledTimes(0);
+
+    await git(repo, "branch", "tasks/added");
+    expect((await service.listRepositoryBranches(linked)).branches).toContainEqual({
+      name: "tasks/added",
+      kind: "local",
+    });
+    await git(repo, "pack-refs", "--all", "--prune");
+    await git(repo, "branch", "-d", "tasks/added");
+    expect((await service.listRepositoryBranches(linked)).branches).not.toContainEqual({
+      name: "tasks/added",
+      kind: "local",
+    });
+    await git(repo, "tag", "tasks/selected");
+    expect((await service.listRepositoryBranches(linked)).headBranch).toBe("heads/tasks/selected");
+    await git(linked, "switch", "--detach");
+    expect((await service.listRepositoryBranches(linked)).headBranch).toBeUndefined();
+    expect((await service.listRepositoryBranches(repo)).headBranch).toBe("main");
+
+    const commit = await git(repo, "rev-parse", "HEAD");
+    const refs = path.join(repo, ".git", "refs", "heads", "fleet");
+    await fs.mkdir(refs);
+    await Promise.all(
+      Array.from({ length: 810 }, (_, index) =>
+        fs.writeFile(path.join(refs, String(index).padStart(4, "0")), `${commit}\n`),
+      ),
+    );
+    const fleet = await service.listRepositoryBranches(repo);
+    run.mockClear();
+    expect(await service.listRepositoryBranches(repo)).toEqual(fleet);
+    expect(run).toHaveBeenCalledTimes(0);
+    await fs.unlink(path.join(refs, "0000"));
+    expect((await service.listRepositoryBranches(repo)).branches).not.toContainEqual({
+      name: "fleet/0000",
+      kind: "local",
+    });
+  });
+
+  it.each(["missing loose", "corrupt loose", "missing pack", "missing index", "corrupt pack"])(
+    "rejects a %s HEAD object after a branch-list cache hit",
+    async (damage) => {
+      const head = await git(repo, "rev-parse", "HEAD");
+      let object = path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2));
+      if (!damage.endsWith("loose")) {
+        await git(repo, "gc", "--prune=now");
+        const packs = path.join(repo, ".git", "objects", "pack");
+        const suffix = damage === "missing index" ? ".idx" : ".pack";
+        object = path.join(
+          packs,
+          (await fs.readdir(packs)).find((name) => name.endsWith(suffix))!,
+        );
+      }
+      if (damage.startsWith("corrupt")) {
+        await fs.chmod(object, 0o600);
+      }
+      const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+      const first = await service.listRepositoryBranches(repo, { includeRepositoryStatus: true });
+      expect(first.repositoryStatus).toBe("git");
+      run.mockClear();
+      expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
+        first,
+      );
+      expect(run).toHaveBeenCalledTimes(0);
+      if (damage.startsWith("missing")) {
+        await fs.unlink(object);
+      } else {
+        await fs.writeFile(object, Buffer.alloc((await fs.stat(object)).size));
+      }
+
+      await expect(
+        service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
+      ).resolves.toEqual({
+        branches: [],
+        repositoryStatus: "unavailable",
+      });
+      await expect(service.listRepositoryBranches(repo)).rejects.toThrow(
+        "Git metadata is unavailable",
+      );
+    },
+  );
+
+  it.each(["global", "worktree", "included", "environment", "relative", "parameters"])(
+    "observes changed %s config after warming checkout admission",
+    async (source) => {
+      let config = path.join(root, "global.gitconfig");
+      if (source === "worktree") {
+        await git(repo, "config", "extensions.worktreeConfig", "true");
+        config = path.join(repo, ".git", "config.worktree");
+      } else if (source === "included") {
+        config = path.join(root, "included.gitconfig");
+        await git(repo, "config", "include.path", config);
+      } else if (source === "relative") {
+        config = path.join(repo, "global.gitconfig");
+        vi.stubEnv("GIT_CONFIG_GLOBAL", "global.gitconfig");
+      } else if (source === "parameters") {
+        config = path.join(root, "included.gitconfig");
+        vi.stubEnv("GIT_CONFIG_PARAMETERS", `'include.path=${config}'`);
+      }
+      const first = await service.listRepositoryBranches(repo, { includeRepositoryStatus: true });
+      expect(first.repositoryStatus).toBe("git");
+      expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
+        first,
+      );
+      if (source === "environment") {
+        config = path.join(root, "redirected.gitconfig");
+        vi.stubEnv("GIT_CONFIG_GLOBAL", config);
+      }
+      await fs.writeFile(config, "[malformed\n");
+      expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
+        {
+          branches: [],
+          repositoryStatus: "unavailable",
+        },
+      );
+    },
+  );
+
+  it("keeps tag peeling and alternate object storage under native Git admission", async () => {
+    const head = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "tag", "-a", "tag-head", "-m", "tagged commit");
+    const tag = await git(repo, "rev-parse", "tag-head");
+    const alternate = path.join(root, "alternate");
+    await git(root, "clone", "--shared", "--no-checkout", repo, alternate);
+    await fs.writeFile(path.join(repo, ".git", "HEAD"), `${tag}\n`);
+    for (const checkout of [repo, alternate]) {
+      const first = await service.listRepositoryBranches(checkout, {
+        includeRepositoryStatus: true,
+      });
+      expect(first.repositoryStatus).toBe("git");
+      expect(
+        await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true }),
+      ).toEqual(first);
+    }
+    await fs.unlink(path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2)));
+    for (const checkout of [repo, alternate]) {
+      expect(
+        await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true }),
+      ).toEqual({
+        branches: [],
+        repositoryStatus: "unavailable",
+      });
+    }
+  });
 
   it("keeps large repositories usable with bounded suggestions and an explicit unlisted base", async () => {
     const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
@@ -143,6 +392,13 @@ describe("ManagedWorktreeService branch discovery", () => {
         kind: "local",
       })),
     ]);
+    const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+    expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
+      result,
+    );
+    expect(run).toHaveBeenCalledTimes(0);
+    run.mockRestore();
+
     const baseRef = `origin/overflow-${String(2_999).padStart(80, "0")}`;
     expect(result.branches.some((branch) => branch.name === baseRef)).toBe(false);
     const worktree = await service.create({ repoRoot: repo, name: "unlisted-base", baseRef });

@@ -5,6 +5,22 @@ import { en } from "./en.ts";
 // cannot leave an update failure without its host-side recovery command.
 const enUpdateActions = {
   updates: {
+    run: {
+      stepWarning: "Warning: {step}",
+      prepareUpdaterDetails:
+        "Keeping a copy of the current updater so it can finish safely while OpenClaw is replaced.",
+      stepLabel: {
+        snapshotSpace: "Checking space for the recovery backup",
+        prepareUpdater: "Preparing the updater",
+        snapshot: "Saving the recovery backup",
+        fetch: "Downloading update revisions",
+        install: "Installing dependencies",
+        update: "Installing OpenClaw",
+        build: "Building OpenClaw",
+        buildUi: "Building the Control UI",
+        doctor: "Checking configuration and data",
+      },
+    },
     confirm: {
       message: "Installs the available update on the connected Gateway and restarts it.",
       macMessage:
@@ -38,8 +54,8 @@ const enUpdateActions = {
     report: {
       title: "Report update failure",
       message:
-        "Review the sanitized report below. Confirming will submit it with the authenticated GitHub CLI when available; otherwise OpenClaw will offer a prefilled issue link or save the sanitized report locally.",
-      submit: "Submit report",
+        "Review the sanitized report below. Named administrators receive a prefilled issue to review and submit with their own GitHub account in their browser. Gateway owners authorize submission with the host's GitHub CLI account when available; otherwise OpenClaw offers a browser handoff or saves the sanitized report locally.",
+      submit: "Continue",
       cancel: "Cancel",
     },
   },
@@ -47,7 +63,7 @@ const enUpdateActions = {
 
 export const registerUpdateActionsEnglish = Object.assign(
   () => {
-    const sections = ["confirm", "dialog", "triage", "report"] as const;
+    const sections = ["run", "confirm", "dialog", "triage", "report"] as const;
     // SAFETY: The canonical English catalog defines these sections as objects.
     const updates = en.updates as Record<(typeof sections)[number], TranslationMap>;
     for (const section of sections) {

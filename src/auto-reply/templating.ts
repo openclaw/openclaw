@@ -1,4 +1,5 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
+import type { SessionConversationLink } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
@@ -57,6 +58,8 @@ export type ChannelStructuredContextEntry = {
 export type SessionTranscriptContext = {
   chatWindow?: boolean;
   historyLimit: number;
+  /** A platform-selected recent window keeps its configured bound and does not merge transcript rows. */
+  historyKind?: "pending" | "recent";
   beforeTimestampMs?: number;
   minTimestampMs?: number;
   senderLabels?: { assistant: string; user: string };
@@ -311,7 +314,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Internal wake cause, independent of transport, transcript provenance, and execution authority. */
-  InternalTurnSource?: "heartbeat" | "cron" | "exec";
+  InternalTurnSource?: "heartbeat" | "cron" | "exec" | "progress-card-refresh";
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
@@ -394,6 +397,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   NativeChannelId?: string;
   /** Channel-owned local conversation image reference; never rendered into prompt text. */
   ConversationAvatar?: string;
+  /** Display-only launch destination; not delivery routing or prompt content. */
+  ConversationLink?: SessionConversationLink;
   /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
   ChannelContext?: PluginHookChannelContext;
   /** Provider-native chat/conversation id used by channel plugins that expose `chat_id`. */
@@ -485,7 +490,7 @@ export type FinalizedRuntimeMsgContext = Omit<
     CommandTurn?: CommandTurnContext;
   };
 
-type NonTemplateContextKey = "ConversationAvatar";
+type NonTemplateContextKey = "ConversationAvatar" | "ConversationLink";
 
 export type TemplateContext = Omit<RuntimeMsgContext, NonTemplateContextKey> & {
   BodyStripped?: string;
@@ -514,39 +519,26 @@ export type TemplateContext = Omit<RuntimeMsgContext, NonTemplateContextKey> & {
 export type FinalizedTemplateContext = Omit<TemplateContext, keyof CanonicalInboundText> &
   CanonicalInboundText;
 
+function formatTemplateScalar(value: unknown): string | undefined {
+  return typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+    ? String(value)
+    : undefined;
+}
+
 function formatTemplateValue(value: unknown): string {
-  if (value == null) {
-    return "";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
+  if (Array.isArray(value)) {
+    return value
+      .map(formatTemplateScalar)
+      .filter((entry) => entry !== undefined)
+      .join(",");
   }
   if (typeof value === "symbol" || typeof value === "function") {
     return value.toString();
   }
-  if (Array.isArray(value)) {
-    return value
-      .flatMap((entry) => {
-        if (entry == null) {
-          return [];
-        }
-        if (typeof entry === "string") {
-          return [entry];
-        }
-        if (typeof entry === "number" || typeof entry === "boolean" || typeof entry === "bigint") {
-          return [String(entry)];
-        }
-        return [];
-      })
-      .join(",");
-  }
-  if (typeof value === "object") {
-    return "";
-  }
-  return "";
+  return formatTemplateScalar(value) ?? "";
 }
 
 // Simple {{Placeholder}} interpolation using inbound message context.
@@ -555,7 +547,7 @@ export function applyTemplate(str: string | undefined, ctx: TemplateContext) {
     return "";
   }
   return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
-    if (key === "ConversationAvatar") {
+    if (key === "ConversationAvatar" || key === "ConversationLink") {
       return "";
     }
     const value = ctx[key as keyof TemplateContext];

@@ -1,11 +1,22 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
+import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 
 type ResumeRunRecord = Partial<
   Record<
-    "conclusion" | "event" | "head_branch" | "head_sha" | "html_url" | "path" | "workflow_id",
+    | "conclusion"
+    | "event"
+    | "head_branch"
+    | "head_sha"
+    | "html_url"
+    | "path"
+    | "workflow_id"
+    | "run_attempt"
+    | "id"
+    | "status",
     unknown
   >
 >;
@@ -13,7 +24,9 @@ type ResumeTagRecord = {
   object?: Partial<Record<"sha" | "type", unknown>>;
   verification?: { verified?: unknown };
 };
-type ResumeJobRecord = Partial<Record<"conclusion" | "name", unknown>>;
+type ResumeStepRecord = Partial<Record<"conclusion" | "name", unknown>>;
+type ResumeJobRecord = Partial<Record<"conclusion" | "name" | "steps", unknown>>;
+type NpmPublication = { version: string; tarballSha512: string; document: unknown };
 
 export interface OpenClawNpmResumeValidationInput {
   canonicalWorkflowId: unknown;
@@ -32,6 +45,101 @@ const WORKFLOW_PATH = ".github/workflows/openclaw-npm-release.yml";
 // Resume checks run during release recovery, so keep enough headroom for GitHub
 // latency while preventing one stalled read from consuming the workflow budget.
 const GH_COMMAND_TIMEOUT_MS = 60_000;
+const publicationDocumentSchema = z.object({
+  attestations: z.array(
+    z.object({
+      predicateType: z.string(),
+      bundle: z
+        .object({
+          dsseEnvelope: z.object({ payload: z.string() }).passthrough().optional(),
+        })
+        .passthrough(),
+    }),
+  ),
+});
+const publicationStatementSchema = z.object({
+  subject: z.array(z.object({ name: z.string(), digest: z.object({ sha512: z.string() }) })),
+  predicate: z.object({
+    buildDefinition: z.object({
+      externalParameters: z.object({
+        workflow: z.object({ ref: z.string(), repository: z.string(), path: z.string() }),
+      }),
+      resolvedDependencies: z.array(
+        z.object({ uri: z.string(), digest: z.object({ gitCommit: z.string() }) }),
+      ),
+    }),
+    runDetails: z.object({ metadata: z.object({ invocationId: z.string() }) }),
+  }),
+});
+
+function resolvePublishedNpmRun(repo: string, publication: NpmPublication) {
+  const document = publicationDocumentSchema.parse(publication.document);
+  if (!/^[a-f0-9]{128}$/u.test(publication.tarballSha512)) {
+    fail("OpenClaw npm resume requires the exact downloaded tarball's SHA-512.");
+  }
+  const publishers = new Map<
+    string,
+    { runId: string; runAttempt: number; workflowRef: string; workflowSha: string }
+  >();
+  for (const attestation of document.attestations) {
+    if (attestation.predicateType !== "https://slsa.dev/provenance/v1") {
+      continue;
+    }
+    const statement = publicationStatementSchema.parse(
+      parseJson(
+        Buffer.from(attestation.bundle.dsseEnvelope?.payload ?? "", "base64").toString("utf8"),
+        "npm publication provenance",
+      ),
+    );
+    if (
+      !statement.subject.some(
+        (subject) =>
+          subject.name === `pkg:npm/openclaw@${publication.version}` &&
+          subject.digest.sha512 === publication.tarballSha512,
+      )
+    ) {
+      continue;
+    }
+    const { buildDefinition, runDetails } = statement.predicate;
+    const workflow = buildDefinition.externalParameters.workflow;
+    const prefix = `https://github.com/${repo}/actions/runs/`;
+    const invocation = runDetails.metadata.invocationId;
+    const match = invocation.startsWith(prefix)
+      ? /^([1-9][0-9]*)\/attempts\/([1-9][0-9]*)$/u.exec(invocation.slice(prefix.length))
+      : null;
+    if (
+      !match ||
+      workflow.repository !== `https://github.com/${repo}` ||
+      workflow.path !== WORKFLOW_PATH
+    ) {
+      fail("Published npm provenance does not identify this repository's npm release workflow.");
+    }
+    const revisions = new Set(
+      buildDefinition.resolvedDependencies
+        .filter((dependency) => dependency.uri === `git+${workflow.repository}@${workflow.ref}`)
+        .map((dependency) => dependency.digest.gitCommit),
+    );
+    if (revisions.size !== 1) {
+      fail("Published npm provenance has missing or ambiguous workflow revisions.");
+    }
+    const publisher = {
+      runId: requiredString(match[1], "published run id"),
+      runAttempt: Number(match[2]),
+      workflowRef: workflow.ref,
+      workflowSha: requiredSha([...revisions][0], "published workflow SHA"),
+    };
+    publishers.set(JSON.stringify(publisher), publisher);
+  }
+  const [publisher] = publishers.values();
+  if (publishers.size !== 1 || !publisher) {
+    fail(
+      "Published npm provenance has missing or ambiguous publisher evidence; preserve the original runs and reconcile before resuming.",
+    );
+  }
+  // Discovery is not authorization: the entrypoint validates the live run and
+  // protected tag, then verifies this receipt with the canonical Sigstore policy.
+  return publisher;
+}
 
 function fail(message: string): never {
   throw new Error(message);
@@ -64,6 +172,34 @@ function resumeTagRecord(value: unknown): ResumeTagRecord {
 
 function resumeJobRecords(value: unknown): ResumeJobRecord[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+export function isRecoverableOpenClawNpmRegistryReadbackFailure(jobs: unknown): boolean {
+  const records = resumeJobRecords(jobs);
+  const publishJobs = records.filter((job) => job.name === "publish_openclaw_npm");
+  const [publishJob] = publishJobs;
+  if (publishJob?.conclusion !== "failure" || !Array.isArray(publishJob.steps)) {
+    return false;
+  }
+  const steps = publishJob.steps.filter(isRecord) as ResumeStepRecord[];
+  const failedSteps = steps.filter((step) => step.conclusion === "failure");
+  return (
+    publishJobs.length === 1 &&
+    records.every(
+      (job) => job === publishJob || job.conclusion === "success" || job.conclusion === "skipped",
+    ) &&
+    steps.some((step) => step.name === "Publish" && step.conclusion === "success") &&
+    failedSteps.length === 1 &&
+    failedSteps[0]?.name === "Verify extended-stable registry readback"
+  );
+}
+
+function hasAcceptedOpenClawNpmPublication(jobs: unknown): boolean {
+  const records = resumeJobRecords(jobs);
+  return (
+    records.some((job) => job.name === "publish_openclaw_npm" && job.conclusion === "success") ||
+    isRecoverableOpenClawNpmRegistryReadbackFailure(records)
+  );
 }
 
 function requiredString(value: unknown, label: string): string {
@@ -103,7 +239,8 @@ export function validateOpenClawNpmResumeRun({
   const sha = requiredSha(run?.head_sha, "head_sha");
   const path = requiredString(run?.path, "path");
   if (
-    run?.conclusion !== "success" ||
+    (run?.conclusion !== "success" &&
+      !(run?.conclusion === "failure" && isRecoverableOpenClawNpmRegistryReadbackFailure(jobs))) ||
     run?.event !== "workflow_dispatch" ||
     path !== WORKFLOW_PATH ||
     run?.workflow_id !== canonicalWorkflowId ||
@@ -179,23 +316,25 @@ function runGhCommand(
 
 export function resolveOpenClawNpmResumeRun({
   repo,
-  runId,
-  trustedWorkflowFullRef,
-  trustedWorkflowRef,
+  runId: requestedRunId,
+  publication,
   runGh = runOpenClawNpmResumeGh,
 }: {
   repo: string;
   runId: string;
-  trustedWorkflowFullRef: string;
-  trustedWorkflowRef: string;
+  publication: NpmPublication;
   runGh?: (args: string[]) => string;
 }) {
-  if (!/^[1-9][0-9]*$/u.test(runId)) {
-    fail("OpenClaw npm resume run id must be a positive integer.");
-  }
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repo)) {
     fail("OpenClaw npm resume repository must be owner/name.");
   }
+  const publisher = resolvePublishedNpmRun(repo, publication);
+  if (requestedRunId && requestedRunId !== publisher.runId) {
+    fail("OpenClaw npm resume run does not match the published package's original publisher.");
+  }
+  const runId = publisher.runId;
+  const trustedWorkflowFullRef = publisher.workflowRef;
+  const trustedWorkflowRef = publisher.workflowRef.replace(/^refs\/tags\//u, "");
 
   const api = (endpoint: string): unknown =>
     parseJson(runGh(["api", `repos/${repo}/${endpoint}`, "--method", "GET"]), endpoint);
@@ -206,7 +345,18 @@ export function resolveOpenClawNpmResumeRun({
     );
   }
 
-  const run = resumeRunRecord(api(`actions/runs/${runId}`));
+  // The signed invocation identifies the publisher, even if a later rerun
+  // changes the run's latest status. Never substitute that mutable projection.
+  const run = resumeRunRecord(api(`actions/runs/${runId}/attempts/${publisher.runAttempt}`));
+  if (
+    run.id !== Number(runId) ||
+    run.status !== "completed" ||
+    run.head_sha !== publisher.workflowSha ||
+    !Number.isSafeInteger(publisher.runAttempt) ||
+    run.run_attempt !== publisher.runAttempt
+  ) {
+    fail("OpenClaw npm resume run no longer matches the published workflow SHA and attempt.");
+  }
   const canonicalWorkflow = api(`actions/workflows/${WORKFLOW_PATH.split("/").at(-1)}`);
   const tagRef = resumeTagRecord(api(`git/ref/tags/${trustedWorkflowRef}`));
   const tagObjectSha = requiredSha(tagRef?.object?.sha, "tooling tag object SHA");
@@ -216,60 +366,102 @@ export function resolveOpenClawNpmResumeRun({
   const comparison = annotatedTag ? api(`compare/${sha}...main`) : {};
   const jobs = resumeJobRecords(
     parseJson(
-      runGh(["run", "view", runId, "--repo", repo, "--json", "jobs", "--jq", ".jobs"]),
+      runGh([
+        "run",
+        "view",
+        runId,
+        "--repo",
+        repo,
+        "--attempt",
+        String(publisher.runAttempt),
+        "--json",
+        "jobs",
+        "--jq",
+        ".jobs",
+      ]),
       "resume run jobs",
     ),
   );
+  if (!hasAcceptedOpenClawNpmPublication(jobs)) {
+    fail(
+      "OpenClaw npm resume run lacks a successful npm publish job or recoverable registry-readback receipt; preserve the original publication evidence.",
+    );
+  }
 
-  return validateOpenClawNpmResumeRun({
-    canonicalWorkflowId: isRecord(canonicalWorkflow) ? canonicalWorkflow.id : undefined,
-    compareStatus: isRecord(comparison) ? comparison.status : undefined,
-    jobs,
-    run,
-    tag,
-    tagRef,
-    trustedWorkflowFullRef,
-    trustedWorkflowRef,
-  });
+  return {
+    runId,
+    runAttempt: publisher.runAttempt,
+    ...validateOpenClawNpmResumeRun({
+      canonicalWorkflowId: isRecord(canonicalWorkflow) ? canonicalWorkflow.id : undefined,
+      compareStatus: isRecord(comparison) ? comparison.status : undefined,
+      jobs,
+      run,
+      tag,
+      tagRef,
+      trustedWorkflowFullRef,
+      trustedWorkflowRef,
+    }),
+  };
 }
 
-function parseArgs(argv: string[]): {
-  repo: string;
-  runId: string;
-  trustedWorkflowFullRef: string;
-  trustedWorkflowRef: string;
-} {
+function parseArgs(argv: string[]) {
   const options = {
     repo: "",
     runId: "",
-    trustedWorkflowFullRef: "",
-    trustedWorkflowRef: "",
   };
+  let version = "";
+  let tarballSha512 = "";
+  let provenanceFile = "";
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--repo") {
       options.repo = argv[(index += 1)] ?? "";
     } else if (arg === "--run-id") {
       options.runId = argv[(index += 1)] ?? "";
-    } else if (arg === "--trusted-workflow-ref") {
-      options.trustedWorkflowRef = argv[(index += 1)] ?? "";
-    } else if (arg === "--trusted-workflow-full-ref") {
-      options.trustedWorkflowFullRef = argv[(index += 1)] ?? "";
+    } else if (arg === "--version") {
+      version = argv[(index += 1)] ?? "";
+    } else if (arg === "--tarball-sha512") {
+      tarballSha512 = argv[(index += 1)] ?? "";
+    } else if (arg === "--provenance-file") {
+      provenanceFile = argv[(index += 1)] ?? "";
     } else {
       fail(`Unknown argument: ${arg}`);
     }
   }
-  return options;
+  return {
+    ...options,
+    publication: {
+      version,
+      tarballSha512,
+      document: parseJson(readFileSync(provenanceFile, "utf8"), "npm provenance file"),
+    },
+  };
 }
 
-function main(argv: string[] = process.argv.slice(2)): void {
-  const result = resolveOpenClawNpmResumeRun(parseArgs(argv));
+export async function verifyOpenClawNpmResumeRun(
+  options: Parameters<typeof resolveOpenClawNpmResumeRun>[0],
+) {
+  const result = resolveOpenClawNpmResumeRun(options);
+  const { verifyNpmProvenanceAttestation } = await import("./openclaw-npm-postpublish-verify.ts");
+  await verifyNpmProvenanceAttestation({
+    packageName: "openclaw",
+    version: options.publication.version,
+    integrity: `sha512-${Buffer.from(options.publication.tarballSha512, "hex").toString("base64")}`,
+    attestations: publicationDocumentSchema.parse(options.publication.document).attestations,
+    expectedWorkflowRef: result.workflowRef,
+    expectedWorkflowSha: result.workflowSha,
+  });
+  return result;
+}
+
+async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const result = await verifyOpenClawNpmResumeRun(parseArgs(argv));
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    main();
+    await main();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

@@ -2,9 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { ensureKyselyTypes } from "../generate-kysely-types.mts";
 import {
   prepareTsdownBuildExecution,
-  resolveStagedSdkDeclarationConcurrency,
+  resolveStagedDeclarationConcurrency,
   TSDOWN_DECLARATION_EXTENSIONS,
   TSDOWN_UNIFIED_CACHE_ENV,
 } from "../tsdown-build.mts";
@@ -44,6 +45,7 @@ export async function writeTsdownDeclarations(
   try {
     // The private child retains declared cwd ownership; snapshot/output paths are physical.
     await withDistArtifactOwnership(process.cwd(), async () => {
+      await ensureKyselyTypes(root);
       const { default: configs }: { default: typeof import("../../tsdown.config.ts").default } =
         await import(pathToFileURL(path.join(root, "tsdown.config.ts")).href);
       const staging = createStage();
@@ -165,13 +167,13 @@ export async function writeTsdownDeclarations(
           throw new Error("Declaration cache changed before restoration; rerun the build");
         }
       }
-      // Empty partitions still produce receipts, but only two nonempty SDK misses
-      // may overlap. All other plans retain dependency-ordered serial execution.
+      // Only nonempty single-compiler private stages may overlap. Publication
+      // still joins the complete batch before merging any group's declarations.
       const misses = prepared.filter((group) => !group.state?.fresh);
       const concurrency = misses.every(
         (group) => group.required.length > 0 && group.plan.invocations.length === 1,
       )
-        ? resolveStagedSdkDeclarationConcurrency(
+        ? resolveStagedDeclarationConcurrency(
             misses.map((group) => ({ name: group.name, maxOldSpaceMb: group.plan.maxOldSpaceMb })),
           )
         : 1;

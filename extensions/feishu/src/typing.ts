@@ -1,4 +1,3 @@
-// Feishu plugin module implements typing behavior.
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -12,16 +11,12 @@ import {
 // Feishu emoji types for typing indicator
 // See: https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
 // Full list: https://github.com/go-lark/lark/blob/main/emoji.go
-const TYPING_EMOJI = "Typing"; // Typing indicator emoji
+const TYPING_EMOJI = "Typing";
 
 export type TypingIndicatorState = {
   messageId: string;
   reactionId: string | null;
 };
-
-type FeishuMessageReactionCreateResponse = Awaited<
-  ReturnType<ReturnType<typeof createFeishuClient>["im"]["messageReaction"]["create"]>
->;
 
 /**
  * Add a typing indicator (reaction) to a message.
@@ -66,9 +61,7 @@ export async function addTypingIndicator(params: {
       throw new FeishuBackoffError(backoffCode);
     }
 
-    const typedResponse: FeishuMessageReactionCreateResponse = response;
-    const reactionId = typedResponse.data?.reaction_id ?? null;
-    return { messageId, reactionId };
+    return { messageId, reactionId: response.data?.reaction_id ?? null };
   } catch (err) {
     if (isFeishuBackoffError(err)) {
       if (getFeishuRuntime().logging.shouldLogVerbose()) {

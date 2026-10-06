@@ -39,35 +39,15 @@ describe("resolveFeishuSendTarget", () => {
     createFeishuClientMock.mockReset().mockReturnValue(client);
   });
 
-  it("keeps explicit group targets as chat_id even when ID shape is ambiguous", () => {
-    const result = resolveFeishuSendTarget({
-      cfg,
-      to: "feishu:group:group_room_alpha",
-    });
-
-    expect(result.receiveId).toBe("group_room_alpha");
-    expect(result.receiveIdType).toBe("chat_id");
+  it.each([
+    ["feishu:group:group_room_alpha", "group_room_alpha", "chat_id"],
+    ["lark:dm:ou_123", "ou_123", "open_id"],
+    ["  feishu:dm:user_123  ", "user_123", "user_id"],
+  ])("resolves %s to %s with receive-id type %s", (to, receiveId, receiveIdType) => {
+    const result = resolveFeishuSendTarget({ cfg, to });
+    expect(result.receiveId).toBe(receiveId);
+    expect(result.receiveIdType).toBe(receiveIdType);
     expect(result.client).toBe(client);
-  });
-
-  it("maps dm-prefixed open IDs to open_id", () => {
-    const result = resolveFeishuSendTarget({
-      cfg,
-      to: "lark:dm:ou_123",
-    });
-
-    expect(result.receiveId).toBe("ou_123");
-    expect(result.receiveIdType).toBe("open_id");
-  });
-
-  it("maps dm-prefixed non-open IDs to user_id", () => {
-    const result = resolveFeishuSendTarget({
-      cfg,
-      to: "  feishu:dm:user_123  ",
-    });
-
-    expect(result.receiveId).toBe("user_123");
-    expect(result.receiveIdType).toBe("user_id");
   });
 
   it("throws when target account is not configured", () => {

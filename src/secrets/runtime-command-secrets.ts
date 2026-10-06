@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
@@ -64,44 +64,28 @@ function pluginIdFromRuntimeWebPath(path: string): string | undefined {
   return /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path)?.[1];
 }
 
-function isWebCommandSecretPath(path: string): boolean {
-  return /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path);
-}
-
 function isProviderOverridePath(params: {
   config: OpenClawConfig;
   path: string;
   providerOverrides: CommandSecretProviderOverrides | undefined;
 }): boolean {
-  const webSearch = normalizeOptionalString(params.providerOverrides?.webSearch);
-  if (webSearch) {
-    if (params.config.tools?.web?.search?.enabled === false) {
+  for (const [overrideKey, kind, contract] of [
+    ["webSearch", "search", "webSearchProviders"],
+    ["webFetch", "fetch", "webFetchProviders"],
+  ] as const) {
+    const provider = normalizeOptionalString(params.providerOverrides?.[overrideKey]);
+    if (!provider) {
+      continue;
+    }
+    if (params.config.tools?.web?.[kind]?.enabled === false) {
       return false;
     }
     const pluginId = pluginIdFromRuntimeWebPath(params.path);
-    if (pluginId && params.path.endsWith(".config.webSearch.apiKey")) {
+    if (pluginId && params.path.endsWith(`.config.${overrideKey}.apiKey`)) {
       return (
         resolveManifestContractOwnerPluginId({
-          contract: "webSearchProviders",
-          value: webSearch,
-          origin: "bundled",
-          config: params.config,
-        }) === pluginId
-      );
-    }
-  }
-
-  const webFetch = normalizeOptionalString(params.providerOverrides?.webFetch);
-  if (webFetch) {
-    if (params.config.tools?.web?.fetch?.enabled === false) {
-      return false;
-    }
-    const pluginId = pluginIdFromRuntimeWebPath(params.path);
-    if (pluginId && params.path.endsWith(".config.webFetch.apiKey")) {
-      return (
-        resolveManifestContractOwnerPluginId({
-          contract: "webFetchProviders",
-          value: webFetch,
+          contract,
+          value: provider,
           origin: "bundled",
           config: params.config,
         }) === pluginId
@@ -131,16 +115,12 @@ function restoreInactiveWebCommandSecretTargets(params: {
     if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
       continue;
     }
-    if (!isWebCommandSecretPath(target.path)) {
+    if (!pluginIdFromRuntimeWebPath(target.path)) {
       continue;
     }
     // Provider overrides can make a web SecretRef active for this command only. Other web refs
     // must be restored from source config so assignment analysis keeps them inactive.
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults,
-    });
+    const ref = parseSecretRef(target.refValue, defaults) ?? parseSecretRef(target.value, defaults);
     if (!ref) {
       continue;
     }
@@ -218,11 +198,7 @@ async function resolveForcedActiveCommandSecretTargets(params: {
     if (!activePaths.has(target.path)) {
       continue;
     }
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults,
-    });
+    const ref = parseSecretRef(target.refValue, defaults) ?? parseSecretRef(target.value, defaults);
     if (!ref) {
       continue;
     }
@@ -251,7 +227,6 @@ async function resolveForcedActiveCommandSecretTargets(params: {
  * Resolves command-scoped SecretRef assignments from the active runtime snapshot.
  * Provider overrides are evaluated against cloned snapshot config.
  */
-/** Resolves command secret assignments from the active prepared runtime snapshot. */
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
   /** Command name used in diagnostics returned to gateway/tool callers. */
   commandName: string;
@@ -276,37 +251,20 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
   if (params.targetIds.size === 0) {
     return Promise.resolve({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
   }
-  return resolveCommandSecretsFromSnapshot({
-    activeSnapshot,
-    commandName: params.commandName,
-    targetIds: params.targetIds,
-    allowedPaths: params.allowedPaths,
-    forcedActivePaths: params.forcedActivePaths,
-    optionalActivePaths: params.optionalActivePaths,
-    providerOverrides: params.providerOverrides,
-  });
+  return resolveCommandSecretsFromSnapshot(activeSnapshot, { ...params });
 }
 
-async function resolveCommandSecretsFromSnapshot(params: {
-  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshotState>>;
-  commandName: string;
-  targetIds: ReadonlySet<string>;
-  allowedPaths?: ReadonlySet<string>;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
-  providerOverrides?: CommandSecretProviderOverrides;
-}): Promise<{
-  assignments: CommandSecretAssignment[];
-  diagnostics: string[];
-  inactiveRefPaths: string[];
-}> {
+async function resolveCommandSecretsFromSnapshot(
+  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshotState>>,
+  params: Parameters<typeof resolveCommandSecretsFromActiveRuntimeSnapshot>[0],
+): ReturnType<typeof resolveCommandSecretsFromActiveRuntimeSnapshot> {
   const hasOverrides = hasProviderOverrides(params.providerOverrides);
   const sourceConfig = applyProviderOverridesToConfig(
-    params.activeSnapshot.sourceConfig,
+    activeSnapshot.sourceConfig,
     params.providerOverrides,
   );
   const resolvedConfig = applyProviderOverridesToConfig(
-    params.activeSnapshot.config,
+    activeSnapshot.config,
     params.providerOverrides,
   );
   const context = hasOverrides
@@ -331,7 +289,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
     optionalActivePaths: params.optionalActivePaths,
   });
 
-  const warningSource = context?.warnings ?? params.activeSnapshot.warnings;
+  const warningSource = context?.warnings ?? activeSnapshot.warnings;
   let inactiveRefPaths = filterInactiveRefPaths({
     config: sourceConfig,
     providerOverrides: params.providerOverrides,
@@ -357,16 +315,18 @@ async function resolveCommandSecretsFromSnapshot(params: {
     optionalActivePaths: params.optionalActivePaths,
   });
 
-  let analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
-    sourceConfig,
-    resolvedConfig,
-    targetIds: params.targetIds,
-    inactiveRefPaths: new Set(inactiveRefPaths),
-    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
-  });
+  const analyzeAssignments = () =>
+    analyzeCommandSecretAssignmentsFromSnapshot({
+      sourceConfig,
+      resolvedConfig,
+      targetIds: params.targetIds,
+      inactiveRefPaths: new Set(inactiveRefPaths),
+      ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
+    });
+  let analyzed = analyzeAssignments();
   if (hasOverrides) {
     const impliedInactivePaths = analyzed.unresolved
-      .filter((entry) => isWebCommandSecretPath(entry.path))
+      .filter((entry) => pluginIdFromRuntimeWebPath(entry.path))
       .filter(
         (entry) =>
           !isProviderOverridePath({
@@ -378,13 +338,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
       .map((entry) => entry.path);
     if (impliedInactivePaths.length > 0) {
       inactiveRefPaths = uniqueStrings([...inactiveRefPaths, ...impliedInactivePaths]);
-      analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
-        sourceConfig,
-        resolvedConfig,
-        targetIds: params.targetIds,
-        inactiveRefPaths: new Set(inactiveRefPaths),
-        ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
-      });
+      analyzed = analyzeAssignments();
     }
   }
   const optionalActiveUnresolvedPaths = analyzed.unresolved
@@ -392,13 +346,7 @@ async function resolveCommandSecretsFromSnapshot(params: {
     .map((entry) => entry.path);
   if (optionalActiveUnresolvedPaths.length > 0) {
     inactiveRefPaths = uniqueStrings([...inactiveRefPaths, ...optionalActiveUnresolvedPaths]);
-    analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig,
-      targetIds: params.targetIds,
-      inactiveRefPaths: new Set(inactiveRefPaths),
-      ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
-    });
+    analyzed = analyzeAssignments();
   }
   return {
     // A runtime snapshot can be authoritative for only part of a command's target set.

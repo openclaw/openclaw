@@ -1,14 +1,20 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  TranscriptMessageAppendOptions,
-  TranscriptMessageAppendResult,
-} from "../config/sessions/session-accessor.js";
+import type { TranscriptMessageAppendResult } from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
 import {
   readSessionTranscriptContextMessages,
-  type SessionTranscriptContextVersion,
+  validateSessionTranscriptContextAdmission,
+  validateSessionTranscriptContextVersion,
 } from "../config/sessions/session-accessor.sqlite-model-context.js";
-import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
+import type {
+  LockedTranscriptMessageAppendOptions,
+  SessionTranscriptReadScope,
+  SessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.types.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import type { SessionTranscriptContextReader } from "../config/sessions/session-transcript-context-reader.js";
 import {
+  resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
   withSessionContextAdmission,
@@ -17,6 +23,9 @@ import type {
   TranscriptTurnAdmission,
   TranscriptEntryAnchor,
 } from "../config/sessions/transcript-entry-anchor.js";
+import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
+import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import { IncognitoSessionSyncAccessError } from "../state/incognito-session-error.js";
 import type { AgentMessage } from "./agent-core.js";
 import type {
   InternalSessionTranscriptWriteLockContext,
@@ -25,10 +34,82 @@ import type {
 import type { SessionTranscriptTargetParams } from "./session-transcript-runtime.js";
 
 export { resolveSessionTranscriptReadFence as captureCodexSessionTranscriptReadAdmission } from "../config/sessions/session-transcript-read-fence.js";
-export { validateSessionTranscriptContextAdmission as validateCodexSessionTranscriptReadAdmission } from "../config/sessions/session-accessor.sqlite-model-context.js";
-export { validateSessionTranscriptContextVersion as validateCodexSessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-model-context.js";
-export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-model-context.js";
+export type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
 export { SessionTranscriptReadFenceError };
+
+export {
+  createSessionTranscriptContextReader as createCodexSessionContextReader,
+  type SessionTranscriptContextReader as CodexSessionContextReader,
+} from "../config/sessions/session-transcript-context-reader.js";
+export type { SessionTranscriptContextSnapshot as CodexSessionContextSnapshot } from "../config/sessions/session-history-read.types.js";
+
+/** Capture the admitted actor before yielding; ordinary host-owned routing stays unchanged. */
+export function captureCodexSessionContextReader(
+  source: SessionTranscriptRuntimeTarget,
+  signal?: AbortSignal,
+): SessionTranscriptContextReader | undefined {
+  const binding = captureIncognitoSessionBinding(source);
+  if (!binding) {
+    return undefined;
+  }
+  const target = captureSessionTranscriptTargetBinding(source);
+  const { actor } = binding;
+  const assertOwned = captureOwnedTranscriptWriteAssertion(target);
+  const claim = actor.sessions.captureCurrent(target.sessionKey);
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    binding.admissionSignal?.throwIfAborted();
+    assertOwned();
+    actor.assertCurrent();
+    claim.assertCurrent();
+  };
+  assertCurrent();
+  const input = {
+    sessionKey: target.sessionKey,
+    sessionId: target.sessionId,
+    lifecycleRevision: actor.sessions.readSharing(target.sessionKey)?.entry?.lifecycleRevision,
+    admission: resolveSessionTranscriptReadFence(target),
+  };
+  return async (readTarget, read) => {
+    const value = await actor.sessions.withSharedState(async () => {
+      assertCurrent();
+      const { bindIncognitoSessionComputeReader } =
+        await import("../config/sessions/session-incognito-compute-read.js");
+      assertCurrent();
+      return bindIncognitoSessionComputeReader({
+        actor,
+        authority: { assertCurrent },
+        target: input,
+        signal,
+      }).nativeContext(readTarget, read);
+    });
+    assertCurrent();
+    actor.assertReadable();
+    return value;
+  };
+}
+
+function assertCodexSessionSyncAccess(target: SessionTranscriptReadScope, method: string) {
+  if (captureIncognitoSessionBinding(target)) {
+    throw new IncognitoSessionSyncAccessError(method, "captureCodexSessionContextReader");
+  }
+}
+
+/** Actor reads validate through the captured awaited context reader. */
+export function validateCodexSessionTranscriptReadAdmission(
+  ...args: Parameters<typeof validateSessionTranscriptContextAdmission>
+): void {
+  assertCodexSessionSyncAccess(args[0], "validateCodexSessionTranscriptReadAdmission");
+  validateSessionTranscriptContextAdmission(...args);
+}
+
+/** Actor reads validate through the captured awaited context reader. */
+export function validateCodexSessionTranscriptContextVersion(
+  ...args: Parameters<typeof validateSessionTranscriptContextVersion>
+): void {
+  assertCodexSessionSyncAccess(args[0], "validateCodexSessionTranscriptContextVersion");
+  validateSessionTranscriptContextVersion(...args);
+}
 
 /** The native evidence consumer remains lazy inside one readonly transcript snapshot. */
 export function readCodexSessionContext<T>(
@@ -40,6 +121,7 @@ export function readCodexSessionContext<T>(
   ) => T,
   admission?: TranscriptTurnAdmission,
 ): T {
+  assertCodexSessionSyncAccess(target, "readCodexSessionContext");
   return withSessionContextAdmission(target, admission, () =>
     readSessionTranscriptContextMessages(target, read),
   );
@@ -71,8 +153,9 @@ export async function readCodexSessionTranscriptEventsBeforeAdmission(
 export type CodexSessionTranscriptMirrorWriteLockContext =
   InternalSessionTranscriptWriteLockContext & {
     appendMessageWithMessageSequence: <TMessage>(
-      options: Omit<TranscriptMessageAppendOptions<TMessage>, "config">,
+      options: Omit<LockedTranscriptMessageAppendOptions<TMessage>, "config">,
     ) => Promise<{
+      lifecycleRevision?: string;
       messageSeq?: number;
       result: TranscriptMessageAppendResult<TMessage> | undefined;
     }>;

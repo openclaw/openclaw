@@ -124,7 +124,7 @@ describe("session event wake preemption retry", () => {
   it.each(
     ["replace", "dispose"].flatMap((change) => [false, true].map((throws) => ({ change, throws }))),
   )(
-    "hands an entire ready batch to its next owner after synchronous $change (throws=$throws)",
+    "retains batch work across synchronous $change without orphaning waiters (throws=$throws)",
     async ({ change, throws }) => {
       const replacement = vi.fn(async () => ({ status: "ran" as const, durationMs: 7 }));
       const retired = vi.fn(() => {
@@ -149,16 +149,20 @@ describe("session event wake preemption retry", () => {
       expect(retired).toHaveBeenCalledOnce();
       if (change === "dispose") {
         expect(replacement).not.toHaveBeenCalled();
+        const unavailable = { status: "skipped", reason: "handler-unavailable" };
+        expect(await Promise.all(results)).toEqual([unavailable, unavailable, unavailable]);
         setSessionEventWakeHandler(replacement);
       }
       await vi.runAllTimersAsync();
 
       expect(replacement).toHaveBeenCalledTimes(3);
-      expect(await Promise.all(results)).toEqual([
-        { status: "ran", durationMs: 7 },
-        { status: "ran", durationMs: 7 },
-        { status: "ran", durationMs: 7 },
-      ]);
+      if (change === "replace") {
+        expect(await Promise.all(results)).toEqual([
+          { status: "ran", durationMs: 7 },
+          { status: "ran", durationMs: 7 },
+          { status: "ran", durationMs: 7 },
+        ]);
+      }
     },
   );
 

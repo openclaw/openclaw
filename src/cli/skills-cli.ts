@@ -1,12 +1,11 @@
-// Skills CLI for workspace status, install/update, ClawHub verification, and workshop proposals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
+  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import type { SkillsCuratorCompatibleStatusResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveConfiguredAgentId,
@@ -16,16 +15,15 @@ import {
 } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
   CLAWHUB_SKILLS_SH_REF_PREFIX,
   CLAWHUB_SKILLS_SH_TRUST_LABEL,
-  CLAWHUB_SKILLS_SH_TRUST_STATE,
   fetchClawHubSkillCard,
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
@@ -33,7 +31,6 @@ import {
   readVerifiedClawHubSkillSourceUrl,
   readTrackedClawHubSkillSlugs,
   resolveClawHubSkillVerificationTarget,
-  searchSkillsFromClawHub,
   updateSkillsFromClawHub,
   verifySkillWithClawHub,
 } from "../skills/lifecycle/clawhub.js";
@@ -44,7 +41,6 @@ import {
 import {
   getSkillCuratorStatus,
   SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE,
-  type SkillCuratorStatus,
 } from "../skills/workshop/curator.js";
 import {
   applySkillProposal,
@@ -71,34 +67,31 @@ import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js"
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
-import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
-import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+import {
+  formatSkillCuratorStatus,
+  formatSkillInfo,
+  formatSkillsCheck,
+  formatSkillsList,
+} from "./skills-cli.format.js";
 import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 import { isSkillsMachineOutput } from "./skills-output-mode.js";
-
-export type {
-  SkillInfoOptions,
-  SkillsCheckOptions,
-  SkillsListOptions,
-} from "./skills-cli.format.js";
-export { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+import { registerSkillsSearchCli } from "./skills-search-cli.js";
 
 type ResolvedClawHubSkillVerificationTarget = Extract<
   Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
   { ok: true }
 >;
 
-function formatSkillWarning(message: string): string {
-  return message.includes("╭─") ? message : theme.warn(message);
-}
-
-function formatClawHubSearchText(value: string): string {
-  return sanitizeForLog(value.replace(/\s+/gu, " ")).trim();
-}
+const skillInstallLogger = {
+  info: (message: string) => defaultRuntime.log(message),
+  warn: (message: string) =>
+    defaultRuntime.log(message.includes("╭─") ? message : theme.warn(message)),
+};
 
 function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: string }): boolean {
   return (
@@ -110,7 +103,6 @@ function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: stri
 
 type ResolveSkillsWorkspaceOptions = {
   agentId?: string;
-  cwd?: string;
   skipPluginValidation?: boolean;
 };
 
@@ -137,6 +129,7 @@ async function callSkillsGateway<T>(params: {
   params: Record<string, unknown>;
   timeoutMs?: number;
   requiredMethods?: string[];
+  caps?: CallGatewayOptions["caps"];
 }): Promise<T> {
   const { callGateway } = await import("../gateway/call.js");
   return await callGateway<T>({
@@ -155,11 +148,7 @@ function normalizeExplicitAgentId(agentId?: string): string | undefined {
   return normalizedAgentId;
 }
 
-function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
-  config: ReturnType<typeof getRuntimeConfig>;
-  workspaceDir: string;
-  agentId: string;
-} {
+function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
   const config = getRuntimeConfig(
     options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
@@ -167,7 +156,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
-    : resolveAgentIdByWorkspacePath(config, options?.cwd ?? process.cwd());
+    : resolveAgentIdByWorkspacePath(config, process.cwd());
   const agentId = explicitAgentId
     ? resolveConfiguredAgentId(config, explicitAgentId)
     : (inferredAgentId ??
@@ -179,17 +168,8 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   };
 }
 
-function resolveAgentOption(
-  command: Command | undefined,
-  opts?: { agent?: string },
-): string | undefined {
-  return resolveOptionFromCommand<string>(command, "agent") ?? opts?.agent;
-}
-
-async function loadSkillsStatusReport(
-  options?: ResolveSkillsWorkspaceOptions,
-): Promise<SkillStatusReport> {
-  const resolved = resolveSkillsWorkspace({ ...options, skipPluginValidation: true });
+async function loadSkillsStatusReport(agentId: string | undefined): Promise<SkillStatusReport> {
+  const resolved = resolveSkillsWorkspace({ agentId, skipPluginValidation: true });
   try {
     return await callSkillsGateway<SkillStatusReport>({
       config: resolved.config,
@@ -207,37 +187,30 @@ async function loadSkillsStatusReport(
     ) {
       throw error;
     }
-    const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
-    return buildWorkspaceSkillStatus(resolved.workspaceDir, {
+    const { prepareWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
+    return prepareWorkspaceSkillStatus(resolved.workspaceDir, {
       config: resolved.config,
       agentId: resolved.agentId,
-    });
+    }).then(({ report }) => report);
   }
 }
 
 async function runSkillsAction(
   render: (report: SkillStatusReport) => string,
-  options?: ResolveSkillsWorkspaceOptions,
+  agentId: string | undefined,
 ): Promise<void> {
   await runCommandWithRuntime(defaultRuntime, async () => {
-    const report = await loadSkillsStatusReport(options);
+    const report = await loadSkillsStatusReport(agentId);
     defaultRuntime.writeStdout(render(report));
   });
 }
 
-function resolveSkillsWorkspaceForCommand(
-  command: Command | null | undefined,
-  opts?: { agent?: string },
-): ReturnType<typeof resolveSkillsWorkspace> {
-  return resolveSkillsWorkspace({ agentId: resolveAgentOption(command ?? undefined, opts) });
-}
-
 function resolveClawHubTargetWorkspace(
-  command: Command | undefined,
-  opts: { agent?: string; global?: boolean },
+  command: Command,
+  opts: { global?: boolean },
   reportError: (message: string) => void = defaultRuntime.error,
 ): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
-  const agentId = normalizeExplicitAgentId(resolveAgentOption(command, opts));
+  const agentId = normalizeExplicitAgentId(resolveOptionFromCommand<string>(command, "agent"));
   if (opts.global && agentId) {
     reportError("Use either --global or --agent, not both.");
     defaultRuntime.exit(1);
@@ -363,48 +336,6 @@ function formatSkillProposalEvaluation(result: SkillProposalEvaluateResult): str
   return `${lines.join("\n")}\n`;
 }
 
-function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
-  const timestamp = (value: number | null) =>
-    value === null ? "never" : new Date(value).toISOString();
-  const lines = [
-    `Last attempt: ${timestamp(status.lastAttemptAtMs)}`,
-    `Last success: ${timestamp(status.lastSuccessAtMs)}`,
-    `Counts: ${status.counts.active} active, ${status.counts.stale} stale, ${status.counts.archived} archived`,
-  ];
-  if (status.lastError) {
-    lines.push(`Last error: ${status.lastError}`);
-  }
-  const relative = (value: number) => formatTimeAgo(Math.max(0, Date.now() - value));
-  for (const review of Object.values(status.collectionReview)) {
-    lines.push(
-      `Collection review: attempted ${relative(review.attemptedAtMs)}; ${review.error ? `failed: ${review.error}` : review.succeededAtMs ? `succeeded ${relative(review.succeededAtMs)}` : "running"}`,
-    );
-  }
-  for (const [workspace, review] of Object.entries(status.experienceReview)) {
-    lines.push(
-      `Experience review ${workspace.slice(0, 8)}: ${review.outcome}${review.error ? `: ${review.error}` : review.proposalId ? ` (${review.proposalId})` : ""}; attempted ${relative(review.attemptedAtMs)}`,
-    );
-  }
-  const keyCounts = new Map<string, number>();
-  for (const skill of status.skills) {
-    keyCounts.set(skill.skillKey, (keyCounts.get(skill.skillKey) ?? 0) + 1);
-  }
-  for (const skill of status.skills) {
-    const pinned = skill.pinned ? " pinned" : "";
-    const lastUsed =
-      skill.lastUsedAtMs === null ? "never" : new Date(skill.lastUsedAtMs).toISOString();
-    const label =
-      keyCounts.get(skill.skillKey) === 1
-        ? skill.skillKey
-        : `${skill.skillKey} (${skill.skillFile})`;
-    lines.push(`${label}  ${skill.state}${pinned}  last-used=${lastUsed}  uses=${skill.useCount}`);
-  }
-  for (const overlap of status.overlaps) {
-    lines.push(`Legacy overlap: ${overlap.left} ~ ${overlap.right}`);
-  }
-  return `${lines.join("\n")}\n`;
-}
-
 async function withOfflineGatewayLock<T>(
   config: ReturnType<typeof getRuntimeConfig>,
   gatewayError: unknown,
@@ -414,7 +345,7 @@ async function withOfflineGatewayLock<T>(
   const lock = await acquireGatewayLock({
     allowInTests: true,
     port: resolveGatewayPort(config, process.env),
-    role: "skill-workshop-apply",
+    role: "sqlite-maintenance",
     timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
   }).catch(() => undefined);
   if (!lock) {
@@ -422,7 +353,7 @@ async function withOfflineGatewayLock<T>(
   }
   // Missing credentials cannot prove a Gateway is absent; only its ownership lock can.
   try {
-    return await action();
+    return await lock.run(action);
   } finally {
     await lock.release();
   }
@@ -431,7 +362,7 @@ async function withOfflineGatewayLock<T>(
 async function callSkillCurator<T>(
   method: "status" | "pin" | "restore" | "unpin",
   params: { skill?: string },
-  loadLocal: () => T,
+  loadLocal: (config: ResolvedSkillsWorkspace["config"]) => T | Promise<T>,
 ): Promise<T> {
   const config = getRuntimeConfig();
   try {
@@ -439,6 +370,7 @@ async function callSkillCurator<T>(
       config,
       method: `skills.curator.${method}`,
       params,
+      ...(method === "status" ? { caps: [GATEWAY_CLIENT_CAPS.SKILL_CURATOR_LIVE_INVENTORY] } : {}),
     });
   } catch (error) {
     if (
@@ -451,8 +383,8 @@ async function callSkillCurator<T>(
       throw error;
     }
     return method === "status"
-      ? loadLocal()
-      : await withOfflineGatewayLock(config, error, loadLocal);
+      ? loadLocal(config)
+      : await withOfflineGatewayLock(config, error, () => loadLocal(config));
   }
 }
 
@@ -561,59 +493,19 @@ async function readSkillProposalInput(options: {
   return { content: await readSkillProposalDraftFile(proposal!) };
 }
 
-/**
- * Register the skills CLI commands
- */
 export function registerSkillsCli(program: Command) {
   const skills = program
     .command("skills")
     .description("List and inspect available skills")
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--json", "Output as JSON", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/skills", "docs.openclaw.ai/cli/skills")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/skills"));
   const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
     Boolean(opts?.json || skills.opts<{ json?: boolean }>().json);
   setCommandJsonMode(skills, "output", ({ argv, command }) => isSkillsMachineOutput(argv, command));
   registerSkillsLibraryCli(skills);
 
-  skills
-    .command("search")
-    .description("Search ClawHub skills")
-    .argument("[query...]", "Optional search query")
-    .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
-    .option("--json", "Output as JSON", false)
-    .action(async (queryParts: string[], opts: { limit?: number; json?: boolean }) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const results = await searchSkillsFromClawHub({
-          query: normalizeOptionalString(queryParts.join(" ")),
-          limit: opts.limit,
-        });
-        if (hasJsonOutput(opts)) {
-          defaultRuntime.writeJson({ results });
-          return;
-        }
-        if (results.length === 0) {
-          defaultRuntime.log("No ClawHub skills found.");
-          return;
-        }
-        for (const entry of results) {
-          const installRef = normalizeOptionalString(entry.installRef);
-          const skillRef = formatClawHubSearchText(installRef ?? entry.slug);
-          const isExternalSource =
-            installRef?.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX) === true &&
-            entry.trustState === CLAWHUB_SKILLS_SH_TRUST_STATE;
-          const version = entry.version ? ` v${formatClawHubSearchText(entry.version)}` : "";
-          const summary = entry.summary ? `  ${formatClawHubSearchText(entry.summary)}` : "";
-          const displayName = formatClawHubSearchText(entry.displayName);
-          const trust = isExternalSource ? `  ${CLAWHUB_SKILLS_SH_TRUST_LABEL}` : "";
-          defaultRuntime.log(`${skillRef}${version}  ${displayName}${summary}${trust}`);
-        }
-      });
-    });
+  registerSkillsSearchCli(skills);
 
   skills
     .command("install")
@@ -687,10 +579,7 @@ export function registerSkillsCli(program: Command) {
               ...resolveInstallPolicyWarningAcknowledgementCliOptions({
                 acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
               }),
-              logger: {
-                info: (message) => defaultRuntime.log(message),
-                warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
-              },
+              logger: skillInstallLogger,
             });
             if (!result.ok) {
               defaultRuntime.error(result.error);
@@ -725,10 +614,7 @@ export function registerSkillsCli(program: Command) {
             }),
             ...(opts.forceInstall ? { forceInstall: true } : {}),
             confirmInstall: resolveClawHubInstallConfirmation(),
-            logger: {
-              info: (message) => defaultRuntime.log(message),
-              warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
-            },
+            logger: skillInstallLogger,
           });
           if (!result.ok) {
             if (!isClawHubSkillBlockedCliFailure(result)) {
@@ -804,10 +690,7 @@ export function registerSkillsCli(program: Command) {
             ...resolveInstallPolicyWarningAcknowledgementCliOptions({
               acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
             }),
-            logger: {
-              info: (message) => defaultRuntime.log(message),
-              warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
-            },
+            logger: skillInstallLogger,
             config: target.config,
           });
           let failed = false;
@@ -937,7 +820,11 @@ export function registerSkillsCli(program: Command) {
 
   const showCuratorStatus = async (opts: { json?: boolean }, command: Command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const status = await callSkillCurator("status", {}, getSkillCuratorStatus);
+      const status = await callSkillCurator<SkillsCuratorCompatibleStatusResult>(
+        "status",
+        {},
+        (config) => getSkillCuratorStatus({ config }),
+      );
       if (hasJsonOutput(opts) || inheritOptionFromParent<boolean>(command, "json")) {
         defaultRuntime.writeJson(status);
         return;
@@ -983,7 +870,9 @@ export function registerSkillsCli(program: Command) {
     format: (result: T) => string,
   ): Promise<void> => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const result = await action(resolveSkillsWorkspaceForCommand(command, opts));
+      const result = await action(
+        resolveSkillsWorkspace({ agentId: resolveOptionFromCommand<string>(command, "agent") }),
+      );
       if (hasJsonOutput(opts)) {
         defaultRuntime.writeJson(result);
         return;
@@ -1243,9 +1132,7 @@ export function registerSkillsCli(program: Command) {
               ...opts,
               json: hasJsonOutput(opts),
             }),
-          {
-            agentId: resolveAgentOption(command, opts),
-          },
+          resolveOptionFromCommand<string>(command, "agent"),
         );
       },
     );
@@ -1266,9 +1153,7 @@ export function registerSkillsCli(program: Command) {
             json: hasJsonOutput(opts),
           });
         },
-        {
-          agentId: resolveAgentOption(command, opts),
-        },
+        resolveOptionFromCommand<string>(command, "agent"),
       );
       if (!skillFound) {
         defaultRuntime.exit(1);
@@ -1287,17 +1172,15 @@ export function registerSkillsCli(program: Command) {
             ...opts,
             json: hasJsonOutput(opts),
           }),
-        {
-          agentId: resolveAgentOption(command, opts),
-        },
+        resolveOptionFromCommand<string>(command, "agent"),
       );
     });
 
-  // Default action (no subcommand) - show list
   skills.action(async (opts: { agent?: string; json?: boolean }, command: Command) => {
-    await runSkillsAction((report) => formatSkillsList(report, { json: hasJsonOutput(opts) }), {
-      agentId: resolveAgentOption(command, opts),
-    });
+    await runSkillsAction(
+      (report) => formatSkillsList(report, { json: hasJsonOutput(opts) }),
+      resolveOptionFromCommand<string>(command, "agent"),
+    );
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

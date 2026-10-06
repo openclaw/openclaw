@@ -19,6 +19,12 @@ export type RpcResponse = {
 
 export type RpcMessage = RpcRequest | RpcResponse;
 
-export function isRpcResponse(message: RpcMessage): message is RpcResponse {
-  return "id" in message && !("method" in message);
+export function isRpcResponse(message: unknown): message is RpcResponse {
+  return (
+    message !== null &&
+    typeof message === "object" &&
+    "id" in message &&
+    (typeof message.id === "number" || typeof message.id === "string") &&
+    !("method" in message)
+  );
 }

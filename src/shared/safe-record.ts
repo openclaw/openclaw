@@ -24,19 +24,13 @@ export function readRecordValue(value: unknown, key: string): unknown {
 
 /** Copy array entries defensively from values that may throw on length/index access. */
 export function copyArrayEntries(value: unknown): unknown[] {
-  let isArray: boolean;
-  try {
-    isArray = Array.isArray(value);
-  } catch {
-    return [];
-  }
-  if (!isArray) {
-    return [];
-  }
-
-  const arrayValue = value as readonly unknown[];
+  let arrayValue: readonly unknown[];
   let length: number;
   try {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    arrayValue = value;
     length = arrayValue.length;
   } catch {
     return [];

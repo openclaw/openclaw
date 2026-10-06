@@ -1,3 +1,8 @@
+import { raceWithTimeout } from "@openclaw/retry";
+import {
+  collectReplyMediaEntries,
+  recordReplyPayloadMediaSelectionChange,
+} from "../../infra/outbound/reply-media-entries.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type {
@@ -34,19 +39,14 @@ export async function runReplyDispatchBeforeDeliverStage(
   if (!stage.timeoutMs) {
     return await stage.hook(payload, info);
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error(`beforeDeliver timed out after ${stage.timeoutMs}ms`)),
-      stage.timeoutMs,
-    );
-    timer.unref?.();
-  });
-  try {
-    return await Promise.race([Promise.resolve(stage.hook(payload, info)), timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return await raceWithTimeout(
+    () => Promise.resolve(stage.hook(payload, info)),
+    stage.timeoutMs,
+    () => {
+      throw new Error(`beforeDeliver timed out after ${stage.timeoutMs}ms`);
+    },
+    { ref: false },
+  );
 }
 
 function resolveStages(
@@ -79,8 +79,14 @@ export function composeReplyDispatchBeforeDeliver(
       if (!current) {
         return null;
       }
+      const previousMediaUrls: string[] = collectReplyMediaEntries(current).map(({ url }) => url);
       const next = await runReplyDispatchBeforeDeliverStage(stage, current, info);
-      current = next ? copyReplyPayloadMetadata(current, next) : null;
+      current = next
+        ? recordReplyPayloadMediaSelectionChange(
+            previousMediaUrls,
+            copyReplyPayloadMetadata(current, next),
+          )
+        : null;
     }
     return current;
   };

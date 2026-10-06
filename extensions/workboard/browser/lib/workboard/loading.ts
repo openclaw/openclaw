@@ -1,6 +1,7 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { setWorkboardCards } from "./card-state.ts";
+import { normalizeWorkboardChange } from "./change-payload.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardsPayload } from "./normalization.ts";
 import {
@@ -8,30 +9,11 @@ import {
   getWorkboardState,
   isCurrentWorkboardLoadGeneration,
   nextWorkboardLoadGeneration,
-  resetWorkboardLifecycleTaskConfirmations,
-  setWorkboardLifecycleTaskRefreshFailed,
-  setWorkboardLifecycleTasksPrepared,
-  shouldRefreshWorkboardTasksForLifecycle,
   workboardHasActiveWrites,
-  workboardTaskLinksReadyForLifecycle,
   type WorkboardHost,
   type WorkboardLoadToken,
 } from "./runtime.ts";
-import {
-  applyTaskSummariesToState,
-  getWorkboardTaskPollBatch,
-  listWorkboardTasks,
-  selectWorkboardMissingTaskConfirmationIds,
-  selectWorkboardTaskDiscoveryQueries,
-  selectWorkboardTaskPollIds,
-  taskMatchesTrackedCardLink,
-} from "./task-links.ts";
-import type {
-  WorkboardRefreshSource,
-  WorkboardTaskLinkState,
-  WorkboardTaskSummary,
-  WorkboardUiState,
-} from "./types.ts";
+import type { WorkboardRefreshSource, WorkboardUiState } from "./types.ts";
 
 type LoadWorkboardParams = {
   host: WorkboardHost;
@@ -39,7 +21,6 @@ type LoadWorkboardParams = {
   requestUpdate?: () => void;
   force?: boolean;
   refreshDiagnostics?: boolean;
-  taskRefresh?: "all" | "linked";
   preserveError?: boolean;
 };
 
@@ -96,7 +77,6 @@ async function loadWorkboardInternal(
   const generation = nextWorkboardLoadGeneration(params.host);
   const loadToken: WorkboardLoadToken = { queuedAfterGeneration, catalogOnly };
   runtime.loadToken = loadToken;
-  const lastRefreshErrorBeforeLoad = state.lastRefreshError;
   if (!catalogOnly) {
     state.loadAttempted = true;
     state.loading = true;
@@ -104,9 +84,7 @@ async function loadWorkboardInternal(
       delete runtime.loadError;
       state.error = null;
     }
-    if (params.taskRefresh !== "linked" || !state.lifecycleTaskRefreshFailed) {
-      state.lastRefreshError = null;
-    }
+    state.lastRefreshError = null;
     params.requestUpdate?.();
   }
   const loadPromise = (async () => {
@@ -120,199 +98,37 @@ async function loadWorkboardInternal(
           }
         }
       }
-      const payload = await client.request("workboard.cards.list", {});
+      const payload = await client.request(
+        "workboard.cards.list",
+        runtime.cardsRevision ? { sinceRevision: runtime.cardsRevision } : {},
+      );
+      if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
+        return false;
+      }
+      const unchanged = isRecord(payload) && payload.unchanged === true;
       if (
         catalogOnly &&
+        !unchanged &&
         (!isRecord(payload) || !Array.isArray(payload.cards) || !Array.isArray(payload.boards))
       ) {
         return false;
       }
-      const normalized = normalizeCardsPayload(payload);
-      if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
-        return false;
-      }
+      const normalized = unchanged ? state : normalizeCardsPayload(payload);
       if (catalogOnly) {
         state.boards = normalized.boards;
-        // Keep navigation current without replacing cards beneath an unfinished draft.
-        if (shouldDeferWorkboardLiveRefresh(state)) {
-          return true;
-        }
-        // Catalog hydration never establishes task freshness or authorizes stale edits.
-        setWorkboardCards(state, normalized.cards);
-        state.statuses = normalized.statuses;
-        state.tasksByCardId = new Map(
-          state.cards.flatMap((card) => {
-            const task = state.tasksByCardId.get(card.id);
-            return task && taskMatchesTrackedCardLink(task, card, state.missingTaskIds)
-              ? [[card.id, task] as const]
-              : [];
-          }),
-        );
-        if (!workboardTaskLinksReadyForLifecycle(state, { requireRunningTaskDiscovery: true })) {
-          setWorkboardLifecycleTasksPrepared(state, false, { host: params.host });
-        }
-        return true;
       }
-      const previousTasksByCardId = state.tasksByCardId;
-      const taskLinkState: WorkboardTaskLinkState = {
-        cards: normalized.cards,
-        tasksByCardId: new Map(),
-        missingTaskIds: new Set(state.missingTaskIds),
-      };
-      let lifecycleTaskRefreshFailed = state.lifecycleTaskRefreshFailed;
-      let preserveLifecycleTaskRefreshFailure = false;
-      let nextTaskRefreshError: string | null = null;
-      let nextUnfilteredCursor: string | null | undefined;
-      let rejectedUnfilteredCursor: string | undefined;
-      if (taskLinkState.cards.length > 0) {
-        const preparedTaskSummaries = taskLinkState.cards.flatMap((card) => {
-          const task = previousTasksByCardId.get(card.id);
-          return task && taskMatchesTrackedCardLink(task, card, taskLinkState.missingTaskIds)
-            ? [task]
-            : [];
-        });
-        try {
-          const pollResult =
-            params.taskRefresh === "linked"
-              ? await getWorkboardTaskPollBatch(
-                  client,
-                  selectWorkboardTaskPollIds(
-                    params.host,
-                    taskLinkState.cards,
-                    previousTasksByCardId,
-                    taskLinkState.missingTaskIds,
-                  ),
-                  selectWorkboardTaskDiscoveryQueries(
-                    params.host,
-                    taskLinkState.cards,
-                    previousTasksByCardId,
-                    taskLinkState.missingTaskIds,
-                  ),
-                )
-              : null;
-          let taskSummaries: WorkboardTaskSummary[];
-          let missingTaskIds: ReadonlySet<string>;
-          let taskRefreshError: string | null;
-          if (pollResult) {
-            taskSummaries = [
-              ...pollResult.tasks,
-              ...preparedTaskSummaries.filter(
-                (task) => !pollResult.missingTaskIds.has(task.taskId),
-              ),
-            ];
-            missingTaskIds = pollResult.missingTaskIds;
-            taskRefreshError = pollResult.error;
-          } else {
-            const listedTaskSummaries = await listWorkboardTasks(client);
-            const confirmationResult = await getWorkboardTaskPollBatch(
-              client,
-              selectWorkboardMissingTaskConfirmationIds(
-                params.host,
-                taskLinkState.cards,
-                listedTaskSummaries,
-                taskLinkState.missingTaskIds,
-                previousTasksByCardId,
-              ),
-              [],
-            );
-            const previousTasksToPreserve = confirmationResult.error
-              ? preparedTaskSummaries.filter(
-                  (task) => !confirmationResult.missingTaskIds.has(task.taskId),
-                )
-              : [];
-            taskSummaries = [
-              ...listedTaskSummaries,
-              ...confirmationResult.tasks,
-              ...previousTasksToPreserve,
-            ];
-            missingTaskIds = confirmationResult.missingTaskIds;
-            taskRefreshError = confirmationResult.error;
-          }
-          nextUnfilteredCursor = pollResult?.nextUnfilteredCursor;
-          rejectedUnfilteredCursor = pollResult?.rejectedUnfilteredCursor;
-          applyTaskSummariesToState(taskLinkState, taskSummaries, { missingTaskIds });
-          preserveLifecycleTaskRefreshFailure =
-            params.taskRefresh === "linked" &&
-            state.lifecycleTaskRefreshFailed &&
-            !taskRefreshError &&
-            shouldRefreshWorkboardTasksForLifecycle(taskLinkState);
-          lifecycleTaskRefreshFailed =
-            Boolean(taskRefreshError) || preserveLifecycleTaskRefreshFailure;
-          if (taskRefreshError) {
-            nextTaskRefreshError = taskRefreshError;
-          }
-        } catch (error) {
-          applyTaskSummariesToState(taskLinkState, preparedTaskSummaries);
-          // Render-driven lifecycle sync runs after every update. Defer a
-          // failed task refresh until a later authoritative refresh.
-          lifecycleTaskRefreshFailed = true;
-          nextTaskRefreshError = formatError(error);
-        }
-      } else {
-        lifecycleTaskRefreshFailed = false;
+      // Keep navigation current without replacing cards beneath an unfinished draft.
+      if ((catalogOnly || params.preserveError) && shouldDeferWorkboardLiveRefresh(state)) {
+        return catalogOnly;
       }
-      if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
-        return false;
-      }
-      if (
-        rejectedUnfilteredCursor &&
-        runtime.defaultTaskDiscoveryCursor === rejectedUnfilteredCursor
-      ) {
-        delete runtime.defaultTaskDiscoveryCursor;
-      }
-      if (params.taskRefresh === "linked" && shouldDeferWorkboardLiveRefresh(state)) {
-        if (rejectedUnfilteredCursor && nextTaskRefreshError) {
-          setWorkboardLifecycleTaskRefreshFailed(state, true, {
-            host: params.host,
-            requestUpdate: params.requestUpdate,
-          });
-          state.lifecycleTaskRefreshError = nextTaskRefreshError;
-          state.lastRefreshError = nextTaskRefreshError;
-        }
-        return false;
-      }
-      if (!rejectedUnfilteredCursor && nextUnfilteredCursor !== undefined) {
-        if (nextUnfilteredCursor) {
-          runtime.defaultTaskDiscoveryCursor = nextUnfilteredCursor;
-        } else {
-          delete runtime.defaultTaskDiscoveryCursor;
-        }
-      }
-      setWorkboardCards(state, taskLinkState.cards);
+      runtime.cardsRevision = normalizeWorkboardChange(isRecord(payload) ? payload.revision : null);
+      setWorkboardCards(state, normalized.cards);
       state.boards = normalized.boards;
       state.statuses = normalized.statuses;
-      state.tasksByCardId = taskLinkState.tasksByCardId;
-      state.missingTaskIds = taskLinkState.missingTaskIds;
-      resetWorkboardLifecycleTaskConfirmations(state, { host: params.host });
-      const recoveredFromLifecycleTaskRefresh =
-        state.lifecycleTaskRefreshFailed && !lifecycleTaskRefreshFailed;
-      if (!preserveLifecycleTaskRefreshFailure) {
-        setWorkboardLifecycleTaskRefreshFailed(state, lifecycleTaskRefreshFailed, {
-          host: params.host,
-          requestUpdate: params.requestUpdate,
-        });
+      // Catalog hydration never authorizes stale edits.
+      if (catalogOnly) {
+        return true;
       }
-      if (!lifecycleTaskRefreshFailed) {
-        state.lifecycleTaskRefreshError = null;
-        if (
-          recoveredFromLifecycleTaskRefresh &&
-          state.lastRefreshError === lastRefreshErrorBeforeLoad
-        ) {
-          state.lastRefreshError = null;
-        }
-      }
-      if (nextTaskRefreshError) {
-        state.lifecycleTaskRefreshError = nextTaskRefreshError;
-        state.lastRefreshError = nextTaskRefreshError;
-      }
-      setWorkboardLifecycleTasksPrepared(
-        state,
-        !lifecycleTaskRefreshFailed &&
-          workboardTaskLinksReadyForLifecycle(taskLinkState, {
-            requireRunningTaskDiscovery: params.taskRefresh === "linked",
-          }),
-        { host: params.host, requestUpdate: params.requestUpdate },
-      );
       const recoveredLoadError = runtime.loadError;
       if (recoveredLoadError !== undefined && state.error === recoveredLoadError) {
         state.error = null;
@@ -366,12 +182,7 @@ export async function refreshWorkboard(params: {
   if (state.dispatching || workboardHasActiveWrites(state)) {
     return false;
   }
-  const startedAt = Date.now();
-  state.lastRefreshStartedAt = startedAt;
-  state.lastRefreshSource = params.source;
-  if (!passive || !state.lifecycleTaskRefreshFailed) {
-    state.lastRefreshError = null;
-  }
+  state.lastRefreshError = null;
   params.requestUpdate?.();
   if (!params.client) {
     state.lastRefreshError = "Gateway client unavailable";
@@ -384,10 +195,8 @@ export async function refreshWorkboard(params: {
     requestUpdate: params.requestUpdate,
     force: true,
     refreshDiagnostics: params.refreshDiagnostics,
-    taskRefresh: passive ? "linked" : "all",
     preserveError: passive,
   });
-  state.lastRefreshSource = params.source;
   if (!passive && state.error) {
     state.lastRefreshError = state.error;
   } else if (refreshed) {

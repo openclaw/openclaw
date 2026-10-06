@@ -1,8 +1,3 @@
-/**
- * Channel config mutation helpers.
- *
- * Updates account enabled state and detects configured secret-like values.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveAccountKey,

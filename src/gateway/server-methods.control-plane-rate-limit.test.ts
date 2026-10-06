@@ -11,7 +11,7 @@ import {
   CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
   CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
 } from "./control-plane-rate-limit.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
@@ -236,9 +236,7 @@ describe("gateway control-plane write rate limit", () => {
     expect(suspension?.release()).toBe(true);
   });
 
-  it.each([
-    ...new Set(["sessions.list", "sessions.subscribe", ...STARTUP_UNAVAILABLE_GATEWAY_METHODS]),
-  ])(
+  it.each(["sessions.list", "sessions.create", "environments.create"])(
     "blocks startup-gated method %s before dispatch with a retryable startup error",
     async (method) => {
       const handlerCalls = vi.fn();

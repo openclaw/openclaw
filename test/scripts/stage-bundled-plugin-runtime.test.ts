@@ -8,6 +8,10 @@ import {
   prepareBundledPluginRuntime,
   stageBundledPluginRuntime,
 } from "../../scripts/stage-bundled-plugin-runtime.mts";
+import { readInstalledPluginOverview } from "../../src/plugins/installed-plugin-overview.js";
+import { createPluginCache, withPluginCache } from "../../src/plugins/plugin-cache.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { createCommandFixture } from "../helpers/command-fixture.js";
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-stage-runtime-"));
@@ -94,6 +98,7 @@ function writeRuntimeFixture(repoRoot: string) {
     "dist/extensions/demo/index.js": "export const generation = 'candidate';\n",
     "dist/extensions/demo/package.json": '{"name":"demo","type":"module"}\n',
     "dist/extensions/demo/assets/info.txt": "candidate asset\n",
+    "dist/extensions/demo/README.md": "# Candidate plugin\n",
   };
   for (const [relative, content] of Object.entries(files)) {
     const target = path.join(repoRoot, relative);
@@ -112,6 +117,62 @@ describe("prepareBundledPluginRuntime", () => {
     vi.unstubAllEnvs();
   });
 
+  it("admits a cold source checkout before its dependencies are installed", async (context) => {
+    const command = createCommandFixture(context, "tree");
+    const repoRoot = command.createTempDir("openclaw-cold-source-");
+    const { collectRuntimeImportClosure } =
+      await import("../../scripts/lib/runtime-import-closure.mts");
+    const sourceRoot = process.cwd();
+    try {
+      for (const file of collectRuntimeImportClosure(sourceRoot, [
+        "scripts/stage-bundled-plugin-runtime.mts",
+      ])) {
+        const target = path.join(repoRoot, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(path.join(sourceRoot, file), target);
+      }
+      fs.writeFileSync(path.join(repoRoot, "package.json"), '{"name":"openclaw","type":"module"}');
+      const owner = pathToFileURL(
+        path.join(sourceRoot, "scripts/lib/source-update-artifact-preflight.mts"),
+      ).href;
+      const result = await command.run(
+        resolveTestNodeExecPath(),
+        [
+          "--input-type=module",
+          "--eval",
+          `import assert from "node:assert/strict";
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
+import { inspectSourceUpdateArtifacts } from ${JSON.stringify(owner)};
+execFileSync("git", ["init", "--quiet"]);
+const admission = await inspectSourceUpdateArtifacts(process.cwd());
+try {
+  assert(admission.lock);
+  assert(fs.existsSync(".artifacts/dist-artifacts.lock/owner.json"));
+  assert.equal(admission.sourceRuntimePrepared, true);
+} finally {
+  await admission.lock?.release();
+}`,
+        ],
+        { cwd: repoRoot, env: { ...process.env, NODE_OPTIONS: "" } },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      for (const entry of [
+        "node_modules",
+        "dist",
+        "dist-runtime",
+        ".artifacts/dist-artifacts.lock/owner.json",
+      ]) {
+        expect(fs.existsSync(path.join(repoRoot, entry)), entry).toBe(false);
+      }
+      expect(fs.readdirSync(repoRoot).some((entry) => entry.startsWith(".openclaw-runtime-"))).toBe(
+        false,
+      );
+    } finally {
+      await command.lifetime.cleanup();
+    }
+  });
+
   it("prepares both roots without mutation and publishes imports valid at their final paths", async () => {
     await withTempDir(async (repoRoot) => {
       const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
@@ -128,6 +189,16 @@ describe("prepareBundledPluginRuntime", () => {
       );
       const sdk = await import(pathToFileURL(path.join(aliasRoot, "plugin-sdk/demo.js")).href);
       expect(runtime.generation).toBe("candidate");
+      expect(
+        withPluginCache(createPluginCache(), () =>
+          readInstalledPluginOverview({
+            rootDir: path.join(runtimeRoot, "extensions/demo"),
+            origin: "bundled",
+            providers: [],
+            channels: [],
+          }),
+        )?.readme,
+      ).toBe("# Candidate plugin\n");
       expect(sdk.generation).toBe("candidate");
       expect(
         fs.readFileSync(path.join(runtimeRoot, "extensions/demo/assets/info.txt"), "utf8"),

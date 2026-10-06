@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
@@ -15,7 +16,8 @@ import {
   bootstrapLaunchAgentOrThrow,
   isLaunchctlAlreadyLoaded,
   isUnsupportedGuiDomain,
-  parseLaunchctlPrint,
+  parseLaunchctlJob,
+  probeLaunchAgentState,
   readLaunchAgentRuntime,
   resolveLaunchAgentGatewayContext,
   resolveLaunchAgentGuiDomain,
@@ -56,7 +58,7 @@ function readLaunchAgentPidForCleanupSync(serviceTarget: string): number {
   if (result.code !== 0) {
     throw new Error(`launchctl print failed: ${formatLaunchctlResultDetail(result)}`);
   }
-  const pid = parseLaunchctlPrint(result.stdout || result.stderr || "").pid;
+  const pid = parseLaunchctlJob(result.stdout || result.stderr || "", serviceTarget).runtime.pid;
   if (pid === undefined) {
     throw new Error("launchctl print did not report a running pid");
   }
@@ -107,31 +109,22 @@ export async function repairLaunchAgentBootstrap(args: {
   await rewriteLaunchAgentPlistForRestart({ env, label, plistPath, warn });
   await execLaunchctl(["enable", serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
-  let repairStatus: "repaired" | "already-loaded" = "repaired";
-  if (boot.code !== 0) {
-    const detail = (boot.stderr || boot.stdout).trim();
-    if (isUnsupportedGuiDomain(detail)) {
-      return {
-        ok: false,
-        status: "gui-session-unavailable",
-        detail,
-        domain,
-      };
-    }
-    if (!isLaunchctlAlreadyLoaded(boot)) {
-      return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
-    }
-    repairStatus = "already-loaded";
+  if (boot.code === 0) {
+    return { ok: true, status: "repaired" };
   }
-  if (repairStatus === "repaired") {
-    return { ok: true, status: repairStatus };
+  const detail = (boot.stderr || boot.stdout).trim();
+  if (isUnsupportedGuiDomain(detail)) {
+    return { ok: false, status: "gui-session-unavailable", detail, domain };
+  }
+  if (!isLaunchctlAlreadyLoaded(boot)) {
+    return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
   }
 
   // Service is already bootstrapped. Only kickstart if it is not actively running —
   // kickstarting a healthy running service causes unnecessary session disconnects.
   const runtime = await readLaunchAgentRuntime(env);
   if (runtime.status === "running") {
-    return { ok: true, status: repairStatus };
+    return { ok: true, status: "already-loaded" };
   }
 
   const kick = await execLaunchctl(["kickstart", serviceTarget]);
@@ -142,7 +135,7 @@ export async function repairLaunchAgentBootstrap(args: {
       detail: (kick.stderr || kick.stdout).trim() || undefined,
     };
   }
-  return { ok: true, status: repairStatus };
+  return { ok: true, status: "already-loaded" };
 }
 type LaunchAgentRestoreResult = { loaded: true } | { loaded: false; detail: string };
 
@@ -165,40 +158,67 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
   serviceTarget: string;
   plistPath: string;
   onMutation?: (mode: "enable" | "bootstrap") => void;
+  assertCurrent?: () => void;
+  retryPendingTeardown?: boolean;
+  preserveAutoStart?: boolean;
 }): Promise<LaunchAgentRestoreResult> {
+  params.assertCurrent?.();
   const probe = await execLaunchctl(["print", params.serviceTarget]);
+  params.assertCurrent?.();
   if (probe.code === 0) {
     return { loaded: true };
   }
   try {
     await bootstrapLaunchAgentOrThrow({
-      domain: params.domain,
-      serviceTarget: params.serviceTarget,
-      plistPath: params.plistPath,
+      ...params,
       actionHint: "openclaw gateway start",
-      onMutation: params.onMutation,
     });
     return { loaded: true };
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     // A failed restore is not recoverable by launchd: the label is gone, so
     // KeepAlive has nothing to respawn. Report it instead of dropping it.
     return { loaded: false, detail: error instanceof Error ? error.message : String(error) };
   }
 }
 
-function formatLaunchAgentLeftUnloadedError(params: {
-  domain: string;
-  serviceTarget: string;
-  plistPath: string;
-  failure: string;
-  restoreDetail: string;
-}): string {
-  return [
-    params.failure,
-    `LaunchAgent ${params.serviceTarget} is not loaded and could not be restored: ${params.restoreDetail}`,
-    "The gateway is down and launchd has no job left to respawn it.",
-    `Fix: run \`openclaw gateway start\`, or \`launchctl bootstrap ${params.domain} ${params.plistPath}\`.`,
-  ].join("\n");
+async function rethrowLaunchAgentActivationFailure(
+  params: Parameters<typeof ensureLaunchAgentLoadedAfterFailure>[0],
+  error: unknown,
+): Promise<never> {
+  if (hasCommandProcessCleanupError(error)) {
+    throw error;
+  }
+  const restored = await ensureLaunchAgentLoadedAfterFailure(params);
+  const failure = error instanceof Error ? error.message : String(error);
+  throw new Error(
+    restored.loaded
+      ? `${failure}\nLaunchAgent ${params.serviceTarget} is loaded; launchd can retry its KeepAlive job. Run openclaw gateway status --deep to inspect startup.`
+      : [
+          failure,
+          `LaunchAgent ${params.serviceTarget} is not loaded and could not be restored: ${restored.detail}`,
+          "The gateway is down and launchd has no job left to respawn it.",
+          `Fix: run \`openclaw gateway start\`, or \`launchctl bootstrap ${params.domain} ${params.plistPath}\`.`,
+        ].join("\n"),
+    { cause: error },
+  );
+}
+
+async function needsLaunchAgentBootstrap(
+  kickstart: Awaited<ReturnType<typeof execLaunchctl>>,
+  serviceTarget: string,
+  assertCurrent?: () => void,
+): Promise<boolean> {
+  if (kickstart.code === 0 || isLaunchctlNotLoaded(kickstart)) {
+    return kickstart.code !== 0;
+  }
+  // Empty or generic kickstart output cannot establish whether the job exists.
+  assertCurrent?.();
+  const observed = await probeLaunchAgentState(serviceTarget);
+  assertCurrent?.();
+  return observed.state === "not-loaded";
 }
 
 export async function startLaunchAgent({
@@ -207,6 +227,7 @@ export async function startLaunchAgent({
   onMutation,
   assertCurrent,
   preserveAutoStart,
+  preserveDefinition,
 }: GatewayServiceControlArgs): Promise<void> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveLaunchAgentGuiDomain();
@@ -227,24 +248,41 @@ export async function startLaunchAgent({
     }
   }
 
-  assertCurrent?.();
-  let start = await execLaunchctl(["kickstart", serviceTarget]);
-  if (isLaunchctlNotLoaded(start)) {
-    await bootstrapLaunchAgentOrThrow({
-      domain,
-      serviceTarget,
-      plistPath,
-      actionHint: "openclaw gateway start",
-      onMutation: reportMutation,
-      skipEnable: preserveAutoStart || enabled,
-      assertCurrent,
-    });
-    // Loading does not start demand-only jobs. Without -k, an auto-started job is left running.
+  try {
     assertCurrent?.();
-    start = await execLaunchctl(["kickstart", serviceTarget]);
-  }
-  if (start.code !== 0) {
-    throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+    let start = await execLaunchctl(["kickstart", serviceTarget]);
+    if (await needsLaunchAgentBootstrap(start, serviceTarget, assertCurrent)) {
+      await bootstrapLaunchAgentOrThrow({
+        domain,
+        serviceTarget,
+        plistPath,
+        actionHint: "openclaw gateway start",
+        onMutation: reportMutation,
+        skipEnable: enabled,
+        preserveAutoStart,
+        assertCurrent,
+        retryPendingTeardown: preserveDefinition,
+      });
+      // Loading does not start demand-only jobs. Without -k, an auto-started job is left running.
+      assertCurrent?.();
+      start = await execLaunchctl(["kickstart", serviceTarget]);
+    }
+    if (start.code !== 0) {
+      throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+    }
+  } catch (error) {
+    await rethrowLaunchAgentActivationFailure(
+      {
+        domain,
+        serviceTarget,
+        plistPath,
+        onMutation: reportMutation,
+        assertCurrent,
+        retryPendingTeardown: preserveDefinition,
+        preserveAutoStart,
+      },
+      error,
+    );
   }
   reportMutation("kickstart");
 
@@ -252,11 +290,14 @@ export async function startLaunchAgent({
 }
 
 export async function restartLaunchAgent({
+  onRestartAttempted,
   preserveDefinition,
+  preserveAutoStart,
   stdout,
   env,
   warn,
   onMutation,
+  assertCurrent,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveLaunchAgentGuiDomain();
@@ -342,101 +383,79 @@ export async function restartLaunchAgent({
     return { outcome: "scheduled" };
   }
 
-  // `openclaw gateway restart` is an explicit operator request to bring the
-  // LaunchAgent back, so clear any persisted disabled state before restart.
-  const enable = await execLaunchctl(["enable", serviceTarget]);
-  if (enable.code === 0) {
-    reportMutation("enable");
-  }
+  // Explicit restart restores activation, including a service parked by Doctor.
+  try {
+    if (!preserveAutoStart) {
+      assertCurrent?.();
+      const enable = await execLaunchctl(["enable", serviceTarget]);
+      if (enable.code === 0) {
+        reportMutation("enable");
+      }
+    }
 
-  if (plistReloadNeeded) {
-    const bootout = await execLaunchctl(["bootout", serviceTarget]);
-    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
-    }
-    if (bootout.code === 0) {
-      reportMutation("bootout");
-    }
-    try {
+    if (plistReloadNeeded) {
+      assertCurrent?.();
+      const bootout = await execLaunchctl(["bootout", serviceTarget]);
+      if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+        throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+      }
+      if (bootout.code === 0) {
+        reportMutation("bootout");
+      }
       await bootstrapLaunchAgentOrThrow({
         domain,
         serviceTarget,
         plistPath,
         actionHint: "openclaw gateway restart",
         onMutation: reportMutation,
+        assertCurrent,
+        preserveAutoStart,
         retryPendingTeardown: true,
       });
-    } catch (error) {
-      // bootout already removed the job from the domain, so a failed bootstrap
-      // leaves the gateway down with no KeepAlive respawn to recover it. Restore
-      // the job before surfacing the original failure, as the kickstart path does.
-      const restored = await ensureLaunchAgentLoadedAfterFailure({
+    } else {
+      assertCurrent?.();
+      onRestartAttempted?.();
+      const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
+      if (start.code === 0) {
+        reportMutation("kickstart");
+      } else {
+        if (!(await needsLaunchAgentBootstrap(start, serviceTarget, assertCurrent))) {
+          throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
+        }
+        // A preserved plist may be demand-only; bootstrap only registers it.
+        await bootstrapLaunchAgentOrThrow({
+          domain,
+          serviceTarget,
+          plistPath,
+          actionHint: "openclaw gateway restart",
+          onMutation: reportMutation,
+          assertCurrent,
+          preserveAutoStart,
+          retryPendingTeardown: preserveDefinition,
+        });
+        if (preserveDefinition) {
+          assertCurrent?.();
+          const kick = await execLaunchctl(["kickstart", serviceTarget]);
+          if (kick.code !== 0) {
+            throw new Error(`launchctl kickstart failed: ${kick.stderr || kick.stdout}`.trim());
+          }
+          reportMutation("kickstart");
+        }
+      }
+    }
+  } catch (error) {
+    await rethrowLaunchAgentActivationFailure(
+      {
         domain,
         serviceTarget,
         plistPath,
         onMutation: reportMutation,
-      });
-      if (restored.loaded) {
-        throw error;
-      }
-      throw new Error(
-        formatLaunchAgentLeftUnloadedError({
-          domain,
-          serviceTarget,
-          plistPath,
-          failure: error instanceof Error ? error.message : String(error),
-          restoreDetail: restored.detail,
-        }),
-        { cause: error },
-      );
-    }
-    writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
-    return { outcome: "completed" };
-  }
-
-  const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
-  if (start.code === 0) {
-    reportMutation("kickstart");
-    writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
-    return { outcome: "completed" };
-  }
-
-  if (!isLaunchctlNotLoaded(start)) {
-    const restored = await ensureLaunchAgentLoadedAfterFailure({
-      domain,
-      serviceTarget,
-      plistPath,
-      onMutation: reportMutation,
-    });
-    const failure = `launchctl kickstart failed: ${start.stderr || start.stdout}`.trim();
-    if (restored.loaded) {
-      throw new Error(failure);
-    }
-    throw new Error(
-      formatLaunchAgentLeftUnloadedError({
-        domain,
-        serviceTarget,
-        plistPath,
-        failure,
-        restoreDetail: restored.detail,
-      }),
+        assertCurrent,
+        preserveAutoStart,
+        retryPendingTeardown: preserveDefinition || plistReloadNeeded,
+      },
+      error,
     );
-  }
-
-  // A preserved plist may be demand-only; bootstrap alone only registers it.
-  await bootstrapLaunchAgentOrThrow({
-    domain,
-    serviceTarget,
-    plistPath,
-    actionHint: "openclaw gateway restart",
-    onMutation: reportMutation,
-  });
-  if (preserveDefinition) {
-    const kick = await execLaunchctl(["kickstart", serviceTarget]);
-    if (kick.code !== 0) {
-      throw new Error(`launchctl kickstart failed: ${kick.stderr || kick.stdout}`.trim());
-    }
-    reportMutation("kickstart");
   }
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
   return { outcome: "completed" };

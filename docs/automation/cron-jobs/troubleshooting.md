@@ -33,10 +33,13 @@ openclaw doctor
     - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
     - `reason: not-due` in run output means the manual run was checked with `openclaw automations run <jobId> --due` and the job was not due yet.
     - If the job's execution agent cannot be resolved, automatic and manual attempts record a failed task and a skipped run-history entry with the reason. Select an agent with `openclaw automations edit <jobId> --agent <id>`.
+    - A run can finish `ok` after an exec call fails and the agent replies. Check `diagnostic:` in `openclaw automations show <jobId>` or `diagnostics` in run history; unresolved exec failures produce a warning without exposing command arguments.
+    - `handler-unavailable` means the heartbeat service was not registered or stopped during the wait. The attempt is recorded as skipped. Check Gateway startup and sidecar errors before retrying the job.
     - If a capped job's stored named creator account is unavailable, the run fails before model/tool execution. Job details, run history, and warning logs name the account. Re-add it to the channel configuration, or recreate the automation from the intended account; changing the delivery `--account` does not change creator authority. Legacy jobs without account metadata keep their existing execution policy.
 
   </Accordion>
   <Accordion title="Job fired but no delivery">
+    - `System event queue is full` means the session already has 20 pending events. OpenClaw keeps those accepted events and records the overflowing reminder as a failed run instead of dropping an older reminder. Let the session process its pending events, then retry the failed reminder with `openclaw automations run <jobId>`. If heartbeats were paused, enable them with `openclaw system heartbeat enable`. Pending system events are process-local, not a durable delivery receipt across Gateway restarts.
     - Delivery mode `none` means no runner fallback send is expected. The agent can still send directly with the `message` tool when a chat route is available.
     - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
     - For Matrix, copied or legacy jobs with lowercased `delivery.to` room IDs can fail because Matrix room IDs are case-sensitive. Edit the job to the exact `!room:server` or `room:!room:server` value from Matrix.

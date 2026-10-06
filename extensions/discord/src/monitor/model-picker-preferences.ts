@@ -1,4 +1,3 @@
-// Discord plugin module implements model picker preferences behavior.
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   MAX_DATE_TIMESTAMP_MS,
@@ -40,19 +39,15 @@ export type DiscordModelPickerPreferenceScope = {
   userId: string;
 };
 
-function normalizeId(value?: string): string {
-  return normalizeOptionalString(value) ?? "";
-}
-
 function buildDiscordModelPickerPreferenceKey(
   scope: DiscordModelPickerPreferenceScope,
 ): string | null {
-  const userId = normalizeId(scope.userId);
+  const userId = normalizeOptionalString(scope.userId);
   if (!userId) {
     return null;
   }
   const accountId = normalizeSharedAccountId(scope.accountId);
-  const guildId = normalizeId(scope.guildId);
+  const guildId = normalizeOptionalString(scope.guildId);
   if (guildId) {
     return `discord:${accountId}:guild:${guildId}:user:${userId}`;
   }
@@ -89,6 +84,18 @@ function sanitizeStoredPreferenceEntry(value: unknown): ModelPickerPreferencesEn
 
 function timestampOrder(value?: number): number {
   return value !== undefined && value >= 0 ? value : 0;
+}
+
+function scopedPreferenceEntries(
+  entries: Array<{ key: string; value: unknown }>,
+  scopeKey: string,
+) {
+  return entries
+    .map((entry) => ({ key: entry.key, value: sanitizeStoredPreferenceEntry(entry.value) }))
+    .filter(
+      (entry): entry is { key: string; value: ModelPickerPreferencesEntry } =>
+        entry.value?.scopeKey === scopeKey,
+    );
 }
 
 function comparePreferenceEntries(
@@ -142,12 +149,7 @@ export async function readDiscordModelPickerRecentModels(params: {
   const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_RECENT_LIMIT, 10));
   try {
     const store = openPreferenceStore(params.env);
-    const recent = (await store.entries())
-      .map((entry) => ({ key: entry.key, value: sanitizeStoredPreferenceEntry(entry.value) }))
-      .filter(
-        (entry): entry is { key: string; value: ModelPickerPreferencesEntry } =>
-          entry.value?.scopeKey === key,
-      )
+    const recent = scopedPreferenceEntries(await store.entries(), key)
       .toSorted(comparePreferenceEntries)
       .map((entry) => entry.value.modelRef);
     if (!params.allowedModelRefs || params.allowedModelRefs.size === 0) {
@@ -176,9 +178,9 @@ export async function recordDiscordModelPickerRecentModel(params: {
 
   try {
     const store = openPreferenceStore(params.env);
-    const existingEntries = (await store.entries())
-      .map((entry) => sanitizeStoredPreferenceEntry(entry.value))
-      .filter((entry): entry is ModelPickerPreferencesEntry => entry?.scopeKey === key);
+    const existingEntries = scopedPreferenceEntries(await store.entries(), key).map(
+      (entry) => entry.value,
+    );
     const timestamp = nextPreferenceTimestamp(existingEntries);
     await store.register(buildPreferenceModelKey(key, normalizedModelRef), {
       scopeKey: key,
@@ -186,13 +188,9 @@ export async function recordDiscordModelPickerRecentModel(params: {
       ...timestamp,
     });
     const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_RECENT_LIMIT, 10));
-    const scopedEntries = (await store.entries())
-      .map((entry) => ({ key: entry.key, value: sanitizeStoredPreferenceEntry(entry.value) }))
-      .filter(
-        (entry): entry is { key: string; value: ModelPickerPreferencesEntry } =>
-          entry.value?.scopeKey === key,
-      )
-      .toSorted(comparePreferenceEntries);
+    const scopedEntries = scopedPreferenceEntries(await store.entries(), key).toSorted(
+      comparePreferenceEntries,
+    );
     await Promise.all(scopedEntries.slice(limit).map((entry) => store.delete(entry.key)));
   } catch {}
 }

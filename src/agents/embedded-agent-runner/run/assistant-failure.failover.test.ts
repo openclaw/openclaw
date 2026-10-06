@@ -253,7 +253,8 @@ describe("assistant failure recovery", () => {
     async (fallbackConfigured) => {
       for (const [message, reason, status] of [
         ['  400 {"error":{"message":"credit balance is too low"}}  ', "billing", 400],
-        ["500 provider returned HTTP 500", "timeout", 500],
+        // An untyped 500 is a provider-side server error; only 408/499/504/522/524 are timeouts.
+        ["500 provider returned HTTP 500", "server_error", 500],
         ["503 service unavailable", "overloaded", 503],
         ["request timed out", "timeout", 408],
         ["401 invalid api key", "auth", 401],
@@ -276,7 +277,9 @@ describe("assistant failure recovery", () => {
         if (reason === "auth") {
           expect(failure.message).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
         } else if (reason === "rate_limit") {
-          expect(failure.message).toBe("⚠️ API rate limit reached. Please try again later.");
+          expect(failure.message).toBe(
+            "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+          );
         }
         expect(input.traceAttempts[0]?.status).toBe(status);
       }

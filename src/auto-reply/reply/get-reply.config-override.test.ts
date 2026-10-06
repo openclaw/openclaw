@@ -1,14 +1,16 @@
-// Tests get-reply config override handling for a single inbound turn.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { resolveModelRefFromString } from "../../agents/model-selection-shared.js";
 import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../../config/sessions/session-diff-baseline-capture.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
 import {
   buildGetReplyCtx,
   createGetReplyContinueDirectivesResult,
@@ -26,76 +28,98 @@ import {
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 
 type CaptureSessionDiffBaseline =
-  (typeof import("../../sessions/session-diff.js"))["captureSessionDiffBaseline"];
+  typeof import("../../sessions/session-diff.js").captureSessionDiffBaseline;
+type DirectiveOverrides = Partial<Parameters<typeof createGetReplyContinueDirectivesResult>[0]>;
 const mocks = vi.hoisted(() => ({
-  captureSessionDiffBaseline: vi.fn<CaptureSessionDiffBaseline>(),
+  captureBaseline: vi.fn<CaptureSessionDiffBaseline>(),
   resolveReplyDirectives: vi.fn(),
+  handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
 }));
-vi.mock("../../sessions/session-diff.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../sessions/session-diff.js")>()),
-  captureSessionDiffBaseline: mocks.captureSessionDiffBaseline,
-}));
-vi.mock("./commands.runtime.js", () => ({
-  handleCommands: vi.fn(async () => ({ shouldContinue: true })),
-}));
 registerGetReplyRuntimeOverrides(mocks);
-
-let getReplyFromConfig: typeof import("../../plugin-sdk/reply-runtime.js").getReplyFromConfig;
-let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
-let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
+const { getReplyFromConfig } = await import("../../plugin-sdk/reply-runtime.js");
+const { getRuntimeConfig: loadConfigMock } = await import("../../config/config.js");
+const { runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js");
+const { resolveDefaultModel: resolveDefaultModelMock } =
+  await import("./directive-handling.defaults.js");
+const { resolveModelRefFromString: resolveModelRefFromStringMock } =
+  await import("../../agents/model-selection.js");
+const defaultImplementation = vi.mocked(resolveDefaultModelMock).getMockImplementation();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const defaultSessionKey = "agent:main:telegram:123";
+const resolvedConfig: OpenClawConfig = {
+  channels: { telegram: { botToken: "resolved-telegram-token" } },
+  agents: { defaults: { userTimezone: "America/New_York" } },
+};
 
-async function loadGetReplyRuntimeForTest() {
-  ({ getReplyFromConfig } = await import("../../plugin-sdk/reply-runtime.js"));
-  ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
-  ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
-}
+beforeEach(() => {
+  vi.unstubAllEnvs();
+  for (const mock of Object.values(mocks)) {
+    mock.mockReset();
+  }
+  vi.mocked(loadConfigMock).mockReset().mockReturnValue({});
+  vi.mocked(runPreparedReplyMock).mockReset();
+  vi.mocked(resolveModelRefFromStringMock).mockReset().mockReturnValue(null);
+  vi.mocked(resolveDefaultModelMock).mockReset();
+  if (defaultImplementation) {
+    vi.mocked(resolveDefaultModelMock).mockImplementation(defaultImplementation);
+  }
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
-async function prepareBaselineClaimSession(sessionId: string) {
-  const sessionKey = `agent:main:telegram:${sessionId}`;
-  const storePath = path.join(tempDirs.make("openclaw-get-reply-baseline-"), "sessions.json");
-  const entry: InternalSessionEntry = {
-    createdVia: "operator",
-    sessionId,
-    sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
-    updatedAt: Date.now(),
-  };
+async function seedSession(
+  entry: InternalSessionEntry,
+  {
+    sessionKey = defaultSessionKey,
+    snapshot = false,
+    body,
+  }: { sessionKey?: string; snapshot?: boolean; body?: string } = {},
+) {
+  const storePath = path.join(tempDirs.make("get-reply-session-"), "sessions.json");
   await replaceSessionEntry({ sessionKey, storePath }, entry);
   const sessionEntryHandle = { replaceCurrent: vi.fn() };
-  mocks.initSessionState.mockResolvedValueOnce(
-    createGetReplySessionState({
-      initialSessionEntry: entry,
-      sessionEntry: entry,
-      sessionEntryHandle,
-      sessionId,
-      sessionKey,
-      sessionStore: { [sessionKey]: entry },
-      storePath,
-    }),
-  );
-  const ctx = buildGetReplyCtx({
-    Body: "run after capture",
-    BodyForAgent: "run after capture",
-    RawBody: "run after capture",
-    CommandBody: "run after capture",
-    SessionKey: sessionKey,
+  const fixture = createGetReplySessionState({
+    sessionKey,
+    sessionEntry: entry,
+    sessionStore: { [sessionKey]: entry },
+    storePath,
+    ...(snapshot
+      ? { initialSessionEntry: entry, sessionEntryHandle, sessionId: entry.sessionId }
+      : {}),
+    ...(body === undefined ? {} : { triggerBodyNormalized: body, bodyStripped: body }),
   });
-  mocks.resolveReplyDirectives.mockResolvedValueOnce(
-    createGetReplyContinueDirectivesResult({
-      body: "run after capture",
-      abortKey: sessionKey,
-      from: ctx.From ?? "telegram:user:42",
-      to: ctx.To ?? "telegram:123",
-      senderId: ctx.SenderId ?? "user:42",
-      commandSource: "message",
-      senderIsOwner: true,
-      resetHookTriggered: false,
-    }),
-  );
-  return { ctx, sessionEntryHandle, sessionKey, storePath };
+  return { fixture, sessionKey, storePath, sessionEntryHandle };
 }
-
+function continueDirectives(body: string, sessionKey: string, overrides: DirectiveOverrides = {}) {
+  return createGetReplyContinueDirectivesResult({
+    body,
+    abortKey: sessionKey,
+    from: "telegram:user:42",
+    to: "telegram:123",
+    senderId: "telegram:user:42",
+    commandSource: "text",
+    senderIsOwner: true,
+    resetHookTriggered: false,
+    ...overrides,
+  });
+}
+async function prepareBaselineClaimSession(sessionId: string) {
+  const session = await seedSession(
+    {
+      createdVia: "operator",
+      sessionId,
+      sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
+      updatedAt: Date.now(),
+    },
+    { sessionKey: `agent:main:telegram:${sessionId}`, snapshot: true },
+  );
+  mocks.initSessionState.mockResolvedValueOnce(session.fixture);
+  const ctx = buildGetReplyCtx({ SessionKey: session.sessionKey });
+  return { ...session, ctx };
+}
 function createPreparedDispatchRuntime(
   overrides: Partial<PreparedReplyDispatchRuntime> = {},
 ): PreparedReplyDispatchRuntime {
@@ -104,11 +128,8 @@ function createPreparedDispatchRuntime(
     agentDir: "/tmp/prepared-model-owner",
     workspaceDir: "/tmp/prepared-model-workspace",
     config: {
-      channels: { telegram: { botToken: "resolved-telegram-token" } },
-      agents: {
-        defaults: { userTimezone: "America/New_York" },
-        list: [{ id: "main", default: true }],
-      },
+      ...resolvedConfig,
+      agents: { ...resolvedConfig.agents, entries: { main: {} } },
     },
     modelCatalog: { entries: [], routeVariants: [] },
     inboundPluginRegistry: createEmptyPluginRegistry(),
@@ -119,34 +140,19 @@ function createPreparedDispatchRuntime(
 
 describe("getReplyFromConfig configOverride", () => {
   beforeEach(async () => {
-    await loadGetReplyRuntimeForTest();
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
-    mocks.resolveReplyDirectives.mockReset();
-    mocks.initSessionState.mockReset();
-    mocks.captureSessionDiffBaseline.mockReset();
-    vi.mocked(loadConfigMock).mockReset();
-    vi.mocked(runPreparedReplyMock).mockReset();
-
-    vi.mocked(loadConfigMock).mockReturnValue({});
+    const sessionDiff = await import("../../sessions/session-diff.js");
+    const commands = await import("./commands.runtime.js");
+    vi.spyOn(sessionDiff, "captureSessionDiffBaseline").mockImplementation(mocks.captureBaseline);
+    vi.spyOn(commands, "handleCommands").mockResolvedValue({ shouldContinue: true });
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
-    const sessionKey = "agent:main:telegram:123";
-    const storePath = path.join(tempDirs.make("openclaw-get-reply-session-"), "sessions.json");
-    const entry: InternalSessionEntry = {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-    };
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
-    mocks.initSessionState.mockResolvedValue(
-      createGetReplySessionState({
-        initialSessionEntry: entry,
-        sessionEntry: entry,
-        sessionEntryHandle: { replaceCurrent: vi.fn() },
-        sessionKey,
-        sessionStore: { [sessionKey]: entry },
-        storePath,
-      }),
+    const session = await seedSession(
+      { sessionId: "session-1", updatedAt: Date.now() },
+      { snapshot: true },
     );
-    mocks.captureSessionDiffBaseline.mockImplementation(async ({ sessionId }) => ({
+    mocks.initSessionState.mockResolvedValue(session.fixture);
+    mocks.captureBaseline.mockImplementation(async ({ sessionId }) => ({
       version: 1,
       sessionId,
       root: "/workspace",
@@ -154,54 +160,53 @@ describe("getReplyFromConfig configOverride", () => {
     }));
   });
 
-  afterEach(() => {
-    vi.unstubAllEnvs();
+  it("rejects forged operator authority at the public SDK reply entry", async () => {
+    const assertCurrent = vi.fn();
+    const plain = { profileId: "guest", scopes: ["operator.admin"], assertCurrent };
+    const issued = createAdmittedRunOperatorAuthority(plain);
+    for (const operatorAuthority of [plain, { ...issued }]) {
+      const options = { runId: "forged-operator", operatorAuthority };
+      await expect(getReplyFromConfig(buildGetReplyCtx(), options, {})).rejects.toThrow(
+        "operator run authority must be issued by the host",
+      );
+    }
+    expect(assertCurrent).not.toHaveBeenCalled();
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(runPreparedReplyMock).not.toHaveBeenCalled();
   });
-
-  it("merges configOverride over fresh getRuntimeConfig()", async () => {
-    vi.mocked(loadConfigMock).mockReturnValue({
-      channels: {
-        telegram: {
-          botToken: "resolved-telegram-token",
-        },
-      },
-      agents: {
-        defaults: {
-          userTimezone: "UTC",
-        },
-      },
-    } satisfies OpenClawConfig);
-
-    await getReplyFromConfig(buildGetReplyCtx(), undefined, {
-      agents: {
-        defaults: {
-          userTimezone: "America/New_York",
-        },
-      },
-    } as OpenClawConfig);
-
-    expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
-  });
-
-  it("settles a precreated baseline claim before reply execution", async () => {
-    const sessionId = "precreated-get-reply";
-    const { ctx, sessionEntryHandle, sessionKey, storePath } =
-      await prepareBaselineClaimSession(sessionId);
-    vi.mocked(runPreparedReplyMock).mockImplementationOnce(async () => {
-      expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-        sessionDiffBaseline: { version: 1, sessionId, root: "/workspace" },
-      });
-      return { text: "ok" };
+  it("pins the issued operator source once through public reply option copies", async () => {
+    const issued = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
     });
-
-    await getReplyFromConfig(ctx, undefined, {});
-
-    expect(mocks.captureSessionDiffBaseline).toHaveBeenCalledOnce();
-    expect(sessionEntryHandle.replaceCurrent).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionDiffBaseline: expect.objectContaining({ sessionId }) }),
+    let reads = 0;
+    const options = {
+      runId: "issued-operator",
+      get operatorAuthority() {
+        reads += 1;
+        return reads === 1 ? issued : { ...issued, scopes: ["operator.admin"] };
+      },
+    };
+    await expect(getReplyFromConfig(buildGetReplyCtx(), options, {})).resolves.toEqual({
+      text: "ok",
+    });
+    expect(reads).toBe(1);
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+      expect.objectContaining({ opts: expect.objectContaining({ operatorAuthority: issued }) }),
     );
   });
-
+  it("merges configOverride over fresh getRuntimeConfig()", async () => {
+    vi.mocked(loadConfigMock).mockReturnValue({
+      ...resolvedConfig,
+      agents: { defaults: { userTimezone: "UTC" } },
+    });
+    await getReplyFromConfig(buildGetReplyCtx(), undefined, {
+      agents: { defaults: { userTimezone: "America/New_York" } },
+    });
+    expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
+  });
   it("reports reset cleanup failure without starting the reply", async () => {
     const message = "Reset did not complete. Inspect remaining tasks and retry /reset.";
     mocks.initSessionState.mockRejectedValueOnce(new SessionResetCleanupError(message));
@@ -213,133 +218,245 @@ describe("getReplyFromConfig configOverride", () => {
     expect(runState.preRunRejection).toBe("session-directive-rejected");
     expect(runPreparedReplyMock).not.toHaveBeenCalled();
   });
-
   it("rethrows baseline work-start invalidation before reply execution", async () => {
     const { ctx } = await prepareBaselineClaimSession("invalidated-get-reply");
-    mocks.captureSessionDiffBaseline.mockRejectedValueOnce(
+    mocks.captureBaseline.mockRejectedValueOnce(
       new SessionWorkStartInvalidatedError("session changed during baseline capture"),
     );
-
     await expect(getReplyFromConfig(ctx, undefined, {})).rejects.toBeInstanceOf(
       SessionWorkStartInvalidatedError,
     );
     expect(runPreparedReplyMock).not.toHaveBeenCalled();
   });
-
-  it("continues the reply flow after an ordinary baseline capture failure", async () => {
-    const { ctx, sessionKey, storePath } = await prepareBaselineClaimSession(
-      "failed-get-reply-capture",
-    );
-    mocks.captureSessionDiffBaseline.mockRejectedValueOnce(new Error("git capture failed"));
-    vi.mocked(runPreparedReplyMock).mockResolvedValueOnce({ text: "ok" });
-
-    await expect(getReplyFromConfig(ctx, undefined, {})).resolves.toEqual({ text: "ok" });
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionDiffBaselineCapture: { status: "unavailable" },
-    });
-  });
-
-  it("uses complete configOverride without reloading config", async () => {
-    const { withFullRuntimeReplyConfig } = await import("./get-reply-fast-path.js");
+  it("uses the admitted catalog through the native SDK resolver", async () => {
+    const preparedRuntime = createPreparedDispatchRuntime();
     vi.mocked(loadConfigMock).mockImplementation(() => {
-      throw new Error("getRuntimeConfig should not be called for complete runtime config");
+      throw new Error("getRuntimeConfig should not be called for a prepared Gateway dispatch");
     });
-
-    const conflictingRuntime = createPreparedDispatchRuntime();
-    await bindPreparedReplyDispatchRuntime(conflictingRuntime, getReplyFromConfig)(
-      buildGetReplyCtx(),
-      undefined,
-      withFullRuntimeReplyConfig({
-        channels: {
-          telegram: {
-            botToken: "resolved-telegram-token",
-          },
-        },
-        agents: {
-          defaults: {
-            userTimezone: "America/New_York",
-          },
-        },
-      } satisfies OpenClawConfig),
+    const body = "/model ollama/picker-secondary -s";
+    await bindPreparedReplyDispatchRuntime(
+      preparedRuntime,
+      getReplyFromConfig,
+    )(
+      buildGetReplyCtx({
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
+        CommandSource: "native",
+        CommandAuthorized: true,
+        CommandTargetSessionKey: defaultSessionKey,
+      }),
     );
-
     expect(loadConfigMock).not.toHaveBeenCalled();
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentDir: expect.not.stringMatching(/prepared-model-owner/),
-        preparedModelCatalog: undefined,
+        agentId: "main",
+        agentDir: "/tmp/prepared-model-owner",
+        workspaceDir: "/tmp/prepared-model-workspace",
+        preparedModelCatalog: preparedRuntime.modelCatalog,
       }),
     );
   });
-
-  it.each([false, true])(
-    "uses the admitted catalog through the SDK resolver (native=%s)",
-    async (native) => {
-      const preparedRuntime = createPreparedDispatchRuntime();
-      vi.mocked(loadConfigMock).mockImplementation(() => {
-        throw new Error("getRuntimeConfig should not be called for a prepared Gateway dispatch");
-      });
-
-      await bindPreparedReplyDispatchRuntime(
-        preparedRuntime,
-        getReplyFromConfig,
-      )(
-        buildGetReplyCtx(
-          native
-            ? {
-                Body: "/model ollama/picker-secondary -s",
-                RawBody: "/model ollama/picker-secondary -s",
-                CommandBody: "/model ollama/picker-secondary -s",
-                CommandSource: "native",
-                CommandAuthorized: true,
-                CommandTargetSessionKey: "agent:main:telegram:123",
-              }
-            : {},
-        ),
-      );
-
-      expect(loadConfigMock).not.toHaveBeenCalled();
-      expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
-      expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "main",
-          agentDir: "/tmp/prepared-model-owner",
-          workspaceDir: "/tmp/prepared-model-workspace",
-          preparedModelCatalog: preparedRuntime.modelCatalog,
-        }),
-      );
-    },
-  );
-
   it("rejects a prepared dispatch runtime that crosses the admitted session agent", async () => {
     const preparedRuntime = createPreparedDispatchRuntime({
       agentId: "worker",
-      config: { agents: { list: [{ id: "worker", default: true }] } },
+      config: { agents: { entries: { worker: {} } } },
     });
-
     await expect(
       bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildGetReplyCtx()),
     ).rejects.toThrow("reply model catalog owner changed from main to worker");
   });
+});
 
-  it("marks a frozen complete config without changing its identity or own keys", async () => {
-    const { withFullRuntimeReplyConfig } = await import("./get-reply-fast-path.js");
-    const cfg = Object.freeze({
-      agents: { defaults: { userTimezone: "America/New_York" } },
-      channels: { telegram: { botToken: "resolved-telegram-token" } },
-    } satisfies OpenClawConfig);
-    const ownKeys = Reflect.ownKeys(cfg);
-    vi.mocked(loadConfigMock).mockImplementation(() => {
-      throw new Error("getRuntimeConfig should not be called for complete runtime config");
+function makeTestModel(id: string, name: string, reasoning: boolean): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  };
+}
+function makeReasoningModelConfig(
+  thinking?: false | "high",
+  filterPrimary = false,
+): OpenClawConfig {
+  return withFastReplyConfig({
+    agents: {
+      defaults: {
+        model: "openai/gpt-5.5",
+        workspace: "/tmp/workspace",
+        ...(thinking === undefined
+          ? {}
+          : { models: { "openai/gpt-5.5": { params: { thinking } } } }),
+        ...(filterPrimary ? { modelPolicy: { allow: ["anthropic/*"] } } : {}),
+      },
+    },
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.test/v1",
+          models: [makeTestModel("gpt-5.5", "GPT-5.5", true)],
+        },
+        anthropic: {
+          baseUrl: "https://api.anthropic.test/v1",
+          models: [makeTestModel("claude-fallback", "Claude Fallback", false)],
+        },
+      },
+    },
+  });
+}
+async function mockAutoFallbackSession(modelSelectionLocked?: boolean) {
+  const session = await seedSession(
+    {
+      sessionId: "fallback-session",
+      updatedAt: Date.now(),
+      providerOverride: "anthropic",
+      modelOverride: "claude-fallback",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.5",
+      modelSelectionLocked,
+    },
+    { body: "hello" },
+  );
+  mocks.initSessionState.mockResolvedValue(session.fixture);
+  return session;
+}
+function mockFallbackDirectiveResult(sessionKey: string, overrides: DirectiveOverrides = {}) {
+  mocks.resolveReplyDirectives.mockImplementation(async () =>
+    continueDirectives("hello", sessionKey, {
+      provider: "anthropic",
+      model: "claude-fallback",
+      ...overrides,
+    }),
+  );
+}
+function runParams() {
+  return vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+}
+async function expectPreparedReply(cfg: OpenClawConfig, options?: InternalGetReplyOptions) {
+  await expect(getReplyFromConfig(buildGetReplyCtx(), options, cfg)).resolves.toEqual({
+    text: "ok",
+  });
+  expect(runPreparedReplyMock).toHaveBeenCalledOnce();
+  return runParams();
+}
+
+describe("getReplyFromConfig auto-fallback primary probes", () => {
+  beforeEach(async () => {
+    delete process.env.OPENCLAW_TEST_FAST;
+    const catalog = await import("../../agents/model-catalog.runtime.js");
+    vi.spyOn(catalog, "loadProviderScopedThinkingCatalog").mockResolvedValue([]);
+    vi.spyOn(catalog, "loadPreparedModelCatalogSnapshot").mockResolvedValue({
+      entries: [],
+      routeVariants: [],
+      authoritative: true,
     });
-
-    const marked = withFullRuntimeReplyConfig(cfg);
-    await getReplyFromConfig(buildGetReplyCtx(), undefined, marked);
-
-    expect(marked).toBe(cfg);
-    expect(Reflect.ownKeys(cfg)).toEqual(ownKeys);
-    expect(loadConfigMock).not.toHaveBeenCalled();
-    expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
+    vi.mocked(resolveDefaultModelMock).mockReturnValue({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+    });
+    vi.mocked(resolveModelRefFromStringMock).mockImplementation(resolveModelRefFromString);
+    mocks.handleInlineActions.mockImplementation(
+      async (params: { directives?: unknown; cleanedBody?: string }) => ({
+        kind: "continue",
+        directives: params.directives ?? {},
+        cleanedBody: params.cleanedBody ?? "hello",
+        abortedLastRun: false,
+      }),
+    );
+    vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
+  });
+  it("suppresses heartbeat model overrides for a model-locked session", async () => {
+    const { sessionKey } = await mockAutoFallbackSession(true);
+    mockFallbackDirectiveResult(sessionKey, { resolvedThinkLevel: "off" });
+    await expectPreparedReply(makeReasoningModelConfig(), {
+      isHeartbeat: true,
+      heartbeatModelOverride: "openai/gpt-5.5@openai:metered",
+    });
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
+    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-fallback",
+      hasResolvedHeartbeatModelOverride: false,
+    });
+    expect(runParams()).toMatchObject({ provider: "anthropic", model: "claude-fallback" });
+    expect(runParams()?.autoFallbackPrimaryProbe).toBeUndefined();
+    expect(runParams()).not.toHaveProperty("configuredProfileId", "openai:metered");
+  });
+  it("keeps an explicit heartbeat profile on its turn without persisting it into chat", async () => {
+    const { sessionKey, storePath } = await mockAutoFallbackSession();
+    mockFallbackDirectiveResult(sessionKey, { provider: "openai", model: "gpt-5.5" });
+    const cfg = makeReasoningModelConfig();
+    await getReplyFromConfig(
+      buildGetReplyCtx(),
+      { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5@openai:metered" },
+      cfg,
+    );
+    expect(runParams()).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+      configuredProfileId: "openai:metered",
+    });
+    expect(loadSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
+    await getReplyFromConfig(buildGetReplyCtx(), undefined, cfg);
+    expect(vi.mocked(runPreparedReplyMock).mock.calls[1]?.[0]).not.toHaveProperty(
+      "configuredProfileId",
+      "openai:metered",
+    );
+  });
+  it.each([
+    ["turn override", undefined, "off"],
+    ["per-model off", false, "off"],
+    ["per-model high", "high", "high"],
+  ] as const)(
+    "honors %s and clears fallback reasoning during primary probes",
+    async (_name, thinking, expected) => {
+      const { sessionKey } = await mockAutoFallbackSession();
+      mockFallbackDirectiveResult(sessionKey, {
+        resolvedThinkLevel: "off",
+        resolvedReasoningLevel: thinking === undefined ? undefined : "on",
+      });
+      const prepared = await expectPreparedReply(
+        makeReasoningModelConfig(thinking),
+        thinking === undefined ? { thinkingLevelOverride: "off" } : undefined,
+      );
+      expect(prepared).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.5",
+        resolvedThinkLevel: expected,
+        resolvedReasoningLevel: "off",
+      });
+    },
+  );
+  it("uses the policy-selected model defaults when the primary probe is filtered out", async () => {
+    const { sessionKey } = await mockAutoFallbackSession();
+    mockFallbackDirectiveResult(sessionKey, { resolvedThinkLevel: "off" });
+    const catalogRuntime = await import("../../agents/model-catalog.runtime.js");
+    const catalog = [
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
+      { provider: "anthropic", id: "claude-fallback", name: "Claude Fallback", reasoning: false },
+    ];
+    vi.mocked(catalogRuntime.loadPreparedModelCatalogSnapshot).mockResolvedValueOnce({
+      entries: catalog,
+      routeVariants: catalog,
+      authoritative: true,
+    });
+    const prepared = await expectPreparedReply(makeReasoningModelConfig("high", true));
+    expect(prepared?.modelState).toMatchObject({
+      provider: "anthropic",
+      model: "claude-fallback",
+    });
+    expect(prepared).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
+    });
   });
 });

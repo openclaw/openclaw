@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installProcessWarningFilter, shouldIgnoreWarning } from "./warning-filter.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { installProcessWarningFilter } from "./warning-filter.js";
 
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
 const baseEmitWarning = process.emitWarning.bind(process);
@@ -34,52 +35,6 @@ describe("warning filter", () => {
     vi.restoreAllMocks();
   });
 
-  it("suppresses known deprecation and experimental warning signatures", () => {
-    const ignoredWarnings = [
-      {
-        name: "DeprecationWarning",
-        code: "DEP0040",
-        message: "The punycode module is deprecated.",
-      },
-      {
-        name: "DeprecationWarning",
-        code: "DEP0060",
-        message: "The `util._extend` API is deprecated.",
-      },
-      {
-        name: "ExperimentalWarning",
-        message: "SQLite is an experimental feature and might change at any time",
-      },
-    ];
-
-    for (const warning of ignoredWarnings) {
-      expect(shouldIgnoreWarning(warning)).toBe(true);
-    }
-  });
-
-  it("keeps unknown warnings visible", () => {
-    const visibleWarnings = [
-      {
-        name: "DeprecationWarning",
-        code: "DEP9999",
-        message: "Totally new warning",
-      },
-      {
-        name: "ExperimentalWarning",
-        message: "Different experimental warning",
-      },
-      {
-        name: "DeprecationWarning",
-        code: "DEP0040",
-        message: "Different deprecated module",
-      },
-    ];
-
-    for (const warning of visibleWarnings) {
-      expect(shouldIgnoreWarning(warning)).toBe(false);
-    }
-  });
-
   it("routes only Node's warning printer at WARN across repeated capture setup", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-warning-filter-"));
     const logFile = path.join(tempDir, "warning.log");
@@ -105,7 +60,7 @@ describe("warning filter", () => {
       delete childEnv.NODE_REDIRECT_WARNINGS;
       delete childEnv.NODE_NO_WARNINGS;
       const result = spawnSync(
-        process.execPath,
+        resolveTestNodeExecPath(),
         ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", source],
         {
           cwd: process.cwd(),
@@ -196,6 +151,34 @@ describe("warning filter", () => {
         name: "DeprecationWarning",
         message: "The punycode module is deprecated.",
       });
+
+      const visibleWarnings = [
+        {
+          name: "DeprecationWarning",
+          code: "DEP9999",
+          message: "Totally new warning",
+        },
+        {
+          name: "ExperimentalWarning",
+          message: "Different experimental warning",
+        },
+        {
+          name: "DeprecationWarning",
+          code: "DEP0040",
+          message: "Different deprecated module",
+        },
+      ];
+      for (const warning of visibleWarnings) {
+        process.emitWarning(Object.assign(new Error(warning.message), warning));
+      }
+      await flushWarnings();
+      for (const warning of visibleWarnings) {
+        expect(seenWarnings.find((seen) => seen.message === warning.message)).toStrictEqual({
+          code: warning.code,
+          name: warning.name,
+          message: warning.message,
+        });
+      }
     } finally {
       process.off("warning", onWarning);
     }

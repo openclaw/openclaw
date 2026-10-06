@@ -2,6 +2,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { expectDefined, readStringValue } from "@openclaw/normalization-core";
 import {
@@ -14,6 +15,7 @@ import {
   type Mock,
   type MockInstance,
 } from "vitest";
+import { maintainOpenClawCompileCache } from "../node-compile-cache.mjs";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { mockNodeBuiltinModule } from "./plugin-sdk/test-helpers/node-builtin-mocks.js";
 import { createDeferredCore } from "./shared/deferred.js";
@@ -54,6 +56,7 @@ import {
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
+import { resolveNodeCompileCacheEnv } from "./infra/node-compile-cache-env.js";
 
 function enabledDirectory(callIndex = 0): string {
   const [directory] = expectDefined(enableCompileCache.mock.calls[callIndex], "cache enable call");
@@ -115,46 +118,64 @@ describe("entry compile cache", () => {
     expect(resolveEntryInstallRoot("/pkg/openclaw/entry.js")).toBe("/pkg/openclaw");
   });
 
-  it("treats git and source entry markers as source checkouts", async () => {
-    await fs.writeFile(path.join(root, ".git"), "gitdir: .git/worktrees/openclaw\n", "utf8");
-    enableOpenClawCompileCache({ env: {}, installRoot: root });
-    expect(enableCompileCache).not.toHaveBeenCalled();
-  });
+  it.each(["git", "source", "package"])(
+    "activates compile cache only for an enabled %s install",
+    async (kind) => {
+      if (kind === "git") {
+        await fs.writeFile(path.join(root, ".git"), "gitdir: .git/worktrees/openclaw\n", "utf8");
+      } else if (kind === "source") {
+        await markSourceCheckout();
+      }
+      enableOpenClawCompileCache({ env: {}, installRoot: root });
+      expect(enableCompileCache).toHaveBeenCalledTimes(kind === "package" ? 1 : 0);
+      enableOpenClawCompileCache({ env: { NODE_DISABLE_COMPILE_CACHE: "1" }, installRoot: root });
+      setTestEnvValue("NODE_DISABLE_COMPILE_CACHE", "1");
+      enableOpenClawCompileCache({ installRoot: root });
+      expect(enableCompileCache).toHaveBeenCalledTimes(kind === "package" ? 1 : 0);
+    },
+  );
 
-  it("disables compile cache for source-checkout installs", async () => {
-    await markSourceCheckout();
-    enableOpenClawCompileCache({ env: {}, installRoot: root });
-    expect(enableCompileCache).not.toHaveBeenCalled();
-  });
-
-  it("keeps compile cache enabled for packaged installs unless disabled by env", () => {
-    enableOpenClawCompileCache({ env: {}, installRoot: root });
-    expect(enableCompileCache).toHaveBeenCalledOnce();
-    enableOpenClawCompileCache({ env: { NODE_DISABLE_COMPILE_CACHE: "1" }, installRoot: root });
-    expect(enableCompileCache).toHaveBeenCalledOnce();
-  });
-
-  it("scopes packaged compile cache by package install metadata", async () => {
-    await fs.writeFile(path.join(root, "package.json"), '{"version":"2026.4.29"}\n', "utf8");
-    enableOpenClawCompileCache({
-      env: { NODE_COMPILE_CACHE: path.join(root, ".node-cache") },
-      installRoot: root,
+  it("skips cache activation with a warning when Windows TEMP makes the path too long", () => {
+    vi.spyOn(os, "tmpdir").mockReturnValue(path.join(root, "x".repeat(200)));
+    withMockedPlatform("win32", () => {
+      enableOpenClawCompileCache({ env: {}, installRoot: root });
     });
-    const directory = enabledDirectory();
-    expect(directory).toContain(path.join(".node-cache", "openclaw"));
-    expect(directory).toContain("2026.4.29");
-    expect(path.basename(directory)).toMatch(/^\d+-\d+$/);
+    expect(enableCompileCache).not.toHaveBeenCalled();
+    expect(writeStderr).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("Compile cache disabled: Windows cache path exceeds 200 characters"),
+    );
   });
 
-  it("invalidates a replaced installation without deleting shared compile caches", async () => {
+  it.each([200, 201])("bounds Windows child cache paths at 200 characters: %s", (length) => {
+    const directory = path.join(root, "x".repeat(length - root.length - 1));
+    const env = { NODE_COMPILE_CACHE: directory, KEEP: "unchanged" };
+    withMockedPlatform("win32", () => {
+      const childEnv = resolveNodeCompileCacheEnv(env);
+      if (length === 200) {
+        expect(childEnv).toBe(env);
+        expect(writeStderr).not.toHaveBeenCalled();
+      } else {
+        expect(childEnv).toEqual({ NODE_DISABLE_COMPILE_CACHE: "1", KEEP: "unchanged" });
+        expect(writeStderr).toHaveBeenCalledOnce();
+      }
+    });
+    expect(env.NODE_COMPILE_CACHE).toBe(directory);
+  });
+
+  it("retires a replaced installation without deleting other applications' compile caches", async () => {
     const packageJsonPath = path.join(root, "package.json");
     const env = { NODE_COMPILE_CACHE: path.join(root, ".node-cache") };
     await fs.writeFile(packageJsonPath, '{"version":"2026.4.29"}\n', "utf8");
     enableOpenClawCompileCache({ env, installRoot: root });
     const originalDirectory = enabledDirectory();
+    expect(originalDirectory).toContain(path.join(".node-cache", "openclaw"));
+    expect(originalDirectory).toContain("2026.4.29");
+    expect(path.basename(originalDirectory)).toMatch(/^\d+-\d+$/);
     await fs.mkdir(originalDirectory, { recursive: true });
     const originalCacheEntry = path.join(originalDirectory, "keep.txt");
     await fs.writeFile(originalCacheEntry, "previous cached installation\n", "utf8");
+    const sharedCacheEntry = path.join(env.NODE_COMPILE_CACHE, "another-application");
+    await fs.writeFile(sharedCacheEntry, "keep\n");
     await fs.writeFile(
       packageJsonPath,
       '{"version":"2026.4.29","installation":"replacement"}\n',
@@ -164,122 +185,84 @@ describe("entry compile cache", () => {
     const replacementDirectory = enabledDirectory(1);
     expect(replacementDirectory).toContain(path.join("openclaw", "2026.4.29"));
     expect(replacementDirectory).not.toBe(originalDirectory);
-    await expect(fs.readFile(originalCacheEntry, "utf8")).resolves.toBe(
-      "previous cached installation\n",
-    );
+    await maintainOpenClawCompileCache(replacementDirectory);
+    await expect(fs.stat(originalDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(sharedCacheEntry, "utf8")).resolves.toBe("keep\n");
   });
 
-  it("runs a one-shot no-cache respawn when source checkout inherits NODE_COMPILE_CACHE", async () => {
-    await markSourceCheckout();
-    await expect(
-      respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root }),
-    ).resolves.toBe(true);
-    const [command, args, options] = expectDefined(spawn.mock.calls[0], "respawn call");
-    expect(command).toBe(process.execPath);
-    expect(args).toEqual(["--no-warnings", entryFile, "status", "--json"]);
-    expect(options?.env?.NODE_DISABLE_COMPILE_CACHE).toBe("1");
-    expect(options?.env?.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED).toBe("1");
-    expect(options?.env?.NODE_COMPILE_CACHE).toBeUndefined();
-    expect(options?.stdio).toBe("inherit");
-    expect(options?.detached).toBe(
-      process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
-    );
-  });
-
-  it("keeps POSIX native hook relays on the timeout-owned process", async () => {
-    await markSourceCheckout();
-    entryFile = path.join(root, "src", "entry.ts");
-    argv = [process.execPath, entryFile, "hooks", "relay", "--relay-id", "relay-1"];
-    await withMockedPlatform("linux", async () => {
-      await expect(
-        respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root }),
-      ).resolves.toBe(false);
-      expect(spawn).not.toHaveBeenCalled();
-    });
-    await withMockedPlatform("win32", async () => {
+  it.each(["inherited", "active"])(
+    "runs a one-shot no-cache respawn for an %s cache",
+    async (cache) => {
+      await markSourceCheckout();
+      if (cache === "active") {
+        deleteTestEnvValue("NODE_COMPILE_CACHE");
+        getCompileCacheDir.mockReturnValue(path.join(root, ".active-cache"));
+      }
       await expect(
         respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root }),
       ).resolves.toBe(true);
       expect(spawn).toHaveBeenCalledOnce();
-    });
-  });
+      const [command, args, options] = expectDefined(spawn.mock.calls[0], "respawn call");
+      expect(command).toBe(process.execPath);
+      expect(args).toEqual(["--no-warnings", entryFile, "status", "--json"]);
+      expect(options?.env?.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+      expect(options?.env?.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED).toBe("1");
+      expect(options?.env?.NODE_COMPILE_CACHE).toBeUndefined();
+      expect(options?.stdio).toBe("inherit");
+      expect(options?.detached).toBe(
+        process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
+      );
+      expect(attachChildProcessBridge).toHaveBeenCalledWith(child, {
+        onSignal: expect.any(Function),
+      });
+      child.emit("exit", 0, null);
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(writeStderr).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(["linux", "win32"] as const)(
-    "keeps foreground Gmail cleanup in process with inherited compile cache on %s",
-    async (platform) => {
-      await markSourceCheckout();
-      entryFile = path.join(root, "src", "entry.ts");
-      argv = [process.execPath, entryFile, "webhooks", "--profile", "fixture", "gmail", "run"];
+  const commands = {
+    hooks: ["hooks", "relay", "--relay-id", "relay-1"],
+    gmail: ["webhooks", "--profile", "fixture", "gmail", "run"],
+    gateway: ["--profile=fixture", "gateway", "run"],
+    status: ["status", "--json"],
+  };
+  it.each([
+    ["hooks", "linux", "source", false],
+    ["hooks", "win32", "source", true],
+    ["gmail", "linux", "source", false],
+    ["gmail", "win32", "source", false],
+    ["gateway", "linux", "source", false],
+    ["status", "linux", "package", false],
+    ["status", "linux", "respawned", false],
+  ] as const)(
+    "respects %s/%s respawn policy for %s",
+    async (command, platform, install, respawns) => {
+      if (install !== "package") {
+        await markSourceCheckout();
+      }
+      if (install === "respawned") {
+        setTestEnvValue("OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED", "1");
+      }
+      if (command === "hooks" || command === "gmail") {
+        entryFile = path.join(root, "src", "entry.ts");
+      }
+      argv = [process.execPath, entryFile, ...commands[command]];
       await withMockedPlatform(platform, async () => {
         await expect(
           respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root }),
-        ).resolves.toBe(false);
-        expect(spawn).not.toHaveBeenCalled();
+        ).resolves.toBe(respawns);
+        expect(spawn).toHaveBeenCalledTimes(respawns ? 1 : 0);
       });
     },
   );
 
-  it("keeps interactive no-cache respawns attached to the terminal", async () => {
+  it.each([[], ["tui"]])("keeps interactive no-cache respawns attached: %j", async (...command) => {
     await markSourceCheckout();
-    argv = [process.execPath, entryFile, "tui"];
+    argv = [process.execPath, entryFile, ...command];
     await respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root });
     expect(expectDefined(spawn.mock.calls[0], "respawn call")[2]?.detached).toBe(false);
   });
-
-  it("keeps bare-root no-cache respawns attached to the terminal", async () => {
-    await markSourceCheckout();
-    argv = [process.execPath, entryFile];
-    await respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root });
-    expect(expectDefined(spawn.mock.calls[0], "respawn call")[2]?.detached).toBe(false);
-  });
-
-  it("does not respawn packaged installs when NODE_COMPILE_CACHE is configured", async () => {
-    await expect(
-      respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root }),
-    ).resolves.toBe(false);
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
-  it("does not respawn source checkouts twice", async () => {
-    await markSourceCheckout();
-    setTestEnvValue("OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED", "1");
-    await expect(
-      respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root }),
-    ).resolves.toBe(false);
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
-  it("runs compile-cache respawns with the child-process bridge", async () => {
-    await markSourceCheckout();
-    await respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root });
-    expect(attachChildProcessBridge).toHaveBeenCalledWith(child, {
-      onSignal: expect.any(Function),
-    });
-    child.emit("exit", 0, null);
-    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
-    expect(writeStderr).not.toHaveBeenCalled();
-  });
-
-  it.each(["linux", "win32"] as const)(
-    "preserves compile-cache respawn child signal termination on %s",
-    async (platform) => {
-      await markSourceCheckout();
-      await withMockedPlatform(platform, async () => {
-        await respawnWithoutOpenClawCompileCacheIfNeeded({
-          currentFile: entryFile,
-          installRoot: root,
-        });
-        child.emit("exit", null, "SIGTERM");
-        if (platform === "win32") {
-          expect(exit).toHaveBeenCalledExactlyOnceWith(1);
-          expect(processKill).not.toHaveBeenCalled();
-        } else {
-          expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGTERM");
-          expect(exit).not.toHaveBeenCalled();
-        }
-      });
-    },
-  );
 
   it.each(["linux", "win32"] as const)(
     "waits for a signaled compile-cache respawn child after force-killing it on %s",
@@ -316,19 +299,6 @@ describe("entry compile cache", () => {
       }
     },
   );
-
-  it("respawns when Node already enabled its cache without an inherited cache path", async () => {
-    await markSourceCheckout();
-    deleteTestEnvValue("NODE_COMPILE_CACHE");
-    getCompileCacheDir.mockReturnValue(path.join(root, ".active-cache"));
-    await expect(
-      respawnWithoutOpenClawCompileCacheIfNeeded({ currentFile: entryFile, installRoot: root }),
-    ).resolves.toBe(true);
-    expect(spawn).toHaveBeenCalledOnce();
-    expect(
-      expectDefined(spawn.mock.calls[0], "respawn call")[2]?.env?.NODE_DISABLE_COMPILE_CACHE,
-    ).toBe("1");
-  });
 
   it("awaits diagnostic setup while preserving the child environment snapshot", async () => {
     await markSourceCheckout();

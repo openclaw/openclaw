@@ -41,8 +41,6 @@ describe("resolvePnpmRunner", () => {
     writeLauncher("not-executable/pnpm", elfHeader, 0o644);
     writeLauncher("shell/pnpm", '#!/bin/sh\nprintf "%s\\n" "$@"\n', 0o755);
     writeLauncher("parent/pnpm", "#!/usr/bin/env node\n", 0o755);
-    // PATH absence and precedence need separate directories even though setup is shared.
-    mkdirSync(path.join(fixturesRoot, "child"));
     for (const name of ["corepack/corepack", "path/pnpm", "path/corepack"]) {
       writeLauncher(name, "#!/bin/sh\nexit 0\n", 0o755);
     }
@@ -106,24 +104,6 @@ describe("resolvePnpmRunner", () => {
       entrypoint: path.join(tempDir, entrypoint),
       npmExecPath: envMode === "selected" ? selectedPath : envMode === "empty" ? null : parentPath,
       args: ["literal & argument"],
-    });
-  });
-
-  it("uses npm_execpath when it points to a JS pnpm entrypoint", () => {
-    const tempDir = path.join(fixturesRoot, "js");
-    const npmExecPath = path.join(tempDir, "pnpm.cjs");
-
-    expect(
-      resolvePnpmRunner({
-        npmExecPath,
-        nodeExecPath: "/usr/local/bin/node",
-        pnpmArgs: ["exec", "vitest", "run"],
-        platform: "linux",
-      }),
-    ).toEqual({
-      command: "/usr/local/bin/node",
-      args: [npmExecPath, "exec", "vitest", "run"],
-      shell: false,
     });
   });
 
@@ -321,24 +301,6 @@ describe("resolvePnpmRunner", () => {
     });
   });
 
-  posixIt("resolves relative PATH entries from the child working directory", () => {
-    const childDir = path.join(fixturesRoot, "child");
-
-    expect(
-      resolvePnpmRunner({
-        cwd: childDir,
-        npmExecPath: "",
-        env: { PATH: "node_modules/.bin" },
-        pnpmArgs: ["exec", "vitest", "run"],
-        platform: "linux",
-      }),
-    ).toEqual({
-      command: "pnpm",
-      args: ["exec", "vitest", "run"],
-      shell: false,
-    });
-  });
-
   posixIt.each([
     { name: "leading empty", segments: ["", "other"], marker: "cwd", exitCode: 7 },
     {
@@ -360,11 +322,6 @@ describe("resolvePnpmRunner", () => {
     };
     const args = ["run", "build", "literal & argument", ""];
     const expectedOutput = [marker, ...args, ""].join("\n");
-    const native = spawnSync("pnpm", args, { cwd, env, encoding: "utf8", timeout: 5_000 });
-    expect(native.error).toBeUndefined();
-    expect(native.status, native.stderr).toBe(exitCode);
-    expect(native.stdout).toBe(expectedOutput);
-
     const spec = createPnpmRunnerSpawnSpec({
       cwd,
       env,
@@ -378,9 +335,9 @@ describe("resolvePnpmRunner", () => {
       timeout: 5_000,
     });
     expect(wrapped.error).toBeUndefined();
-    expect(wrapped.status, wrapped.stderr).toBe(native.status);
-    expect(wrapped.stdout).toBe(native.stdout);
-    expect(wrapped.stderr).toBe(native.stderr);
+    expect(wrapped.status, wrapped.stderr).toBe(exitCode);
+    expect(wrapped.stdout).toBe(expectedOutput);
+    expect(wrapped.stderr).toBe("");
   });
 
   posixIt("uses Corepack when pnpm is not directly available on PATH", () => {

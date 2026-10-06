@@ -92,6 +92,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         },
         providerMode: "mock-openai",
         providerBaseUrl: `${fixture.baseUrl}/v1`,
+        mockSessionObserverUrl: mock.sessionObserverUrl,
         primaryModel: MODEL,
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
         controlUiEnabled: true,

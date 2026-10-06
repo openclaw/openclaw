@@ -2,14 +2,20 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelsHandlers } from "../gateway/server-methods/models.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog-auth.js";
+import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
+import { MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   HARNESS_ID,
   PLUGIN_ID,
@@ -22,18 +28,111 @@ import {
   writeFixturePlugin,
   writeUnrelatedFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
-import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
+import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
   publishPreparedModelRuntimeSnapshot,
+  refreshPreparedModelRuntimeCatalog,
 } from "./prepared-model-runtime.js";
-import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
+import { CREDENTIAL_ONLY_PROVIDER_ID } from "./test-helpers/prepared-model-catalog-credential-only.test-support.js";
+import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
+import {
+  observeSyntheticAuth,
+  usePreparedCatalogWorkerFixtures,
+} from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir, retireAfterTest, waitForMarker, waitForWorkers } =
-  usePreparedCatalogWorkerFixtures();
+const { makeTempDir, retireAfterTest, waitForWorkers } = usePreparedCatalogWorkerFixtures();
+
+const createStaticSnapshot = createStaticCatalogSnapshotFixture({ makeTempDir, retireAfterTest });
 
 describe("prepared model catalog worker plugin scope", () => {
-  it.each([
+  it("retains refreshed CLI auth while acquiring an unrelated provider catalog", async () => {
+    vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
+    const cliHome = makeTempDir("openclaw-catalog-cli-auth-home-");
+    const fixture = await createStaticSnapshot(0, { HOME: cliHome });
+    const provider = "minimax-portal";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [MINIMAX_CLI_PROFILE_ID]: {
+            type: "oauth",
+            provider,
+            access: "expired-cli-access-not-real",
+            refresh: "same-cli-login-not-real",
+            expires: 1,
+          },
+        },
+        order: { [provider]: [MINIMAX_CLI_PROFILE_ID] },
+      },
+      fixture.agentDir,
+    );
+    const cliCredentials = path.join(cliHome, ".minimax", "oauth_creds.json");
+    fs.mkdirSync(path.dirname(cliCredentials), { recursive: true });
+    fs.writeFileSync(
+      cliCredentials,
+      JSON.stringify({
+        access_token: "refreshed-cli-access-not-real",
+        refresh_token: "same-cli-login-not-real",
+        expiry_date: Date.now() + 3_600_000,
+      }),
+    );
+
+    const refreshed = await fixture.snapshot.loadFullModelCatalog!({
+      refresh: true,
+      providerIds: [provider],
+    });
+    const expected = getPreparedModelFullCatalogAuth(refreshed)!;
+    expect(expected.credentials?.[provider]).toMatchObject({
+      access: "refreshed-cli-access-not-real",
+    });
+    expect(expected.authStore.profiles[MINIMAX_CLI_PROFILE_ID]).toMatchObject({
+      access: "refreshed-cli-access-not-real",
+    });
+    const expectedStore: RuntimeAuthProfileStore = expected.authStore;
+    expect(expectedStore.runtimeLocalProfileIds).toContain(MINIMAX_CLI_PROFILE_ID);
+    expect(expectedStore.runtimeLocalOrderProviderIds).toContain(provider);
+
+    const unrelated = await fixture.snapshot.loadFullModelCatalog!({
+      refresh: true,
+      providerIds: [PROVIDER_ID],
+    });
+    expect(unrelated.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+    );
+    const retained = getPreparedModelFullCatalogAuth(unrelated)!;
+    expect(retained.credentials?.[provider]).toEqual(expected.credentials?.[provider]);
+    expect(retained.authStore.profiles[MINIMAX_CLI_PROFILE_ID]).toEqual(
+      expected.authStore.profiles[MINIMAX_CLI_PROFILE_ID],
+    );
+    const retainedStore: RuntimeAuthProfileStore = retained.authStore;
+    expect(retainedStore.runtimeLocalProfileIds).toContain(MINIMAX_CLI_PROFILE_ID);
+    expect(retainedStore.runtimeLocalOrderProviderIds).toContain(provider);
+    expect(retainedStore.runtimePersistedProfileIds ?? []).not.toContain(MINIMAX_CLI_PROFILE_ID);
+    expect(retainedStore.order?.[provider]).toEqual(expectedStore.order?.[provider]);
+    expect(fixture.snapshot.isCurrent()).toBe(true);
+  });
+
+  it("captures runtime synthetic auth for credential-only providers before full refresh", async () => {
+    const fixture = await createStaticSnapshot(0, {}, { credentialOnlySyntheticAuth: true });
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+
+    // The provider's catalog emits this row only when its stored token resolves.
+    expect(catalog?.entries).toContainEqual(
+      expect.objectContaining({
+        provider: CREDENTIAL_ONLY_PROVIDER_ID,
+        id: "credential-only-model",
+      }),
+    );
+    // The worker read the parent's captured answer; it never ran the hook itself.
+    expect(
+      fs.readFileSync(path.join(fixture.root, "credential-only-auth-owner.txt"), "utf8"),
+    ).toMatch(/^(parent\n)+$/u);
+  });
+
+  it.for([
     { first: "full", slot: "memory", asyncSyntheticAuth: false, syntheticAuthAvailable: true },
     {
       first: "scoped",
@@ -42,12 +141,17 @@ describe("prepared model catalog worker plugin scope", () => {
       syntheticAuthAvailable: false,
     },
     { first: "held", slot: "none", asyncSyntheticAuth: true, syntheticAuthAvailable: false },
-  ])("keeps models.list scoped with $first discovery and $slot selected", async (selection) => {
+  ])("keeps models.list scoped with $first discovery and $slot selected", async (selection, t) => {
+    const { signal } = t;
     const root = makeTempDir("openclaw-model-catalog-scope-worker-");
     const stateDir = path.join(root, "state");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const workspaceDir = path.join(root, "workspace");
     const marker = path.join(root, "worker-marker.txt");
+    const catalogHold = `${marker}.hold`;
+    if (selection.first === "scoped") {
+      fs.writeFileSync(catalogHold, "");
+    }
     const unrelatedMarker = path.join(root, "unrelated-worker-plugin.txt");
     fs.mkdirSync(agentDir, { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
@@ -70,7 +174,7 @@ describe("prepared model catalog worker plugin scope", () => {
             "published-fixture/published-model": { agentRuntime: { id: "openclaw" } },
           },
         },
-        list: [{ id: "main", default: true, agentDir, workspace: workspaceDir }],
+        entries: { main: { agentDir, workspace: workspaceDir } },
       },
       models: {
         providers: {
@@ -131,33 +235,35 @@ describe("prepared model catalog worker plugin scope", () => {
       provenance: "configured",
       catalogMode: "static",
     });
-    const authStore = getPreparedModelRuntimeAuthStore(snapshot);
-    if (!authStore) {
-      throw new Error("prepared runtime produced no auth store");
-    }
     const projectSnapshot = async (
       full: boolean,
       providerIds?: readonly string[],
       refresh?: boolean,
     ): Promise<PreparedGatewayModelCatalogSnapshot> => {
       const modelCatalog = full
-        ? await snapshot.loadFullModelCatalog!({ providerIds, refresh })
-        : snapshot.modelCatalog;
-      return {
-        ...modelCatalog,
-        agentId: "main",
-        agentDir,
-        workspaceDir,
-        config,
-        observationConfig: snapshot.observationConfig,
-        isCurrent: snapshot.isCurrent,
-        pluginRegistry: snapshot.pluginRegistry,
-        catalogComplete: full,
-        authModes: snapshot.authModes,
-        authStore,
-        metadataSnapshot: snapshot.metadataSnapshot,
-        authMaterializations: [],
-      };
+        ? await refreshPreparedModelRuntimeCatalog(snapshot, { providerIds, refresh })
+        : snapshot.readFullModelCatalog?.();
+      const owner = materializePreparedModelCatalogOwner(snapshot, modelCatalog);
+      return await loadPreparedGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
+      });
+    };
+    const waitForPublication = async (previous: ModelCatalogSnapshot | undefined) => {
+      await expect
+        .poll(
+          () => {
+            const catalog = snapshot.readFullModelCatalog?.();
+            return Boolean(
+              catalog &&
+              catalog !== previous &&
+              !catalog.pendingProviders?.length &&
+              !catalog.refreshFailed,
+            );
+          },
+          { timeout: 30_000 },
+        )
+        .toBe(true);
     };
     const loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] =
       async (params) => {
@@ -173,15 +279,14 @@ describe("prepared model catalog worker plugin scope", () => {
         } = await projectSnapshot(params?.readOnly === false);
         return publicSnapshot;
       };
-    let published = await projectSnapshot(false);
     registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
       loadDeferred: async (params) =>
-        (published = await projectSnapshot(
+        await projectSnapshot(
           params?.readOnly === false,
           params?.providerDiscoveryProviderIds,
           params?.refreshFullCatalog === true,
-        )),
-      readPrepared: async () => published,
+        ),
+      readPrepared: async () => await projectSnapshot(false),
     });
     const respond = vi.fn();
     const context = Object.assign({} as GatewayRequestContext, {
@@ -196,11 +301,13 @@ describe("prepared model catalog worker plugin scope", () => {
       fs.writeFileSync(probePath, "");
       fs.writeFileSync(ownerPath, "");
       const hold = path.join(root, "synthetic-auth-hold");
+      const auth = observeSyntheticAuth(root);
       if (selection.first === "held") {
         fs.writeFileSync(hold, "");
       }
       // The first worker operation must enter through the registered scoped refresh.
       const params = { view: "all", provider: PROVIDER_ID, refresh: true };
+      const previousCatalog = snapshot.readFullModelCatalog?.();
       const refresh = Promise.resolve(
         expectDefined(
           modelsHandlers["models.list"],
@@ -221,7 +328,15 @@ describe("prepared model catalog worker plugin scope", () => {
         });
         void observedRefresh.catch(() => {});
         try {
-          await vi.waitFor(() => expect(fs.readFileSync(ownerPath, "utf8")).toContain("parent\n"));
+          await withinTest(
+            awaitGateBeforeSettlement(
+              auth.entered,
+              observedRefresh,
+              "parent auth probe did not enter before models.list settled",
+            ),
+            signal,
+          );
+          expect(fs.readFileSync(ownerPath, "utf8")).toContain("parent\n");
           // The entered probe stays pending until abort; later publication probes may proceed.
           fs.rmSync(hold);
           const readStarted = performance.now();
@@ -246,15 +361,7 @@ describe("prepared model catalog worker plugin scope", () => {
               ...config,
               agents: {
                 ...config.agents,
-                list: [
-                  {
-                    id: "main",
-                    default: true,
-                    agentDir,
-                    workspace: workspaceDir,
-                    name: "Updated agent",
-                  },
-                ],
+                entries: { main: { agentDir, workspace: workspaceDir, name: "Updated agent" } },
               },
             },
           };
@@ -287,19 +394,60 @@ describe("prepared model catalog worker plugin scope", () => {
             responseBoundMs: 5_000,
           });
           const cancelled = path.join(root, "synthetic-auth-cancel.txt");
-          await waitForMarker(cancelled);
-          await expect(observedRefresh).rejects.toThrow("superseded");
+          await withinTest(
+            awaitGateBeforeSettlement(
+              auth.aborted,
+              observedRefresh,
+              "parent auth probe did not observe abort before models.list settled",
+            ),
+            signal,
+          );
+          await withinTest(observedRefresh, signal);
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "UNAVAILABLE",
+              message: expect.stringContaining("superseded"),
+              retryable: true,
+              retryAfterMs: 0,
+            }),
+          );
           expect(settled).toBe(true);
           expect(fs.readFileSync(cancelled, "utf8")).toBe("abort\njoined\n");
           await waitForWorkers();
         } finally {
           fs.rmSync(hold, { force: true });
+          auth.close();
           await drainGlobalSingletonLifecycleState("close");
           await Promise.allSettled([observedRefresh]);
         }
         return;
       }
-      await refresh;
+      try {
+        await refresh;
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({ pendingProviders: [PROVIDER_ID] }),
+          undefined,
+        );
+      } finally {
+        auth.close();
+        fs.rmSync(catalogHold, { force: true });
+      }
+      await waitForPublication(previousCatalog);
+      respond.mockClear();
+      await expectDefined(
+        modelsHandlers["models.list"],
+        "models.list test invariant",
+      )({
+        req: { type: "req", id: "models-list-scoped-published", method: "models.list" },
+        params: { view: "all", provider: PROVIDER_ID },
+        respond: respond as RespondFn,
+        client: null,
+        isWebchatConnect: () => false,
+        context,
+      });
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -318,6 +466,7 @@ describe("prepared model catalog worker plugin scope", () => {
       expect(fs.existsSync(unrelatedMarker)).toBe(false);
       respond.mockClear();
     }
+    const previousCatalog = snapshot.readFullModelCatalog?.();
     await expectDefined(
       modelsHandlers["models.list"],
       'modelsHandlers["models.list"] test invariant',
@@ -334,7 +483,19 @@ describe("prepared model catalog worker plugin scope", () => {
       isWebchatConnect: () => false,
       context,
     });
-
+    await waitForPublication(previousCatalog);
+    respond.mockClear();
+    await expectDefined(
+      modelsHandlers["models.list"],
+      "models.list test invariant",
+    )({
+      req: { type: "req", id: "models-list-full-published", method: "models.list" },
+      params: { view: "all" },
+      respond: respond as RespondFn,
+      client: null,
+      isWebchatConnect: () => false,
+      context,
+    });
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({

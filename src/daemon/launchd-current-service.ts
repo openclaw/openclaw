@@ -1,26 +1,15 @@
-/** Detects launchd service membership from environment markers or process ancestry. */
+/** Detects native launchd membership, including children reparented after ancestor exit. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { probeLaunchAgentState, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
+import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
 
-/** Checks whether the current process appears to be running under the requested launchd label. */
+/** Environment hints for launchd identity; inherited markers do not prove ancestry. */
 export function isCurrentProcessLaunchdServiceLabel(
   label: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const currentLabels = [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME, env.XPC_SERVICE_NAME].flatMap(
-    (value) => {
-      const normalized = normalizeOptionalString(value);
-      return normalized ? [normalized] : [];
-    },
-  );
-
-  for (const currentLabel of currentLabels) {
-    if (currentLabel === label) {
-      return true;
-    }
-  }
-
   // Detached update/restart handoffs keep OPENCLAW_LAUNCHD_LABEL as the service
   // identity to manage while running outside the job, so the configured label
   // alone never proves membership: a restart that trusted it would schedule a
@@ -28,29 +17,37 @@ export function isCurrentProcessLaunchdServiceLabel(
   // Managed wrappers inject the service marker; trust it when launchd's own
   // label variables are absent or renamed by the host environment.
   return (
-    normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL) === label &&
-    normalizeOptionalString(env.OPENCLAW_SERVICE_MARKER) === "openclaw" &&
-    Boolean(normalizeOptionalString(env.OPENCLAW_SERVICE_KIND))
+    [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME, env.XPC_SERVICE_NAME].some(
+      (value) => normalizeOptionalString(value) === label,
+    ) ||
+    (normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL) === label &&
+      normalizeOptionalString(env.OPENCLAW_SERVICE_MARKER) === "openclaw" &&
+      Boolean(normalizeOptionalString(env.OPENCLAW_SERVICE_KIND)))
   );
 }
 
-/**
- * Env markers are the fast path. A hand-written plist can omit them, so the PID
- * launchd reports for the job is checked against the caller's ancestry instead.
- * The detached update helper's recovery CLI inherits OPENCLAW_LAUNCHD_LABEL but
- * descends from no running Gateway, so it stays on the synchronous path.
- */
-export async function isCurrentProcessInsideLaunchdService(
-  label: string,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<boolean> {
-  if (isCurrentProcessLaunchdServiceLabel(label, env)) {
-    return true;
-  }
-  // Probe failures resolve to "unknown"; only a running job has a PID to be inside.
+/** A completed parent walk alone cannot exclude reparented members of a launchd job. */
+export async function isCurrentProcessInsideLaunchdService(label: string): Promise<boolean> {
   const probe = await probeLaunchAgentState(`${resolveLaunchAgentGuiDomain()}/${label}`);
-  if (probe.state !== "running" || probe.runtime.pid === undefined) {
+  if (probe.state === "running" && probe.runtime.pid !== undefined) {
+    const ancestors = getSelfAndAncestorPidsSync();
+    if (ancestors.has(probe.runtime.pid)) {
+      return true;
+    }
+    const membership = inspectServiceProcessMembershipSync(probe.runtime.pid, "darwin");
+    if (membership === "inside") {
+      return true;
+    }
+    if (membership === "unknown") {
+      throw new ServiceInspectionError("service-membership-unverified");
+    }
+    if (!ancestors.has(1)) {
+      throw new ServiceInspectionError("service-ancestry-unverified");
+    }
     return false;
   }
-  return getSelfAndAncestorPidsSync().has(probe.runtime.pid);
+  if (probe.state === "unknown" || probe.state === "running") {
+    throw new ServiceInspectionError("service-membership-unverified");
+  }
+  return false;
 }

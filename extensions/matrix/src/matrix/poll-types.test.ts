@@ -6,13 +6,12 @@ import {
   buildPollStartContent,
   formatPollResultsAsText,
   parsePollStart,
-  parsePollStartContent,
   resolvePollReferenceEventId,
 } from "./poll-types.js";
 
-describe("parsePollStartContent", () => {
+describe("parsePollStart", () => {
   it("parses legacy m.poll payloads", () => {
-    const summary = parsePollStartContent({
+    const summary = parsePollStart({
       "m.poll": {
         question: { "m.text": "Lunch?" },
         kind: "m.poll.disclosed",
@@ -25,7 +24,10 @@ describe("parsePollStartContent", () => {
     });
 
     expect(summary?.question).toBe("Lunch?");
-    expect(summary?.answers).toEqual(["Yes", "No"]);
+    expect(summary?.answers).toEqual([
+      { id: "answer1", text: "Yes" },
+      { id: "answer2", text: "No" },
+    ]);
   });
 
   it("preserves answer ids when parsing poll start content", () => {
@@ -146,20 +148,15 @@ describe("poll relation parsing", () => {
 describe("buildPollResultsSummary", () => {
   it("counts only the latest valid response from each sender", () => {
     const summary = buildPollResultsSummary({
-      pollEventId: "$poll",
-      roomId: "!room:example.org",
       sender: "@alice:example.org",
-      senderName: "Alice",
-      content: {
-        "m.poll.start": {
-          question: { "m.text": "Lunch?" },
-          kind: "m.poll.disclosed",
-          max_selections: 1,
-          answers: [
-            { id: "a1", "m.text": "Pizza" },
-            { id: "a2", "m.text": "Sushi" },
-          ],
-        },
+      poll: {
+        question: "Lunch?",
+        kind: "m.poll.disclosed",
+        maxSelections: 1,
+        answers: [
+          { id: "a1", text: "Pizza" },
+          { id: "a2", text: "Sushi" },
+        ],
       },
       relationEvents: [
         {
@@ -212,16 +209,53 @@ describe("buildPollResultsSummary", () => {
     expect(summary?.totalVotes).toBe(2);
   });
 
+  it.each([
+    { name: "nonfinite closing times", endTimes: [Number.NaN], closed: false },
+    { name: "the earliest finite closing time", endTimes: [1, -0], closed: true },
+  ])("preserves vote ordering with $name", ({ endTimes, closed }) => {
+    const votes: Array<[string, number | undefined, string]> = [
+      ["$z", Number.NaN, "answer2"],
+      ["$a", undefined, "answer1"],
+      ["$after", 0.5, "answer1"],
+      ["$equal", 0, "answer2"],
+      ["$before", -0.5, "answer1"],
+    ];
+    const summary = buildPollResultsSummary({
+      sender: "@alice:example.org",
+      poll: {
+        question: "Lunch?",
+        kind: "m.poll.disclosed",
+        maxSelections: 1,
+        answers: [
+          { id: "answer1", text: "Pizza" },
+          { id: "answer2", text: "Sushi" },
+        ],
+      },
+      relationEvents: [
+        ...endTimes.map((origin_server_ts, index) => ({
+          event_id: "$end" + index,
+          sender: "@alice:example.org",
+          type: "m.poll.end",
+          origin_server_ts,
+        })),
+        ...votes.map(([event_id, origin_server_ts, answer]) => ({
+          event_id,
+          sender: "@bob:example.org",
+          type: "m.poll.response",
+          origin_server_ts,
+          content: buildPollResponseContent("$poll", [answer]),
+        })),
+      ],
+    });
+
+    expect(summary?.entries.map(({ votes: voteCount }) => voteCount)).toEqual([0, 1]);
+    expect(summary?.closed).toBe(closed);
+  });
+
   it("formats disclosed poll results with vote totals", () => {
     const text = formatPollResultsAsText({
-      eventId: "$poll",
-      roomId: "!room:example.org",
-      sender: "@alice:example.org",
-      senderName: "Alice",
       question: "Lunch?",
-      answers: ["Pizza", "Sushi"],
       kind: "m.poll.disclosed",
-      maxSelections: 1,
       entries: [
         { id: "a1", text: "Pizza", votes: 1 },
         { id: "a2", text: "Sushi", votes: 0 },

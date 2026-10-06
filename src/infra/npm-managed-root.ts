@@ -1,18 +1,21 @@
-// Manages private npm package roots for plugin install flows.
 import { constants as fsConstants, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errors.js";
+import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
 import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
+import { resolveNpmCommand } from "./npm-command.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { replaceFileAtomicSync } from "./replace-file.js";
+import { isPackageDependencyName } from "./package-json.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
@@ -33,13 +36,6 @@ type HostPackageManifest = {
   peerDependencies?: Record<string, string>;
 };
 
-type ManagedNpmRootOpenClawMetadata = {
-  managedOverrides?: string[];
-  managedPeerDependencies?: string[];
-  [key: string]: unknown;
-};
-
-/** Installed dependency metadata read from a managed root lockfile. */
 export type ManagedNpmRootInstalledDependency = {
   version?: string;
   integrity?: string;
@@ -64,22 +60,6 @@ function readDependencyRecord(value: unknown): Record<string, string> {
   return filterStringRecord(value) ?? {};
 }
 
-function isSafePackageName(name: string): boolean {
-  if (name.startsWith("@")) {
-    const parts = name.split("/");
-    return (
-      parts.length === 2 && parts.every((part) => part.length > 0 && part !== "." && part !== "..")
-    );
-  }
-  return (
-    name.length > 0 && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".."
-  );
-}
-
-function isManagedNpmRootHostPeerPackageName(name: string): boolean {
-  return name === "openclaw";
-}
-
 function readOverrideRecord(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) {
     return {};
@@ -93,40 +73,47 @@ function readOverrideRecord(value: unknown): Record<string, unknown> {
   return overrides;
 }
 
-function readManagedOverrideKeys(value: unknown): string[] {
-  if (!isRecord(value) || !Array.isArray(value.managedOverrides)) {
-    return [];
-  }
-  return value.managedOverrides.filter((key): key is string => typeof key === "string");
+function readManagedKeys(
+  value: unknown,
+  key: "managedOverrides" | "managedPeerDependencies",
+): string[] {
+  return filterStringEntries(isRecord(value) ? value[key] : undefined);
 }
 
-function readManagedPeerDependencyKeys(value: unknown): string[] {
-  if (!isRecord(value) || !Array.isArray(value.managedPeerDependencies)) {
-    return [];
-  }
-  return value.managedPeerDependencies.filter((key): key is string => typeof key === "string");
-}
-
-function buildManagedOpenClawMetadata(params: {
-  current: unknown;
+function buildManagedNpmRootManifest(params: {
+  manifest: ManagedNpmRootManifest;
+  dependencies: Record<string, string>;
+  overrides: Record<string, unknown>;
   managedOverrideKeys: string[];
-  managedPeerDependencyKeys?: string[];
-}): ManagedNpmRootOpenClawMetadata | undefined {
-  const metadata: ManagedNpmRootOpenClawMetadata = isRecord(params.current)
-    ? { ...params.current }
-    : {};
+  managedPeerDependencyKeys: string[];
+}): ManagedNpmRootManifest {
+  const metadata = isRecord(params.manifest.openclaw) ? { ...params.manifest.openclaw } : {};
   if (params.managedOverrideKeys.length > 0) {
     metadata.managedOverrides = params.managedOverrideKeys;
   } else {
     delete metadata.managedOverrides;
   }
-  const managedPeerDependencyKeys = params.managedPeerDependencyKeys;
-  if (managedPeerDependencyKeys && managedPeerDependencyKeys.length > 0) {
-    metadata.managedPeerDependencies = managedPeerDependencyKeys;
-  } else if (managedPeerDependencyKeys) {
+  if (params.managedPeerDependencyKeys.length > 0) {
+    metadata.managedPeerDependencies = params.managedPeerDependencyKeys;
+  } else {
     delete metadata.managedPeerDependencies;
   }
-  return Object.keys(metadata).length > 0 ? metadata : undefined;
+  const next: ManagedNpmRootManifest = {
+    ...params.manifest,
+    private: true,
+    dependencies: params.dependencies,
+  };
+  if (Object.keys(params.overrides).length > 0) {
+    next.overrides = params.overrides;
+  } else {
+    delete next.overrides;
+  }
+  if (Object.keys(metadata).length > 0) {
+    next.openclaw = metadata;
+  } else {
+    delete next.openclaw;
+  }
+  return next;
 }
 
 async function readManagedNpmRootManifest(filePath: string): Promise<ManagedNpmRootManifest> {
@@ -134,28 +121,16 @@ async function readManagedNpmRootManifest(filePath: string): Promise<ManagedNpmR
   return isRecord(parsed) ? { ...parsed } : {};
 }
 
-async function readHostWorkspaceOverrides(packageRoot: string): Promise<Record<string, unknown>> {
-  const workspace = parseYaml(
-    await fs.readFile(path.join(packageRoot, "pnpm-workspace.yaml"), "utf8"),
-  ) as unknown;
-  return isRecord(workspace) ? readOverrideRecord(workspace.overrides) : {};
-}
-
-function readHostDependencySpec(
-  manifest: HostPackageManifest,
-  packageName: string,
-): string | undefined {
-  return (
-    manifest.dependencies?.[packageName] ??
-    manifest.optionalDependencies?.[packageName] ??
-    manifest.peerDependencies?.[packageName] ??
-    manifest.devDependencies?.[packageName]
-  );
-}
-
 function resolveHostOverrideReferences(value: unknown, manifest: HostPackageManifest): unknown {
   if (typeof value === "string" && value.startsWith("$")) {
-    return readHostDependencySpec(manifest, value.slice(1)) ?? value;
+    const packageName = value.slice(1);
+    return (
+      manifest.dependencies?.[packageName] ??
+      manifest.optionalDependencies?.[packageName] ??
+      manifest.peerDependencies?.[packageName] ??
+      manifest.devDependencies?.[packageName] ??
+      value
+    );
   }
   if (!isRecord(value)) {
     return value;
@@ -167,15 +142,6 @@ function resolveHostOverrideReferences(value: unknown, manifest: HostPackageMani
   return resolved;
 }
 
-function isUnsupportedManagedNpmOverride(value: unknown): boolean {
-  return typeof value === "string" && value.trim().startsWith("npm:");
-}
-
-function isPnpmParentChildOverrideSelector(key: string): boolean {
-  // Match pnpm's parse-overrides delimiter without confusing npm ranges such as pkg@>1.
-  return /[^ |@]>/u.test(key);
-}
-
 function filterUnsupportedManagedNpmRootOverrides(
   value: unknown,
   omitNpmAliases = false,
@@ -184,8 +150,9 @@ function filterUnsupportedManagedNpmRootOverrides(
   const filtered: Record<string, unknown> = {};
   for (const [key, raw] of Object.entries(overrides)) {
     if (
-      isPnpmParentChildOverrideSelector(key) ||
-      (omitNpmAliases && isUnsupportedManagedNpmOverride(raw))
+      // Match pnpm's delimiter without confusing npm ranges such as pkg@>1.
+      /[^ |@]>/u.test(key) ||
+      (omitNpmAliases && typeof raw === "string" && raw.trim().startsWith("npm:"))
     ) {
       continue;
     }
@@ -267,7 +234,7 @@ function applyManagedNpmRootOverrides(params: {
   managedDependencyNames: ReadonlySet<string>;
 }): { overrides: Record<string, unknown>; managedOverrideKeys: string[] } {
   const overrides = readOverrideRecord(params.manifest.overrides);
-  for (const key of readManagedOverrideKeys(params.manifest.openclaw)) {
+  for (const key of readManagedKeys(params.manifest.openclaw, "managedOverrides")) {
     delete overrides[key];
   }
   Object.assign(overrides, params.managedOverrides);
@@ -283,9 +250,7 @@ function applyManagedNpmRootOverrides(params: {
   return { overrides, managedOverrideKeys };
 }
 
-/** Read host OpenClaw pnpm overrides for reuse inside a managed npm root. */
 export async function readOpenClawManagedNpmRootOverrides(params?: {
-  argv1?: string;
   cwd?: string;
   moduleUrl?: string;
   packageRoot?: string | null;
@@ -293,7 +258,7 @@ export async function readOpenClawManagedNpmRootOverrides(params?: {
   const packageRoot =
     params?.packageRoot ??
     resolveOpenClawPackageRootSync({
-      argv1: params?.argv1 ?? process.argv[1],
+      argv1: process.argv[1],
       moduleUrl: params?.moduleUrl ?? import.meta.url,
       cwd: params?.cwd ?? process.cwd(),
     });
@@ -308,8 +273,11 @@ export async function readOpenClawManagedNpmRootOverrides(params?: {
       return {};
     }
     const hostManifest = manifest as HostPackageManifest;
+    const workspace: unknown = parseYaml(
+      await fs.readFile(path.join(packageRoot, "pnpm-workspace.yaml"), "utf8"),
+    );
     const overrides = filterUnsupportedManagedNpmRootOverrides(
-      await readHostWorkspaceOverrides(packageRoot),
+      isRecord(workspace) ? workspace.overrides : undefined,
     );
     return Object.fromEntries(
       Object.entries(overrides).map(([key, value]) => [
@@ -322,7 +290,6 @@ export async function readOpenClawManagedNpmRootOverrides(params?: {
   }
 }
 
-/** Resolve the dependency spec to write for a parsed registry package. */
 export function resolveManagedNpmRootDependencySpec(params: {
   parsedSpec: ParsedRegistryNpmSpec;
   resolution: NpmSpecResolution;
@@ -330,7 +297,6 @@ export function resolveManagedNpmRootDependencySpec(params: {
   return params.resolution.version ?? params.parsedSpec.selector ?? "latest";
 }
 
-/** Insert or update a dependency and managed override metadata in package.json. */
 export async function upsertManagedNpmRootDependency(params: {
   npmRoot: string;
   packageName: string;
@@ -352,7 +318,9 @@ export async function upsertManagedNpmRootDependency(params: {
   };
   // Explicit install transfers ownership: the package stops being a managed peer pin,
   // so the installer's spec wins now and later syncs may not re-pin or delete it.
-  const managedDependencyNames = new Set(readManagedPeerDependencyKeys(manifest.openclaw));
+  const managedDependencyNames = new Set(
+    readManagedKeys(manifest.openclaw, "managedPeerDependencies"),
+  );
   managedDependencyNames.delete(params.packageName);
   const { overrides, managedOverrideKeys } = applyManagedNpmRootOverrides({
     manifest,
@@ -360,26 +328,13 @@ export async function upsertManagedNpmRootDependency(params: {
     dependencies: nextDependencies,
     managedDependencyNames,
   });
-  const openclawMetadata = buildManagedOpenClawMetadata({
-    current: manifest.openclaw,
+  const next = buildManagedNpmRootManifest({
+    manifest,
+    dependencies: nextDependencies,
+    overrides,
     managedOverrideKeys,
     managedPeerDependencyKeys: [...managedDependencyNames].toSorted(),
   });
-  const next: ManagedNpmRootManifest = {
-    ...manifest,
-    private: true,
-    dependencies: nextDependencies,
-  };
-  if (Object.keys(overrides).length > 0) {
-    next.overrides = overrides;
-  } else {
-    delete next.overrides;
-  }
-  if (openclawMetadata) {
-    next.openclaw = openclawMetadata;
-  } else {
-    delete next.openclaw;
-  }
   await writeJson(manifestPath, next, { trailingNewline: true });
 }
 
@@ -391,46 +346,20 @@ function isOptionalPeerDependency(manifest: Record<string, unknown>, peerName: s
   return isRecord(peerMetadata) && peerMetadata.optional === true;
 }
 
-function isDevOnlyLockPackage(value: unknown): boolean {
-  return isRecord(value) && value.dev === true;
-}
-
 function readStringList(value: unknown): string[] | undefined {
-  if (typeof value === "string") {
-    return [value];
-  }
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const values = value.filter((entry): entry is string => typeof entry === "string");
+  const values = typeof value === "string" ? [value] : filterStringEntries(value);
   return values.length > 0 ? values : undefined;
 }
 
 function matchesNpmPlatformList(value: string | undefined, list: string[] | undefined): boolean {
-  if (!list) {
-    return true;
-  }
-  if (list.length === 1 && list[0] === "any") {
+  if (!list || (list.length === 1 && list[0] === "any")) {
     return true;
   }
   if (!value) {
     return false;
   }
-  let negated = 0;
-  let matched = false;
-  for (const entry of list) {
-    const negate = entry.startsWith("!");
-    const test = negate ? entry.slice(1) : entry;
-    if (negate) {
-      negated += 1;
-      if (value === test) {
-        return false;
-      }
-    } else {
-      matched = matched || value === test;
-    }
-  }
-  return matched || negated === list.length;
+  const allowed = list.filter((entry) => !entry.startsWith("!"));
+  return !list.includes(`!${value}`) && (allowed.length === 0 || allowed.includes(value));
 }
 
 function resolveCurrentLibc(): string | undefined {
@@ -452,8 +381,8 @@ function resolveCurrentLibc(): string | undefined {
   return undefined;
 }
 
-function isUnsupportedOptionalLockPackage(value: unknown): boolean {
-  if (!isRecord(value) || value.optional !== true) {
+function isUnsupportedOptionalLockPackage(value: Record<string, unknown>): boolean {
+  if (value.optional !== true) {
     return false;
   }
   return (
@@ -463,37 +392,15 @@ function isUnsupportedOptionalLockPackage(value: unknown): boolean {
   );
 }
 
-function hasNpmPlatformConstraint(value: Record<string, unknown>): boolean {
-  return value.os !== undefined || value.cpu !== undefined || value.libc !== undefined;
-}
-
 function readLockPackageLocationName(location: string): string | undefined {
   const parts = location.split("/");
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    if (parts[index] !== "node_modules") {
-      continue;
-    }
-    const first = parts[index + 1];
-    if (!first) {
-      return undefined;
-    }
-    if (!first.startsWith("@")) {
-      return first;
-    }
-    const second = parts[index + 2];
-    return second ? `${first}/${second}` : undefined;
+  const index = parts.lastIndexOf("node_modules");
+  const first = index >= 0 ? parts[index + 1] : undefined;
+  if (!first || !first.startsWith("@")) {
+    return first || undefined;
   }
-  return undefined;
-}
-
-function readLockPackageName(location: string, value: unknown): string | undefined {
-  if (isRecord(value)) {
-    const packageName = readOptionalString(value.name);
-    if (packageName) {
-      return packageName;
-    }
-  }
-  return readLockPackageLocationName(location);
+  const second = parts[index + 2];
+  return second ? `${first}/${second}` : undefined;
 }
 
 function resolveManagedNpmLockPackagePath(params: {
@@ -512,10 +419,6 @@ function resolveManagedNpmLockPackagePath(params: {
     return undefined;
   }
   return packagePath;
-}
-
-function isTopLevelLockPackageLocation(location: string): boolean {
-  return location.split("/").filter((part) => part === "node_modules").length === 1;
 }
 
 type MissingRequiredPlatformPackage = {
@@ -540,7 +443,7 @@ async function isRequiredPlatformPackageComplete(params: {
     return false;
   }
   const packageName = readOptionalString(manifest.name);
-  if (!packageName || !isSafePackageName(packageName)) {
+  if (!packageName || !isPackageDependencyName(packageName)) {
     return false;
   }
   if (!Array.isArray(manifest.files) || !manifest.files.includes("vendor")) {
@@ -591,7 +494,6 @@ async function isRequiredPlatformPackageComplete(params: {
   return false;
 }
 
-/** Lists explicitly required current-platform packages that npm left missing or incomplete. */
 export async function listMissingRequiredPlatformPackages(params: {
   npmRoot: string;
   requiredPackageNames: ReadonlySet<string> | readonly string[];
@@ -610,14 +512,19 @@ export async function listMissingRequiredPlatformPackages(params: {
     if (
       !isRecord(value) ||
       value.optional !== true ||
-      !hasNpmPlatformConstraint(value) ||
+      (value.os === undefined && value.cpu === undefined && value.libc === undefined) ||
       isUnsupportedOptionalLockPackage(value)
     ) {
       continue;
     }
     const name = readLockPackageLocationName(location);
     const packagePath = resolveManagedNpmLockPackagePath({ npmRoot: params.npmRoot, location });
-    if (!name || !requiredPackageNames.has(name) || !isSafePackageName(name) || !packagePath) {
+    if (
+      !name ||
+      !requiredPackageNames.has(name) ||
+      !isPackageDependencyName(name) ||
+      !packagePath
+    ) {
       continue;
     }
     if (
@@ -632,28 +539,6 @@ export async function listMissingRequiredPlatformPackages(params: {
   return missing.toSorted((left, right) => left.packagePath.localeCompare(right.packagePath));
 }
 
-function findLockPackageVersion(params: {
-  lockfile: ManagedNpmRootLockfile;
-  packageName: string;
-}): string | undefined {
-  if (!isRecord(params.lockfile.packages)) {
-    return undefined;
-  }
-  const preferredLocation = `node_modules/${params.packageName}`;
-  const preferredPackage = params.lockfile.packages[preferredLocation];
-  if (
-    isRecord(preferredPackage) &&
-    !isDevOnlyLockPackage(preferredPackage) &&
-    !isUnsupportedOptionalLockPackage(preferredPackage)
-  ) {
-    const preferredVersion = readOptionalString(preferredPackage.version);
-    if (preferredVersion) {
-      return preferredVersion;
-    }
-  }
-  return undefined;
-}
-
 function collectNpmLockPeerDependencyPins(params: {
   lockfile: ManagedNpmRootLockfile;
 }): Record<string, string> {
@@ -665,29 +550,31 @@ function collectNpmLockPeerDependencyPins(params: {
     if (
       location === "" ||
       !isRecord(value) ||
-      isDevOnlyLockPackage(value) ||
+      value.dev === true ||
       isUnsupportedOptionalLockPackage(value)
     ) {
       continue;
     }
-    const packageName = readLockPackageName(location, value);
-    if (packageName && isManagedNpmRootHostPeerPackageName(packageName)) {
+    const packageName = readOptionalString(value.name) ?? readLockPackageLocationName(location);
+    if (packageName === "openclaw") {
       continue;
     }
     const peerDependencies = readDependencyRecord(value.peerDependencies);
     for (const [peerName, peerRange] of Object.entries(peerDependencies)) {
-      if (
-        isManagedNpmRootHostPeerPackageName(peerName) ||
-        pins.has(peerName) ||
-        !isSafePackageName(peerName)
-      ) {
+      if (peerName === "openclaw" || pins.has(peerName) || !isPackageDependencyName(peerName)) {
         continue;
       }
-      const version = findLockPackageVersion({ lockfile: params.lockfile, packageName: peerName });
+      const preferredPackage = packages[`node_modules/${peerName}`];
+      const version =
+        isRecord(preferredPackage) &&
+        preferredPackage.dev !== true &&
+        !isUnsupportedOptionalLockPackage(preferredPackage)
+          ? readOptionalString(preferredPackage.version)
+          : undefined;
       if (!version && isOptionalPeerDependency(value, peerName)) {
         continue;
       }
-      if (!version && !isTopLevelLockPackageLocation(location)) {
+      if (!version && location.split("/").filter((part) => part === "node_modules").length !== 1) {
         continue;
       }
       pins.set(peerName, version ?? peerRange);
@@ -714,25 +601,18 @@ function scrubHostPeerFromLockPackage(value: unknown): boolean {
     return false;
   }
   let changed = false;
-  if (isRecord(value.peerDependencies) && "openclaw" in value.peerDependencies) {
-    const peerDependencies = { ...value.peerDependencies };
-    delete peerDependencies.openclaw;
-    if (Object.keys(peerDependencies).length > 0) {
-      value.peerDependencies = peerDependencies;
-    } else {
-      delete value.peerDependencies;
+  for (const key of ["peerDependencies", "peerDependenciesMeta"] as const) {
+    const peers = value[key];
+    if (isRecord(peers) && "openclaw" in peers) {
+      const remaining = { ...peers };
+      delete remaining.openclaw;
+      if (Object.keys(remaining).length > 0) {
+        value[key] = remaining;
+      } else {
+        delete value[key];
+      }
+      changed = true;
     }
-    changed = true;
-  }
-  if (isRecord(value.peerDependenciesMeta) && "openclaw" in value.peerDependenciesMeta) {
-    const peerDependenciesMeta = { ...value.peerDependenciesMeta };
-    delete peerDependenciesMeta.openclaw;
-    if (Object.keys(peerDependenciesMeta).length > 0) {
-      value.peerDependenciesMeta = peerDependenciesMeta;
-    } else {
-      delete value.peerDependenciesMeta;
-    }
-    changed = true;
   }
   return changed;
 }
@@ -743,14 +623,11 @@ async function scrubHostPeerFromTempPackageLock(lockPath: string): Promise<void>
     return;
   }
   let changed = false;
-  if (isRecord(parsed.packages)) {
-    for (const value of Object.values(parsed.packages)) {
-      changed = scrubHostPeerFromLockPackage(value) || changed;
-    }
-  }
-  if (isRecord(parsed.dependencies)) {
-    for (const value of Object.values(parsed.dependencies)) {
-      changed = scrubHostPeerFromLockPackage(value) || changed;
+  for (const packages of [parsed.packages, parsed.dependencies]) {
+    if (isRecord(packages)) {
+      for (const value of Object.values(packages)) {
+        changed = scrubHostPeerFromLockPackage(value) || changed;
+      }
     }
   }
   if (changed) {
@@ -758,63 +635,26 @@ async function scrubHostPeerFromTempPackageLock(lockPath: string): Promise<void>
   }
 }
 
-function collectExistingManagedPeerDependencyPins(
-  dependencies: Record<string, string>,
-  previousManagedPeerDependencies: string[],
-): Record<string, string> {
-  const pins: Record<string, string> = {};
-  for (const packageName of previousManagedPeerDependencies) {
-    const dependencySpec = dependencies[packageName];
-    if (dependencySpec) {
-      pins[packageName] = dependencySpec;
-    }
-  }
-  return pins;
-}
-
-function isHostPeerResolutionFailure(
-  result: Awaited<ReturnType<ManagedNpmRootRunCommand>>,
-): boolean {
-  const output = `${result.stdout}\n${result.stderr}`;
-  return /(^|[^@\w.-])openclaw(?=$|[@\s:,"'])/i.test(output);
-}
-
-function createManagedNpmPeerPlanArgs(params?: {
-  force?: boolean;
-  legacyPeerDeps?: boolean;
-}): string[] {
-  return [
-    "npm",
-    "install",
-    "--package-lock-only",
-    ...(params?.force ? ["--force"] : []),
-    ...createSafeNpmInstallArgs({
-      omitDev: true,
-      omitPeer: true,
-      legacyPeerDeps: params?.legacyPeerDeps,
-      loglevel: "error",
-      ignoreWorkspaces: true,
-      noAudit: true,
-      noFund: true,
-    }).slice(1),
-  ];
-}
-
 async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   npmRoot: string;
   manifest: ManagedNpmRootManifest;
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
+  workTimeoutMs?: number | null;
   signal?: AbortSignal;
 }): Promise<Record<string, string>> {
   const manifest = params.manifest;
   const dependencies = readDependencyRecord(manifest.dependencies);
-  const previousManagedPeerDependencies = readManagedPeerDependencyKeys(manifest.openclaw);
-  const fallbackPeerPins = collectExistingManagedPeerDependencyPins(
-    dependencies,
-    previousManagedPeerDependencies,
+  const previousManagedPeerDependencies = readManagedKeys(
+    manifest.openclaw,
+    "managedPeerDependencies",
   );
+  const fallbackPeerPins: Record<string, string> = {};
   for (const packageName of previousManagedPeerDependencies) {
+    const dependencySpec = dependencies[packageName];
+    if (dependencySpec) {
+      fallbackPeerPins[packageName] = dependencySpec;
+    }
     delete dependencies[packageName];
   }
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-peer-plan-"));
@@ -829,54 +669,52 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
       },
       { trailingNewline: true },
     );
-    await copyPathIfExists(
-      path.join(params.npmRoot, "package-lock.json"),
-      path.join(tempRoot, "package-lock.json"),
-    );
     const tempLockPath = path.join(tempRoot, "package-lock.json");
+    await copyPathIfExists(path.join(params.npmRoot, "package-lock.json"), tempLockPath);
     await scrubHostPeerFromTempPackageLock(tempLockPath);
-    await copyPathIfExists(path.join(params.npmRoot, ".npmrc"), path.join(tempRoot, ".npmrc"));
-    await copyPathIfExists(
-      path.join(params.npmRoot, "_openclaw-pack-archives"),
-      path.join(tempRoot, "_openclaw-pack-archives"),
-    );
+    for (const name of [".npmrc", "_openclaw-pack-archives"]) {
+      await copyPathIfExists(path.join(params.npmRoot, name), path.join(tempRoot, name));
+    }
 
     const command = params.runCommand ?? runCommandWithTimeout;
-    const npmPeerPlanArgs = createManagedNpmPeerPlanArgs({ force: true });
-    const npmPlanOptions = {
-      cwd: tempRoot,
-      timeoutMs: params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS,
-      signal: params.signal,
-      killProcessTree: true,
-      env: createSafeNpmInstallEnv(process.env, {
-        legacyPeerDeps: false,
-        npmConfigCwd: tempRoot,
-        packageLock: true,
-        quiet: true,
-      }),
-    };
-    const result = await command(npmPeerPlanArgs, npmPlanOptions);
-    if (result.code !== 0) {
-      if (isHostPeerResolutionFailure(result)) {
-        const hostPeerFallbackArgs = createManagedNpmPeerPlanArgs({
-          force: true,
-          legacyPeerDeps: true,
-        });
-        const hostPeerFallbackOptions = {
-          ...npmPlanOptions,
+    const runPeerPlan = (legacyPeerDeps: boolean) =>
+      command(
+        resolveNpmCommand([
+          "install",
+          "--package-lock-only",
+          "--force",
+          ...createSafeNpmInstallArgs({
+            omitPeer: true,
+            legacyPeerDeps,
+            ignoreWorkspaces: true,
+            noAudit: true,
+            noFund: true,
+          }).slice(1),
+        ]),
+        {
+          cwd: tempRoot,
+          timeoutMs: resolveInstallWorkTimeoutMs(
+            params.workTimeoutMs,
+            params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS,
+          ),
+          signal: params.signal,
+          killProcessTree: true,
           env: createSafeNpmInstallEnv(process.env, {
-            legacyPeerDeps: true,
+            legacyPeerDeps,
             npmConfigCwd: tempRoot,
             packageLock: true,
             quiet: true,
           }),
-        };
-        const hostPeerFallbackResult = await command(hostPeerFallbackArgs, hostPeerFallbackOptions);
-        if (hostPeerFallbackResult.code === 0) {
-          const lockfile = await readManagedNpmRootManifest(tempLockPath);
-          return collectNpmLockPeerDependencyPins({ lockfile });
-        }
-      }
+        },
+      );
+    let result = await runPeerPlan(false);
+    if (
+      result.code !== 0 &&
+      /(^|[^@\w.-])openclaw(?=$|[@\s:,"'])/i.test(`${result.stdout}\n${result.stderr}`)
+    ) {
+      result = await runPeerPlan(true);
+    }
+    if (result.code !== 0) {
       return fallbackPeerPins;
     }
     const lockfile = await readManagedNpmRootManifest(tempLockPath);
@@ -886,7 +724,6 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   }
 }
 
-/** Sync package.json with peer dependency pins resolved from npm's lock plan. */
 export async function syncManagedNpmRootPeerDependencies(params: {
   npmRoot: string;
   beforePersistentApply?: () => void;
@@ -894,12 +731,16 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   omitNpmAliasOverrides?: boolean;
   runCommand?: ManagedNpmRootRunCommand;
   timeoutMs?: number;
+  workTimeoutMs?: number | null;
   signal?: AbortSignal;
 }): Promise<boolean> {
   const manifestPath = path.join(params.npmRoot, "package.json");
   const manifest = await readManagedNpmRootManifest(manifestPath);
   const dependencies = readDependencyRecord(manifest.dependencies);
-  const previousManagedPeerDependencies = readManagedPeerDependencyKeys(manifest.openclaw);
+  const previousManagedPeerDependencies = readManagedKeys(
+    manifest.openclaw,
+    "managedPeerDependencies",
+  );
   const previousManagedPeerDependencySet = new Set(previousManagedPeerDependencies);
   const managedOverrides = filterUnsupportedManagedNpmRootOverrides(
     params.managedOverrides,
@@ -918,6 +759,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     manifest: { ...manifest, overrides: plannedOverrides },
     runCommand: params.runCommand,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     signal: params.signal,
   });
   const managedPeerDependencyNames = new Set(
@@ -950,27 +792,13 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     dependencies: nextDependencies,
     managedDependencyNames: managedPeerDependencyNames,
   });
-  const managedPeerDependencyKeys = [...managedPeerDependencyNames].toSorted();
-  const openclawMetadata = buildManagedOpenClawMetadata({
-    current: manifest.openclaw,
-    managedOverrideKeys,
-    managedPeerDependencyKeys,
-  });
-  const next: ManagedNpmRootManifest = {
-    ...manifest,
-    private: true,
+  const next = buildManagedNpmRootManifest({
+    manifest,
     dependencies: nextDependencies,
-  };
-  if (Object.keys(overrides).length > 0) {
-    next.overrides = overrides;
-  } else {
-    delete next.overrides;
-  }
-  if (openclawMetadata) {
-    next.openclaw = openclawMetadata;
-  } else {
-    delete next.openclaw;
-  }
+    overrides,
+    managedOverrideKeys,
+    managedPeerDependencyKeys: [...managedPeerDependencyNames].toSorted(),
+  });
   const changed = JSON.stringify(next) !== JSON.stringify(manifest);
   if (changed) {
     // Planning yields; publish this small manifest without yielding after authority revalidation.
@@ -993,6 +821,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   npmRoot: string;
   packageRoot?: string | null;
   timeoutMs?: number;
+  workTimeoutMs?: number | null;
   signal?: AbortSignal;
   logger?: ManagedNpmRootLogger;
   runCommand?: ManagedNpmRootRunCommand;
@@ -1012,7 +841,8 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   const dependencies = readDependencyRecord(manifest.dependencies);
   const hasManifestDependency = "openclaw" in dependencies;
   const hasLockDependency = await managedNpmRootLockfileHasOpenClawPeer(params.npmRoot);
-  const hasPackageDir = await pathExists(path.join(params.npmRoot, "node_modules", "openclaw"));
+  const hasPackageDir =
+    (await lstatIfExists(path.join(params.npmRoot, "node_modules", "openclaw"))) !== null;
   const preserveActiveHostLink = activeHostState === "linked-active-host";
   if (!hasManifestDependency && !hasLockDependency && (!hasPackageDir || preserveActiveHostLink)) {
     return false;
@@ -1027,30 +857,22 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   }
 
   const command = params.runCommand ?? runCommandWithTimeout;
-  const npmArgs = hasManifestDependency
-    ? [
-        "npm",
-        "uninstall",
-        "--loglevel=error",
-        "--legacy-peer-deps",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        "openclaw",
-      ]
-    : [
-        "npm",
-        "prune",
-        "--loglevel=error",
-        "--legacy-peer-deps",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-      ];
+  const npmArgs = resolveNpmCommand([
+    hasManifestDependency ? "uninstall" : "prune",
+    "--loglevel=error",
+    "--legacy-peer-deps",
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    ...(hasManifestDependency ? ["openclaw"] : []),
+  ]);
   try {
     const result = await command(npmArgs, {
       cwd: params.npmRoot,
-      timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
+      timeoutMs: resolveInstallWorkTimeoutMs(
+        params.workTimeoutMs,
+        Math.max(params.timeoutMs ?? 300_000, 300_000),
+      ),
       signal: params.signal,
       killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
@@ -1151,18 +973,6 @@ async function lstatIfExists(filePath: string): Promise<Stats | null> {
   }
 }
 
-async function pathExists(filePath: string): Promise<boolean> {
-  return await fs
-    .lstat(filePath)
-    .then(() => true)
-    .catch((err: unknown) => {
-      if (hasErrnoCode(err, "ENOENT")) {
-        return false;
-      }
-      throw err;
-    });
-}
-
 async function scrubManagedNpmRootOpenClawPeer(params: {
   npmRoot: string;
   preservePackageDir?: boolean;
@@ -1214,7 +1024,7 @@ async function scrubManagedNpmRootOpenClawPeer(params: {
   }
 
   const openclawPackageDir = path.join(params.npmRoot, "node_modules", "openclaw");
-  if (!params.preservePackageDir && (await pathExists(openclawPackageDir))) {
+  if (!params.preservePackageDir && (await lstatIfExists(openclawPackageDir))) {
     await fs.rm(openclawPackageDir, { recursive: true, force: true });
   }
   const binDir = path.join(params.npmRoot, "node_modules", ".bin");
@@ -1228,7 +1038,6 @@ async function scrubManagedNpmRootOpenClawPeer(params: {
   });
 }
 
-/** Read lockfile metadata for an installed dependency in the managed root. */
 export async function readManagedNpmRootInstalledDependency(params: {
   npmRoot: string;
   packageName: string;

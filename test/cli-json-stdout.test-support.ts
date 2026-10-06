@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { resolveVitestNodeArgs } from "../scripts/lib/vitest-process-env.mts";
 
 export function runBuiltCli(
   tempHome: string,
   args: string[],
   envOverrides: NodeJS.ProcessEnv = {},
-  options: { inheritEnvironment?: boolean } = {},
+  options: { inheritEnvironment?: boolean; execArgv?: string[] } = {},
 ) {
   const env: NodeJS.ProcessEnv = {
     ...(options.inheritEnvironment === false ? { PATH: process.env.PATH } : process.env),
@@ -20,7 +21,10 @@ export function runBuiltCli(
   Object.assign(env, envOverrides);
 
   const entry = path.resolve(process.cwd(), "openclaw.mjs");
-  return spawnSync(process.execPath, [entry, ...args], {
+  // Without the runner's V8 policy, process.exit can deadlock joining a background
+  // compiler that waits for main-thread GC; spawnSync then reports status null.
+  const nodeArgs = process.versions.bun ? [] : resolveVitestNodeArgs(env);
+  return spawnSync(process.execPath, [...nodeArgs, ...(options.execArgv ?? []), entry, ...args], {
     cwd: process.cwd(),
     env,
     encoding: "utf8",

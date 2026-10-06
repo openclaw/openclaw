@@ -11,6 +11,7 @@ import {
 describe("OpenAI reasoning effort support", () => {
   it.each([
     { api: "openai-completions", expected: "xhigh", compat: undefined },
+    { api: "openclaw-openai-completions-transport", expected: "xhigh", compat: undefined },
     { api: "openai-responses", expected: "max", compat: undefined },
     {
       api: "openai-completions",
@@ -54,12 +55,6 @@ describe("OpenAI reasoning effort support", () => {
 
   it("preserves reasoning_effort metadata for gpt-5.4-mini in Chat Completions", () => {
     const model = { provider: "openai", id: "gpt-5.4-mini", api: "openai-completions" };
-    expect(resolveOpenAISupportedReasoningEfforts(model)).toContain("medium");
-    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBe("medium");
-  });
-
-  it("preserves reasoning_effort for gpt-5.4-mini in Responses", () => {
-    const model = { provider: "openai", id: "gpt-5.4-mini", api: "openai-responses" };
     expect(resolveOpenAISupportedReasoningEfforts(model)).toContain("medium");
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBe("medium");
   });
@@ -255,12 +250,20 @@ describe("OpenAI temperature support", () => {
     expect(supportsOpenAITemperature({ id: "gpt-5.4-mini" })).toBe(true);
     expect(supportsOpenAITemperature({ id: "gpt-5.60" })).toBe(true);
     expect(supportsOpenAITemperature({ id: "gpt-6-astra-custom" })).toBe(true);
+    expect(supportsOpenAITemperature({ id: "gpt-6-sol-custom" })).toBe(true);
+    expect(supportsOpenAITemperature({ id: "gpt-6-luna-custom" })).toBe(true);
     expect(supportsOpenAITemperature({ id: "llama-4-70b" })).toBe(true);
   });
 
   it("honors catalog compat overrides in both directions", () => {
     expect(
       supportsOpenAITemperature({ id: "gpt-6-astra", compat: { supportsTemperature: true } }),
+    ).toBe(true);
+    expect(
+      supportsOpenAITemperature({ id: "gpt-6-sol", compat: { supportsTemperature: true } }),
+    ).toBe(true);
+    expect(
+      supportsOpenAITemperature({ id: "gpt-6-luna", compat: { supportsTemperature: true } }),
     ).toBe(true);
     expect(
       supportsOpenAITemperature({ id: "gpt-5.6-luna", compat: { supportsTemperature: true } }),

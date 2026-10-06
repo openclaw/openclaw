@@ -99,7 +99,7 @@ export async function createAgentTeam(
       };
     }
     const pending = ids.filter((id) => {
-      const deletion = readAgentDeletionJournal(id);
+      const deletion = readAgentDeletionJournal(id, {}, "runtime");
       return deletion && !deletion.cleanupCompleted;
     });
     if (pending.length) {

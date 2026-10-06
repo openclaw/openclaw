@@ -3,14 +3,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
 } from "./http-common.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   resolveTrustedHttpOperatorScopes,
@@ -19,48 +18,28 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-s
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { loadSessionEntry } from "./session-utils.js";
 
-type SessionKeyPathResolution =
-  | { matched: false }
-  | { matched: true; sessionKey: string }
-  | { error: "invalid-session-key"; matched: true };
-
-function resolveSessionKeyFromPath(pathname: string): SessionKeyPathResolution {
-  const match = pathname.match(/^\/sessions\/([^/]+)\/kill$/);
-  if (!match) {
-    return { matched: false };
-  }
-  try {
-    const decoded = decodeURIComponent(match[1] ?? "").trim();
-    if (!decoded) {
-      return { error: "invalid-session-key", matched: true };
-    }
-    return { matched: true, sessionKey: decoded };
-  } catch {
-    return { error: "invalid-session-key", matched: true };
-  }
-}
-
 export async function handleSessionKillHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-  },
+  opts: GatewayHttpRequestAuthOptions,
 ): Promise<boolean> {
-  const cfg = getRuntimeConfig();
+  const cfg = opts.cfg ?? getRuntimeConfig();
   const url = new URL(req.url ?? "/", "http://localhost");
-  const sessionKeyResolution = resolveSessionKeyFromPath(url.pathname);
-  if (!sessionKeyResolution.matched) {
+  const match = url.pathname.match(/^\/sessions\/([^/]+)\/kill$/);
+  if (!match) {
     return false;
   }
-  if ("error" in sessionKeyResolution) {
+  let sessionKey: string;
+  try {
+    sessionKey = decodeURIComponent(match[1] ?? "").trim();
+  } catch {
     sendInvalidRequest(res, "invalid session key");
     return true;
   }
-  const { sessionKey } = sessionKeyResolution;
+  if (!sessionKey) {
+    sendInvalidRequest(res, "invalid session key");
+    return true;
+  }
 
   if (req.method !== "POST") {
     sendMethodNotAllowed(res, "POST");
@@ -68,12 +47,12 @@ export async function handleSessionKillHttpRequest(
   }
 
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
+    cfg,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
   });
   if (!requestAuth) {
     return true;
@@ -111,11 +90,14 @@ export async function handleSessionKillHttpRequest(
     return true;
   }
 
-  const result = await killSubagentRunAdmin({
-    cfg,
-    sessionKey: canonicalKey,
-    agentId: requestedAgent.agentId,
-  });
+  const result = await killSubagentRunAdmin(
+    {
+      cfg,
+      sessionKey: canonicalKey,
+      agentId: requestedAgent.agentId,
+    },
+    { assertCurrent: requestAuth.assertCurrent },
+  );
 
   if (result.found && result.error) {
     sendJson(res, 503, {

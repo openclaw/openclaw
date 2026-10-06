@@ -10,6 +10,7 @@ import { loadInstalledPluginIndex } from "../../src/plugins/installed-plugin-ind
 import { createInstalledPluginOwnershipResolver } from "../../src/plugins/installed-plugin-package-ownership.js";
 import { closeOpenClawStateDatabaseByPath } from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 
 const PLUGIN_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const CORRUPT_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
@@ -146,17 +147,22 @@ fi
   }
 }
 
-async function waitForPortFile(portFile: string): Promise<number> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+async function waitForPortFile(portFile: string, signal: AbortSignal): Promise<number> {
+  // The production registry publishes only this file; no IPC or stdout readiness is exposed.
+  while (!signal.aborted) {
     if (existsSync(portFile)) {
       const port = Number.parseInt(readFileSync(portFile, "utf8"), 10);
       if (Number.isInteger(port) && port > 0) {
         return port;
       }
     }
-    await delay(50);
+    await delay(10, undefined, { signal }).catch((error: unknown) => {
+      if (!signal.aborted) {
+        throw error;
+      }
+    });
   }
-  throw new Error("registry did not write a port file");
+  throw new Error("registry did not write a port file", { cause: signal.reason });
 }
 
 describe("plugin update unchanged Docker E2E", () => {
@@ -249,14 +255,26 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(script).not.toContain("cat /tmp/openclaw-e2e-registry.log");
   });
 
-  it("serves plugin metadata from an ephemeral registry port", async () => {
+  it("serves plugin metadata from an ephemeral registry port", async ({ signal }) => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-registry-"));
     const portFile = path.join(root, "registry.port");
     const child = spawn("node", [PLUGIN_UPDATE_REGISTRY_SCRIPT, portFile], {
       stdio: "ignore",
     });
+    const waiting = new AbortController();
+    child.once("error", (error) => waiting.abort(error));
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
     try {
-      const port = await waitForPortFile(portFile);
+      const port = await withinTest(
+        awaitGateBeforeSettlement(
+          waitForPortFile(portFile, AbortSignal.any([signal, waiting.signal])),
+          closed,
+          "registry did not write a port file",
+        ),
+        signal,
+      );
 
       const response = await fetch(`http://127.0.0.1:${port}/@example%2flossless-claw`);
       expect(response.status).toBe(200);
@@ -267,7 +285,9 @@ describe("plugin update unchanged Docker E2E", () => {
         `http://127.0.0.1:${port}/@example/lossless-claw/-/lossless-claw-0.9.0.tgz`,
       );
     } finally {
+      waiting.abort();
       child.kill("SIGTERM");
+      await closed;
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -354,6 +374,9 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(script).not.toContain("OPENCLAW_UPDATE_POST_CORE=1");
     expect(script).not.toContain(
       'node "$entry" update --channel beta --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ',
+    );
+    expect(script).toContain(
+      'OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org/}"',
     );
     expect(script).toContain(
       "openclaw update failed or timed out after ${update_timeout_seconds}s",

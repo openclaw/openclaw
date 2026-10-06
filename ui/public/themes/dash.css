@@ -20,7 +20,9 @@
   --accent-subtle: rgba(207, 139, 77, 0.14);
   --accent-glow: rgba(207, 139, 77, 0.22);
   --primary: #cf8b4d;
+  --primary-hover: var(--accent-hover);
   --primary-foreground: #1a1210;
+  --accent-foreground: #1a1210;
 
   /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
   --destructive: #d32f2f;
@@ -97,6 +99,8 @@
   --accent-subtle: rgba(138, 81, 44, 0.12);
   --accent-glow: rgba(138, 81, 44, 0.16);
   --primary: #8a512c;
+  --primary-hover: var(--accent-hover);
+  --accent-foreground: var(--primary-foreground);
 
   /* Surfaces — warm parchment tones */
   --bg: #f7f2ec;

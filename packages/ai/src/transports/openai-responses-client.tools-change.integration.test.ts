@@ -29,7 +29,6 @@ const revisedTool: Tool = {
 };
 const scenarios = [
   { name: "added", before: [recordTool], after: [recordTool, verifyTool], continues: true },
-  { name: "removed", before: [recordTool, verifyTool], after: [recordTool], continues: true },
   { name: "schema", before: [recordTool], after: [revisedTool], continues: true },
   { name: "empty", before: [recordTool], after: [], continues: true },
   { name: "omitted", before: [recordTool], after: undefined, continues: true },

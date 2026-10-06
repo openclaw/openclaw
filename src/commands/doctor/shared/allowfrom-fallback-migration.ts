@@ -20,10 +20,6 @@ const ACCOUNT_GROUP_ALLOW_FROM_PATH = [
 type ChannelRecord = Record<string, unknown>;
 type SchemaPath = readonly string[];
 
-function isDisabled(record: ChannelRecord): boolean {
-  return record.enabled === false;
-}
-
 function normalizeAllowFrom(raw: unknown): string[] {
   return normalizeUniqueStringEntries(Array.isArray(raw) ? raw : []);
 }
@@ -44,24 +40,6 @@ function readDmAllowFrom(params: {
       mode: getDoctorChannelCapabilities(params.channelName).dmAllowFromMode,
     }),
   );
-}
-
-function readOwnDmAllowFrom(params: { channelName: string; account: ChannelRecord }): string[] {
-  return normalizeAllowFrom(
-    resolveChannelDmAllowFrom({
-      account: params.account,
-      mode: getDoctorChannelCapabilities(params.channelName).dmAllowFromMode,
-    }),
-  );
-}
-
-function findGeneratedChannelConfigSchema(
-  channelName: string,
-): Record<string, unknown> | undefined {
-  const normalizedChannelId = normalizeAnyChannelId(channelName);
-  return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
-    (entry) => entry.channelId === channelName || entry.channelId === normalizedChannelId,
-  )?.schema;
 }
 
 function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
@@ -106,7 +84,10 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 }
 
 function generatedSchemaAllowsGroupAllowFrom(channelName: string, path: SchemaPath): boolean {
-  const schema = findGeneratedChannelConfigSchema(channelName);
+  const normalizedChannelId = normalizeAnyChannelId(channelName);
+  const schema = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
+    (entry) => entry.channelId === channelName || entry.channelId === normalizedChannelId,
+  )?.schema;
   // Extension-installed channels (e.g. ClawHub agentmail) have no generated-metadata entry;
   // without schema info we can't prove the write is safe, so fail closed rather than open.
   return schema !== undefined && schemaAllowsConfigPath(schema, path);
@@ -130,7 +111,10 @@ function migrateRecord(params: {
   if (params.parent && params.parentHadGroupAllowFrom) {
     return false;
   }
-  const ownAllowFrom = readOwnDmAllowFrom(params);
+  const ownAllowFrom = readDmAllowFrom({
+    channelName: params.channelName,
+    account: params.account,
+  });
   if (params.parent && ownAllowFrom.length === 0 && readGroupAllowFrom(params.parent).length > 0) {
     return false;
   }
@@ -168,7 +152,7 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
     ) {
       continue;
     }
-    if (isDisabled(channelConfig)) {
+    if (channelConfig.enabled === false) {
       continue;
     }
     if (!getDoctorChannelCapabilities(channelName).groupAllowFromFallbackToAllowFrom) {
@@ -198,7 +182,7 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
     );
     for (const [accountId, accountConfig] of Object.entries(accounts)) {
       const account = asNullableRecord(accountConfig);
-      if (!account || isDisabled(account)) {
+      if (!account || account.enabled === false) {
         continue;
       }
       migrateRecord({

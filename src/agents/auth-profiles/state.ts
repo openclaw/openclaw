@@ -16,23 +16,20 @@ function normalizeAuthProfileOrder(raw: unknown): AuthProfileState["order"] {
   if (!isRecord(raw)) {
     return undefined;
   }
-  const normalized = Object.entries(raw).reduce<Record<string, string[]>>(
-    (acc, [provider, value]) => {
-      if (!Array.isArray(value)) {
-        return acc;
-      }
-      const providerKey = normalizeProviderId(provider);
-      if (!providerKey) {
-        return acc;
-      }
-      const list = normalizeTrimmedStringList(value);
-      if (list.length > 0) {
-        acc[providerKey] = list;
-      }
-      return acc;
-    },
-    {},
-  );
+  const normalized: Record<string, string[]> = {};
+  for (const [provider, value] of Object.entries(raw)) {
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    const providerKey = normalizeProviderId(provider);
+    if (!providerKey) {
+      continue;
+    }
+    const list = normalizeTrimmedStringList(value);
+    if (list.length > 0) {
+      normalized[providerKey] = list;
+    }
+  }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
@@ -88,12 +85,6 @@ export function mergeAuthProfileState(
   const mergeRecord = <T>(left?: Record<string, T>, right?: Record<string, T>) => {
     if (!left && !right) {
       return undefined;
-    }
-    if (!left) {
-      return { ...right };
-    }
-    if (!right) {
-      return { ...left };
     }
     return { ...left, ...right };
   };

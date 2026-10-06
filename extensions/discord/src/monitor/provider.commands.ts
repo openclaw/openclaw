@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 import {
   listNativeCommandSpecsForConfig,
   listSkillCommandsForAgents,
@@ -29,10 +28,7 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   maxDiscordCommands?: number;
   listSkillCommandsForAgents?: typeof listSkillCommandsForAgents;
   listNativeCommandSpecsForConfig?: typeof listNativeCommandSpecsForConfig;
-}): Promise<{
-  skillCommands: ReturnType<typeof listSkillCommandsForAgents>;
-  commandSpecs: DiscordProviderCommandSpec[];
-}> {
+}) {
   const listSkillCommands = params.listSkillCommandsForAgents ?? listSkillCommandsForAgents;
   const listNativeCommandSpecs =
     params.listNativeCommandSpecsForConfig ?? listNativeCommandSpecsForConfig;

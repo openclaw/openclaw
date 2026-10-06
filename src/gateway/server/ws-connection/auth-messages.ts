@@ -56,6 +56,9 @@ export function formatGatewayAuthFailureMessage(params: {
       return `unauthorized: gateway token mismatch (${tokenHint})`;
     case "token_missing_config":
       return "unauthorized: gateway token not configured on gateway (set gateway.auth.token)";
+    case "token_redacted_config":
+    case "password_redacted_config":
+      return "gateway credential is a redaction sentinel (run openclaw doctor --fix on the Gateway, then restart and re-pair)";
     case "password_missing":
       return `unauthorized: gateway password missing (${passwordHint})`;
     case "password_mismatch":

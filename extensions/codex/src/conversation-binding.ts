@@ -1,12 +1,11 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginHookInboundClaimEvent } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
-  isCodexAppServerUnsafeSubscriptionError,
+  CodexAppServerUnsafeSubscriptionError,
   retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./app-server/attempt-client-cleanup.js";
@@ -14,8 +13,8 @@ import { normalizeCodexAppServerBindingModelProvider } from "./app-server/auth-p
 import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
-  type CodexAppServerLiveThreadOwnership,
 } from "./app-server/client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./app-server/client-thread-owner.js";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerOverloadError,
@@ -42,7 +41,7 @@ import {
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
-} from "./app-server/thread-lifecycle.js";
+} from "./app-server/thread-model-selection.js";
 import {
   isSameCodexAppServerThreadOwner,
   releaseCodexAppServerBindingSubscription,
@@ -57,7 +56,6 @@ import {
 import type { CodexAppServerConversationBindingData } from "./conversation-binding-data.js";
 import {
   assertNativeConversationApprovalPolicySupported,
-  buildCodexConversationAgentLookup,
   buildConversationThreadRequestForClient,
   CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
   prepareCodexConversationBinding,
@@ -65,7 +63,10 @@ import {
   resolveModelBackedReviewerPolicyProvider,
   type CodexConversationConfig,
 } from "./conversation-binding-preparation.js";
-import { trackCodexConversationActiveTurn } from "./conversation-control.js";
+import {
+  buildCodexConversationAgentLookup,
+  trackCodexConversationActiveTurn,
+} from "./conversation-control.js";
 import {
   CodexConversationTurnTimeoutError,
   createCodexConversationTurnCollector,
@@ -126,19 +127,9 @@ async function runBoundTurn(params: {
         model: binding.model,
         agentDir: params.data.agentDir,
       });
-      const modelScopedRuntime = resolveCodexAppServerForModelProvider({
-        appServer: runtime,
-        provider: reviewerModelProvider,
-        model: binding.model,
-        config: params.config,
-        env: process.env,
-        agentDir: params.data.agentDir,
-      });
-      const sessionRoot = modelScopedRuntime.sessionRoot;
-      const approvalPolicy = modelScopedRuntime.approvalPolicy;
-      const sandbox = modelScopedRuntime.sandbox;
-      const permissionProfile = modelScopedRuntime.networkProxy?.profileName;
-      const networkProxyConfigFingerprint = modelScopedRuntime.networkProxy?.configFingerprint;
+      const { sessionRoot, approvalPolicy, sandbox } = runtime;
+      const permissionProfile = runtime.networkProxy?.profileName;
+      const networkProxyConfigFingerprint = runtime.networkProxy?.configFingerprint;
       const networkProxyBindingChanged =
         binding.networkProxyProfileName !== permissionProfile ||
         binding.networkProxyConfigFingerprint !== networkProxyConfigFingerprint;
@@ -147,7 +138,7 @@ async function runBoundTurn(params: {
         permissionProfile !== undefined &&
         binding.networkProxyProfileName === permissionProfile &&
         binding.networkProxyConfigFingerprint === networkProxyConfigFingerprint;
-      assertNativeConversationApprovalPolicySupported(modelScopedRuntime);
+      assertNativeConversationApprovalPolicySupported(runtime);
       const modelSelection = binding.model
         ? resolveCodexAppServerRequestModelSelection({
             model: binding.model,
@@ -156,7 +147,7 @@ async function runBoundTurn(params: {
             ...agentLookup,
           })
         : undefined;
-      const threadRequestRuntime = { runtime: modelScopedRuntime, workspaceDir, ...modelSelection };
+      const threadRequestRuntime = { runtime, workspaceDir, ...modelSelection };
 
       const clientOptions = {
         startOptions: runtime.start,
@@ -256,7 +247,9 @@ async function runBoundTurn(params: {
             }
             liveThreadOwnership = undefined;
           } else if (binding.threadId !== threadId) {
-            await releaseCodexAppServerBindingSubscription(binding);
+            await releaseCodexAppServerBindingSubscription(binding, {
+              retainedClientId: client.getInstanceId(),
+            });
           }
           const committed = await params.bindingStore.mutate(identity, {
             kind: "set",
@@ -273,8 +266,8 @@ async function runBoundTurn(params: {
                 ...agentLookup,
               }),
               serviceTier: serviceTier ?? undefined,
-              networkProxyProfileName: modelScopedRuntime.networkProxy?.profileName,
-              networkProxyConfigFingerprint: modelScopedRuntime.networkProxy?.configFingerprint,
+              networkProxyProfileName: runtime.networkProxy?.profileName,
+              networkProxyConfigFingerprint: runtime.networkProxy?.configFingerprint,
               conversationStartId: binding.conversationStartId,
               conversationSourceTransferComplete: binding.conversationSourceTransferComplete,
               historyCoveredThrough: binding.historyCoveredThrough,
@@ -283,7 +276,7 @@ async function runBoundTurn(params: {
           if (!committed) {
             throw new Error("Codex conversation binding changed while rotating its thread.");
           }
-          useStickyNetworkProfile = modelScopedRuntime.networkProxy !== undefined;
+          useStickyNetworkProfile = runtime.networkProxy !== undefined;
         } else if (
           binding.clientId !== client.getInstanceId() ||
           (isCodexAppServerClientRuntimeLive(client) && !params.incognito && !liveThreadOwnership)
@@ -333,7 +326,9 @@ async function runBoundTurn(params: {
           ) {
             // Keep the old physical owner authoritative until unsubscribe succeeds;
             // failed migration then rolls back only the newly resumed connection.
-            await releaseCodexAppServerBindingSubscription(binding);
+            await releaseCodexAppServerBindingSubscription(binding, {
+              retainedClientId: client.getInstanceId(),
+            });
           }
           const committed = await params.bindingStore.mutate(identity, {
             kind: "patch",
@@ -373,7 +368,7 @@ async function runBoundTurn(params: {
             cwd: workspaceDir,
             ...(sessionRoot ? { runtimeWorkspaceRoots: [sessionRoot] } : {}),
             approvalPolicy,
-            approvalsReviewer: modelScopedRuntime.approvalsReviewer,
+            approvalsReviewer: runtime.approvalsReviewer,
             ...(useStickyNetworkProfile
               ? {}
               : {
@@ -389,6 +384,7 @@ async function runBoundTurn(params: {
         activeTurnCleanup = trackCodexConversationActiveTurn({
           identity,
           client,
+          requestTimeoutMs: runtime.requestTimeoutMs,
           threadId,
           turnId: activeTurnId,
         });
@@ -516,17 +512,9 @@ async function runBoundTurn(params: {
   });
 }
 
-export async function runBoundTurnWithMissingThreadRecovery(params: {
-  bindingStore: CodexAppServerBindingStore;
-  data: CodexAppServerConversationBindingData;
-  prompt: string;
-  event: PluginHookInboundClaimEvent;
-  pluginConfig?: unknown;
-  config?: CodexConversationConfig;
-  sessionKey?: string;
-  incognito: boolean;
-  timeoutMs?: number;
-}): Promise<BoundTurnResult> {
+export async function runBoundTurnWithMissingThreadRecovery(
+  params: Parameters<typeof runBoundTurn>[0],
+): Promise<BoundTurnResult> {
   await prepareCodexConversationBinding(params);
   try {
     return await runBoundTurn(params);
@@ -540,7 +528,10 @@ export async function runBoundTurnWithMissingThreadRecovery(params: {
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
-  if (isCodexAppServerOverloadError(error) || isCodexAppServerUnsafeSubscriptionError(error)) {
+  if (
+    isCodexAppServerOverloadError(error) ||
+    error instanceof CodexAppServerUnsafeSubscriptionError
+  ) {
     return false;
   }
   const message = formatErrorMessage(error);

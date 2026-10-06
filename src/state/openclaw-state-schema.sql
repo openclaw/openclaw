@@ -346,6 +346,7 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
 -- identity is agent-scoped end-to-end.
 CREATE TABLE IF NOT EXISTS session_watch_cursors (
   watcher_session_key TEXT NOT NULL,
+  watcher_store_path TEXT,
   target_session_key TEXT NOT NULL,
   last_seen_sequence INTEGER NOT NULL DEFAULT 0,
   notified_sequence INTEGER NOT NULL DEFAULT 0,
@@ -567,6 +568,12 @@ CREATE TABLE IF NOT EXISTS operator_approval_standing_grants (
 
 CREATE INDEX IF NOT EXISTS idx_operator_approval_standing_grants_binding
   ON operator_approval_standing_grants(agent_id, cron_job_id, operation_binding, created_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS operator_approval_standing_grant_generations (
+  grant_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES operator_approval_standing_grants(grant_id) ON DELETE CASCADE,
+  job_definition_generation INTEGER NOT NULL CHECK (job_definition_generation >= 1)
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
@@ -974,6 +981,21 @@ CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
   container_json TEXT
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS node_worker_launch_cleanup (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES node_worker_launches(launch_id) ON DELETE CASCADE,
+  cleanup_mode TEXT NOT NULL CHECK (cleanup_mode IN ('process-group', 'owned-anchor')),
+  lineage_settled INTEGER CHECK (lineage_settled IS NULL OR lineage_settled = 1)
+) STRICT;
+
+-- Older readers retain owned-anchor custody: lineage EOF is not this certificate.
+CREATE TABLE IF NOT EXISTS node_worker_launch_process_scopes (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES node_worker_launches(launch_id) ON DELETE CASCADE,
+  scope_kind TEXT NOT NULL CHECK (scope_kind = 'linux-subreaper'),
+  descendants_reaped INTEGER CHECK (descendants_reaped IS NULL OR descendants_reaped = 1)
+) STRICT;
+
 -- Turn receipts have a shorter lifetime than their physical worker owner.
 -- Keeping the launch running preserves capacity and predecessor cleanup semantics.
 CREATE TABLE IF NOT EXISTS node_worker_turns (
@@ -1186,6 +1208,14 @@ CREATE INDEX IF NOT EXISTS idx_acp_sessions_state_activity
 CREATE INDEX IF NOT EXISTS idx_acp_sessions_agent_activity
   ON acp_sessions(agent, last_activity_at DESC, session_key);
 
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_agent
+  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.agentSessionId'),
+    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+
+CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_acpx
+  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.acpxSessionId'),
+    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+
 CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
@@ -1256,7 +1286,8 @@ CREATE TABLE IF NOT EXISTS agent_database_leases (
   path TEXT NOT NULL,
   owner_pid INTEGER NOT NULL,
   owner_start_time INTEGER,
-  opened_at INTEGER NOT NULL
+  opened_at INTEGER NOT NULL,
+  provenance TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS plugin_state_entries (
@@ -1453,6 +1484,9 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   agent_id TEXT,
   payload_kind TEXT NOT NULL,
   job_json TEXT NOT NULL,
+  grant_definition_revision TEXT,
+  grant_definition_generation INTEGER,
+  grant_definition_updated_at INTEGER,
   state_json TEXT NOT NULL DEFAULT '{}',
   runtime_updated_at_ms INTEGER,
   schedule_identity TEXT,
@@ -1473,6 +1507,7 @@ CREATE TABLE IF NOT EXISTS cron_run_receipts (
   config_revision TEXT NOT NULL,
   agent_id TEXT NOT NULL,
   request_run_id TEXT,
+  delivery_attempt_state TEXT NOT NULL DEFAULT 'unknown' CHECK (delivery_attempt_state IN ('unknown', 'not-started', 'started')),
   status TEXT NOT NULL,
   owner_pid INTEGER NOT NULL,
   owner_start_time INTEGER,
@@ -1563,7 +1598,7 @@ CREATE INDEX IF NOT EXISTS idx_delivery_queue_pending
   ON delivery_queue_entries(queue_name, status, enqueued_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_failed
-  ON delivery_queue_entries(queue_name, status, failed_at, id);
+  ON delivery_queue_entries(status, queue_name, failed_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_session
   ON delivery_queue_entries(queue_name, status, session_key, enqueued_at, id)
@@ -1617,6 +1652,7 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_a
 CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);
+CREATE INDEX IF NOT EXISTS idx_task_runs_requester_session_key ON task_runs(requester_session_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_source_ended
   ON task_runs(runtime, source_id, ended_at, created_at, task_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_ended
@@ -1626,7 +1662,9 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,
   child_session_key TEXT NOT NULL,
   controller_session_key TEXT,
+  controller_store_path TEXT,
   requester_session_key TEXT NOT NULL,
+  requester_store_path TEXT,
   created_at INTEGER NOT NULL,
   payload_json TEXT NOT NULL DEFAULT '{}'
 ) STRICT;
@@ -1760,6 +1798,10 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_utterances (
     ON DELETE CASCADE
 ) STRICT;
 
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_utterances_id
+  ON meeting_transcript_utterances(session_id, session_started_at, utterance_id)
+  WHERE utterance_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS meeting_transcript_summaries (
   session_id TEXT NOT NULL,
   session_started_at TEXT NOT NULL,
@@ -1832,7 +1874,8 @@ CREATE TABLE IF NOT EXISTS worktrees (
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
   removed_at INTEGER,
-  run_end_cleanup_json TEXT
+  run_end_cleanup_json TEXT,
+  gc_protection_json TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
@@ -2055,6 +2098,7 @@ CREATE TABLE IF NOT EXISTS github_repository_publication_requests (
   request_digest TEXT NOT NULL,
   session_id TEXT NOT NULL,
   session_lifecycle_revision TEXT,
+  requester_authority_json TEXT,
   session_key TEXT NOT NULL,
   agent_id TEXT NOT NULL,
   workspace_id TEXT NOT NULL,
@@ -2225,6 +2269,10 @@ CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
 CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
   ON worker_session_placements(updated_at_ms, session_id);
 
+CREATE INDEX IF NOT EXISTS idx_worker_session_placements_environment
+  ON worker_session_placements(environment_id)
+  WHERE environment_id IS NOT NULL;
+
 -- Planned placement moves retain their exact source CAS and bounded target
 -- without widening the stable placement-state vocabulary. The opaque operation
 -- id fences stale asynchronous completion; it is correlation, never authority.
@@ -2295,6 +2343,30 @@ CREATE TABLE IF NOT EXISTS worker_session_tool_operations (
   PRIMARY KEY (source_session_id, source_claim_id, tool_call_id),
   FOREIGN KEY (source_session_id)
     REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+) STRICT;
+
+-- Local sandbox execution is a projection of a session-owned managed worktree.
+-- No cascade: an older binary must not discard pending edits with a session row.
+CREATE TABLE IF NOT EXISTS local_workspace_projections (
+  worktree_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  lifecycle_revision TEXT,
+  projection_path TEXT NOT NULL UNIQUE,
+  base_commit TEXT NOT NULL,
+  source_paths_json TEXT NOT NULL,
+  baseline_json TEXT,
+  baseline_ref TEXT,
+  pending_ref TEXT,
+  pending_target TEXT CHECK (pending_target IN ('canonical', 'projection')),
+  paused_runtimes_json TEXT,
+  journal_json TEXT,
+  journal_pack BLOB CHECK (journal_pack IS NULL OR length(journal_pack) <= 268435456),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  created_at_ms INTEGER NOT NULL,
+  CHECK ((baseline_json IS NULL) = (baseline_ref IS NULL)),
+  CHECK ((journal_json IS NULL) = (journal_pack IS NULL))
 ) STRICT;
 
 -- A reconciliation journal is written before managed-worktree mutation. The
@@ -2465,6 +2537,7 @@ CREATE TABLE IF NOT EXISTS github_publication_session_lifecycles (
   publication_kind TEXT NOT NULL CHECK (publication_kind IN ('shared', 'personal')),
   request_id TEXT NOT NULL,
   lifecycle_revision TEXT,
+  requester_authority_json TEXT,
   PRIMARY KEY (publication_kind, request_id)
 ) STRICT;
 
@@ -2639,6 +2712,21 @@ CREATE TABLE IF NOT EXISTS claw_mcp_server_refs (
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, name)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS user_profile_identities (
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  canonical_login TEXT,
+  created_at INTEGER NOT NULL,
+  authorization_id TEXT,
+  authorization_basis_json TEXT,
+  PRIMARY KEY (provider, subject)
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_user_profile_identities_profile_id
+  ON user_profile_identities(profile_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profile_identities_authorization
+  ON user_profile_identities(authorization_id);
 
 CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   realpath TEXT NOT NULL PRIMARY KEY,

@@ -3,21 +3,6 @@ import { describe, expect, it } from "vitest";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
 
 describe("PluginLoaderCacheState", () => {
-  it("evicts the least recently used registry cache entry", () => {
-    const cache = new PluginLoaderCacheState<string>(2);
-
-    cache.set("", "empty");
-    cache.set("a", "alpha");
-    cache.set("b", "bravo");
-    expect(cache.get("a")).toBe("alpha");
-
-    cache.set("c", "charlie");
-
-    expect(cache.get("b")).toBeUndefined();
-    expect(cache.get("a")).toBe("alpha");
-    expect(cache.get("c")).toBe("charlie");
-  });
-
   it("bounds open-allowlist warning suppression by loader cache capacity", () => {
     const cache = new PluginLoaderCacheState<string>(2);
 

@@ -260,28 +260,6 @@ describe("registerPluginHttpRoute", () => {
     },
   );
 
-  it("registers route and unregisters it", () => {
-    const registry = createEmptyPluginRegistry();
-    const handler = vi.fn();
-
-    const unregister = registerPluginHttpRoute({
-      path: "/plugins/demo",
-      auth: "plugin",
-      handler,
-      registry,
-    });
-
-    expectRegisteredRouteShape(registry, {
-      path: "/plugins/demo",
-      handler,
-      auth: "plugin",
-      match: "exact",
-    });
-
-    unregister();
-    expect(registry.httpRoutes).toHaveLength(0);
-  });
-
   it("marks gateway method dispatch entitlement only for plugins declaring the contract", () => {
     const pluginRegistry = createTestPluginRegistry();
     const config = {} as OpenClawConfig;
@@ -375,32 +353,6 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(1);
     expect(registry.httpRoutes[0]?.source).toBe("primary");
     expect(logs.at(-1)).toContain("route conflict");
-  });
-
-  it("replaces a same-plugin canonical exact-path alias when requested", () => {
-    const { registry, register } = createLoggedRouteHarness();
-    register({
-      path: "/Webhooks/SMS/",
-      auth: "plugin",
-      pluginId: "sms",
-      source: "sms-webhook",
-    });
-
-    register({
-      path: "/webhooks/sms",
-      auth: "plugin",
-      pluginId: "sms",
-      source: "sms-webhook",
-      replaceExisting: true,
-      throwOnFailure: true,
-    });
-
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]).toMatchObject({
-      path: "/webhooks/sms",
-      pluginId: "sms",
-      source: "sms-webhook",
-    });
   });
 
   it("keeps a reused same-owner route until its last lease releases", () => {

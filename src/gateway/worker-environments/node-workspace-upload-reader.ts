@@ -2,33 +2,30 @@ import { createHash } from "node:crypto";
 import fsp, { type FileHandle } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
+import { writeFileWindowFully } from "../../infra/file-descriptor.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { NodeWorkspaceTransferInvalidReason } from "../../worker/node-workspace-transfer-protocol.js";
 import { nodeWorkspaceTransferEntryPath } from "./node-workspace-transfer-snapshot.js";
-import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
+import {
+  MAX_WORKSPACE_INVENTORY_ENTRIES,
+  MAX_WORKSPACE_MANIFEST_BYTES,
+} from "./workspace-inventory-limits.js";
+import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
 import { decodeWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_TOTAL_BYTES,
-  MAX_RECONCILIATION_ENTRIES,
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { assertWorkspaceMatchesManifest } from "./workspace-reconcile.js";
-import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 
 const MAX_UPLOAD_BYTES =
   MAX_WORKSPACE_MANIFEST_BYTES * 2 +
   MAX_RECONCILIATION_TOTAL_BYTES +
-  MAX_RECONCILIATION_ENTRIES * 8 +
+  MAX_WORKSPACE_INVENTORY_ENTRIES * 8 +
   8;
 export class NodeWorkspaceTransferLimitError extends Error {
   readonly code = "workspace-transfer-limit";
-}
-
-export function isNodeWorkspaceTransferLimitError(
-  error: unknown,
-): error is NodeWorkspaceTransferLimitError {
-  return error instanceof NodeWorkspaceTransferLimitError;
 }
 
 class NodeWorkspaceTransferInvalidError extends Error {
@@ -149,21 +146,10 @@ async function streamUploadFile(params: {
       );
     }
     hash.update(chunk);
-    let chunkOffset = 0;
-    while (chunkOffset < chunk.length) {
-      const { bytesWritten } = await params.handle.write(
-        chunk,
-        chunkOffset,
-        chunk.length - chunkOffset,
-        offset + chunkOffset,
-      );
-      // A short write adds another await, so each suffix retry needs its own authority fence.
-      params.assertCurrent();
-      if (bytesWritten === 0) {
-        throw new Error("Workspace transfer upload write made no progress");
-      }
-      chunkOffset += bytesWritten;
-    }
+    await writeFileWindowFully(params.handle, chunk, offset, {
+      assertBeforeMutation: params.assertCurrent,
+    });
+    params.assertCurrent();
     offset += chunk.length;
   }
   if (hash.digest("hex") !== params.entry.sha256) {
@@ -235,9 +221,10 @@ export async function readNodeWorkspaceUpload(params: {
     assertCurrent();
     const current = await readManifest();
     assertCurrent();
-    let transferPaths: string[];
+    let transferEntries: WorkerWorkspaceManifestEntry[];
     try {
-      transferPaths = workerWorkspaceTransferPaths(current.manifest, base.manifest, params.signal);
+      params.signal.throwIfAborted();
+      transferEntries = parseChangedWorkspaceResult(base.manifest, current.manifest).entries;
     } catch (error) {
       if (params.signal.aborted && error === params.signal.reason) {
         throw error;
@@ -249,16 +236,10 @@ export async function readNodeWorkspaceUpload(params: {
       );
     }
     assertCurrent();
-    const transferPathSet = new Set(transferPaths);
     stagingRoot = await fsp.mkdtemp(path.join(params.temporaryRoot, "upload-"));
-    const currentByPath = new Map(current.manifest.entries.map((entry) => [entry.path, entry]));
-    for (const relative of transferPaths) {
-      const entry = currentByPath.get(relative);
-      if (!entry) {
-        continue;
-      }
+    for (const entry of transferEntries) {
       try {
-        const destination = nodeWorkspaceTransferEntryPath(stagingRoot, relative);
+        const destination = nodeWorkspaceTransferEntryPath(stagingRoot, entry.path);
         await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
         assertCurrent();
         if (entry.type === "symlink") {
@@ -299,7 +280,7 @@ export async function readNodeWorkspaceUpload(params: {
       await assertWorkspaceMatchesManifest({
         root: stagingRoot,
         manifest: current.manifest,
-        entries: current.manifest.entries.filter((entry) => transferPathSet.has(entry.path)),
+        entries: transferEntries,
       });
     } catch (error) {
       // Discard joins this validation; a later cancellation must not hide its failure.

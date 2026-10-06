@@ -106,7 +106,7 @@ export async function patchLiveQaGatewayConfig(params: {
       if (!patchResult.hash) {
         throw new Error("live QA config patch returned no persisted hash");
       }
-      // Restart-required writes acknowledge before SIGUSR1 completes. The old
+      // Restart-required writes acknowledge before SIGUSR2 completes. The old
       // Gateway can still look healthy, so require the active runtime revision.
       await waitForLiveQaGatewayConfigApplied({
         expectedHash: patchResult.hash,

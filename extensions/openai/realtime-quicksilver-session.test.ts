@@ -1,4 +1,7 @@
-import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSessionCreateRequest,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENAI_QUICKSILVER_OFFER_PATH } from "./realtime-quicksilver-session.js";
 import {
@@ -28,6 +31,25 @@ function requireStringBody(body: BodyInit | null | undefined): string {
 }
 
 const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+
+async function reserveLiveSession(
+  realtime: ReturnType<typeof createBroker>["realtime"],
+  overrides: Pick<RealtimeVoiceBrowserSessionCreateRequest, "model" | "runAgentConsult"> = {},
+) {
+  const reservation = await realtime.broker.createBrowserSession(
+    {
+      providerConfig: {},
+      model: "gpt-live-test-canary",
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+      ...overrides,
+    },
+    { type: "api-key", token: "platform-key" },
+  );
+  if (reservation.transport !== "webrtc") {
+    throw new Error("Expected WebRTC reservation");
+  }
+  return reservation;
+}
 
 describe("GPT-Live offer broker", () => {
   it("waits for the GA sideband before returning an audio-only SDP answer and hangs up once", async () => {
@@ -129,10 +151,8 @@ describe("GPT-Live offer broker", () => {
     }
   });
 
-  it.each([
-    ["error", "sensitive-route"],
-    ["timeout", "sensitive-session"],
-  ])("hangs up a GA call when sideband startup ends in %s", async (failure, privateValue) => {
+  it("hangs up a GA call when sideband startup fails", async () => {
+    const privateValue = "sensitive-route";
     const onError = vi.fn();
     const bridge = {
       connect: vi.fn(async () => {
@@ -150,7 +170,7 @@ describe("GPT-Live offer broker", () => {
         ? new Response(null, { status: 204 })
         : new Response("v=answer\r\n", {
             status: 201,
-            headers: { Location: `/v1/realtime/calls/rtc_${failure}` },
+            headers: { Location: "/v1/realtime/calls/rtc_error" },
           }),
     );
     const fetchImpl = fetchMock as unknown as typeof fetch;
@@ -188,9 +208,7 @@ describe("GPT-Live offer broker", () => {
       expect(callbackError?.cause).toBeUndefined();
       expect(bridge.close).toHaveBeenCalledOnce();
       expect(
-        fetchMock.mock.calls.filter(([url]) =>
-          requestTarget(url).endsWith(`/rtc_${failure}/hangup`),
-        ),
+        fetchMock.mock.calls.filter(([url]) => requestTarget(url).endsWith("/rtc_error/hangup")),
       ).toHaveLength(1);
     } finally {
       await realtime.cleanup();
@@ -398,17 +416,7 @@ describe("GPT-Live offer broker", () => {
     });
     try {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const reservation = await realtime.broker.createBrowserSession(
-        {
-          providerConfig: {},
-          model: "gpt-live-test-canary",
-          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-        },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
+      const reservation = await reserveLiveSession(realtime);
       const response = createResponseHarness();
       const handling = realtime.handler(
         createRequest({ token: reservation.clientSecret }),
@@ -444,17 +452,7 @@ describe("GPT-Live offer broker", () => {
       socketFactory: (attempt) => new FakeSocket(attempt < 2 ? "error" : "open"),
     });
     try {
-      const reservation = await realtime.broker.createBrowserSession(
-        {
-          providerConfig: {},
-          model: "gpt-live-test-canary",
-          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-        },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
+      const reservation = await reserveLiveSession(realtime);
       const response = createResponseHarness();
       await realtime.handler(createRequest({ token: reservation.clientSecret }), response.res);
 
@@ -491,13 +489,7 @@ describe("GPT-Live offer broker", () => {
       },
     });
     try {
-      const reservation = await realtime.broker.createBrowserSession(
-        { providerConfig: {}, model: "gpt-live-test-canary", runAgentConsult },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
+      const reservation = await reserveLiveSession(realtime, { runAgentConsult });
       await realtime.handler(
         createRequest({ token: reservation.clientSecret }),
         createResponseHarness().res,
@@ -571,17 +563,7 @@ describe("GPT-Live offer broker", () => {
   it("keeps nonfatal error frames alive but closes on fatal auth errors", async () => {
     const { realtime, sockets, logger } = createBroker();
     try {
-      const reservation = await realtime.broker.createBrowserSession(
-        {
-          providerConfig: {},
-          model: "gpt-live-test-canary",
-          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-        },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
+      const reservation = await reserveLiveSession(realtime);
       await realtime.handler(
         createRequest({ token: reservation.clientSecret }),
         createResponseHarness().res,
@@ -605,17 +587,7 @@ describe("GPT-Live offer broker", () => {
   it("treats binary sideband frames as protocol failures", async () => {
     const { realtime, sockets, logger } = createBroker();
     try {
-      const reservation = await realtime.broker.createBrowserSession(
-        {
-          providerConfig: {},
-          model: "gpt-live-test-canary",
-          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-        },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
+      const reservation = await reserveLiveSession(realtime);
       await realtime.handler(
         createRequest({ token: reservation.clientSecret }),
         createResponseHarness().res,
@@ -747,17 +719,7 @@ describe("GPT-Live offer broker", () => {
       );
       expect(contentTypePrefix.res.statusCode).toBe(415);
 
-      const reservation = await realtime.broker.createBrowserSession(
-        {
-          providerConfig: {},
-          model: "gpt-live-1",
-          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-        },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
+      const reservation = await reserveLiveSession(realtime, { model: "gpt-live-1" });
       now.mockReturnValue(61_001);
       const expired = createResponseHarness();
       await realtime.handler(createRequest({ token: reservation.clientSecret }), expired.res);
@@ -901,13 +863,10 @@ describe("GPT-Live offer broker", () => {
     const { realtime } = createBroker();
     const runAgentConsult = vi.fn(async () => ({ text: "Done" }));
     try {
-      const reservation = await realtime.broker.createBrowserSession(
-        { providerConfig: {}, model: "gpt-live-1", runAgentConsult },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
+      const reservation = await reserveLiveSession(realtime, {
+        model: "gpt-live-1",
+        runAgentConsult,
+      });
       const response = createResponseHarness();
       await realtime.handler(
         createRequest({ token: reservation.clientSecret, body: "   " }),
@@ -949,13 +908,10 @@ describe("GPT-Live offer broker", () => {
     const { realtime, sockets } = createBroker({ fetchImpl });
     const runAgentConsult = vi.fn(async () => ({ text: "Done" }));
     try {
-      const reservation = await realtime.broker.createBrowserSession(
-        { providerConfig: {}, model: "gpt-live-1", runAgentConsult },
-        { type: "api-key", token: "platform-key" },
-      );
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
+      const reservation = await reserveLiveSession(realtime, {
+        model: "gpt-live-1",
+        runAgentConsult,
+      });
       const response = createResponseHarness();
       const handling = realtime.handler(
         createRequest({ token: reservation.clientSecret }),

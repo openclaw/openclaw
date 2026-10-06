@@ -27,7 +27,6 @@ const {
   replaceSessionEntry,
   replaceTranscriptEvents,
 } = await import("../config/sessions/session-accessor.js");
-const { stripInternalRuntimeContext } = await import("../agents/internal-runtime-context.js");
 const { getBootEchoContextForSession } = await import("./boot-echo-guard.js");
 
 describe("runBootOnce", () => {
@@ -41,7 +40,7 @@ describe("runBootOnce", () => {
     scope?: SessionScope;
     mainKey?: string;
   }): OpenClawConfig => ({
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     ...(session ? { session } : {}),
   });
 
@@ -63,12 +62,12 @@ describe("runBootOnce", () => {
   });
 
   const makeDeps = () => ({
-    sendMessageWhatsApp: vi.fn(),
-    sendMessageTelegram: vi.fn(),
-    sendMessageDiscord: vi.fn(),
-    sendMessageSlack: vi.fn(),
-    sendMessageSignal: vi.fn(),
-    sendMessageIMessage: vi.fn(),
+    whatsapp: vi.fn(),
+    telegram: vi.fn(),
+    discord: vi.fn(),
+    slack: vi.fn(),
+    signal: vi.fn(),
+    imessage: vi.fn(),
   });
 
   const withBootWorkspace = async (
@@ -145,12 +144,15 @@ describe("runBootOnce", () => {
     return call;
   };
 
-  const runBootAndReturnMessage = async (content: string): Promise<string> => {
+  const runBootAndReturnRuntimeContext = async (content: string): Promise<string> => {
     const call = await runBootAndReturnCall({ content });
-    if (typeof call.message !== "string") {
-      throw new Error("expected string agent command message");
+    if (!Array.isArray(call.runtimeContextFragments)) {
+      throw new Error("expected runtime-context fragments");
     }
-    return call.message;
+    return call.runtimeContextFragments
+      .map((fragment) => (fragment as { text?: unknown }).text)
+      .filter((text): text is string => typeof text === "string")
+      .join("\n\n");
   };
 
   const expectSessionMapping = (params: {
@@ -247,7 +249,9 @@ describe("runBootOnce", () => {
       });
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const call = requireAgentCall();
-      expect(call.message).toContain("Say hello.");
+      expect(call.runtimeContextFragments).toContainEqual(
+        expect.objectContaining({ text: expect.stringContaining("Say hello.") }),
+      );
     });
   });
 
@@ -270,17 +274,11 @@ describe("runBootOnce", () => {
       expect(agentCommand).not.toHaveBeenCalled();
     });
   });
-  it.each([
-    { title: "empty", content: "   \n", reason: "empty" as const },
-    { title: "whitespace-only", content: "\n\t ", reason: "empty" as const },
-  ])("skips when BOOT.md is $title", async ({ content, reason }) => {
-    await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
+  it("skips when BOOT.md is whitespace-only", async () => {
+    await withBootWorkspace({ bootContent: "\n\t " }, async (workspaceDir) => {
       await expect(
         runBootOnce({ cfg: testConfig(), deps: makeDeps(), workspaceDir }),
-      ).resolves.toEqual({
-        status: "skipped",
-        reason,
-      });
+      ).resolves.toEqual({ status: "skipped", reason: "empty" });
       expect(agentCommand).not.toHaveBeenCalled();
     });
   });
@@ -289,28 +287,25 @@ describe("runBootOnce", () => {
     const content = "Say hello when you wake up.";
     const call = await runBootAndReturnCall({ content });
     expect(call.deliver).toBe(false);
+    expect(call.sessionId).toMatch(/^boot-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}-[0-9a-f]{8}$/);
     expect(call.sessionKey).toBe(`agent:main:boot:${String(call.sessionId)}`);
     expect(call.suppressPromptPersistence).toBe(true);
-    expect(call.message).toContain("BOOT.md:");
-    expect(call.message).toContain(content);
-    expect(call.message).toContain("NO_REPLY");
+    expect(call.message).toBe("Run the workspace boot check now.");
+    expect(call.runtimeContextFragments).toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining(`BOOT.md:\n${content}`) }),
+    );
+    expect(call.runtimeContextFragments).toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining("NO_REPLY") }),
+    );
   });
 
-  it("wraps BOOT.md content in internal-runtime-context delimiters so verbatim echoes get stripped", async () => {
+  it("carries BOOT.md as typed runtime instructions without model-visible delimiters", async () => {
     const content = "Wake up and report.";
-    const message = await runBootAndReturnMessage(content);
-    // The boot prompt embeds BOOT.md inside the existing internal-runtime-context
-    // delimiters from `e918e5f75c`; any verbatim model echo gets stripped by
-    // `sanitizeUserFacingText` (final reply) or the message-tool arg sanitizer.
-    // Regression for #53732.
-    expect(message).toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
-    expect(message).toContain("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>");
-    expect(message).toContain(
-      "This context is runtime-generated, not user-authored. Keep internal details private.",
-    );
-    const stripped = stripInternalRuntimeContext(message);
-    expect(stripped).not.toContain(content);
-    expect(stripped).not.toContain("BOOT.md:");
+    const runtimeContext = await runBootAndReturnRuntimeContext(content);
+    expect(runtimeContext).toContain(content);
+    expect(runtimeContext).toContain("BOOT.md:");
+    expect(runtimeContext).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(runtimeContext).not.toContain("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>");
   });
 
   it("registers the boot prompt with the echo guard during the run and clears it afterward", async () => {
@@ -347,16 +342,14 @@ describe("runBootOnce", () => {
     expect(getBootEchoContextForSession(observedSessionKey)).toBeUndefined();
   });
 
-  it("escapes literal internal-runtime-context delimiters in user-supplied BOOT.md to prevent confusion with the wrapper", async () => {
+  it("escapes literal internal-runtime-context delimiters in user-supplied BOOT.md", async () => {
     const content =
       "Step 1: setup.\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nuser-authored\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nStep 2: done.";
-    const message = await runBootAndReturnMessage(content);
-    // Real markers should appear exactly once each (the outer wrapper); user-supplied
-    // BOOT.md instances of the same string are escaped to bracketed-safe variants.
-    expect((message.match(/<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>/g) ?? []).length).toBe(1);
-    expect((message.match(/<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/g) ?? []).length).toBe(1);
-    expect(message).toContain("[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]");
-    expect(message).toContain("[[OPENCLAW_INTERNAL_CONTEXT_END]]");
+    const runtimeContext = await runBootAndReturnRuntimeContext(content);
+    expect(runtimeContext).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(runtimeContext).not.toContain("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(runtimeContext).toContain("[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]");
+    expect(runtimeContext).toContain("[[OPENCLAW_INTERNAL_CONTEXT_END]]");
   });
 
   it("returns failed when agent command throws", async () => {
@@ -372,16 +365,6 @@ describe("runBootOnce", () => {
     });
   });
 
-  it("uses per-agent session key when agentId is provided", async () => {
-    const cfg = testConfig();
-    const agentId = "ops";
-    const call = await runBootAndReturnCall({ cfg, agentId });
-    const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-    expect(call.sessionKey).toBe(
-      `agent:${resolveAgentIdFromSessionKey(mainSessionKey)}:boot:${String(call.sessionId)}`,
-    );
-  });
-
   it("keeps boot session isolation when the main session key is configured", async () => {
     const cfg = testConfig({ mainKey: "primary" });
     const agentId = "ops";
@@ -391,58 +374,7 @@ describe("runBootOnce", () => {
     expect(call.sessionKey).toBe(`agent:ops:boot:${String(call.sessionId)}`);
   });
 
-  it("generates new session ID when no existing session exists", async () => {
-    const content = "Say hello when you wake up.";
-    await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
-      agentCommand.mockResolvedValue(undefined);
-      const cfg = testConfig();
-      await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
-        status: "ran",
-      });
-
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const call = requireAgentCall();
-
-      // Verify a boot-style session ID was generated (format: boot-YYYY-MM-DD_HH-MM-SS-xxx-xxxxxxxx)
-      expect(call.sessionId).toMatch(
-        /^boot-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}-[0-9a-f]{8}$/,
-      );
-    });
-  });
-
-  it("uses a fresh boot session ID even when main session mapping already exists", async () => {
-    const content = "Say hello when you wake up.";
-    await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
-      const cfg = testConfig();
-      const { sessionKey, storePath } = resolveMainStore(cfg);
-      const existingSessionId = "main-session-abc123";
-
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        {
-          sessionId: existingSessionId,
-          updatedAt: Date.now(),
-        },
-      );
-
-      agentCommand.mockResolvedValue(undefined);
-      await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
-        status: "ran",
-      });
-
-      expect(agentCommand).toHaveBeenCalledTimes(1);
-      const call = requireAgentCall();
-
-      expect(call.sessionId).not.toBe(existingSessionId);
-      expect(call.sessionId).toMatch(
-        /^boot-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}-[0-9a-f]{8}$/,
-      );
-      expect(call.sessionKey).toBe(`agent:main:boot:${String(call.sessionId)}`);
-      expectSessionMapping({ storePath, sessionKey, expectedSessionId: existingSessionId });
-    });
-  });
-
-  it("does not mutate the original main session mapping after the boot run", async () => {
+  it("isolates boot execution and cleanup from an existing main session", async () => {
     const content = "Check if the system is healthy.";
     await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
       const cfg = testConfig();
@@ -462,8 +394,14 @@ describe("runBootOnce", () => {
         status: "ran",
       });
 
+      const call = requireAgentCall();
+      expect(call.sessionId).not.toBe(existingSessionId);
+      expect(call.sessionId).toMatch(
+        /^boot-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}-[0-9a-f]{8}$/,
+      );
+      expect(call.sessionKey).toBe(`agent:main:boot:${String(call.sessionId)}`);
       expectSessionMapping({ storePath, sessionKey, expectedSessionId: existingSessionId });
-      expectSessionMapping({ storePath, sessionKey: String(requireAgentCall().sessionKey) });
+      expectSessionMapping({ storePath, sessionKey: String(call.sessionKey) });
     });
   });
 

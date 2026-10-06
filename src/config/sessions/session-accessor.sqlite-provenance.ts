@@ -29,12 +29,12 @@ export function bindSessionEntryProvenance(entry: SessionEntry): SessionProvenan
   };
 }
 
-export function resolveSessionEntryProvenanceRow<T extends SessionProvenanceRow>(params: {
+export function prepareSessionEntryWindowRow<T extends SessionProvenanceRow>(params: {
   boundSessionRow: T;
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
   previousEntry?: SessionEntry;
-}): T {
+}): T & { transcript_observed_at: number } {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(params.database.db);
   const existingRoot = executeSqliteQueryTakeFirstSync(
     params.database.db,
@@ -45,26 +45,34 @@ export function resolveSessionEntryProvenanceRow<T extends SessionProvenanceRow>
         "acp_owned",
         "plugin_owner_id",
         "hook_external_content_source",
+        "transcript_observed_at",
+        "transcript_updated_at",
       ])
       .where("session_id", "=", params.entry.sessionId),
   );
-  const hasTranscript = Boolean(
-    executeSqliteQueryTakeFirstSync(
-      params.database.db,
-      db
-        .selectFrom("transcript_events")
-        .select("seq")
-        .where("session_id", "=", params.entry.sessionId)
-        .limit(1),
-    ),
-  );
+  // Registry writes snapshot the current transcript watermark so recovery can
+  // distinguish same-millisecond transcript writes before and after this row.
+  const boundSessionRow = {
+    ...params.boundSessionRow,
+    transcript_observed_at: existingRoot?.transcript_updated_at ?? params.entry.updatedAt,
+  };
   // Updates cannot prove provenance for a migrated transcript. Known exclusion metadata is monotonic.
   if (
     existingRoot?.session_entry_provenance === 0 &&
-    (params.previousEntry?.sessionId === params.entry.sessionId || hasTranscript)
+    (params.previousEntry?.sessionId === params.entry.sessionId ||
+      Boolean(
+        executeSqliteQueryTakeFirstSync(
+          params.database.db,
+          db
+            .selectFrom("transcript_events")
+            .select("seq")
+            .where("session_id", "=", params.entry.sessionId)
+            .limit(1),
+        ),
+      ))
   ) {
     return {
-      ...params.boundSessionRow,
+      ...boundSessionRow,
       session_entry_provenance: 0,
       acp_owned: 0,
       plugin_owner_id: null,
@@ -73,12 +81,11 @@ export function resolveSessionEntryProvenanceRow<T extends SessionProvenanceRow>
   }
   return existingRoot?.session_entry_provenance === 1
     ? {
-        ...params.boundSessionRow,
-        acp_owned: existingRoot.acp_owned === 1 ? 1 : params.boundSessionRow.acp_owned,
-        plugin_owner_id: params.boundSessionRow.plugin_owner_id ?? existingRoot.plugin_owner_id,
+        ...boundSessionRow,
+        acp_owned: existingRoot.acp_owned === 1 ? 1 : boundSessionRow.acp_owned,
+        plugin_owner_id: boundSessionRow.plugin_owner_id ?? existingRoot.plugin_owner_id,
         hook_external_content_source:
-          params.boundSessionRow.hook_external_content_source ??
-          existingRoot.hook_external_content_source,
+          boundSessionRow.hook_external_content_source ?? existingRoot.hook_external_content_source,
       }
-    : params.boundSessionRow;
+    : boundSessionRow;
 }

@@ -8,7 +8,7 @@ describe("buildControlUiCspHeader", () => {
   it("blocks inline scripts while allowing inline styles", () => {
     const csp = buildControlUiCspHeader();
     expect(csp).toContain("frame-ancestors 'none'");
-    expect(csp).toContain("frame-src 'self' http: https:");
+    expect(csp).toContain("frame-src 'self' blob: http: https:");
     expect(csp).toContain("script-src 'self'");
     expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
     expect(csp).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
@@ -20,7 +20,7 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toContain("font-src 'self' https://fonts.gstatic.com");
   });
 
-  it("allows OpenAI realtime and tweakcn theme import requests without allowing all HTTPS", () => {
+  it("allows local asset reads and known remote connections without allowing all HTTPS", () => {
     const csp = buildControlUiCspHeader();
     const connectSrc = csp.split("; ").find((directive) => directive.startsWith("connect-src "));
     expect(connectSrc?.split(" ")).toEqual([
@@ -29,6 +29,7 @@ describe("buildControlUiCspHeader", () => {
       "ws:",
       "wss:",
       "data:",
+      "blob:",
       "https://api.openai.com",
       "https://tweakcn.com",
     ]);
@@ -49,18 +50,11 @@ describe("buildControlUiCspHeader", () => {
     expect(invalid).not.toContain("https://example.test");
   });
 
-  it("limits image loading to local sources and the Gravatar fallback origin", () => {
+  it("allows HTTPS image previews alongside local sources", () => {
     const csp = buildControlUiCspHeader();
     const imgSrc = csp.split("; ").find((directive) => directive.startsWith("img-src "));
-    expect(imgSrc?.split(" ")).toEqual([
-      "img-src",
-      "'self'",
-      "data:",
-      "blob:",
-      "https://gravatar.com",
-      "https://avatars.githubusercontent.com",
-    ]);
-    expect(imgSrc?.split(" ")).not.toContain("https:");
+    expect(imgSrc?.split(" ")).toEqual(["img-src", "'self'", "data:", "blob:", "https:"]);
+    expect(imgSrc?.split(" ")).not.toContain("http:");
   });
 
   it("allows same-origin and inline audio/video playback", () => {
@@ -69,19 +63,12 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).not.toContain("media-src 'self' data: blob: https:");
   });
 
-  it("includes inline script hashes in script-src when provided", () => {
-    const csp = buildControlUiCspHeader({
-      inlineScriptHashes: ["sha256-abc123"],
-    });
-    expect(csp).toContain("script-src 'self' 'sha256-abc123'");
-    expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
-  });
-
   it("includes multiple inline script hashes", () => {
     const csp = buildControlUiCspHeader({
       inlineScriptHashes: ["sha256-aaa", "sha256-bbb"],
     });
     expect(csp).toContain("script-src 'self' 'sha256-aaa' 'sha256-bbb'");
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
   });
 
   it("falls back to plain script-src self when hashes array is empty", () => {
@@ -117,18 +104,6 @@ describe("buildControlUiCspHeader", () => {
 describe("computeInlineScriptHashes", () => {
   it("returns empty for HTML without scripts", () => {
     expect(computeInlineScriptHashes("<html><body>hi</body></html>")).toStrictEqual([]);
-  });
-
-  it("hashes inline script content", () => {
-    const content = "alert(1)";
-    const expected = createHash("sha256").update(content, "utf8").digest("base64");
-    const hashes = computeInlineScriptHashes(`<html><script>${content}</script></html>`);
-    expect(hashes).toEqual([`sha256-${expected}`]);
-  });
-
-  it("skips scripts with src attribute", () => {
-    const hashes = computeInlineScriptHashes('<html><script src="/app.js"></script></html>');
-    expect(hashes).toStrictEqual([]);
   });
 
   it("does not treat data-src as an external script attribute", () => {

@@ -10,10 +10,10 @@ import type {
   WizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDeviceIdentityForGatewayCall } from "../gateway/call-device-auth.js";
 import {
   isGatewayClientRequestError,
   isGatewayTransportError,
-  resolveDeviceIdentityForGatewayCall,
   type CallGatewayCliOptions,
 } from "../gateway/call.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -24,7 +24,6 @@ import type {
 } from "../system-agent/setup-inference.js";
 import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 40_000;
 const GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
@@ -35,74 +34,31 @@ const GATEWAY_RESTART_WAIT_TIMEOUT_MS = 45_000;
 const GATEWAY_RESTART_IDENTITY_ERROR =
   "Inference settings were saved, but the Gateway did not provide a boot identity. Update and restart the remote Gateway, then run onboarding again.";
 
-type CallGateway = <T>(options: CallGatewayCliOptions) => Promise<T>;
-
 type RemoteGatewayInferenceTarget = {
   config: OpenClawConfig;
   gatewayUrl: string;
+  configuredRemote?: boolean;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
 };
 
-type RemoteGatewayInferenceOnboardingDeps = {
-  callGateway?: CallGateway;
-  createPrompter?: GuidedOnboardingDeps["createPrompter"];
-  runTui?: typeof import("../tui/tui.js").runTui;
-  runGuidedOnboarding?: typeof import("./onboard-guided.js").runGuidedOnboarding;
-};
-
 function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupInferenceDetection {
   return {
     candidates: result.candidates.map((candidate) => ({
-      kind: candidate.kind,
-      ...(candidate.brandId !== undefined ? { brandId: candidate.brandId } : {}),
-      label: candidate.label,
-      detail: candidate.detail,
-      modelRef: candidate.modelRef,
-      ...(candidate.icon !== undefined ? { icon: candidate.icon } : {}),
-      ...(candidate.website !== undefined ? { website: candidate.website } : {}),
+      ...candidate,
       // Gateway ordering is authoritative; the guided candidate shape no
       // longer permits a second client-side recommendation signal.
       recommended: false,
-      ...(candidate.credentials !== undefined ? { credentials: candidate.credentials } : {}),
     })),
-    manualProviders: result.manualProviders.map((provider) => ({
-      id: provider.id,
-      ...(provider.brandId !== undefined ? { brandId: provider.brandId } : {}),
-      label: provider.label,
-      ...(provider.hint !== undefined ? { hint: provider.hint } : {}),
-      ...(provider.icon !== undefined ? { icon: provider.icon } : {}),
-      ...(provider.website !== undefined ? { website: provider.website } : {}),
-    })),
-    authOptions: (result.authOptions ?? []).map((option) =>
-      Object.assign(
-        {
-          id: option.id,
-          ...(option.brandId !== undefined ? { brandId: option.brandId } : {}),
-          label: option.label,
-          kind: option.kind,
-          featured: option.featured,
-        },
-        option.hint !== undefined ? { hint: option.hint } : {},
-        option.groupLabel !== undefined ? { groupLabel: option.groupLabel } : {},
-        option.icon !== undefined ? { icon: option.icon } : {},
-        option.website !== undefined ? { website: option.website } : {},
-      ),
+    manualProviders: result.manualProviders.map(
+      ({ groupLabel: _groupLabel, ...provider }) => provider,
     ),
+    authOptions: result.authOptions ?? [],
     ...(result.prepareOptions !== undefined
       ? {
-          prepareOptions: result.prepareOptions.map((option) =>
-            Object.assign(
-              {
-                id: option.id,
-                label: option.label,
-              },
-              option.brandId !== undefined ? { brandId: option.brandId } : {},
-              option.hint !== undefined ? { hint: option.hint } : {},
-              option.icon !== undefined ? { icon: option.icon } : {},
-              option.website !== undefined ? { website: option.website } : {},
-            ),
+          prepareOptions: result.prepareOptions.map(
+            ({ actionLabel: _actionLabel, ...option }) => option,
           ),
         }
       : {}),
@@ -115,6 +71,8 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
     })),
     workspace: result.workspace,
     ...(result.configuredModel !== undefined ? { configuredModel: result.configuredModel } : {}),
+    ...(result.setupModel !== undefined ? { setupModel: result.setupModel } : {}),
+    ...(result.utilityModel !== undefined ? { utilityModel: result.utilityModel } : {}),
     setupComplete: result.setupComplete,
   };
 }
@@ -177,6 +135,7 @@ function bindGatewayConfig(target: RemoteGatewayInferenceTarget): OpenClawConfig
       remote: {
         ...target.config.gateway?.remote,
         url: target.gatewayUrl,
+        ...(target.configuredRemote ? {} : { transport: "direct" as const }),
       },
     },
   };
@@ -185,8 +144,14 @@ function bindGatewayConfig(target: RemoteGatewayInferenceTarget): OpenClawConfig
 function toVerifiedActivationResult(params: {
   activation: NonNullable<WizardNextResult["modelActivation"]>;
   requestedModelRef?: string;
+  requestedModelTarget?: "utility";
   verification: SystemAgentSetupVerifyResult;
 }): ActivateSetupInferenceResult {
+  if (params.activation.modelTarget !== params.requestedModelTarget) {
+    throw new Error(
+      "Gateway activated a different model role than the selected connection. Refresh model setup and try again.",
+    );
+  }
   if (
     params.requestedModelRef &&
     params.activation.modelRef.trim() !== params.requestedModelRef.trim()
@@ -203,6 +168,9 @@ function toVerifiedActivationResult(params: {
       `Gateway verified ${params.verification.modelRef}, not the activated ${params.activation.modelRef}.`,
     );
   }
+  if (params.verification.modelTarget !== params.activation.modelTarget) {
+    throw new Error("Gateway verified a different model role than the activated connection.");
+  }
   return { ok: true, ...params.activation, latencyMs: params.verification.latencyMs, lines: [] };
 }
 
@@ -215,11 +183,9 @@ function toVerifiedActivationResult(params: {
 export async function runRemoteGatewayInferenceOnboarding(
   target: RemoteGatewayInferenceTarget,
   runtime: RuntimeEnv = defaultRuntime,
-  deps: RemoteGatewayInferenceOnboardingDeps = {},
 ): Promise<void> {
-  const callGateway = deps.callGateway ?? (await import("../gateway/call.js")).callGatewayCli;
-  const runGuidedOnboarding =
-    deps.runGuidedOnboarding ?? (await import("./onboard-guided.js")).runGuidedOnboarding;
+  const { callGatewayCli } = await import("../gateway/call.js");
+  const { runGuidedOnboarding } = await import("./onboard-guided.js");
   const boundConfig = bindGatewayConfig(target);
   const explicitAuth = Boolean(target.token || target.password);
   let gatewayWorkspace: string | undefined;
@@ -230,13 +196,12 @@ export async function runRemoteGatewayInferenceOnboarding(
       "method" | "params" | "onHelloOk" | "signal" | "deviceIdentity"
     > & { timeoutMs: number },
   ): Promise<T> =>
-    await callGateway<T>({
+    await callGatewayCli<T>({
       ...params,
       config: boundConfig,
-      // Authenticated calls can pin the URL directly. Auth-free loopback
-      // Gateways use the equivalently pinned config target because URL
-      // overrides intentionally require explicit credentials.
-      ...(explicitAuth ? { url: target.gatewayUrl } : {}),
+      // Preserve configured SSH routing across RPCs; an explicitly selected
+      // listener must not acquire that route merely because its URL matches.
+      ...(explicitAuth && !target.configuredRemote ? { url: target.gatewayUrl } : {}),
       ...(target.token ? { token: target.token } : {}),
       ...(target.password ? { password: target.password } : {}),
       ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
@@ -262,11 +227,7 @@ export async function runRemoteGatewayInferenceOnboarding(
     let started = false;
     let terminal = false;
     const prompter: WizardPrompter =
-      params.prompter ??
-      (await (deps.createPrompter?.() ??
-        import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
-          createClackPrompter(),
-        )));
+      params.prompter ?? (await import("../wizard/clack-prompter.js")).createClackPrompter();
     let result: WizardNextResult;
     try {
       result = await request<WizardStartResult>({
@@ -274,6 +235,8 @@ export async function runRemoteGatewayInferenceOnboarding(
         params: {
           sessionId,
           kind: params.kind,
+          ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
           ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
           ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
           ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
@@ -353,7 +316,10 @@ export async function runRemoteGatewayInferenceOnboarding(
       try {
         const verification = await request<SystemAgentSetupVerifyResult>({
           method: "openclaw.setup.verify",
-          params: {},
+          params: {
+            ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+          },
           timeoutMs: restartBootId
             ? Math.min(GATEWAY_SETUP_VERIFY_TIMEOUT_MS, remainingBeforeAttemptMs)
             : GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
@@ -375,6 +341,7 @@ export async function runRemoteGatewayInferenceOnboarding(
             activation,
             verification,
             ...(params.modelRef ? { requestedModelRef: params.modelRef } : {}),
+            ...(params.modelTarget ? { requestedModelTarget: params.modelTarget } : {}),
           });
         }
       } catch (error) {
@@ -405,12 +372,9 @@ export async function runRemoteGatewayInferenceOnboarding(
     // custodian flow (question zero, local setup apply, local hatch) is wrong here.
     handoffMode: "chat",
     runSetupMemoryImportStep: async () => ({ status: "skipped", providers: [] }),
-    ...(deps.createPrompter ? { createPrompter: deps.createPrompter } : {}),
     runSystemAgentChat: async () => {
-      const prompter = await (deps.createPrompter?.() ??
-        import("../wizard/clack-prompter.js").then(({ createClackPrompter }) =>
-          createClackPrompter(),
-        ));
+      const { createClackPrompter } = await import("../wizard/clack-prompter.js");
+      const prompter = createClackPrompter();
       await prompter.intro("OpenClaw");
       // One-shot RPCs have different connections. Preserve a signed device
       // owner across chat replies even when loopback shared auth needs no device.
@@ -458,13 +422,14 @@ export async function runRemoteGatewayInferenceOnboarding(
 
       // Keep resolved credentials in-process; child argv is observable to
       // other local users and must never carry the Gateway secret.
-      const runTui = deps.runTui ?? (await import("../tui/tui.js")).runTui;
+      const { runTui } = await import("../tui/tui.js");
       await runTui({
         config: boundConfig,
         deliver: false,
         ...(agentDraft === "hatch" ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
         boundGateway: {
           url: target.gatewayUrl,
+          ...(target.configuredRemote ? { configuredRemote: true } : {}),
           ...(target.token ? { token: target.token } : {}),
           ...(target.password ? { password: target.password } : {}),
           ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),

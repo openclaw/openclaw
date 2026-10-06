@@ -1,6 +1,7 @@
 /** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
 import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { validatePluginUiCapabilities } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
@@ -9,8 +10,11 @@ import { isRecord } from "../utils.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
+import { normalizeConfigGroups } from "./manifest-config-groups.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
+import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
+import { normalizeManifestThemes } from "./manifest-themes.js";
 import type {
   PluginManifestBackupResource,
   PluginManifestDoctorContract,
@@ -144,7 +148,6 @@ export function loadPluginManifest(
   rejectHardlinks = true,
   rootRealPath?: string,
 ): PluginManifestLoadResult {
-  const manifestPath = path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
   const file = readPluginCacheFile({
     rootDir,
     relativePath: PLUGIN_MANIFEST_FILENAME,
@@ -152,6 +155,9 @@ export function loadPluginManifest(
     maxBytes: MAX_PLUGIN_MANIFEST_BYTES,
     rejectHardlinks,
   });
+  // Aliased roots share this cached result, so retain the checked file's identity
+  // rather than the first caller's path for canonical-root registry/hash reads.
+  const manifestPath = file.ok ? file.path : path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
   if (!file.ok) {
     return matchRootFileOpenFailure(file.failure, {
       path: () => ({
@@ -218,9 +224,7 @@ export function loadPluginManifest(
   }
 
   const requiresPlugins = normalizeTrimmedStringList(raw.requiresPlugins);
-  const enabledByDefaultOnPlatforms = setupNormalizers.normalizeManifestDefaultPlatforms(
-    raw.enabledByDefaultOnPlatforms,
-  );
+  const enabledByDefaultOnPlatforms = normalizeManifestPlatforms(raw.enabledByDefaultOnPlatforms);
   const legacyPluginIds = normalizeTrimmedStringList(raw.legacyPluginIds);
   const autoEnableWhenConfiguredProviders = normalizeTrimmedStringList(
     raw.autoEnableWhenConfiguredProviders,
@@ -318,6 +322,7 @@ export function loadPluginManifest(
       manifestPath,
     });
   }
+  const uiCapabilities = validatePluginUiCapabilities(raw.uiCapabilities);
   const controlUiResult = setupNormalizers.normalizeManifestControlUi(raw.controlUi);
   if (!controlUiResult.ok) {
     return cacheResult({
@@ -327,12 +332,30 @@ export function loadPluginManifest(
     });
   }
 
+  const themesResult = normalizeManifestThemes(raw.themes, id, file.contents.toString("utf8"));
+  if (!themesResult.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest themes: ${themesResult.error}`,
+      manifestPath,
+    });
+  }
+
   return cacheResult({
     ok: true,
+    // Older readers ignored this advisory field; invalid display metadata must
+    // not prevent an installed plugin from loading after an OpenClaw update.
+    ...(!uiCapabilities.ok
+      ? { warnings: [`ignoring invalid plugin manifest uiCapabilities: ${uiCapabilities.error}`] }
+      : {}),
     manifest: {
       ...manifestBeforeDashboard,
       dashboard: dashboardResult.dashboard,
       controlUi: controlUiResult.value,
+      ...(uiCapabilities.ok && uiCapabilities.capabilities !== undefined
+        ? { uiCapabilities: uiCapabilities.capabilities }
+        : {}),
+      themes: themesResult.themes,
       mcpServers: capabilityNormalizers.normalizeManifestMcpServers(raw.mcpServers),
       skills: normalizeTrimmedStringList(raw.skills),
       name: normalizeOptionalString(raw.name),
@@ -340,7 +363,12 @@ export function loadPluginManifest(
       catalog: capabilityNormalizers.normalizeManifestCatalog(raw.catalog),
       version: normalizeOptionalString(raw.version),
       uiHints: setupNormalizers.normalizeConfigUiHints(raw.uiHints),
+      configGroups: normalizeConfigGroups(raw.configGroups, configSchema),
       contracts,
+      decisionModels: capabilityNormalizers.normalizeManifestDecisionModels(
+        raw.decisionModels,
+        contracts?.decisionProviders,
+      ),
       transcriptSources: capabilityNormalizers.normalizeManifestTranscriptSources(
         raw.transcriptSources,
         contracts?.transcriptSourceProviders,

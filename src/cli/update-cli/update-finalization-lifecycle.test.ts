@@ -1,16 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
+import { inspectUpdateRunAbandonment } from "../../infra/update-run-activity.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import {
   ABANDONED_UPDATE_RUN_MS,
   UPDATE_RUN_HEARTBEAT_MS,
 } from "../../infra/update-run-timeouts.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -19,37 +22,89 @@ import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 
 const dirs = createTempDirTracker();
+let stderrWrite: MockInstance<typeof process.stderr.write>;
 
-it("records a Doctor refusal before reporting standalone finalization", async () => {
+it("writes successful finalization progress to stderr and failures as errors", async () => {
+  const logPath = path.join(dirs.make("openclaw-finalize-log-"), "openclaw.log");
+  setLoggerOverride({ level: "info", file: logPath });
   const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
-  lifecycle.attachLedger();
-  const message =
-    "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
-  const privatePath = "/home/example/private-doctor-input";
+  await lifecycle.run("doctor", async () => undefined);
+  expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining('"status":"in_progress"'));
+  expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining('"status":"completed"'));
+  await flushLogger();
+  const phaseRecords = fs
+    .readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((record) => JSON.stringify(record).includes("finalize:doctor"));
+  expect(phaseRecords).toEqual([
+    expect.objectContaining({ _meta: expect.objectContaining({ logLevelName: "INFO" }) }),
+    expect.objectContaining({ _meta: expect.objectContaining({ logLevelName: "INFO" }) }),
+  ]);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  lifecycle.recordWarnings(["A plugin update was deferred."]);
+  expect(console.warn).toHaveBeenCalledWith(
+    expect.stringContaining('"step":"warning:finalize:doctor:0"'),
+  );
   await expect(
-    lifecycle.run("doctor", async () => {
-      throw new UpdateDoctorError(`${message} ${privatePath}`, [
-        { check: "doctor", code: "doctor-failed", message },
-      ]);
+    lifecycle.run("plugins", async () => {
+      throw new Error("fixture failure");
     }),
-  ).rejects.toThrow(message);
+  ).rejects.toThrow("fixture failure");
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining('"status":"failed"'));
   lifecycle.fail();
-  expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).not.toContain(privatePath);
-  closeOpenClawStateDatabaseForTest();
-  const run = listUpdateRuns()[0]!;
-  expect(run).toMatchObject({
-    status: "failed",
-    reason: "doctor-failed",
-  });
-  const report = await prepareUpdateFailureReport({
-    attemptId: run.runId,
-    recordedRun: run,
-    result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
-  });
-  expect(report.body).toContain("Reason code: doctor-failed");
-  expect(report.body).toContain(`Failed phase finalize:doctor: ${message}`);
-  expect(report.body).not.toContain("Failed phase finalize:doctor: exit unknown");
 });
+
+it.each([false, true])(
+  "records a Doctor refusal before reporting standalone finalization (nested=%s)",
+  async (nested) => {
+    const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+    lifecycle.attachLedger();
+    const message =
+      "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
+    const privatePath = "/home/example/private-doctor-input";
+    await expect(
+      lifecycle.run("doctor", async () => {
+        const refusal = new UpdateDoctorError(
+          `${message} ${privatePath}`,
+          [{ check: "doctor", code: "doctor-failed", message }],
+          { exitCode: 23 },
+        );
+        const recording = new Error("Warning output failed");
+        throw nested
+          ? new AggregateError([refusal, recording], "Doctor result recording failed", {
+              cause: recording,
+            })
+          : refusal;
+      }),
+    ).rejects.toThrow(nested ? "Doctor result recording failed" : message);
+    lifecycle.fail();
+    expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).not.toContain(privatePath);
+    closeOpenClawStateDatabaseForTest();
+    const run = listUpdateRuns()[0]!;
+    expect(run).toMatchObject({
+      status: "failed",
+      reason: "doctor-failed",
+    });
+    expect(run.steps).toContainEqual(
+      expect.objectContaining({
+        step: "finalize:doctor",
+        status: "failed",
+        exitCode: 23,
+        failureFacts: [{ check: "doctor", code: "doctor-failed", message }],
+      }),
+    );
+    const report = await prepareUpdateFailureReport({
+      attemptId: run.runId,
+      recordedRun: run,
+      result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
+    });
+    expect(report.body).toContain("Reason code: doctor-failed");
+    expect(report.body).toContain(`Failed phase finalize-doctor: exit 23 (${message})`);
+    expect(report.body).not.toContain("Failed phase finalize-doctor: exit unknown");
+  },
+);
 
 it.each([
   "preflight",
@@ -98,18 +153,22 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("openclaw-finalize-heartbeat-"));
   vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  resetLogger();
+  setLoggerOverride(null);
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   dirs.cleanup();
 });
 
 it.each(["doctor", "targetConfigConvergence"] as const)(
-  "keeps default %s work and heartbeat alive beyond the former deadline",
+  "keeps default %s work owned without writing to its child's maintenance database",
   async (phase) => {
     const stopChildren = vi.fn();
     const lifecycle = new UpdateFinalizationLifecycle(false, undefined, stopChildren);
@@ -121,7 +180,7 @@ it.each(["doctor", "targetConfigConvergence"] as const)(
     }
     const work = createDeferredCore();
     const entered = createDeferredCore();
-    const timerCount = vi.getTimerCount();
+    const heartbeat = vi.spyOn(ledger, "heartbeatUpdateRun");
     const running = withCliProcessScope(() =>
       lifecycle.run(phase, () => {
         entered.resolve();
@@ -129,14 +188,25 @@ it.each(["doctor", "targetConfigConvergence"] as const)(
       }),
     );
     await entered.promise;
+    try {
+      const admitted = getUpdateRun(initial.runId);
+      expect(admitted?.origin.driver?.pid).toBe(process.pid);
 
-    await vi.advanceTimersByTimeAsync(240_000);
-    expect(stopChildren).not.toHaveBeenCalled();
-    expect(getUpdateRun(initial.runId)).toMatchObject({ status: "running" });
-    expect(getUpdateRun(initial.runId)?.updatedAtMs).toBeGreaterThan(initial.updatedAtMs);
-    work.resolve();
-    await expect(running).resolves.toBeUndefined();
-    expect(vi.getTimerCount()).toBe(timerCount);
+      await vi.advanceTimersByTimeAsync(ABANDONED_UPDATE_RUN_MS + UPDATE_RUN_HEARTBEAT_MS);
+      expect(stopChildren).not.toHaveBeenCalled();
+      const observed = getUpdateRun(initial.runId);
+      expect(observed).toEqual(admitted);
+      if (!observed) {
+        throw new Error("Finalization lost its update run.");
+      }
+      expect(inspectUpdateRunAbandonment(observed)).toBeUndefined();
+    } finally {
+      work.resolve();
+      await expect(running).resolves.toBeUndefined();
+    }
+    heartbeat.mockClear();
+    await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+    expect(heartbeat).not.toHaveBeenCalled();
     lifecycle.complete(0);
     expect(getUpdateRun(initial.runId)?.status).toBe("succeeded");
   },
@@ -233,7 +303,7 @@ it.each([false, true])(
     }
     expect(initial.origin.driver?.pid).toBe(process.pid);
     const phase = createDeferredCore();
-    const timerCount = vi.getTimerCount();
+    const heartbeat = vi.spyOn(ledger, "heartbeatUpdateRun");
     const running = lifecycle.run("plugins", () => phase.promise);
     const settled = fails
       ? expect(running).rejects.toThrow("plugin repair failed")
@@ -249,7 +319,8 @@ it.each([false, true])(
       phase.resolve();
     }
     await settled;
-    expect(vi.getTimerCount()).toBe(timerCount);
+    expect(heartbeat).toHaveBeenCalled();
+    heartbeat.mockClear();
     const finishedPhase = getUpdateRun(initial.runId);
     if (fails) {
       expect(finishedPhase?.steps).toContainEqual(
@@ -263,6 +334,7 @@ it.each([false, true])(
       );
     }
     await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+    expect(heartbeat).not.toHaveBeenCalled();
     expect(getUpdateRun(initial.runId)).toEqual(finishedPhase);
     lifecycle.complete(fails ? 1 : 0);
   },
@@ -280,7 +352,7 @@ it("continues finalization after heartbeat errors and warns once for the run", a
   vi.spyOn(ledger, "heartbeatUpdateRun").mockImplementation(() => {
     throw new Error("SQLITE_BUSY: database is locked");
   });
-  for (const phase of ["plugins", "targetConfigConvergence"] as const) {
+  for (const phase of ["plugins", "completionCache"] as const) {
     const work = createDeferredCore();
     const running = lifecycle.run(phase, () => work.promise);
     await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);

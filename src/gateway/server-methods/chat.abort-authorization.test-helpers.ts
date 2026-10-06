@@ -21,7 +21,6 @@ export async function invokeAbort({
   preserveSideRuns,
   scopes = ["operator.write"],
   onAuthorizedAfterQueuedAbort,
-  excludeRunIds,
 }: {
   context: ReturnType<typeof createChatAbortContext>;
   sessionKey?: string;
@@ -31,17 +30,14 @@ export async function invokeAbort({
   preserveSideRuns?: boolean;
   scopes?: string[];
   onAuthorizedAfterQueuedAbort?: () => boolean;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   return await invokeChatAbortHandler({
-    handler:
-      onAuthorizedAfterQueuedAbort || excludeRunIds
-        ? (options) =>
-            handleChatAbortRequestWithLifecycle(options, {
-              onAuthorizedAfterQueuedAbort,
-              excludeRunIds,
-            })
-        : handleChatAbortRequest,
+    handler: onAuthorizedAfterQueuedAbort
+      ? (options) =>
+          handleChatAbortRequestWithLifecycle(options, {
+            onAuthorizedAfterQueuedAbort,
+          })
+      : handleChatAbortRequest,
     context,
     request: {
       sessionKey,

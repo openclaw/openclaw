@@ -15,8 +15,8 @@ forward-ports until after publication.
 ## Version and channel
 
 `YYYY.M.PATCH` uses a sequential monthly train number, not the calendar day.
-Choose beta trains from stable/beta tags only; alpha-only tags do not consume a
-train. Continue an existing beta train with its next `beta.N` when appropriate,
+Choose beta trains from stable/beta tags only; historical alpha-only tags do
+not consume a train. Continue an existing beta train with its next `beta.N` when appropriate,
 otherwise increment the highest stable/beta patch and start at `beta.1`.
 Prefer `-beta.N`, never new numeric-only beta suffixes.
 
@@ -46,7 +46,7 @@ macOS needs a strictly higher numeric `APP_BUILD`.
 
 Android is independently pinned in `apps/android/version.json`. If the stable
 release should include its APK, prepare it before tagging with `--android` or
-`scripts/mobile-release-version.ts --prepare --version YYYY.M.PATCH --write`.
+`pnpm android:version:pin -- --version YYYY.M.PATCH`.
 An older pin causes candidate/publish to skip Android; an immutable tag cannot
 be repaired later to add that platform.
 
@@ -92,6 +92,36 @@ provenance follows current `origin/main`; retain a release-branch PR only while
 its change has not been forward-ported. Do not change root README as routine
 release prep or prefill a future changelog section.
 
+Before freezing Code SHA, verify and stamp the state and agent schema-history
+tables alongside the changelog:
+
+```bash
+node scripts/release-schema-history.mjs YYYY.M.PATCH-beta.N
+```
+
+Use the exact approved version (stable cuts omit `-beta.N`). This stamps only
+`Unreleased` schema rows in `docs/reference/database-schemas/{state,agent}-schema-history.md`;
+existing release attributions and migration notes are preserved. Commit both
+histories with the version and release notes before qualification, not as a
+later changelog-only delta.
+
+Before stamping, manually audit every `Unreleased` row against complete Git
+history and release tags. A shallow checkout or missing tags cannot establish
+that a row is unpublished. Find the bump with `git log -p -S
+'OPENCLAW_STATE_SCHEMA_VERSION = N;' -- src/state` (use
+`OPENCLAW_AGENT_SCHEMA_VERSION` for agents), following earlier constant owners
+when needed. For the introducing commit, use `git tag --contains <sha> --sort=v:refname`
+and select the first tag matching `^v[0-9]{4}\.[0-9]+\.[0-9]+$`.
+If one exists, record that exact stable tag instead of the new cut; otherwise
+record the earliest containing beta, or leave `Unreleased` for the stamping
+step when neither exists. Inspect the tagged constant too: a release can
+contain several development-only bumps and publish the highest version.
+At stable promotion, audit beta-only cells the same way and replace them with
+their first containing stable tag (or this approved stable cut if it is first).
+Keep any earlier-beta provenance in the migration notes where useful.
+This is a release checklist check, not a CI ancestry check: ordinary shallow
+CI checkouts do not carry the complete release history needed to prove it.
+
 When final notes were already included in the qualified Code SHA, retain that
 same commit as Release SHA. If notes change afterward, commit only the release
 changelog and optionally reuse Code evidence: the complete Code-to-Release
@@ -102,3 +132,14 @@ bytes. Any other delta reenters product validation. Use the canonical
 release-note renderer and verifier before
 publication and closeout. The publish workflow owns GitHub page finalization
 only after postpublish evidence succeeds.
+
+## Correction release artifacts
+
+Validate the frozen SHA with `--target-ref release/YYYY.M.PATCH-N` before tagging,
+or the exact `vYYYY.M.PATCH-N` context afterward (`target_context_ref` in the
+workflow). Artifacts must be prepared for that correction tag. Base-package
+and Android APK reuse is allowed only when the correction and base tags resolve
+to the same source commit; retain the APK's verification and add a record tying
+it to the correction tag. Different-source corrections need their own package
+validation and a higher Android `versionCode`. A base-tag validation run alone
+does not authorize correction-tag publication.

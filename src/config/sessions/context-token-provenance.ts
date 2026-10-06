@@ -1,3 +1,4 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionContextBudgetStatus, SessionEntry } from "./types.js";
 
@@ -11,16 +12,14 @@ type SessionContextTokenOwner = Pick<
   | "modelSelectionLocked"
 >;
 
-function resolvePositiveContextTokens(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-function isExactProducerSelection(params: {
+type SessionContextSelection = {
   entry: SessionContextTokenOwner | undefined;
   provider: string | null | undefined;
   model: string | null | undefined;
   agentHarnessId: string | null | undefined;
-}): boolean {
+};
+
+function isExactProducerSelection(params: SessionContextSelection): boolean {
   const entryProvider = normalizeLowercaseStringOrEmpty(params.entry?.modelProvider);
   const entryModel = normalizeLowercaseStringOrEmpty(params.entry?.model);
   const entryHarness = normalizeLowercaseStringOrEmpty(params.entry?.agentHarnessId);
@@ -31,9 +30,6 @@ function isExactProducerSelection(params: {
     entryProvider &&
     entryModel &&
     entryHarness &&
-    currentProvider &&
-    currentModel &&
-    currentHarness &&
     entryProvider === currentProvider &&
     entryModel === currentModel &&
     entryHarness === currentHarness,
@@ -41,39 +37,31 @@ function isExactProducerSelection(params: {
 }
 
 /** Returns a persisted effective resolution only for its exact producing selection. */
-function resolveMatchingPersistedResolution(params: {
-  entry: SessionContextTokenOwner | undefined;
-  provider: string | null | undefined;
-  model: string | null | undefined;
-  agentHarnessId: string | null | undefined;
-}): number | undefined {
+function resolveMatchingPersistedResolution(params: SessionContextSelection): number | undefined {
   if (params.entry?.contextTokensSource !== "resolved-v1") {
     return undefined;
   }
   return isExactProducerSelection(params)
-    ? resolvePositiveContextTokens(params.entry?.contextTokens)
+    ? asPositiveFiniteNumber(params.entry?.contextTokens)
     : undefined;
 }
 
 /** Returns persisted telemetry only when it belongs to the current producing selection. */
-export function resolveTrustedSessionContextTokens(params: {
-  entry: SessionContextTokenOwner | undefined;
-  provider: string | null | undefined;
-  model: string | null | undefined;
-  agentHarnessId: string | null | undefined;
-}): number | undefined {
-  const contextTokens = resolvePositiveContextTokens(params.entry?.contextTokens);
+export function resolveTrustedSessionContextTokens(
+  params: SessionContextSelection,
+): number | undefined {
+  const contextTokens = asPositiveFiniteNumber(params.entry?.contextTokens);
   if (contextTokens === undefined) {
     return undefined;
   }
-  const entryProvider = normalizeLowercaseStringOrEmpty(params.entry?.modelProvider);
-  const entryModel = normalizeLowercaseStringOrEmpty(params.entry?.model);
-  const currentProvider = normalizeLowercaseStringOrEmpty(params.provider);
-  const currentModel = normalizeLowercaseStringOrEmpty(params.model);
   // Locked sessions own their native window, including rows created before
   // context-window provenance was persisted. A known selection mismatch is a
   // different owner, while missing identity remains a supported legacy state.
   if (params.entry?.modelSelectionLocked === true) {
+    const entryProvider = normalizeLowercaseStringOrEmpty(params.entry?.modelProvider);
+    const entryModel = normalizeLowercaseStringOrEmpty(params.entry?.model);
+    const currentProvider = normalizeLowercaseStringOrEmpty(params.provider);
+    const currentModel = normalizeLowercaseStringOrEmpty(params.model);
     if (
       (entryProvider && currentProvider && entryProvider !== currentProvider) ||
       (entryModel && currentModel && entryModel !== currentModel)
@@ -89,16 +77,14 @@ export function resolveTrustedSessionContextTokens(params: {
 }
 
 /** Projects the context window owned by the current session selection. */
-export function resolveProjectedSessionContextTokens(params: {
-  entry: SessionContextTokenOwner | undefined;
-  provider: string | null | undefined;
-  model: string | null | undefined;
-  agentHarnessId: string | null | undefined;
-  resolvedContextTokens: number | null | undefined;
-  authoredContextTokens?: number | null | undefined;
-}): number | undefined {
-  const resolvedContextTokens = resolvePositiveContextTokens(params.resolvedContextTokens);
-  const authoredContextTokens = resolvePositiveContextTokens(params.authoredContextTokens);
+export function resolveProjectedSessionContextTokens(
+  params: SessionContextSelection & {
+    resolvedContextTokens: number | null | undefined;
+    authoredContextTokens?: number | null | undefined;
+  },
+): number | undefined {
+  const resolvedContextTokens = asPositiveFiniteNumber(params.resolvedContextTokens);
+  const authoredContextTokens = asPositiveFiniteNumber(params.authoredContextTokens);
   const trustedContextTokens = resolveTrustedSessionContextTokens(params);
   const persistedResolution =
     resolvedContextTokens === undefined && authoredContextTokens === undefined
@@ -137,7 +123,7 @@ export function resolveProjectedSessionContextBudgetStatus(params: {
     !status ||
     !provider ||
     !model ||
-    resolvePositiveContextTokens(params.contextTokens) === undefined ||
+    asPositiveFiniteNumber(params.contextTokens) === undefined ||
     params.entry?.liveModelSwitchPending ||
     normalizeLowercaseStringOrEmpty(status.provider) !== provider ||
     normalizeLowercaseStringOrEmpty(status.model) !== model ||

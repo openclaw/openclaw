@@ -1,33 +1,4 @@
-// Shared assertions and templates for model forward-compatibility tests.
 import { expect } from "vitest";
-
-export function buildForwardCompatTemplate(params: {
-  id: string;
-  name: string;
-  provider: string;
-  api: "anthropic-messages" | "google-gemini-cli" | "openai-completions" | "openai-responses";
-  baseUrl: string;
-  reasoning?: boolean;
-  input?: readonly ["text"] | readonly ["text", "image"];
-  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  contextWindow?: number;
-  maxTokens?: number;
-}) {
-  // Template shape mirrors discovered catalog rows so fallback tests exercise
-  // metadata cloning rather than hand-built partial models.
-  return {
-    id: params.id,
-    name: params.name,
-    provider: params.provider,
-    api: params.api,
-    baseUrl: params.baseUrl,
-    reasoning: params.reasoning ?? true,
-    input: params.input ?? (["text", "image"] as const),
-    cost: params.cost ?? { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    contextWindow: params.contextWindow ?? 200000,
-    maxTokens: params.maxTokens ?? 64000,
-  };
-}
 
 export function expectResolvedForwardCompatFallbackResult(params: {
   result: {
@@ -66,5 +37,7 @@ export function expectUnknownModelErrorResult(
   id: string,
 ) {
   expect(result.model).toBeUndefined();
-  expect(result.error).toBe(`Unknown model: ${provider}/${id}`);
+  expect(result.error).toBe(
+    `Unknown model: ${provider}/${id}. Run \`openclaw models list --refresh --provider ${provider}\` to inspect this provider's model choices, then retry with a model supported by your account.`,
+  );
 }

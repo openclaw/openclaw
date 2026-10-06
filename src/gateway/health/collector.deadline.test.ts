@@ -1,7 +1,10 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
+import { setImmediate as flushImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { createSessionStoreSummaryReaderStub } from "../../config/sessions/session-store-summary.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -60,18 +63,24 @@ async function collectDeadlineSnapshot(params: {
   });
 }
 
+async function flushHealthPreparation() {
+  await vi.advanceTimersByTimeAsync(0);
+  // The fake deadline clock does not drive the real yield after a session read.
+  await flushImmediate();
+}
+
 describe("gateway health collection deadline", () => {
   beforeAll(async () => {
     vi.doMock("../../config/config.js", () => ({
       getRuntimeConfig: () => testConfig,
     }));
-    // Store paths reach real SQLite target resolution, which inspects the agent
-    // database beside them; a shared /tmp path would read machine-wide state.
     vi.doMock("../../config/sessions/paths.js", () => ({
       resolveSessionStorePathCore: () => sessionStorePath,
     }));
-    vi.doMock("../../config/sessions/session-accessor.js", () => ({
-      readSessionStoreSummaryReadOnly,
+    vi.doMock("../../config/sessions/session-entry-read-runtime.js", () => ({
+      withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(
+        readSessionStoreSummaryReadOnly,
+      ),
     }));
     vi.doMock("../../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
@@ -153,7 +162,7 @@ describe("gateway health collection deadline", () => {
 
     try {
       snapshotPromise = scope.track(() => collectDeadlineSnapshot({ timeoutMs: 50 }));
-      await vi.advanceTimersByTimeAsync(0);
+      await flushHealthPreparation();
       await vi.advanceTimersByTimeAsync(50);
       const snap = await snapshotPromise;
       const channel = snap.channels["deadline-test"];
@@ -207,7 +216,7 @@ describe("gateway health collection deadline", () => {
     ];
 
     const snapshotPromise = collectDeadlineSnapshot({ timeoutMs: 50, audience: "public" });
-    await vi.advanceTimersByTimeAsync(0);
+    await flushHealthPreparation();
     expect(started).toEqual(accountIds.slice(0, 5));
     await vi.advanceTimersByTimeAsync(50);
     const snap = await snapshotPromise;
@@ -251,13 +260,13 @@ describe("gateway health collection deadline", () => {
     ];
 
     const firstSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
-    await vi.advanceTimersByTimeAsync(0);
+    await flushHealthPreparation();
     expect(started).toEqual(accountIds);
     await vi.advanceTimersByTimeAsync(50);
     await firstSnapshot;
 
     const secondSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
-    await vi.advanceTimersByTimeAsync(0);
+    await flushHealthPreparation();
     expect(started).toEqual(accountIds);
     await vi.advanceTimersByTimeAsync(50);
     const second = await secondSnapshot;

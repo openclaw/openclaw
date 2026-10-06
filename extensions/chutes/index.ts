@@ -1,6 +1,3 @@
-/**
- * Chutes provider plugin entrypoint with OAuth and API-key auth methods.
- */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   resolveOAuthApiKeyMarker,
@@ -143,7 +140,7 @@ export default definePluginEntry({
             groupLabel: "Chutes",
             groupHint: "OAuth + API key",
           },
-          run: async (ctx) => await runChutesOAuth(ctx),
+          run: runChutesOAuth,
         },
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
@@ -161,7 +158,7 @@ export default definePluginEntry({
           ].join("\n"),
           defaultModel: CHUTES_DEFAULT_MODEL_REF,
           expectedProviders: ["chutes"],
-          applyConfig: (cfg) => applyChutesApiKeyConfig(cfg),
+          applyConfig: applyChutesApiKeyConfig,
           wizard: {
             choiceId: "chutes-api-key",
             choiceLabel: "Chutes API key",

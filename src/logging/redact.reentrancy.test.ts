@@ -31,14 +31,14 @@ describe("nested redaction calls", () => {
     },
   );
 
-  it("keeps each source assignment policy active after it performs nested redaction", () => {
-    const input = "API_TOKEN=computeFirst()\nAPI_TOKEN=computeSecond()";
+  it.each(["API_TOKEN=", "pass: "])("keeps nested source assignment policy for %s", (prefix) => {
+    const input = `${prefix}computeFirst()\n${prefix}computeSecond()`;
     const assignments: string[] = [];
 
     expect(
       redactInputTextWithSourcePolicy(input, undefined, (text, offset) => {
-        expect(redactSensitiveText("inside private", { patterns: [/private/g] })).toBe(
-          "inside ***",
+        expect(redactSensitiveText("pass: private pass: nested", { mode: "tools" })).toBe(
+          "pass: *** pass: ***",
         );
         assignments.push(text.slice(offset).split("\n")[0] ?? "");
         return true;

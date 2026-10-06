@@ -2,13 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initializeNativeSessionCatalogPreferences } from "../../../plugins/native-session-catalog-config.js";
 
 const loadInstalledPluginIndexInstallRecords = vi.hoisted(() => vi.fn(async () => ({})));
-const inspectBundledPluginStartupMetadata = vi.hoisted(() => vi.fn());
+const hasBundledPluginStartupManifest = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../plugins/installed-plugin-index-record-reader.js", () => ({
   loadInstalledPluginIndexInstallRecords,
 }));
-vi.mock("../../../plugins/bundled-plugin-startup-metadata.js", () => ({
-  inspectBundledPluginStartupMetadata,
+vi.mock("../../../plugins/bundled-plugin-startup-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/bundled-plugin-startup-metadata.js")>()),
+  hasBundledPluginStartupManifest,
 }));
 
 const { configMayRequireStartupPluginConvergence, planStartupPluginConvergence } =
@@ -18,7 +19,7 @@ describe("startup plugin convergence planning", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
-    inspectBundledPluginStartupMetadata.mockReturnValue(undefined);
+    hasBundledPluginStartupManifest.mockReturnValue(false);
   });
 
   it("keeps a fresh core-only Gateway config out of the plugin repair runtime", async () => {
@@ -78,7 +79,7 @@ describe("startup plugin convergence planning", () => {
   });
 
   it("does not repair configured plugins already bundled with the host", () => {
-    inspectBundledPluginStartupMetadata.mockReturnValue({ hasDoctorContract: false });
+    hasBundledPluginStartupManifest.mockReturnValue(true);
 
     expect(
       configMayRequireStartupPluginConvergence({

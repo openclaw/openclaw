@@ -14,6 +14,7 @@ export function buildSelectedSessionCreateParams(
     deferInitialTurn: place.remotePlacement,
     agentId: place.agentId,
     model: place.modelControl.modelForSubmission(),
+    agentRuntime: place.modelControl.agentRuntime,
     contextWindow: place.modelControl.contextWindow,
     thinkingLevel: place.modelControl.thinkingLevel,
     fastMode: place.modelControl.fastMode,

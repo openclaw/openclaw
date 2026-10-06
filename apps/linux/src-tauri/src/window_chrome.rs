@@ -35,7 +35,7 @@ pub fn install(window: &Window) -> tauri::Result<()> {
     #[cfg(target_os = "linux")]
     return crate::window_chrome_linux::install(window);
     #[cfg(target_os = "macos")]
-    return crate::window_chrome_macos::install_window(window);
+    return crate::window_chrome_macos::set_unified(window, false);
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = window;
@@ -140,13 +140,17 @@ pub fn observe_history(webview: &Webview) {
 }
 
 pub(super) fn authorized_source(app: &AppHandle, label: &str, source: &Url) -> bool {
+    if app
+        .try_state::<crate::gateway_windows::GatewayWindows>()
+        .is_some_and(|windows| windows.authorized_source(label, source))
+    {
+        return true;
+    }
     if label == "main" {
         app.state::<crate::DesktopState>()
             .main_window_has_local_url(source)
-            || crate::native_browser_bridge::dashboard_window_source_is_current(app, source)
     } else {
-        crate::external_browser_url_allowed(source)
-            && label == crate::discovery::gateway_window_label(source)
+        false
     }
 }
 

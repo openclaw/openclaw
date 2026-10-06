@@ -200,8 +200,6 @@ class Desktop:
 class Worker:
     def __init__(self):
         self.desktop = Desktop()
-        self.state = {}
-        self.state_lock = threading.Lock()
         self.output_lock = threading.Lock()
         self.stopped = threading.Event()
         self.cli_state = None
@@ -244,6 +242,7 @@ class Worker:
             return dict(self.cli_state)
 
     def heartbeat(self):
+        previous = {}
         while not self.stopped.is_set():
             try:
                 state = self.probe()
@@ -252,10 +251,8 @@ class Worker:
             except (GatewayError, ValueError, KeyError, TypeError) as error:
                 state = {"routeId": "", "desktop": True, "ready": False, "yield": True,
                          "error": str(error) if isinstance(error, GatewayError) else "Desktop response was not recognized."}
-            with self.state_lock:
-                changed = state != self.state
-                self.state = state
-            if changed:
+            if state != previous:
+                previous = state
                 self.emit({"op": "state", **self.public_state(state)})
             self.stopped.wait(3)
 

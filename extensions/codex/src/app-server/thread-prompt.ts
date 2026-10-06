@@ -17,6 +17,7 @@ import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
+import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
 
 export type CodexThreadPromptContext = Pick<
   EmbeddedRunAttemptParams,
@@ -32,13 +33,18 @@ export type CodexThreadPromptContext = Pick<
   | "promptMode"
   | "extraSystemPrompt"
   | "gitCoauthorPrompt"
+  | "runtimePlan"
 >;
 
 export function buildDeveloperInstructions(
   params: CodexThreadPromptContext,
-  options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
+  options: {
+    dynamicTools?: readonly CodexDynamicToolSpec[];
+    nativeCodeModeOnlyEnabled?: boolean;
+  } = {},
 ): string {
   const deferredToolNames = new Set<string>();
+  let screenToolName: string | undefined;
   let showWidgetToolName: string | undefined;
   let dashboardToolName: string | undefined;
   let portalToolName: string | undefined;
@@ -63,6 +69,9 @@ export function buildDeveloperInstructions(
       const qualifiedName = spec.type === "namespace" ? `${spec.name}.${name}` : name;
       if (tool.deferLoading === true && name) {
         deferredToolNames.add(name);
+      }
+      if (name === "screen") {
+        screenToolName ??= qualifiedName;
       }
       if (name === "show_widget") {
         showWidgetToolName ??= qualifiedName;
@@ -90,15 +99,19 @@ export function buildDeveloperInstructions(
   }).join("\n");
   const delegationGuidanceAvailable =
     params.disableTools !== true &&
+    params.toolsAllow?.length !== 0 &&
     params.delegationCapability !== "report_only" &&
     !isMessageOnlyCodexSourceReply(params);
   const nativeDelegationAvailable =
     delegationGuidanceAvailable &&
+    !isCodexResponsesOAuthRun(params) &&
     !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
     !shouldDisableCodexToolSearchForModel(params.modelId);
   const deferredToolDiscoveryGuidance =
     deferredToolNames.size > 0 || nativeDelegationAvailable
-      ? "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`."
+      ? options.nativeCodeModeOnlyEnabled === true
+        ? "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`."
+        : "Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have."
       : undefined;
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
@@ -113,7 +126,7 @@ export function buildDeveloperInstructions(
     // models (codex-rs spec_plan add_collaboration_tools). Without this hint
     // models cannot see spawn_agent and grab the always-direct sessions_spawn.
     nativeDelegationAvailable
-      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork." : ""}`
+      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork." : ""}`
       : undefined,
     hasSessionsYield && nativeDelegationAvailable
       ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
@@ -140,6 +153,7 @@ export function buildDeveloperInstructions(
       : undefined,
     params.disableTools !== true && params.promptMode !== "minimal" && params.promptMode !== "none"
       ? buildUiPresentationPrompt({
+          screenToolName,
           showWidgetToolName,
           dashboardToolName,
           portalToolName,

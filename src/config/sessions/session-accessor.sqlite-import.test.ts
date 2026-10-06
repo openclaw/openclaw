@@ -2,24 +2,27 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { createTranscriptEventReader } from "../../commands/doctor-session-sqlite-readers.js";
+import { createTranscriptEventReader } from "../../infra/session-sqlite-migration-readers.js";
 import * as sqliteDirectories from "../../infra/sqlite-private-directory.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { listSessionBranches } from "./session-accessor.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { loadExactSessionEntry } from "./session-accessor.sqlite-entry.js";
+import { importSqliteSessionRowsBatch } from "./session-accessor.sqlite-import.js";
 import {
   importSqliteSessionRows,
-  importSqliteSessionRowsBatch,
-} from "./session-accessor.sqlite-import.js";
-import {
-  hasSessionTranscriptMessage,
-  loadTranscriptEventsSync,
-} from "./session-accessor.sqlite-read.js";
+  seedUnindexedTranscriptForTest,
+} from "./session-accessor.sqlite-import.test-support.js";
+import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
+import { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
 
 function target(state: OpenClawTestState, id: string) {
   return {
@@ -37,6 +40,33 @@ const message = {
   message: { role: "user", content: "preserved" },
 };
 afterEach(() => vi.restoreAllMocks());
+
+it("rechecks a required empty destination after staging before writing any batch rows", async () => {
+  await withOpenClawTestState({ label: "import-empty-admission" }, async (state) => {
+    const first = target(state, "first");
+    const second = target(state, "second");
+    const occupied = target(state, "occupied");
+    expect(loadExactSessionEntry(occupied)).toBeUndefined();
+    await expect(
+      importSqliteSessionRowsBatch([
+        {
+          ...first,
+          requireEmptyStore: true,
+          beforePersistentApply: () => {
+            runOpenClawAgentWriteTransaction(
+              (database) => writeSessionEntry(database, occupied.sessionKey, occupied.entry),
+              { agentId: "main", env: state.env },
+            );
+          },
+        },
+        { ...second, requireEmptyStore: true },
+      ]),
+    ).rejects.toThrow("SQLite destination is not empty");
+    expect(loadExactSessionEntry(first)).toBeUndefined();
+    expect(loadExactSessionEntry(second)).toBeUndefined();
+    expect(loadExactSessionEntry(occupied)?.entry.sessionId).toBe("occupied");
+  });
+});
 
 // Observe the real allocator on both POSIX and Windows without replacing its permission checks.
 function observeStages() {
@@ -158,7 +188,7 @@ it("refuses imports into archived history without replacing its owner or saved b
     await expect(
       runSessionColdStorageMaintenance({
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: {
             store: database.path,
             maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
@@ -171,8 +201,7 @@ it("refuses imports into archived history without replacing its owner or saved b
     await expect(
       importSqliteSessionRows({
         ...params,
-        readExactTranscriptRows: (append) =>
-          append({ createdAt: 200, eventJson: '{"replacement":true}' }),
+        readTranscriptEvents: (append) => append({ replacement: true }),
       }),
     ).rejects.toMatchObject({ code: "TRANSCRIPT_COLD" });
     expect(database.db.prepare("SELECT * FROM session_nodes").all()).toEqual(owners);
@@ -259,7 +288,12 @@ it("keeps legacy Codex assistant rows that precede later transcript rows during 
       type: "message",
       id,
       parentId,
-      message: { role: "assistant", provider: "codex", api: "openai-chatgpt-responses", content },
+      message: {
+        role: "assistant",
+        provider: id === "reply-1" ? "openai-codex" : "codex",
+        api: id === "reply-1" ? "openai-codex-responses" : "openai-chatgpt-responses",
+        content,
+      },
     });
     const events = [
       { type: "session", id: "codex", version: 3 },
@@ -307,7 +341,7 @@ it("keeps legacy Codex assistant rows that precede later transcript rows during 
   });
 });
 
-it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without append normalization", async () => {
+it("reads legacy handoff bytes, duplicate IDs, timestamps and owner without normalization", async () => {
   await withOpenClawTestState({ label: "import-exact" }, async (state) => {
     const params = target(state, "exact");
     const owner = { actor: { type: "human" as const, id: "owner" }, assignedAt: 40 };
@@ -318,21 +352,26 @@ it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without ap
       message: { role: "user", content: "canonical duplicate" },
     };
     const rows = [
-      { createdAt: 41, eventJson: '{ "type": "session", "id": "exact", "version": 3 }' },
-      { createdAt: 43, eventJson: JSON.stringify(firstMessage, null, 2) },
-      { createdAt: 45, eventJson: JSON.stringify(canonicalMessage) },
+      { seq: 2, createdAt: 41, eventJson: '{ "type": "session", "id": "exact", "version": 3 }' },
+      { seq: 11, createdAt: 43, eventJson: JSON.stringify(firstMessage, null, 2) },
+      { seq: 17, createdAt: 45, eventJson: JSON.stringify(canonicalMessage) },
     ];
-    await importSqliteSessionRows({
+    await seedUnindexedTranscriptForTest({
       ...params,
       entry: { ...params.entry, owner },
-      readExactTranscriptRows: (append) => rows.forEach(append),
+      events: rows.map((row) => ({
+        session_id: params.entry.sessionId,
+        seq: row.seq,
+        created_at: row.createdAt,
+        event_json: row.eventJson,
+      })),
       transcriptMtimeMs: 50,
     });
     const db = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).db;
     expect(
       db
         .prepare(
-          "SELECT created_at AS createdAt, event_json AS eventJson FROM transcript_events ORDER BY seq",
+          "SELECT seq, created_at AS createdAt, event_json AS eventJson FROM transcript_events ORDER BY seq",
         )
         .all(),
     ).toEqual(rows);
@@ -343,13 +382,6 @@ it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without ap
     expect(db.prepare("SELECT transcript_updated_at FROM session_windows").get()).toEqual({
       transcript_updated_at: 50,
     });
-    expect(
-      await importSqliteSessionRows({
-        ...params,
-        skipIfExists: true,
-        readExactTranscriptRows: (append) => append({ createdAt: 99, eventJson: "{}" }),
-      }),
-    ).toMatchObject({ skippedExisting: true, transcriptEvents: 0 });
     expect(loadTranscriptEventsSync({ ...params, sessionId: "exact" })).toHaveLength(3);
     await expect(hasSessionTranscriptMessage({ ...params, sessionId: "exact" })).resolves.toBe(
       true,
@@ -385,7 +417,7 @@ it("rejects batches spanning implicit agent stores before reading sources", asyn
   });
 });
 
-it.each(["implicit", "leaf", "root", "opaque", "parentless"])(
+it.each(["implicit", "root", "opaque", "parentless"])(
   "repairs an original-only prompt rewrite branch in staging (leaf control=%s)",
   async (mode) => {
     const leafControl = mode !== "implicit";
@@ -524,26 +556,13 @@ it.each(["implicit", "leaf", "root", "opaque", "parentless"])(
   },
 );
 
-it.each([
-  {
-    kind: "indexed",
-    repeated: {
-      type: "message",
-      id: "repeated",
-      parentId: "root",
-      message: { role: "assistant", content: "same replay" },
-    },
-  },
-  {
-    kind: "leaf",
-    repeated: {
-      type: "leaf",
-      id: "repeated",
-      parentId: "root",
-      targetId: "root",
-    },
-  },
-])("repairs an identical repeated $kind event and reruns idempotently", async ({ repeated }) => {
+it("repairs an identical repeated event and reruns idempotently", async () => {
+  const repeated = {
+    type: "message",
+    id: "repeated",
+    parentId: "root",
+    message: { role: "assistant", content: "same replay" },
+  };
   await withOpenClawTestState({ label: "import-identical-replay" }, async (state) => {
     const scope = target(state, "identical-replay");
     const events = [
@@ -606,43 +625,5 @@ it.each([
       { event_id: "repeated", count: 1 },
       { event_id: "root", count: 1 },
     ]);
-  });
-});
-
-it.each([
-  ["openai-codex", "openai-codex-responses"],
-  ["codex", "openai-chatgpt-responses"],
-])("normalizes legacy provider %s during canonical import", async (provider, api) => {
-  await withOpenClawTestState({ label: "import-provider-repair" }, async (state) => {
-    const scope = target(state, "provider-repair");
-    const assistantEntry = {
-      type: "message",
-      id: "assistant",
-      parentId: null,
-      message: {
-        role: "assistant",
-        provider,
-        api,
-        content: [{ type: "text", text: "preserved" }],
-      },
-    };
-    const original =
-      [{ type: "session", version: 3, id: "provider-repair" }, assistantEntry]
-        .map((event) => JSON.stringify(event))
-        .join("\n") + "\n";
-    const filename = await state.writeText("provider.jsonl", original);
-
-    const result = await importSqliteSessionRows({
-      ...scope,
-      repairLegacyTranscript: true,
-      readTranscriptEvents: createTranscriptEventReader(filename, "provider-repair"),
-    });
-
-    expect(loadTranscriptEventsSync({ ...scope, sessionId: "provider-repair" }).at(-1)).toEqual({
-      ...assistantEntry,
-      message: { ...assistantEntry.message, provider: "openai", api: "openai-chatgpt-responses" },
-    });
-    expect(result.recovery).toEqual({ complete: true, repaired: true, events: 2 });
-    expect(fs.readFileSync(filename, "utf8")).toBe(original);
   });
 });

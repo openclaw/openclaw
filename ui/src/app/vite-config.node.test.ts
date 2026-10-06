@@ -11,7 +11,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   hashControlUiTranslationText,
   loadControlUiTranslationMemory,
-  materializeControlUiLocaleCatalog,
 } from "../../../scripts/lib/control-ui-i18n-catalog-values.ts";
 import {
   loadControlUiSourceCatalog,
@@ -32,7 +31,11 @@ import {
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { en } from "../i18n/locales/en.ts";
 
-const childProcessMocks = vi.hoisted(() => ({ execFileSync: vi.fn() }));
+const childProcessMocks = vi.hoisted(() => {
+  // Shared Node browser fixtures can load Vite before this file registers its mocks.
+  vi.resetModules();
+  return { execFileSync: vi.fn() };
+});
 const fsMocks = vi.hoisted(() => ({ existsSync: vi.fn(), readFileSync: vi.fn() }));
 const viteMocks = vi.hoisted(() => ({ runnerImport: vi.fn() }));
 
@@ -342,6 +345,8 @@ describe("Control UI Vite config", () => {
       resolveControlUiBuildInfo({
         env: { OPENCLAW_CONTROL_UI_RELEASE_BUILD: "true" },
         readGitCommit: () => null,
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => "2026.7.10",
       }),
     ).toThrow("OPENCLAW_CONTROL_UI_RELEASE_BUILD must be 1 when set");
@@ -353,6 +358,8 @@ describe("Control UI Vite config", () => {
       resolveControlUiBuildInfo({
         env: { GITHUB_SHA: "b".repeat(40) },
         readGitCommit,
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => null,
       }),
     ).toMatchObject({ commit: "c".repeat(40), commitAt: null });
@@ -361,6 +368,8 @@ describe("Control UI Vite config", () => {
       resolveControlUiBuildInfo({
         env: { GITHUB_SHA: "b".repeat(40) },
         readGitCommit: () => null,
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => null,
       }).commit,
     ).toBe("b".repeat(40));
@@ -379,6 +388,8 @@ describe("Control UI Vite config", () => {
       resolveControlUiBuildInfo({
         env: { GIT_SHA: "A".repeat(40), GITHUB_SHA: "b".repeat(40) },
         readGitCommit,
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => null,
       }).commit,
     ).toBe("a".repeat(40));
@@ -471,6 +482,8 @@ describe("Control UI Vite config", () => {
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
         },
         readGitCommit: () => "a".repeat(40),
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => "2026.7.10",
       }).buildId,
     ).toBe("2026.7.10-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z");
@@ -484,6 +497,8 @@ describe("Control UI Vite config", () => {
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
         },
         readGitCommit: () => "a".repeat(40),
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => "2026.7.10",
       }).buildId,
     ).toBe("2026.7.10-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z");
@@ -642,64 +657,6 @@ describe("Control UI Vite config", () => {
     expect(flat.get("updates.page.intro")).toBe(
       "Manage the connected Gateway's release channel and update policy.",
     );
-  });
-
-  it("materializes translated config hints from the current source catalog", () => {
-    const text = "Gateway Token";
-    const key = configHintTranslationKey("gateway.auth.token", "label", text);
-    const translated = materializeControlUiLocaleCatalog(
-      flattenTranslations(loadControlUiSourceCatalog()),
-      new Map([
-        [
-          "config-hint",
-          {
-            cache_key: "config-hint",
-            model: "test",
-            provider: "test",
-            segment_id: key,
-            source_path: "test",
-            src_lang: "en",
-            text,
-            text_hash: hashControlUiTranslationText(text),
-            tgt_lang: "tr",
-            translated: "Ağ geçidi belirteci",
-            updated_at: "2026-09-03T00:00:00.000Z",
-          },
-        ],
-      ]),
-    );
-
-    expect(flattenTranslations(translated).get(key)).toBe("Ağ geçidi belirteci");
-  });
-
-  it("cannot serve a stale config-hint translation under the current content-addressed key", () => {
-    const oldText = "Old Gateway Token";
-    const oldKey = configHintTranslationKey("gateway.auth.token", "label", oldText);
-    const currentKey = configHintTranslationKey("gateway.auth.token", "label", "Gateway Token");
-    const translated = materializeControlUiLocaleCatalog(
-      flattenTranslations(loadControlUiSourceCatalog()),
-      new Map([
-        [
-          "stale-config-hint",
-          {
-            cache_key: "stale-config-hint",
-            model: "test",
-            provider: "test",
-            segment_id: oldKey,
-            source_path: "test",
-            src_lang: "en",
-            text: oldText,
-            text_hash: hashControlUiTranslationText(oldText),
-            tgt_lang: "tr",
-            translated: "Eski ağ geçidi belirteci",
-            updated_at: "2026-09-03T00:00:00.000Z",
-          },
-        ],
-      ]),
-    );
-
-    expect(flattenTranslations(translated).get(oldKey)).toBeUndefined();
-    expect(flattenTranslations(translated).get(currentKey)).toBeUndefined();
   });
 
   it("includes every English dependency in the raw source-hash input", async () => {

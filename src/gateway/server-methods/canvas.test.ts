@@ -5,7 +5,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { createCoreGatewayMethodDescriptors } from "../methods/core-descriptors.js";
+import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { canvasHandlers } from "./canvas.js";
 import type {
@@ -95,7 +95,7 @@ describe("canvas.document.view", () => {
     context.getMcpAppSandboxPort = () => undefined;
     vi.mocked(context.ensureSandboxHostPort!).mockReturnValue(sandbox.promise);
     const pending = invoke();
-    expect(readDocument).toHaveBeenCalledWith("cv_widget", { maxBytes: 2 * 1024 * 1024 });
+    expect(readDocument).toHaveBeenCalledWith("cv_widget", { maxBytes: 10 * 1024 * 1024 });
     expect(context.ensureSandboxHostPort).toHaveBeenCalledOnce();
     sandbox.resolve(18790);
     document.resolve({ html: "<p>Widget</p>", cspSandbox: "scripts" });
@@ -125,9 +125,12 @@ describe("canvas.document.view", () => {
 
   it("refuses non-widget documents and oversized widget bytes", async () => {
     const { invoke } = createHarness();
+    const html = "é".repeat(5 * 1024 * 1024);
+    readDocument.mockResolvedValueOnce({ html, cspSandbox: "scripts" });
+    expect((await invoke()).mock.calls[0]?.[1]?.html).toBe(html);
     for (const document of [
       { html: "<p>Non-widget artifact</p>" },
-      { html: "x".repeat(2 * 1024 * 1024 + 1), cspSandbox: "scripts" },
+      { html: html + "é", cspSandbox: "scripts" },
     ]) {
       readDocument.mockResolvedValueOnce(document);
       expect((await invoke()).mock.calls[0]?.[0]).toBe(false);
@@ -221,19 +224,22 @@ describe("canvas.document.preview", () => {
     expect(descriptor?.handler).toBe(canvasHandlers["canvas.document.preview"]);
   });
 
-  it.each(["", "a".repeat(256 * 1024), "🦀".repeat(64 * 1024)])(
-    "accepts empty HTML and the exact ASCII/multibyte UTF-8 limit (case %#)",
-    async (html) => {
-      const { invoke } = createPreviewHarness();
-      const respond = await invoke({ html });
-      expect(respond.mock.calls[0]).toEqual([
-        true,
-        { html, sandboxPort: 18790, sandboxUrl: expect.any(String) },
-      ]);
-    },
-  );
+  it.each([
+    "",
+    "a".repeat(2 * 1024 * 1024 - 1),
+    "a".repeat(2 * 1024 * 1024),
+    "🦀".repeat(512 * 1024),
+  ])("accepts empty HTML and the exact ASCII/multibyte UTF-8 limit (case %#)", async (html) => {
+    const { invoke } = createPreviewHarness();
+    const respond = await invoke({ html });
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]).toEqual([
+      true,
+      { html, sandboxPort: 18790, sandboxUrl: expect.any(String) },
+    ]);
+  });
 
-  it.each(["a".repeat(256 * 1024 + 1), "🦀".repeat(64 * 1024) + "a"])(
+  it.each(["a".repeat(2 * 1024 * 1024 + 1), "🦀".repeat(512 * 1024) + "a"])(
     "rejects oversized ASCII/multibyte bytes before provisioning (case %#)",
     async (html) => {
       const { context, invoke } = createPreviewHarness();

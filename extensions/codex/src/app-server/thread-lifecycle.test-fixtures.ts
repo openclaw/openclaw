@@ -1,18 +1,34 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
-import { expect, onTestFinished, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { onTestFinished, vi } from "vitest";
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
-import { threadStartResult as nativeThreadStartResult } from "./codex-app-server.test-fixtures.js";
+import {
+  createCodexRequestRecorder,
+  threadStartResult as nativeThreadStartResult,
+} from "./codex-app-server.test-fixtures.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import { isJsonObject, type RpcRequest, type CodexServerNotification } from "./protocol.js";
-import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
+import {
+  isJsonObject,
+  isRpcResponse,
+  type RpcRequest,
+  type RpcResponse,
+  type CodexServerNotification,
+} from "./protocol.js";
+import {
+  registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
-import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 
 type NativeFixtureThread = {
   response: Record<string, unknown>;
@@ -28,6 +44,11 @@ export function createCodexLifecycleHarness(options: {
   unsubscribe?: (threadId: string) => unknown;
 }) {
   const threads = new Map<string, NativeFixtureThread>();
+  const writtenRequests = createCodexRequestRecorder();
+  const serverResponses = new Map<
+    string | number,
+    ReturnType<typeof createDeferred<RpcResponse>>
+  >();
   const remember = (response: unknown, loaded: boolean, subscribed: boolean) => {
     if (
       !isJsonObject(response) ||
@@ -132,10 +153,15 @@ export function createCodexLifecycleHarness(options: {
   };
   const harness = createClientHarness({
     onWrite: (line, send) => {
-      const request = JSON.parse(line) as RpcRequest;
+      const request = JSON.parse(line) as RpcRequest | RpcResponse;
+      if (isRpcResponse(request)) {
+        serverResponses.get(request.id)?.resolve(request);
+        return;
+      }
       if (request.id === undefined || typeof request.method !== "string") {
         return;
       }
+      writtenRequests.record(request.method, request.params);
       void dispatch(request).then(
         (result) => send({ id: request.id, result }),
         (error: unknown) =>
@@ -152,6 +178,25 @@ export function createCodexLifecycleHarness(options: {
   });
   return Object.assign(harness, {
     request: vi.spyOn(harness.client, "request"),
+    waitForMethod: writtenRequests.waitForMethod,
+    handleServerRequest: async (incoming: {
+      id: string | number;
+      method: string;
+      params?: unknown;
+    }) => {
+      const pending = createDeferred<RpcResponse>();
+      serverResponses.set(incoming.id, pending);
+      try {
+        harness.send(incoming);
+        const response = await pending.promise;
+        if (response.error) {
+          throw new Error("Synthetic server request rejected", { cause: response.error });
+        }
+        return response.result;
+      } finally {
+        serverResponses.delete(incoming.id);
+      }
+    },
     seed: (
       response: unknown,
       state: { loaded: boolean; subscribed: boolean } = { loaded: false, subscribed: false },
@@ -177,16 +222,15 @@ export function createCodexLifecycleHarness(options: {
 export function createCodexLifecycleTurnHarness(
   params: Parameters<typeof createCodexLifecycleHarness>[0] & {
     agentDir: string;
-    wait: { interval: number; timeout: number };
   },
 ) {
   const wire = createCodexLifecycleHarness(params);
   const { client, request } = wire;
-  const requests: Array<{ method: string; params: unknown }> = [];
+  const { requests, record } = createCodexRequestRecorder();
   const nativeRequest = CodexAppServerClient.prototype.request.bind(client);
   request.mockImplementation((method, requestParams, options) => {
     if (method !== "initialize") {
-      requests.push({ method, params: requestParams });
+      record(method, requestParams);
     }
     return nativeRequest(method, requestParams, options);
   });
@@ -228,42 +272,19 @@ export function createCodexLifecycleTurnHarness(
     wire.notify(notification);
     await Promise.all(pendingNotifications);
   };
-  const waitForMethod = async (method: string, timeoutMs: number = params.wait.timeout) => {
-    await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain(method), {
-      interval: 1,
-      timeout: timeoutMs,
-    });
-  };
-  const handleServerRequest = async (incoming: {
-    id: string | number;
-    method: string;
-    params?: unknown;
-  }) => {
-    wire.send(incoming);
-    let response: { result?: unknown; error?: unknown } | undefined;
-    await vi.waitFor(() => {
-      response = wire.writes
-        .map((line) => JSON.parse(line))
-        .find((entry) => entry.id === incoming.id && !entry.method);
-      expect(response).toBeDefined();
-    }, params.wait);
-    if (response?.error) {
-      throw new Error("Synthetic server request rejected", { cause: response.error });
-    }
-    return response?.result;
-  };
   return {
     acquire,
     client,
     request,
     requests,
-    waitForMethod,
+    writes: wire.writes,
+    waitForMethod: wire.waitForMethod,
     notify,
-    handleServerRequest,
+    handleServerRequest: wire.handleServerRequest,
     completeTurn: async ({ threadId, turnId }: { threadId: string; turnId: string }) => {
       await notify({
         method: "turn/completed",
-        params: { threadId, turn: { id: turnId, status: "completed" } },
+        params: { threadId, turn: { id: turnId, status: "completed", items: [] } },
       });
     },
     close: () => client.close(),
@@ -317,6 +338,10 @@ function createTrackedThreadLifecycleHostCapability(): ThreadLifecycleTestHostCa
     kind: "agent-harness-host-capability",
     version: 1,
     assertActive,
+    retainSourceAuthority: () => {
+      assertActive();
+      return undefined;
+    },
     bindToolSurface: (tools) => {
       assertActive();
       return tools.map((tool) => {
@@ -351,6 +376,36 @@ function createTrackedThreadLifecycleHostCapability(): ThreadLifecycleTestHostCa
   };
 }
 
+export function twoStartsThenResumeMethods(preflightMethods: readonly string[]): string[] {
+  return [
+    ...preflightMethods,
+    "thread/start",
+    "thread/unsubscribe",
+    ...preflightMethods,
+    "thread/start",
+    "thread/unsubscribe",
+    ...preflightMethods,
+    "thread/read",
+    "thread/resume",
+    "thread/inject_items",
+  ];
+}
+
+export type CodexAttemptThreadInput = Omit<
+  Parameters<typeof startOrResumeThreadImpl>[0],
+  "bindingStore" | "params"
+> & { params: EmbeddedRunAttemptParams };
+
+/** Full-attempt fixtures register their transcript identity; cold session preparation has no transcript. */
+export function startOrResumeAttemptThread(params: CodexAttemptThreadInput) {
+  registerCodexTestSessionIdentity(
+    params.params.sessionFile,
+    params.params.sessionId,
+    params.params.sessionKey,
+  );
+  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
+}
+
 export function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
 ) {
@@ -362,43 +417,35 @@ export function startOrResumeThread(
 }
 
 export function threadStartResult(threadId = "thread-1"): Record<string, unknown> {
-  return {
-    thread: {
-      id: threadId,
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: "/tmp",
-      projectId: null,
-      cliVersion: "0.149.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4-codex",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: "/tmp",
-    instructionSources: [],
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
-  };
+  const result = nativeThreadStartResult(threadId, "/tmp");
+  return { ...result, thread: { ...result.thread, cliVersion: "0.149.0" } };
 }
 
 export function threadResumeResult(threadId = "thread-existing"): Record<string, unknown> {
   return threadStartResult(threadId);
+}
+
+export async function writeNativeCatalogFixture(
+  rolloutPath: string,
+  threadId: string,
+  dynamicTools: unknown,
+) {
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(
+    rolloutPath,
+    `${JSON.stringify({ type: "session_meta", payload: { id: threadId, dynamic_tools: dynamicTools } })}\n`,
+  );
+}
+
+export function disabledMcpServerStatus(name: string) {
+  return {
+    name,
+    serverInfo: null,
+    tools: {},
+    resources: [],
+    resourceTemplates: [],
+    authStatus: "unsupported",
+  };
 }
 
 export function createAppServerOptions(): CodexAppServerRuntimeOptions {
@@ -413,6 +460,15 @@ export function createAppServerOptions(): CodexAppServerRuntimeOptions {
     loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
     approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+  } as unknown as CodexAppServerRuntimeOptions;
+}
+
+export function createThreadRequestAppServerOptions(): CodexAppServerRuntimeOptions {
+  return {
+    start: createAppServerOptions().start,
+    approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
   } as unknown as CodexAppServerRuntimeOptions;
@@ -483,4 +539,60 @@ export function createCodexRuntimePlanFixture(): NonNullable<
       logDiagnostics: () => undefined,
     },
   } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+}
+
+export function createThreadRequestAttemptParams(params: {
+  provider: string;
+  authProfileId?: string;
+  authProfileType?: "oauth" | "api_key";
+  authProfileProvider?: string;
+  authProfileProviders?: Record<string, string>;
+  runtimeExternalProfileIds?: string[];
+  bootstrapContextMode?: "full" | "lightweight";
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  images?: EmbeddedRunAttemptParams["images"];
+  modelId?: string;
+}): EmbeddedRunAttemptParams {
+  const authProfileProviders =
+    params.authProfileProviders ??
+    (params.authProfileId
+      ? { [params.authProfileId]: params.authProfileProvider ?? "openai" }
+      : {});
+  const authProfileType = params.authProfileType ?? "oauth";
+  return {
+    hostCapabilities: createCodexTestHostCapabilities(),
+    provider: params.provider,
+    modelId: params.modelId ?? "gpt-5.4",
+    prompt: "test prompt",
+    authProfileId: params.authProfileId,
+    ...(params.bootstrapContextMode ? { bootstrapContextMode: params.bootstrapContextMode } : {}),
+    ...(params.bootstrapContextRunKind
+      ? { bootstrapContextRunKind: params.bootstrapContextRunKind }
+      : {}),
+    ...(params.images ? { images: params.images } : {}),
+    authProfileStore: {
+      version: 1,
+      profiles: Object.fromEntries(
+        Object.entries(authProfileProviders).map(([profileId, provider]) => [
+          profileId,
+          authProfileType === "api_key"
+            ? {
+                type: "api_key" as const,
+                provider,
+                key: "sk-test",
+              }
+            : {
+                type: "oauth" as const,
+                provider,
+                access: "access-token",
+                refresh: "refresh-token",
+                expires: Date.now() + 60_000,
+              },
+        ]),
+      ),
+      ...(params.runtimeExternalProfileIds
+        ? { runtimeExternalProfileIds: params.runtimeExternalProfileIds }
+        : {}),
+    },
+  } as EmbeddedRunAttemptParams;
 }

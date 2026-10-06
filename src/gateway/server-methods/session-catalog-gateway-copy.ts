@@ -17,10 +17,10 @@ import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../../security/external-content.js";
-import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
+import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { createGatewaySession } from "../session-create-service.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { buildModelsListResult } from "./models-list-result.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const GATEWAY_COPY_MODEL_LABEL_MAX_CHARS = 384;
@@ -57,7 +57,7 @@ async function resolveGatewayCopyModel(params: {
       catalog,
       ref: source,
       defaultProvider: defaultModel.provider,
-      defaultModel: defaultModel.model,
+      defaultModel,
       agentId: params.agentId,
     });
     return {
@@ -128,8 +128,8 @@ export async function copySessionCatalogToGateway(params: {
       : {}),
     creation: resolveOperatorSessionCreation(params.client),
     commandSource: "gateway:sessions.catalog.continue",
-    loadGatewayModelCatalog: () =>
-      params.context.loadGatewayModelCatalog({ agentId: params.agentId }),
+    loadGatewayModelCatalogSnapshot: () =>
+      params.context.loadGatewayModelCatalogSnapshot({ agentId: params.agentId }),
     atomicInitialization: true,
     commitGuard: params.commitGuard,
     afterCreate: async (entry) => {
@@ -178,14 +178,18 @@ export async function copySessionCatalogToGateway(params: {
   if (!created.ok) {
     return created;
   }
-  recordSessionStateEvent({
-    sessionKey: created.key,
-    agentId: created.agentId,
-    kind: "adopted",
-    actorType: "human",
-    dedupeKey: `adopted:${created.key}`,
-    summary: `adopted from ${params.request.catalogId}`,
-    payload: { catalogId: params.request.catalogId, hostId: params.request.hostId },
-  });
+  await recordSessionStateEventAsync(
+    {
+      sessionKey: created.key,
+      agentId: created.agentId,
+      kind: "adopted",
+      actorType: "human",
+      dedupeKey: `adopted:${created.key}`,
+      summary: `adopted from ${params.request.catalogId}`,
+      payload: { catalogId: params.request.catalogId, hostId: params.request.hostId },
+    },
+    { assertCurrent: params.commitGuard },
+  );
+  params.commitGuard?.();
   return { ok: true, sessionKey: created.key };
 }

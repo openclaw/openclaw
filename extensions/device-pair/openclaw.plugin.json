@@ -2,7 +2,7 @@
   "id": "device-pair",
   "categories": ["security"],
   "doctorContract": {
-    "stateMigrations": [{ "id": "device-pair-notify-json-to-plugin-state" }]
+    "stateMigrations": [{ "id": "device-pair-retired-state" }]
   },
   "activation": {
     "onStartup": true
@@ -14,6 +14,14 @@
     {
       "name": "pair",
       "kind": "runtime-slash"
+    }
+  ],
+  "configGroups": [
+    {
+      "id": "device-pairing",
+      "title": "Device pairing",
+      "order": 10,
+      "properties": ["publicUrl"]
     }
   ],
   "configSchema": {

@@ -31,7 +31,9 @@ import {
 import type { SessionCatalogProvider as RegisteredSessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
@@ -53,12 +55,18 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
+import { continueLocalCodexSession as continueLocalCodexSessionRuntime } from "./session-catalog-adoption.js";
+import { archiveLocalCodexSession } from "./session-catalog-archive.js";
 import {
   createCodexCatalogHomeResolver as createCodexCatalogHomeResolverRuntime,
   type CodexCatalogHome,
 } from "./session-catalog-homes.js";
-import { listPairedNode } from "./session-catalog-node-continue.js";
-import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
+import {
+  createCodexSessionCatalogListOperation,
+  runCatalogListInline,
+} from "./session-catalog-list-operation.js";
+import { readCodexSessionTranscript as readCodexSessionTranscriptRuntime } from "./session-catalog-listing.js";
+import { catalogError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
@@ -68,8 +76,7 @@ import type {
   CodexSessionCatalogControlFactory,
 } from "./session-catalog-types.js";
 import {
-  CODEX_LOCAL_SESSION_HOST_ID,
-  codexSessionCatalogRuntime,
+  registerCodexSessionCatalog as registerCodexSessionCatalogRuntime,
   createCodexSessionCatalogControl as createCodexSessionCatalogControlRuntime,
   createCodexSessionCatalogNodeHostCommands as createCodexSessionCatalogNodeHostCommandsRuntime,
   createCodexSessionCatalogNodeInvokePolicies,
@@ -86,11 +93,13 @@ export const CODEX_NODE_CONTINUE_COMMANDS = [
 ] as const;
 const originalPath = process.env.PATH;
 export const tempDirs: string[] = [];
+const catalogFactories = new Set<ReturnType<typeof createCodexSessionCatalogControlRuntime>>();
 
 beforeEach(() => {
   const stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "codex-catalog-owner-"));
   tempDirs.push(stateDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("CODEX_HOME", path.join(stateDir, "codex"));
   nodeHostMocks.runNodePtyCommand.mockClear();
   nodeHostMocks.userShellPaths.clear();
   commandRpcMocks.codexControlRequest.mockReset();
@@ -106,19 +115,17 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await Promise.all([...catalogFactories].map((factory) => factory.stop()));
+  catalogFactories.clear();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
   vi.unstubAllEnvs();
   process.env.PATH = originalPath;
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
-
-const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
-const continueLocalCodexSessionRuntime = codexSessionCatalogRuntime.continueLocal;
-const listCodexSessionCatalogRuntime = codexSessionCatalogRuntime.list;
-const readCodexSessionTranscriptRuntime = codexSessionCatalogRuntime.readTranscript;
-const registerCodexSessionCatalogRuntime = codexSessionCatalogRuntime.register;
 
 function createCodexSessionCatalogControlFactory(
   params: Omit<
@@ -126,10 +133,12 @@ function createCodexSessionCatalogControlFactory(
     "resolveRuntimeOptions"
   >,
 ) {
-  return createCodexSessionCatalogControlRuntime({
+  const factory = createCodexSessionCatalogControlRuntime({
     ...params,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
   });
+  catalogFactories.add(factory);
+  return factory;
 }
 
 function createCodexCatalogHomeResolver(
@@ -166,26 +175,37 @@ function asControlFactory(
   }
   const forRequest = "forRequest" in control ? control.forRequest : () => control;
   return {
+    hasActiveWork: () => false,
+    disconnect: async () => {},
     forRequest,
-    forNode: () => ({
+    forNode: async () => ({
       control: forRequest("main"),
       sourceHomeId: "node-native",
       codexHome: resolveCodexAppServerUserHomeDir(),
+      transport: "stdio",
+      assertCurrent: () => {},
     }),
-    homesForAgent: () => [],
-    forUpstream: (agentId) => forRequest(agentId),
+    homesForAgent: async () => [],
+    forUpstream: async (agentId) => forRequest(agentId),
   };
 }
 
-export function listCodexSessionCatalog(
-  params: Omit<Parameters<typeof listCodexSessionCatalogRuntime>[0], "control"> & {
+export async function listCodexSessionCatalog(
+  params: Omit<Parameters<typeof createCodexSessionCatalogListOperation>[0], "control"> & {
     control:
       | CodexSessionCatalogControl
       | CodexSessionCatalogControlFactory
       | CodexSessionCatalogControlFactoryStub;
   },
 ) {
-  return listCodexSessionCatalogRuntime({ ...params, control: asControlFactory(params.control) });
+  return {
+    hosts: await runCatalogListInline(
+      createCodexSessionCatalogListOperation({
+        ...params,
+        control: asControlFactory(params.control),
+      }),
+    ),
+  };
 }
 
 const catalogOwners = new WeakMap<
@@ -345,9 +365,11 @@ export const config = {} as OpenClawConfig;
 export function compatibilityOwnerConfig(owner = "alpha"): OpenClawConfig {
   return {
     agents: {
-      list: ["alpha", "beta"].map((id) => (id === owner ? { id, default: true } : { id })),
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: owner } },
+      entries: { alpha: {}, beta: {} },
     },
-  } as OpenClawConfig;
+  };
 }
 
 export async function normalizeCodexManifestConfig(
@@ -410,6 +432,7 @@ export function createControl(overrides: Partial<CodexSessionCatalogControl> = {
   const control = {
     connectionFingerprint: "catalog-connection",
     withPinnedConnection,
+    initialize: vi.fn(async () => undefined),
     requireEligibleThread: vi.fn(async (threadId: string) => idleThread({ id: threadId })),
     listPage: vi.fn(async () => ({ sessions: [] })),
     listDescendantPage: vi.fn(async () => ({ data: [] })),
@@ -677,9 +700,7 @@ export {
   createCodexCatalogHomeResolver,
   createCodexTestBindingStore,
   buildCodexAppServerConnectionFingerprint,
-  listPairedNode,
   catalogError,
-  parseCatalogPage,
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,

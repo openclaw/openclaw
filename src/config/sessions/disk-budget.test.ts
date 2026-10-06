@@ -12,10 +12,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import {
-  resolveTrajectoryFilePath,
-  resolveTrajectoryPointerFilePath,
-} from "../../trajectory/paths.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { enforceSessionDiskBudget, measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -183,7 +179,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: {
           maxDiskBytes: 150,
           highWaterBytes: 100,
@@ -483,7 +478,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: {
           maxDiskBytes: 1,
           highWaterBytes: 1,
@@ -518,7 +512,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: "agent:main:active",
         maintenance: {
           maxDiskBytes: 1,
           highWaterBytes: 1,
@@ -552,7 +545,6 @@ describe("enforceSessionDiskBudget", () => {
         const result = await enforceSessionDiskBudget({
           store,
           storePath,
-          activeSessionKey: "agent:main:active",
           maintenance: {
             maxDiskBytes: 1,
             highWaterBytes: 1,
@@ -616,10 +608,11 @@ describe("enforceSessionDiskBudget", () => {
       );
       const referencedCheckpointPath = path.join(
         dir,
-        "keep.checkpoint.22222222-2222-4222-8222-222222222222.jsonl",
+        "..keep.checkpoint.22222222-2222-4222-8222-222222222222.jsonl",
       );
       const referencedPostCompactionPath = path.join(dir, "keep-compacted.jsonl");
-      const store: Record<string, SessionEntry> = {
+      // Historical metadata is deliberately outside the current session model.
+      const store = {
         "agent:main:main": {
           sessionId,
           updatedAt: Date.now(),
@@ -644,6 +637,7 @@ describe("enforceSessionDiskBudget", () => {
       await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
       await fs.writeFile(checkpointPath, "c".repeat(5000), "utf-8");
       await fs.writeFile(referencedCheckpointPath, "r".repeat(260), "utf-8");
+      await fs.utimes(referencedCheckpointPath, new Date(0), new Date(0));
       await fs.writeFile(referencedPostCompactionPath, "p".repeat(260), "utf-8");
 
       const result = await enforceSessionDiskBudget({
@@ -666,52 +660,57 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
-  it("removes unreferenced trajectory sidecars while preserving referenced ones", async () => {
-    await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const sessionId = "keep";
-      const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
-      const referencedRuntime = resolveTrajectoryFilePath({
-        env: {},
-        sessionFile: transcriptPath,
-        sessionId,
-      });
-      const referencedPointer = resolveTrajectoryPointerFilePath(transcriptPath);
-      const orphanRuntime = path.join(dir, "old.trajectory.jsonl");
-      const orphanPointer = path.join(dir, "old.trajectory-path.json");
-      const store: Record<string, SessionEntry> = {
-        "agent:main:main": {
-          sessionId,
-          updatedAt: Date.now(),
-        },
-      };
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
-      await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
-      await fs.writeFile(referencedRuntime, "r".repeat(80), "utf-8");
-      await fs.writeFile(referencedPointer, "p".repeat(80), "utf-8");
-      await fs.writeFile(orphanRuntime, "o".repeat(5000), "utf-8");
-      await fs.writeFile(orphanPointer, "q".repeat(5000), "utf-8");
+  it.each([
+    ["keep.jsonl", "keep.trajectory.jsonl", "keep.trajectory-path.json"],
+    ["keep.log", "keep.log.trajectory.jsonl", "keep.log.trajectory-path.json"],
+  ])(
+    "removes orphaned sidecars while preserving %s companions",
+    async (transcript, runtime, pointer) => {
+      await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+        const storePath = path.join(dir, "sessions.json");
+        const sessionId = "keep";
+        const transcriptPath = path.join(dir, transcript);
+        const referencedRuntime = path.join(dir, runtime);
+        const referencedPointer = path.join(dir, pointer);
+        const orphanRuntime = path.join(dir, "old.trajectory.jsonl");
+        const orphanPointer = path.join(dir, "old.trajectory-path.json");
+        const store: Record<string, SessionEntry> = {
+          "agent:main:main": Object.assign(
+            {
+              sessionId,
+              updatedAt: Date.now(),
+            },
+            { sessionFile: transcriptPath },
+          ),
+        };
+        await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+        await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
+        await fs.writeFile(referencedRuntime, "r".repeat(80), "utf-8");
+        await fs.writeFile(referencedPointer, "p".repeat(80), "utf-8");
+        await fs.writeFile(orphanRuntime, "o".repeat(5000), "utf-8");
+        await fs.writeFile(orphanPointer, "q".repeat(5000), "utf-8");
 
-      const result = await enforceSessionDiskBudget({
-        store,
-        storePath,
-        maintenance: {
-          maxDiskBytes: 7000,
-          highWaterBytes: 2000,
-        },
-        warnOnly: false,
-      });
+        const result = await enforceSessionDiskBudget({
+          store,
+          storePath,
+          maintenance: {
+            maxDiskBytes: 7000,
+            highWaterBytes: 2000,
+          },
+          warnOnly: false,
+        });
 
-      await expectPathExists(transcriptPath);
-      await expectPathExists(referencedRuntime);
-      await expectPathExists(referencedPointer);
-      await expectPathMissing(orphanRuntime);
-      await expectPathMissing(orphanPointer);
-      expectBudgetResult(result);
-      expect(result.removedFiles).toBe(2);
-      expect(result.removedEntries).toBe(0);
-    });
-  });
+        await expectPathExists(transcriptPath);
+        await expectPathExists(referencedRuntime);
+        await expectPathExists(referencedPointer);
+        await expectPathMissing(orphanRuntime);
+        await expectPathMissing(orphanPointer);
+        expectBudgetResult(result);
+        expect(result.removedFiles).toBe(2);
+        expect(result.removedEntries).toBe(0);
+      });
+    },
+  );
 
   it("does not evict protected thread session entries under store pressure", async () => {
     await withTestDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
@@ -750,7 +749,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: {
           maxDiskBytes: 1000,
           highWaterBytes: 500,
@@ -793,7 +791,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
         warnOnly: false,
         commitEvictedIndex: async () => {
@@ -845,7 +842,6 @@ describe("enforceSessionDiskBudget", () => {
         enforceSessionDiskBudget({
           store,
           storePath,
-          activeSessionKey: activeKey,
           maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
           warnOnly: false,
           commitEvictedIndex: async () => {
@@ -879,7 +875,6 @@ describe("enforceSessionDiskBudget", () => {
       const result = await enforceSessionDiskBudget({
         store,
         storePath,
-        activeSessionKey: activeKey,
         maintenance: { maxDiskBytes: 100, highWaterBytes: 100 },
         warnOnly: false,
       });
