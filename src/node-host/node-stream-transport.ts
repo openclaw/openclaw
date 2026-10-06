@@ -30,6 +30,10 @@ const STREAM_CLOSE_ACK_MS = 5_000;
 // queued. The library allows 30s for that flush. The short acknowledgement
 // budget starts only after those bytes have left the WebSocket buffer.
 const STREAM_CLOSE_FLUSH_MS = 30_000;
+// bufferedAmount === 0 means the kernel accepted the bytes, not that the
+// gateway has read them. A short ack after a large forward completes the
+// node command, the gateway retires the stream, and the unread tail is lost.
+const LONG_CLOSE_ACK_AFTER_BYTES = 64 * 1024;
 const streamLog = createSubsystemLogger("node-host/stream");
 
 type NodeStreamCloseTrigger =
@@ -109,6 +113,7 @@ function createNodeStreamSplice(params: {
       return () => clearTimeout(timer);
     });
   let settled = false;
+  let forwardedBytes = 0;
   let finish!: (trigger: NodeStreamCloseTrigger, error?: Error) => void;
   const resumeWebSocket = () => params.ws.resume();
   const onMessage = (data: RawData, isBinary: boolean) => {
@@ -160,6 +165,7 @@ function createNodeStreamSplice(params: {
       if (params.ws.readyState !== WEBSOCKET_OPEN) {
         return;
       }
+      forwardedBytes += chunk.length;
       params.ws.send(chunk, { binary: true }, (error) => error && finish("send-error", error));
       if (params.ws.bufferedAmount <= PAUSE_BUFFERED_BYTES || resumeTimer) {
         return;
@@ -205,7 +211,11 @@ function createNodeStreamSplice(params: {
             cancelCloseAck = scheduleCloseAck(armCloseAck, RESUME_CHECK_MS);
             return;
           }
-          cancelCloseAck = scheduleCloseAck(retireUnacknowledged, closeAckMs);
+          const ackDelay =
+            forwardedBytes > LONG_CLOSE_ACK_AFTER_BYTES
+              ? Math.max(closeAckMs, STREAM_CLOSE_FLUSH_MS)
+              : closeAckMs;
+          cancelCloseAck = scheduleCloseAck(retireUnacknowledged, ackDelay);
         };
         armCloseAck();
       } else {

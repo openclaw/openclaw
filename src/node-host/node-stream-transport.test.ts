@@ -460,4 +460,85 @@ describe("node stream close acknowledgement", () => {
       });
     }
   });
+
+  it("waits out a large forward instead of the short close acknowledgement", async () => {
+    const payload = Buffer.alloc(200 * 1024, 7);
+    const gateway = createHttpServer();
+    const wss = new WebSocketServer({ server: gateway });
+    let receivedSevens = 0;
+    wss.on("connection", (ws) => {
+      ws.on("message", (data, isBinary) => {
+        if (!isBinary) {
+          return;
+        }
+        const buffer = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+        for (const byte of buffer) {
+          if (byte === 7) {
+            receivedSevens += 1;
+          }
+        }
+      });
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    let targetPeer: net.Socket | undefined;
+    const targetServer = net.createServer((peer) => {
+      targetPeer = peer;
+    });
+    await new Promise<void>((resolve) => {
+      targetServer.listen(0, "127.0.0.1", resolve);
+    });
+    const delays: number[] = [];
+    const controller = new AbortController();
+    let settled = false;
+    const running = runNodeStreamTransport({
+      gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+      attachPath: "/node-desktop/attach",
+      expectedAttachPath: "/node-desktop/attach",
+      target: { port: (targetServer.address() as AddressInfo).port },
+      metadata: { ok: true },
+      streamName: "desktop",
+      signal: controller.signal,
+      closeAckMs: 40,
+      scheduleCloseAck: (callback, delayMs) => {
+        delays.push(delayMs);
+        if (delayMs >= 30_000) {
+          return () => undefined;
+        }
+        const timer = setTimeout(callback, delayMs);
+        return () => clearTimeout(timer);
+      },
+    }).then(() => {
+      settled = true;
+    });
+    try {
+      await expect.poll(() => targetPeer).toBeTruthy();
+      targetPeer?.write(payload);
+      targetPeer?.end();
+      await expect.poll(() => receivedSevens).toBe(payload.length);
+      for (const client of wss.clients) {
+        client.close();
+      }
+      await expect.poll(() => settled).toBe(true);
+      expect(delays.includes(40)).toBe(false);
+      expect(receivedSevens).toBe(payload.length);
+    } finally {
+      controller.abort();
+      await running;
+      targetPeer?.destroy();
+      await new Promise<void>((resolve) => {
+        targetServer.close(() => resolve());
+      });
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  });
 });
