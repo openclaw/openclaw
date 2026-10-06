@@ -2125,10 +2125,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: currentColor;
 }
 
-.agent-chat__input .chat-controls__permission-trigger--default {
-  color: var(--chat-composer-secondary);
-}
-
+.agent-chat__input .chat-controls__permission-trigger--default,
 .agent-chat__input .chat-controls__permission-trigger,
 .agent-chat__input .chat-controls__model-settings .chat-controls__inline-select-trigger {
   color: var(--chat-composer-secondary);

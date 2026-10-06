@@ -149,6 +149,7 @@ export function makeDispatchTestContext(
           enabled: true,
           capacity: { total: 2, available: 2 },
           capturedExecPolicy: true,
+          promptContext: 1,
         },
         commands: observed?.commands ?? ["system.run", "codex.exec-server.stdio.v1"],
       };

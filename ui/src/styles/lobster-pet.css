@@ -873,10 +873,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
     opacity: 0.75;
     transform: scale(1);
   }
-  70% {
-    opacity: 0;
-    transform: scale(1.25);
-  }
+  70%,
   100% {
     opacity: 0;
     transform: scale(1.25);

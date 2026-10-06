@@ -1,4 +1,3 @@
-// Assertions for update-channel switch E2E scenarios.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -32,10 +31,10 @@ function findTopLevelBlock(lines, key) {
 function parseYamlScalar(raw) {
   const trimmed = raw.trim();
   const withoutComment = trimmed.replace(/\s+#.*$/, "");
-  if (withoutComment.startsWith('"') && withoutComment.endsWith('"')) {
-    return withoutComment.slice(1, -1);
-  }
-  if (withoutComment.startsWith("'") && withoutComment.endsWith("'")) {
+  if (
+    (withoutComment.startsWith('"') && withoutComment.endsWith('"')) ||
+    (withoutComment.startsWith("'") && withoutComment.endsWith("'"))
+  ) {
     return withoutComment.slice(1, -1);
   }
   return withoutComment;
@@ -79,18 +78,17 @@ function writeWorkspacePnpmConfig(file, keptPatches) {
     lines.push(...nextLines);
   }
 
-  const allowUnusedIndex = lines.findIndex((line) => /^allowUnusedPatches:\s*/.test(line));
-  if (allowUnusedIndex === -1) {
-    lines.push("allowUnusedPatches: true");
-  } else {
-    lines[allowUnusedIndex] = "allowUnusedPatches: true";
-  }
-
-  const minimumReleaseAgeIndex = lines.findIndex((line) => /^minimumReleaseAge:\s*/.test(line));
-  if (minimumReleaseAgeIndex === -1) {
-    lines.push("minimumReleaseAge: 0");
-  } else {
-    lines[minimumReleaseAgeIndex] = "minimumReleaseAge: 0";
+  for (const [key, value] of [
+    ["allowUnusedPatches", true],
+    ["minimumReleaseAge", 0],
+  ]) {
+    const index = lines.findIndex((line) => new RegExp(`^${key}:\\s*`).test(line));
+    const setting = `${key}: ${value}`;
+    if (index === -1) {
+      lines.push(setting);
+    } else {
+      lines[index] = setting;
+    }
   }
 
   fs.writeFileSync(file, `${lines.join("\n")}${hadTrailingNewline ? "\n" : ""}`);
@@ -226,14 +224,13 @@ function assertConfigChannel(channel) {
 
 function assertDryRun(kind, channel) {
   const preview = JSON.parse(process.env.UPDATE_JSON ?? "");
-  const reportedKind = kind;
   assert.equal(preview.dryRun, true);
   assert.equal(preview.installKind, "package");
   assert.equal(preview.storedChannel, "dev");
   assert.equal(preview.effectiveChannel, channel);
-  assert.equal(preview.updateInstallKind, reportedKind);
-  assert.equal(preview.mode, reportedKind === "git" ? "git" : "npm");
-  assert.equal(preview.switchToGit, reportedKind === "git");
+  assert.equal(preview.updateInstallKind, kind);
+  assert.equal(preview.mode, kind === "git" ? "git" : "npm");
+  assert.equal(preview.switchToGit, kind === "git");
   assert.equal(preview.switchToPackage, false);
 }
 
@@ -278,13 +275,13 @@ switch (command) {
     assertDirtyUpdate(args[0], args[1]);
     break;
   case "assert-dirty-exit":
-    assertDirtyExit(args[0], args[1]);
+    assertDirtyExit(args[0]);
     break;
   case "assert-config-channel":
     assertConfigChannel(args[0]);
     break;
   case "assert-dry-run":
-    assertDryRun(args[0], args[1], args[2]);
+    assertDryRun(args[0], args[1]);
     break;
   case "assert-status-kind":
     assertStatusKind(args[0]);

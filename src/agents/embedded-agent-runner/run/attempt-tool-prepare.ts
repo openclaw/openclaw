@@ -30,6 +30,7 @@ import {
 } from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
+import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";
 import {
@@ -267,10 +268,12 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       return replaySafetyOptions.declaredReplaySafe(candidate);
     },
   };
+  let webSearchUnconfigured = false;
   const constructTools = async (
     sessionPermissionPolicy: PreparedSessionPermissionPolicy | undefined,
     abortSignal: AbortSignal,
   ) => {
+    webSearchUnconfigured = false;
     const constructedToolsRaw = !shouldConstructTools
       ? []
       : await (async () => {
@@ -305,6 +308,23 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             sessionReadScopeKey: attempt.sessionReadScopeKey,
             sessionConfigSource: attempt.oneShotCliRun ? "pinned" : "runtime",
             webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
+            onWebSearchConfiguration: (configured) => {
+              webSearchUnconfigured =
+                !configured &&
+                projectConversationToolNames({
+                  capabilityProfile: runtimeCapabilityProfile,
+                  toolNames: ["web_search"],
+                  warn: () => undefined,
+                }).length === 1 &&
+                resolveNativeWebSearchRoute({
+                  ...buildConversationContext(),
+                  agentId: params.setup.sessionAgentId,
+                  webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
+                  sandboxToolPolicy: params.setup.sandbox?.tools,
+                  authStore: attempt.authProfileStore,
+                  pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
+                }).kind === "managed";
+            },
             githubPublicationAvailable: attempt.githubPublicationAvailable,
             abortSignal,
             skillWorkshop: {
@@ -447,6 +467,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         const policy = mode ? { root: params.setup.sessionPermissionRoot, mode } : undefined;
         const nextTools = await constructTools(policy, toolAbortSignal);
         toolsRaw.splice(0, toolsRaw.length, ...nextTools);
+      },
+      get webSearchUnconfigured() {
+        return webSearchUnconfigured;
       },
       codeModeControlsEnabledForRun,
       codeModeSkills,

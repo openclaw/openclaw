@@ -207,10 +207,7 @@
   justify-content: center;
 }
 
-.chat-queue__grip-state--active {
-  display: none;
-}
-
+.chat-queue__grip-state--active,
 .chat-queue__item:hover .chat-queue__grip:not(:disabled) .chat-queue__grip-state--idle,
 .chat-queue__grip:is(:focus-visible, :active) .chat-queue__grip-state--idle {
   display: none;

@@ -1,5 +1,3 @@
-// Restart request parsing keeps restart sentinel payloads limited to resumable
-// session, delivery, thread, and delay fields.
 import {
   asSafeIntegerInRange,
   MAX_TIMER_TIMEOUT_MS,

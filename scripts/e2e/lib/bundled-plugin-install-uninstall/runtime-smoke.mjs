@@ -1,4 +1,3 @@
-// Runtime smoke script for bundled plugin install/uninstall E2E validation.
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -75,11 +74,8 @@ function readInteger(raw, fallback, name, minimum) {
   if (!text) {
     return fallback;
   }
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
   const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed < minimum) {
+  if (!/^\d+$/u.test(text) || !Number.isSafeInteger(parsed) || parsed < minimum) {
     throw new Error(`invalid ${name}: ${text}`);
   }
   return parsed;
@@ -101,46 +97,41 @@ function readFileChunk(file, startOffset, maxBytes) {
   try {
     stat = fs.statSync(file);
   } catch {
-    return { buffer: Buffer.alloc(0), startOffset: 0, size: 0 };
+    return Buffer.alloc(0);
   }
   if (!stat.isFile() || stat.size <= 0) {
-    return { buffer: Buffer.alloc(0), startOffset: 0, size: stat.size };
+    return Buffer.alloc(0);
   }
 
-  const safeMaxBytes = Math.max(1, Math.floor(Number(maxBytes) || LOG_SCAN_BYTES));
-  const safeStartOffset = Math.min(Math.max(0, Math.floor(Number(startOffset) || 0)), stat.size);
-  const bytesToRead = Math.min(safeMaxBytes, stat.size - safeStartOffset);
+  const safeStartOffset = Math.min(startOffset, stat.size);
+  const bytesToRead = Math.min(maxBytes, stat.size - safeStartOffset);
   if (bytesToRead <= 0) {
-    return { buffer: Buffer.alloc(0), startOffset: safeStartOffset, size: stat.size };
+    return Buffer.alloc(0);
   }
 
   const buffer = Buffer.alloc(bytesToRead);
   const fd = fs.openSync(file, "r");
   try {
     const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, safeStartOffset);
-    return { buffer: buffer.subarray(0, bytesRead), startOffset: safeStartOffset, size: stat.size };
+    return buffer.subarray(0, bytesRead);
   } finally {
     fs.closeSync(fd);
   }
 }
 
-function readFileTailBuffer(file, maxBytes = LOG_SCAN_BYTES) {
+export function readFileTail(file, maxBytes = LOG_SCAN_BYTES) {
   let stat;
   try {
     stat = fs.statSync(file);
   } catch {
-    return { buffer: Buffer.alloc(0), startOffset: 0, size: 0 };
+    return "";
   }
   const safeMaxBytes = Math.max(1, Math.floor(Number(maxBytes) || LOG_SCAN_BYTES));
   const startOffset = Math.max(0, stat.size - safeMaxBytes);
-  return readFileChunk(file, startOffset, safeMaxBytes);
+  return readFileChunk(file, startOffset, safeMaxBytes).toString("utf8");
 }
 
-export function readFileTail(file, maxBytes = LOG_SCAN_BYTES) {
-  return readFileTailBuffer(file, maxBytes).buffer.toString("utf8");
-}
-
-function findFirstNeedleOffset(file, needles) {
+export function findReadyLogOffset(file) {
   let stat;
   try {
     stat = fs.statSync(file);
@@ -151,7 +142,7 @@ function findFirstNeedleOffset(file, needles) {
     return 0;
   }
 
-  const carryBytes = Math.max(0, ...needles.map((needle) => needle.length - 1));
+  const carryBytes = Math.max(0, ...READY_OFFSET_LOG_NEEDLES.map((needle) => needle.length - 1));
   const chunk = Buffer.alloc(Math.min(LOG_SCAN_BYTES, stat.size));
   const fd = fs.openSync(file, "r");
   let carry = Buffer.alloc(0);
@@ -166,9 +157,9 @@ function findFirstNeedleOffset(file, needles) {
       const view = chunk.subarray(0, bytesRead);
       const combined = carry.length > 0 ? Buffer.concat([carry, view]) : view;
       const combinedOffset = offset - carry.length;
-      const indexes = needles
-        .map((needle) => combined.indexOf(needle))
-        .filter((index) => index >= 0);
+      const indexes = READY_OFFSET_LOG_NEEDLES.map((needle) => combined.indexOf(needle)).filter(
+        (index) => index >= 0,
+      );
       if (indexes.length > 0) {
         return combinedOffset + Math.min(...indexes);
       }
@@ -205,7 +196,7 @@ export function createReadyLogScanner(file) {
       offset = 0;
     }
     while (offset < stat.size) {
-      const { buffer } = readFileChunk(file, offset, LOG_SCAN_BYTES);
+      const buffer = readFileChunk(file, offset, LOG_SCAN_BYTES);
       if (buffer.length === 0) {
         break;
       }
@@ -298,14 +289,6 @@ export function activateSmokePlugin(config, pluginId, channels = []) {
       },
     },
   };
-}
-
-export function withSmokeTtsConfig(config, tts) {
-  return { ...config, tts: { ...config.tts, ...tts } };
-}
-
-export function readSmokeTtsConfig(config) {
-  return config.tts;
 }
 
 function channelActivationEnvName(channel) {
@@ -791,7 +774,7 @@ function formatHttpProbeBody(res) {
   if (res.body !== undefined) {
     return JSON.stringify(res.body);
   }
-  const text = typeof res.bodyText === "string" ? res.bodyText.trim() : "";
+  const text = res.bodyText?.trim() ?? "";
   if (!text) {
     return "null";
   }
@@ -938,17 +921,7 @@ function parseJsonValue(text) {
 
 function isGatewayJsonOutput(raw) {
   return (
-    raw?.ok === false ||
-    hasOwnPayloadField(raw, "result") ||
-    hasOwnPayloadField(raw, "payload") ||
-    hasOwnPayloadField(raw, "data")
-  );
-}
-
-function hasOwnPayloadField(raw, field) {
-  return (
-    ((typeof raw === "object" && raw !== null) || typeof raw === "function") &&
-    Object.hasOwn(raw, field)
+    raw.ok === false || ["result", "payload", "data"].some((field) => Object.hasOwn(raw, field))
   );
 }
 
@@ -992,15 +965,16 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
   const port = resolveRuntimeSmokePort(pluginIndex);
-  let config = ensureGatewayConfig(
+  const config = ensureGatewayConfig(
     activateSmokePlugin(readConfig(), pluginId, plan.channels),
     port,
   );
   const env = withManifestChannelActivationEnv(process.env, plan.channels);
   if (plan.speechProviders[0]) {
     const provider = plan.speechProviders[0];
-    const existingTts = readSmokeTtsConfig(config);
-    config = withSmokeTtsConfig(config, {
+    const existingTts = config.tts;
+    config.tts = {
+      ...existingTts,
       provider,
       providers: {
         ...existingTts?.providers,
@@ -1008,7 +982,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
           ...existingTts?.providers?.[provider],
         },
       },
-    });
+    };
   }
   writeConfig(config);
 
@@ -1186,10 +1160,6 @@ async function runWatchdog(options) {
   await assertNoPackageManagerChildren(options.child.pid);
 }
 
-export function findReadyLogOffset(logPath) {
-  return findFirstNeedleOffset(logPath, READY_OFFSET_LOG_NEEDLES);
-}
-
 export function assertGatewayLogNotTruncated(logPath) {
   if (readFileTail(logPath).includes(GATEWAY_LOG_TRUNCATED_NEEDLE)) {
     throw new Error(
@@ -1227,7 +1197,7 @@ export function assertNoPostReadyRuntimeDepsWork(logPath, readyOffset) {
   let offset = Math.min(Math.max(0, Math.floor(Number(readyOffset) || 0)), stat.size);
   let carry = "";
   while (offset < stat.size) {
-    const { buffer } = readFileChunk(logPath, offset, LOG_SCAN_BYTES);
+    const buffer = readFileChunk(logPath, offset, LOG_SCAN_BYTES);
     if (buffer.length === 0) {
       break;
     }
@@ -1242,7 +1212,7 @@ export function assertNoPostReadyRuntimeDepsWork(logPath, readyOffset) {
 }
 
 function commandIncludesPackageManager(args) {
-  return String(args ?? "")
+  return args
     .trim()
     .split(/\s+/u)
     .some((token) =>
@@ -1252,22 +1222,6 @@ function commandIncludesPackageManager(args) {
     );
 }
 
-function parseProcessSnapshot(stdout) {
-  const processes = [];
-  for (const line of String(stdout ?? "").split("\n")) {
-    const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/u.exec(line);
-    if (!match) {
-      continue;
-    }
-    processes.push({
-      args: match[3],
-      pid: Number(match[1]),
-      ppid: Number(match[2]),
-    });
-  }
-  return processes;
-}
-
 export function findPackageManagerDescendants(psOutput, rootPid) {
   const root = Number(rootPid);
   if (!Number.isInteger(root) || root <= 0) {
@@ -1275,7 +1229,16 @@ export function findPackageManagerDescendants(psOutput, rootPid) {
   }
 
   const childrenByParent = new Map();
-  for (const processInfo of parseProcessSnapshot(psOutput)) {
+  for (const line of String(psOutput ?? "").split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/u.exec(line);
+    if (!match) {
+      continue;
+    }
+    const processInfo = {
+      args: match[3],
+      pid: Number(match[1]),
+      ppid: Number(match[2]),
+    };
     const list = childrenByParent.get(processInfo.ppid) ?? [];
     list.push(processInfo);
     childrenByParent.set(processInfo.ppid, list);
@@ -1286,7 +1249,7 @@ export function findPackageManagerDescendants(psOutput, rootPid) {
   const seen = new Set();
   while (pending.length > 0) {
     const current = pending.shift();
-    if (!current || seen.has(current.pid)) {
+    if (seen.has(current.pid)) {
       continue;
     }
     seen.add(current.pid);
@@ -1338,16 +1301,14 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
   const env = createIsolatedStateEnv(`tts-disabled-${pluginId}`);
   writeConfig(
     ensureGatewayConfig(
-      withSmokeTtsConfig(
-        {
-          plugins: {
-            enabled: false,
-          },
+      {
+        plugins: {
+          enabled: false,
         },
-        {
+        tts: {
           provider: selectedProvider,
         },
-      ),
+      },
       port,
     ),
     env,
@@ -1384,17 +1345,15 @@ async function smokeOpenAiTts(pluginIndex) {
   const env = createIsolatedStateEnv("tts-openai-live");
   writeConfig(
     ensureGatewayConfig(
-      withSmokeTtsConfig(
-        {
-          plugins: {
-            enabled: true,
-            allow: ["openai"],
-            entries: {
-              openai: { enabled: true },
-            },
+      {
+        plugins: {
+          enabled: true,
+          allow: ["openai"],
+          entries: {
+            openai: { enabled: true },
           },
         },
-        {
+        tts: {
           provider: "openai",
           providers: {
             openai: {
@@ -1402,7 +1361,7 @@ async function smokeOpenAiTts(pluginIndex) {
             },
           },
         },
-      ),
+      },
       port,
     ),
     env,

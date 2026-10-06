@@ -159,6 +159,12 @@ function createFixture() {
     idempotencyKey: "observe-1",
     ...overrides,
   });
+  const click = (idempotencyKey: string) =>
+    request({
+      command: "computer.act",
+      params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
+      idempotencyKey,
+    });
   return {
     service,
     config,
@@ -172,6 +178,7 @@ function createFixture() {
     leases,
     stops,
     request,
+    click,
   };
 }
 
@@ -195,14 +202,7 @@ describe("Gateway computer service", () => {
         f.config.desktop!.host!.enabled = !initiallyManaged;
       }
       await expect(
-        f.service.invoke({
-          ...f.request({
-            command: "computer.act",
-            params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
-            idempotencyKey: "stale-target-click",
-          }),
-          generation: originalGeneration,
-        }),
+        f.service.invoke({ ...f.click("stale-target-click"), generation: originalGeneration }),
       ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
       expect(f.act).not.toHaveBeenCalled();
       expect(startComputerHostProcess).toHaveBeenCalledOnce();
@@ -423,13 +423,7 @@ describe("Gateway computer service", () => {
     });
     const physicalId = f.openExecution.mock.calls[0]![0].executionId;
     expect(physicalId).not.toBe(logicalId);
-    await f.service.invoke(
-      f.request({
-        command: "computer.act",
-        params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
-        idempotencyKey: "click-1",
-      }),
-    );
+    await f.service.invoke(f.click("click-1"));
     expect(JSON.parse(f.act.mock.calls[0]![0] ?? "{}")).toMatchObject({
       executionId: physicalId,
       action: "left_click",

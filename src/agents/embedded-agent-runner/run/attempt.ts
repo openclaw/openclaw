@@ -341,6 +341,7 @@ async function runEmbeddedAttemptOwned(
         modelToolsEnabled: toolsEnabled,
         skillsPrompt,
         codeModeActive: codeModeControlsEnabledForRun,
+        webSearchUnconfigured: () => preparedToolBase.webSearchUnconfigured,
         toolSearchCatalogRef,
         toolSearchDirectoryEnabled: toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
         toolSearchRuntimeConfig,

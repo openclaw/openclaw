@@ -22,6 +22,18 @@ vi.mock("../approval-channel-custody.js", () => ({
   prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
 }));
 
+function createFixture(includeSystemAgent = false) {
+  const databaseOptions = createDatabaseOptions();
+  const managers = createManagers(databaseOptions);
+  const handlers = createApprovalHandlers({
+    execApprovalManager: managers.exec,
+    pluginApprovalManager: managers.plugin,
+    systemAgentApprovalManager: includeSystemAgent ? managers.systemAgent : undefined,
+    databaseOptions,
+  });
+  return { databaseOptions, managers, handlers };
+}
+
 describe("approval.resolve channel reviewer custody", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -29,8 +41,7 @@ describe("approval.resolve channel reviewer custody", () => {
   });
 
   it("resolves a system-agent proposal through its channel reviewer custody", async () => {
-    const databaseOptions = createDatabaseOptions();
-    const managers = createManagers(databaseOptions);
+    const { managers, handlers } = createFixture(true);
     const pending = await registerSystemAgent(
       managers.systemAgent,
       "system-agent:channel-reviewer",
@@ -45,13 +56,6 @@ describe("approval.resolve channel reviewer custody", () => {
             }
           : null,
     );
-    const handlers = createApprovalHandlers({
-      execApprovalManager: managers.exec,
-      pluginApprovalManager: managers.plugin,
-      systemAgentApprovalManager: managers.systemAgent,
-      databaseOptions,
-    });
-
     const response = await invoke({
       handlers,
       method: "approval.resolve",
@@ -72,20 +76,12 @@ describe("approval.resolve channel reviewer custody", () => {
   });
 
   it("refuses a system-agent decision when reviewer custody is revoked before the final write", async () => {
-    const databaseOptions = createDatabaseOptions();
-    const managers = createManagers(databaseOptions);
+    const { databaseOptions, managers, handlers } = createFixture(true);
     const pending = await registerSystemAgent(managers.systemAgent, "system-agent:revoked-owner");
     // Custody holds when the request arrives, then the owner is removed before the decision write.
     prepareApprovalChannelCustodyMock
       .mockReturnValueOnce({ resolverId: "irc:default", authorizes: () => true })
       .mockReturnValue(null);
-    const handlers = createApprovalHandlers({
-      execApprovalManager: managers.exec,
-      pluginApprovalManager: managers.plugin,
-      systemAgentApprovalManager: managers.systemAgent,
-      databaseOptions,
-    });
-
     const response = await invoke({
       handlers,
       method: "approval.resolve",
@@ -105,8 +101,7 @@ describe("approval.resolve channel reviewer custody", () => {
   });
 
   it("refuses a plugin reviewer revoked between lookup and the final decision write", async () => {
-    const databaseOptions = createDatabaseOptions();
-    const managers = createManagers(databaseOptions);
+    const { databaseOptions, managers, handlers } = createFixture();
     const record = managers.plugin.create(
       {
         title: "Plugin permission",
@@ -144,11 +139,6 @@ describe("approval.resolve channel reviewer custody", () => {
         return authorized ? { resolverId: "slack:default", authorizes: () => true } : null;
       },
     );
-    const handlers = createApprovalHandlers({
-      execApprovalManager: managers.exec,
-      pluginApprovalManager: managers.plugin,
-      databaseOptions,
-    });
     const context = { ...createContext(), getRuntimeConfig: () => config };
     const resolve = async (senderId: string) =>
       await invoke({
@@ -171,8 +161,7 @@ describe("approval.resolve channel reviewer custody", () => {
   });
 
   it("checks live channel custody before the canonical resolution CAS", async () => {
-    const databaseOptions = createDatabaseOptions();
-    const managers = createManagers(databaseOptions);
+    const { databaseOptions, managers, handlers } = createFixture();
     const pending = await registerExec(managers.exec, {
       id: "channel-custody-cas",
       request: { turnSourceChannel: "telegram", turnSourceAccountId: "ops" },
@@ -183,12 +172,6 @@ describe("approval.resolve channel reviewer custody", () => {
       authorizes: (request: { request: ExecApprovalRequestPayload }) =>
         request.request.turnSourceAccountId === "ops",
     });
-    const handlers = createApprovalHandlers({
-      execApprovalManager: managers.exec,
-      pluginApprovalManager: managers.plugin,
-      databaseOptions,
-    });
-
     const response = await invoke({
       handlers,
       method: "approval.resolve",
