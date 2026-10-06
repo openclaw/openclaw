@@ -1,4 +1,3 @@
-/** Agent-runner execution loop, fallback handling, and user-facing failure mapping. */
 import crypto from "node:crypto";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
@@ -65,10 +64,12 @@ import {
   buildTerminalAgentRunFailureReplyPayload,
   markAgentRunFailureReplyPayload,
 } from "./agent-runner-failure-reply.js";
-import {
-  executeAgentFallbackCycle,
-  type AgentFallbackCycleState,
-} from "./agent-runner-fallback-cycle.js";
+import { runAgentFallbackCandidates } from "./agent-runner-fallback-candidate.js";
+import type {
+  AgentFallbackCycleParams,
+  AgentFallbackCycleState,
+} from "./agent-runner-fallback-cycle.types.js";
+import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import {
   createAgentTurnTimingTracker,
@@ -392,7 +393,7 @@ async function executeAgentTurnInternalLoop(
         directBlockDeliveries,
         heartbeatState,
       });
-      const cycle = await executeAgentFallbackCycle({
+      const cycleParams: AgentFallbackCycleParams = {
         preparedRunAdmission,
         turn: params,
         effectiveRun,
@@ -411,7 +412,15 @@ async function executeAgentTurnInternalLoop(
         shouldSurfaceToControlUi,
         commitTerminalOutcome,
         clearRecoveredAutoFallbackPrimaryProbe,
+      };
+      const fallbackResult = await runAgentFallbackCandidates(cycleParams);
+      agentTurnTiming.logIfSlow({
+        runId,
+        sessionId: params.followupRun.run.sessionId,
+        sessionKey: params.sessionKey,
+        outcome: "completed",
       });
+      const cycle = await settleAgentFallbackCycle({ cycle: cycleParams, fallbackResult });
       if (cycle.kind === "aborted") {
         return cycle;
       }
@@ -609,7 +618,6 @@ async function executeAgentTurnInternal(
   }
 }
 
-/** Runs the agent turn with provider/model fallback, retry, and closed settlement. */
 async function executeAgentTurnOutcome(
   executionParams: AppContextTurnParams,
   runId: string,
@@ -698,7 +706,6 @@ async function executeAgentTurnOutcome(
   }
 }
 
-/** Runs the agent turn and records its execution and message-tool delivery outcomes. */
 export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
   params.opts?.onRunVerbosityResolved?.({
     verboseLevelOverride: params.followupRun.run.verboseLevelOverride,

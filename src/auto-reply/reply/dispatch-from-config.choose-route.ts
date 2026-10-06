@@ -25,6 +25,7 @@ import {
 import { renderPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { recoverBlockReplySources, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
+import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
@@ -38,7 +39,6 @@ import { suppressPendingFinalDelivery } from "./dispatch-from-config.pending-fin
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import { runReplyDispatchTakeover } from "./dispatch-from-config.reply-dispatch-hook.js";
 import { maybeRefuseRestrictedRuntimeTakeover } from "./dispatch-from-config.restricted-runtime.js";
-import { createSessionMetadataChangeNotifier } from "./dispatch-from-config.session-metadata.js";
 import {
   captureDeliveredTranscriptMirror,
   mirrorDeliveredReplyToTranscript,
@@ -101,9 +101,27 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const shouldSendToolSummariesAsync = async () =>
     params.replyOptions?.suppressToolProgressMessages !== true &&
     (await shouldEmitVerboseProgressAsync());
-  const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
-    params.onSessionMetadataChanges,
-  );
+  const { onSessionMetadataChanges } = params;
+  const notifiedKeys = new Set<string>();
+  const routeState: { sessionMetadataChangesForResult?: CommandSessionMetadataChange[] } = {};
+  const notifySessionMetadataChanges = (changes: CommandSessionMetadataChange[] | undefined) => {
+    const freshChanges = changes?.filter((change) => {
+      const key = JSON.stringify([change.sessionKey, change.agentId ?? null, change.reason]);
+      if (notifiedKeys.has(key)) {
+        return false;
+      }
+      notifiedKeys.add(key);
+      return true;
+    });
+    if (!freshChanges?.length) {
+      return;
+    }
+    routeState.sessionMetadataChangesForResult = [
+      ...(routeState.sessionMetadataChangesForResult ?? []),
+      ...freshChanges,
+    ];
+    onSessionMetadataChanges?.(freshChanges);
+  };
   const allowsVerboseProgressDespiteSourceSuppression = () =>
     state.suppressAutomaticSourceDelivery &&
     state.sourceReplyDeliveryMode === "message_tool_only" &&
@@ -116,10 +134,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     (state.suppressDelivery &&
       !(allowsVerboseProgressDespiteSourceSuppression() && shouldSendToolSummaries()));
   const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
-    state.suppressAutomaticSourceDelivery &&
-    state.sourceReplyDeliveryMode === "message_tool_only" &&
-    ctx.InboundEventKind !== "room_event" &&
-    !state.sendPolicyDenied &&
+    allowsVerboseProgressDespiteSourceSuppression() &&
     params.replyOptions?.forceToolResultProgress === true;
   let finalReplyDeliveryStarted = false;
   const isSessionWriterDeliveryAuthorized = (payload: ReplyPayload) =>

@@ -30,7 +30,7 @@ import {
   extractRestoreErrorDetails,
   readConfigHealthEntry,
 } from "./io.observe-state.js";
-import { resolveConfigReadRecoveryContext } from "./io.observe-suspicious.js";
+import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type {
@@ -353,16 +353,20 @@ function* planSuspiciousConfigRead(
           stat: null,
         })
       : undefined);
-  const recoveryContext = resolveConfigReadRecoveryContext({
-    current,
+  const suspicious = resolveConfigObserveSuspiciousReasons({
+    bytes: current.bytes,
+    hasMeta: current.hasMeta,
+    gatewayMode: current.gatewayMode,
     parsed,
-    entry,
-    backupBaseline,
+    lastKnownGood: backupBaseline,
   });
-  if (!recoveryContext) {
+  if (suspicious.length === 0) {
     return null;
   }
-  const { suspicious, suspiciousSignature } = recoveryContext;
+  const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
+  if (entry.lastObservedSuspiciousSignature === suspiciousSignature) {
+    return null;
+  }
   backupRaw ??= (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
   if (!backupRaw) {
     return null;

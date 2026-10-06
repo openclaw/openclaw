@@ -1,4 +1,3 @@
-/** Helper predicates and gates used while streaming agent-runner payloads. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import {
   hasOutboundReplyContent,
@@ -9,7 +8,6 @@ import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
-/** Returns true when a payload carries audio media. */
 export const isAudioPayload = (payload: ReplyPayload): boolean =>
   resolveSendableOutboundReplyParts(payload).mediaUrls.some(isAudioFileName);
 
@@ -36,7 +34,6 @@ function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | unde
       ? normalizeVerboseLevel(entry.verboseLevel)
       : undefined;
   } catch {
-    // ignore store read failures
     return undefined;
   }
 }
@@ -65,15 +62,12 @@ function createVerboseGate(
   };
 }
 
-/** Creates the visibility gate for tool result summaries. */
 export const createShouldEmitToolResult = (params: VerboseGateParams): (() => boolean) =>
   createVerboseGate(params, (level) => level !== "off");
 
-/** Creates the visibility gate for command/tool output streams. */
 export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => boolean) =>
   createVerboseGate(params, (level) => level === "full");
 
-/** Sends typing signals for visible text payloads when typing is enabled. */
 export const signalTypingIfNeeded = async (
   payloads: ReplyPayload[],
   typingSignals: TypingSignaler,

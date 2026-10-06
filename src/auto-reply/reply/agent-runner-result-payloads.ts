@@ -483,9 +483,6 @@ export async function prepareReplyAgentPayloads(state: {
     });
   }
 
-  // Drain any late tool/block deliveries before deciding there's "nothing to send".
-  // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
-  // keep the typing indicator stuck.
   if (
     payloadArray.length === 0 &&
     fallbackNoticePayloads.length === 0 &&

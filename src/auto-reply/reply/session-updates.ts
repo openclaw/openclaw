@@ -99,7 +99,6 @@ async function persistSkillSnapshot(params: {
   return { entry: persistedEntry ?? undefined, updated: Boolean(persistedEntry) && updated };
 }
 
-/** Ensures a session entry has the reusable skill snapshot needed for reply runs. */
 export async function ensureSkillSnapshot(params: {
   agentId: string;
   sessionEntry?: SessionEntry;
