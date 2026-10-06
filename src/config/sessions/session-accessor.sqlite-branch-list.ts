@@ -94,7 +94,7 @@ export async function listSessionBranches(
           key,
           async () => {
             const { runSessionBranchSummaryWorkerRequest } =
-              await import("./session-transcript-read-worker-runtime.js");
+              await import("./session-transcript-worker-runtime.js");
             const read = () => {
               assertCurrent();
               return runSessionBranchSummaryWorkerRequest(

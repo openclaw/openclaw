@@ -8,7 +8,6 @@ import type {
   WorkerTaskPoolOptions,
 } from "../../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runSessionBranchSummaryWorkerRequest } from "./session-transcript-read-worker-runtime.js";
 import {
   historyLane,
   maintenanceLane,
@@ -20,6 +19,7 @@ import {
   isSessionHistoryWorkerCold,
   prewarmSessionHistoryWorker,
   retainSessionHistoryWorkerDatabase,
+  runSessionBranchSummaryWorkerRequest,
   withSessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";

@@ -3,7 +3,6 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
-import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
@@ -156,20 +155,4 @@ export async function readSessionResetRecallCutoffInWorker(
     throw new Error("Session transcript worker returned an export instead of reset metadata");
   }
   return result.cutoff;
-}
-
-export async function runSessionBranchSummaryWorkerRequest(
-  request: SessionBranchSummaryReadRequest,
-  signal: AbortSignal,
-) {
-  const [{ withSessionHistoryWorkerDatabase }, { maintenanceLane }] = await Promise.all([
-    import("./session-transcript-worker-runtime.js"),
-    import("./session-transcript-worker-resources.js"),
-  ]);
-  const { database, ...read } = request;
-  return withSessionHistoryWorkerDatabase(
-    database,
-    (owner) => owner.readBranchSummaries({ request: read }, signal),
-    maintenanceLane,
-  );
 }
