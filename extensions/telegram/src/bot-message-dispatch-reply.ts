@@ -41,13 +41,12 @@ import {
   normalizePreparedDeliveryPayload,
   formatTelegramGroupThreadReply,
 } from "./bot-message-dispatch-payload.js";
-import { pushToolProgress } from "./bot-message-dispatch-progress.js";
+import { pushToolProgress, retainProgressDraft } from "./bot-message-dispatch-progress.js";
 import { deduplicateBlockSentMedia, trackBlockMedia } from "./bot-message-dispatch.media-dedup.js";
 import type {
   TelegramDispatchTurn as Turn,
   TelegramReplyStateSlice,
 } from "./bot-message-dispatch.types.js";
-import { buildTelegramInboundOriginTarget } from "./bot/helpers.js";
 import {
   appendTelegramDroppedControlFallback,
   resolveTelegramInlineButtons,
@@ -270,26 +269,16 @@ async function adoptProgressContinuation(
     return false;
   }
   info.assertPlatformSendAuthorized?.();
-  const adopted = await adopt({
-    channel: "telegram",
-    accountId: turn.context.route.accountId,
-    to: buildTelegramInboundOriginTarget(turn.context.chatId, turn.context.threadSpec),
-    threadId: turn.context.threadSpec.id,
-    messageId: String(messageId),
-    text,
-    snapshot: turn.progressCompositor.getSnapshot(),
-  });
-  if (!adopted) {
+  if (!adopt(retainProgressDraft(turn, stream))) {
     return false;
   }
-  // Core now owns the visible card. Remove the old transport before any awaited
-  // retirement so late callbacks and unconditional cleanup cannot delete it.
+  // The retained draft now owns the card. Detach it from this turn so final
+  // cleanup and late lane callbacks cannot edit or delete it.
   turn.answerLane.stream = undefined;
   turn.progressContinuationAdopted = true;
   resetLaneState(turn, turn.answerLane);
   resetReasoningStepState(turn);
   turn.deliveryState.markDelivered();
-  await stream.discard();
   return true;
 }
 export async function deliverReply(

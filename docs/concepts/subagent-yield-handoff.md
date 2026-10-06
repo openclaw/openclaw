@@ -180,24 +180,17 @@ continuations do not send activity to an external channel. This
 activity signal does not change the configured message queue mode or restore
 individual tool-progress messages.
 
-When Telegram confirms an existing progress message and accepts its handoff,
-the native child cohort retains that message while the requester turn is paused.
-With `streaming.progress.toolProgress: true`, prepared child operation names
-and outcomes can update the same message. Private child prose, reasoning,
-commands, arguments, and results are not copied into that progress draft.
-The final answer remains a separate delivery obligation; confirmed final delivery
-cleans up the temporary progress message without delaying registry settlement.
-An edit failure disables further edits but retains independently authorized
-terminal cleanup. Cancellation also stops edits and cleans up the message while
-its original audience and source remain current.
-
-A missing message receipt or refused handoff keeps the ordinary waiting
-acknowledgment. Streaming opt-outs still apply. Message custody is process-local:
-Gateway replacement, account disablement, requester reset or archive, and source
-revocation cannot revive an old presenter from a stored message ID. This handoff
-covers accepted announcing subagents, not collectors or arbitrary background
-jobs. It does not restore the former Tasks presenter or create a separate task
-or flow projection.
+On Telegram, a confirmed `progress` draft can stay with the yielding turn's
+announcing children instead of the waiting acknowledgment. Telegram keeps
+rendering, throttling and deleting it; the native registry only forwards child
+status and prepared operation names (never child prose, commands, arguments or
+results) and honors `streaming.progress.toolProgress`. A resumed parent that
+yields again keeps the same draft for its new children. The draft is deleted when
+the settle wake completes the last tracked cohort (final, `NO_REPLY` or terminal
+failure) or when stop or reset cancels the children. It is process-local: a
+Gateway restart does not revive it. Other channels keep the waiting
+acknowledgment. A yielded turn still does not start a separate task or flow
+projection.
 
 [Progress cards](/tools/progress-card) remain durable session state. The parent
 updates its own card as work advances and when child results return. Inspect

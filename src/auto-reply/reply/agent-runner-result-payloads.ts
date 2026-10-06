@@ -601,26 +601,18 @@ export async function prepareReplyAgentPayloads(state: {
       ? appendUnscheduledReminderNote(replyPayloads)
       : replyPayloads;
 
-  const progressStatusPayload = guardedReplyPayloads.find(
+  const statusPayload = guardedReplyPayloads.find(
     (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
   );
-  if (progressStatusPayload) {
+  if (statusPayload) {
     await attachWaitingStatusProgressContinuation({
-      payload: progressStatusPayload,
-      requesterSessionKey: sessionKey ?? followupRun.run.sessionKey,
-      requesterAgentId: followupRun.run.agentId,
-      requesterSessionId: followupRun.run.sessionId,
-      requesterTurnRunId: runId,
-      requesterContinuationSettled: runResult.requesterContinuationSettled,
+      payload: statusPayload,
       acceptedSessionSpawns: runResult.acceptedSessionSpawns,
       operation: replyOperation,
     });
   }
 
   if (continuationOwner) {
-    const statusPayload = guardedReplyPayloads.find(
-      (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
-    );
     const acceptedSessionSpawns = runResult.acceptedSessionSpawns;
     const requesterSessionKey = sessionKey ?? followupRun.run.sessionKey;
     if (!requesterSessionKey || !acceptedSessionSpawns?.length || !statusPayload) {

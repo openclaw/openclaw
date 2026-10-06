@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import type { ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk/reply-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
@@ -77,7 +78,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
           toolProgress: true,
           finalReply: setReplyPayloadMetadata(reply, {
             progressContinuation: {
-              adopt: async () => {
+              adopt: () => {
                 adopted = true;
                 return true;
               },
@@ -221,60 +222,8 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     ).toEqual([]);
   });
 
-  it.each(["none", "forum", "direct-messages"] as const)(
-    "hands off the canonical %s audience rather than only the chat id",
-    async (scope) => {
-      const context = http.createContext();
-      context.threadSpec = scope === "none" ? { scope: "none" } : { scope, id: 77 };
-      const suffix =
-        scope === "forum" ? ":topic:77" : scope === "direct-messages" ? ":direct-topic:77" : "";
-      const expectedTo = "telegram:" + context.chatId + suffix;
-      context.ctxPayload.To = expectedTo;
-      context.ctxPayload.OriginatingTo = expectedTo;
-      let receipt: unknown;
-      await dispatchProgressTurn(
-        async (options) => {
-          await options?.onItemEvent?.({
-            kind: "preamble",
-            itemId: "audience",
-            phase: "end",
-            progressText: "Checking delegated work.",
-          });
-          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "audience" });
-          await waitForBotApiCall((call) => call.method === "sendMessage");
-        },
-        {
-          mode: "progress",
-          toolProgress: true,
-          context,
-          finalReply: setReplyPayloadMetadata(
-            { text: "Waiting for delegated work." },
-            {
-              progressContinuation: {
-                adopt: async (candidate) => {
-                  receipt = candidate;
-                  return true;
-                },
-                close: () => undefined,
-              },
-            },
-          ),
-        },
-      );
-      expect(receipt).toMatchObject({
-        channel: "telegram",
-        accountId: "default",
-        to: expectedTo,
-        ...(scope === "none" ? {} : { threadId: 77 }),
-      });
-      expect(calls.filter((call) => call.fields.text === "Waiting for delegated work.")).toEqual(
-        [],
-      );
-    },
-  );
-
   it.each([true, false])(
-    "retains the existing progress card only when continuation custody is accepted (%s)",
+    "keeps updating and then deletes the same card only after accepted custody (%s)",
     async (accept) => {
       const waitingText = "Waiting for delegated work.";
       const commentary = "Parent commentary remains visible.";
@@ -282,15 +231,17 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
         { step: "Inspect the request", status: "completed" as const },
         { step: "Finish delegated work", status: "in_progress" as const },
       ];
-      let receipt: unknown;
+      let draft:
+        | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressContinuation"]>>[0]
+        | undefined;
       let progressMessageId: number | undefined;
       let parentCallbacks: ReplyResolverOptions | undefined;
       const waitingPayload = setReplyPayloadMetadata(
         { text: waitingText },
         {
           progressContinuation: {
-            adopt: async (candidate) => {
-              receipt = candidate;
+            adopt: (candidate) => {
+              draft = candidate;
               return accept;
             },
             close: () => undefined,
@@ -318,11 +269,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
         { mode: "progress", toolProgress: true, finalReply: waitingPayload },
       );
 
-      expect(receipt).toMatchObject({
-        messageId: String(progressMessageId),
-        text: expect.stringContaining(commentary),
-        snapshot: { statusHeadline: commentary, plan },
-      });
+      expect(draft).toBeDefined();
       if (accept) {
         await parentCallbacks?.onItemEvent?.({
           kind: "preamble",
@@ -351,8 +298,26 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
       ]);
       expect([...visibleMessages.values()][0]).toContain("Finish delegated work");
       expect(calls.filter((call) => call.method === "deleteMessage")).toEqual([]);
-      expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
       expect(calls.some((call) => call.fields.text === waitingText)).toBe(false);
+
+      draft?.push({
+        itemId: "child",
+        kind: "subagent",
+        title: "Delegated verification",
+        phase: "update",
+        status: "running",
+      });
+      await expect
+        .poll(() => [...visibleMessages.values()][0], { timeout: 5_000 })
+        .toContain("Delegated verification");
+      draft?.retire();
+      await expect.poll(() => [...visibleMessages.keys()], { timeout: 5_000 }).toEqual([]);
+      expect(
+        calls
+          .filter((call) => call.method === "deleteMessage")
+          .map((call) => Number(call.fields.message_id)),
+      ).toEqual([progressMessageId]);
+      expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
     },
   );
 

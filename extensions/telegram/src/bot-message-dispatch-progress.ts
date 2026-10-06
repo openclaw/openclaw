@@ -21,6 +21,7 @@ import type {
   TelegramDispatchTurnConfig as TurnConfig,
   TelegramProgressStateSlice,
 } from "./bot-message-dispatch.types.js";
+import type { TelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState } from "./lane-delivery-text-deliverer.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { editMessageTelegram } from "./send.js";
@@ -219,6 +220,50 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
     // progress instead of replacing unknown final custody with a duplicate send.
     turn.runtime.error?.(`telegram failed preview settlement: ${formatErrorMessage(error)}`);
   }
+}
+
+/**
+ * Keeps a confirmed progress card after its turn for the owner that adopted it.
+ * The card keeps Telegram's rendering, throttling and deletion; only the
+ * adopting owner's prepared items reach it.
+ */
+export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
+  const compositor = createChannelProgressDraftCompositor({
+    preparedItems: true,
+    entry: turn.telegramCfg,
+    mode: "progress",
+    active: true,
+    seed: `${turn.context.route.accountId}:${turn.context.chatId}:${turn.context.threadSpec.id ?? ""}`,
+    reasoningGate: false,
+    updateOnLineChange: true,
+    initialSnapshot: turn.progressCompositor.getSnapshot(),
+    update: (_text, options) => {
+      stream.updatePreview(
+        renderTelegramProgressDraftPreview(options.snapshot, {
+          toolProgress: compositor.previewToolProgressEnabled,
+          richMessages: turn.richMessages,
+          maxLines: resolveChannelProgressDraftMaxLines(turn.telegramCfg),
+          maxLineChars: resolveChannelProgressDraftMaxLineChars(turn.telegramCfg),
+        }),
+      );
+    },
+  });
+  // Nothing renders until adoption hands the card over and the owner pushes.
+  let queue: Promise<unknown> | undefined;
+  const enqueue = (work: () => Promise<unknown>) => {
+    queue = (queue ?? compositor.start()).then(work).catch((error: unknown) => {
+      turn.runtime.error?.(`telegram retained progress failed: ${formatErrorMessage(error)}`);
+    });
+  };
+  return {
+    push: (item: Parameters<Turn["progressCompositor"]["pushItemEvent"]>[0]) =>
+      enqueue(() => compositor.pushItemEvent(item)),
+    retire: () =>
+      enqueue(async () => {
+        compositor.cancel();
+        await stream.clear();
+      }),
+  };
 }
 
 export async function canPushToolProgress(turn: Turn): Promise<boolean> {

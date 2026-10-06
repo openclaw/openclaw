@@ -197,9 +197,6 @@ export function createTelegramDispatchHttpFixture() {
                 ...(fields.message_thread_id
                   ? { message_thread_id: Number(fields.message_thread_id) }
                   : {}),
-                ...(fields.direct_messages_topic_id
-                  ? { direct_messages_topic: { topic_id: Number(fields.direct_messages_topic_id) } }
-                  : {}),
               },
             }),
           );

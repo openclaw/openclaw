@@ -317,11 +317,6 @@ export async function resolveFollowupDeliveryDecision(params: {
     if (fallbackPayload === waitingStatusPayload) {
       await attachWaitingStatusProgressContinuation({
         payload: fallbackPayload,
-        requesterSessionKey: turn.queued.run.sessionKey,
-        requesterAgentId: turn.queued.run.agentId,
-        requesterSessionId: turn.queued.run.sessionId,
-        requesterTurnRunId: execution.runId,
-        requesterContinuationSettled: result.requesterContinuationSettled,
         acceptedSessionSpawns: result.acceptedSessionSpawns,
         operation: turn.operation,
       });
