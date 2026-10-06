@@ -1487,10 +1487,6 @@ extension OpenClawChatSQLiteTranscriptCache {
     private static func encodeJSON(_ value: some Encodable) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(value)
-        guard let result = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.fileWriteInapplicableStringEncoding)
-        }
-        return result
+        return try String(bytes: encoder.encode(value), encoding: .utf8)!
     }
 }

@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import OpenClawIPC
 import OpenClawKit
 import Security
 import UserNotifications
@@ -20,7 +19,7 @@ struct NotificationManager {
         title: String,
         body: String,
         sound: String?,
-        priority: NotificationPriority? = nil,
+        priority: OpenClawNotificationPriority? = nil,
         identifier: String = UUID().uuidString,
         requestPermission: Bool = true,
         isCurrent: () -> Bool = { true }) async -> Bool
