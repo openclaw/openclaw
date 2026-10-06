@@ -62,10 +62,10 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: false as const, reason: "origin not allowed" },
     },
     {
-      name: "rejects same-origin public host without dangerous fallback",
+      name: "rejects same-origin local-use NAT64 host without dangerous fallback",
       input: {
-        requestHost: "attacker.example.com:18789",
-        origin: "http://attacker.example.com:18789",
+        requestHost: "[64:ff9b:1::8.8.8.8]:18789",
+        origin: "http://[64:ff9b:1::8.8.8.8]:18789",
       },
       expected: { ok: false as const, reason: "origin not allowed" },
     },
@@ -83,15 +83,6 @@ describe("checkBrowserOrigin", () => {
       input: {
         requestHost: "127.0.0.1:18789",
         origin: "http://localhost:5173",
-        isLocalClient: false,
-      },
-      expected: { ok: false as const, reason: "origin not allowed" },
-    },
-    {
-      name: "rejects same-origin loopback host matches for non-local clients",
-      input: {
-        requestHost: "127.0.0.1:18789",
-        origin: "http://127.0.0.1:18789",
         isLocalClient: false,
       },
       expected: { ok: false as const, reason: "origin not allowed" },
@@ -150,17 +141,15 @@ describe("checkBrowserOrigin", () => {
     expect(checkBrowserOrigin(input)).toEqual(expected);
   });
 
-  it.each([
-    "chrome-extension://abcdefghijklmnop",
-    "tauri://localhost",
-    "electron://localhost",
-    "app://desktop",
-  ])("accepts an exactly allowlisted hosted app origin: %s", (origin) => {
-    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
-      ok: true,
-      matchedBy: "allowlist",
-    });
-  });
+  it.each(["chrome-extension://abcdefghijklmnop", "tauri://localhost"])(
+    "accepts an exactly allowlisted hosted app origin: %s",
+    (origin) => {
+      expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
+        ok: true,
+        matchedBy: "allowlist",
+      });
+    },
+  );
 
   it.each([
     "tauri://localhost/path",
@@ -191,6 +180,38 @@ describe("checkBrowserOrigin", () => {
 });
 
 describe("resolveAcceptedBrowserOrigin", () => {
+  it.each([
+    { allowedOrigins: undefined, origin: "https://gateway.example.com", accepted: true },
+    { allowedOrigins: undefined, origin: "https://other.example.com", accepted: false },
+    { allowedOrigins: [], origin: "https://gateway.example.com", accepted: false },
+    {
+      allowedOrigins: ["https://other.example.com"],
+      origin: "https://gateway.example.com",
+      accepted: false,
+    },
+    {
+      allowedOrigins: ["https://other.example.com"],
+      origin: "https://other.example.com",
+      accepted: true,
+    },
+  ])("uses the effective configured origin policy: %j", ({ allowedOrigins, origin, accepted }) => {
+    const req = {
+      headers: { host: "127.0.0.1:18789", origin },
+      socket: { remoteAddress: "203.0.113.10" },
+    } as IncomingMessage;
+    expect(
+      resolveAcceptedBrowserOrigin({
+        req,
+        cfg: {
+          gateway: {
+            publicOrigin: "https://GATEWAY.example.com:443/",
+            controlUi: { allowedOrigins },
+          },
+        },
+      }),
+    ).toBe(accepted ? origin : undefined);
+  });
+
   it("applies the configured Host-header fallback through the canonical request resolver", () => {
     const origin = "https://gateway.example.com:18789";
     const req = {

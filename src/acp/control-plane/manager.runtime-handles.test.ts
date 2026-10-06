@@ -1,15 +1,14 @@
-/** Tests ACP runtime handle caching, reuse, re-ensure, and eviction behavior. */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
   createRuntime,
   disposeAcpSessionManagerInstance,
-  expectRecordFields,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  mockCallArg,
+  installMutableAcpSessionMetaUpsert,
   readySessionMeta,
   type OpenClawConfig,
   type SessionAcpMeta,
@@ -18,596 +17,373 @@ import {
 describe("AcpSessionManager runtime handles", () => {
   installAcpSessionManagerTestLifecycle();
 
-  it("reuses runtime session handles for repeat turns in the same manager process", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "first",
-      mode: "prompt",
-      requestId: "r1",
-    });
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
-    });
-
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
-    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
-  });
-
-  it("disposes every retained runtime handle", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockImplementation((input: unknown) => {
-      const sessionKey = (input as { sessionKey: string }).sessionKey;
-      return {
-        sessionKey,
-        storeSessionKey: sessionKey,
-        acp: readySessionMeta(),
-      };
-    });
-    const manager = new AcpSessionManager();
-
-    for (const [index, sessionKey] of [
-      "agent:claude:acp:session-1",
-      "agent:codex:acp:session-2",
-    ].entries()) {
-      await manager.runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey,
-        text: `turn ${index + 1}`,
-        mode: "prompt",
-        requestId: `r${index + 1}`,
-      });
-    }
-
-    await disposeAcpSessionManagerInstance(manager, "gateway-shutdown");
-
-    expect(runtimeState.close).toHaveBeenCalledTimes(2);
-    expect(
-      new Set(
-        runtimeState.close.mock.calls.map(
-          ([input]) => (input as { handle: { sessionKey: string } }).handle.sessionKey,
-        ),
-      ),
-    ).toEqual(new Set(["agent:claude:acp:session-1", "agent:codex:acp:session-2"]));
-    expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
-  });
-
-  it("cancels an active turn before closing its retained runtime handle", async () => {
-    const runtimeState = createRuntime();
-    let releaseTurn!: () => void;
-    const turnReleased = new Promise<void>((resolve) => {
-      releaseTurn = resolve;
-    });
-    const lifecycle: string[] = [];
-    runtimeState.runTurn.mockImplementation(async function* () {
-      await turnReleased;
-      yield { type: "done" as const };
-    });
-    runtimeState.cancel.mockImplementation(async () => {
-      lifecycle.push("cancel");
-      releaseTurn();
-    });
-    runtimeState.close.mockImplementation(async () => {
-      lifecycle.push("close");
-    });
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    const sessionKey = "agent:claude:acp:active-session";
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
+  function fixture(overrides: Partial<SessionAcpMeta> = {}, cfg: OpenClawConfig = baseCfg) {
+    const state = createRuntime();
+    const persisted = { currentMeta: readySessionMeta(overrides) };
+    const sessionKey = `agent:${persisted.currentMeta.agent}:acp:runtime-handles`;
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
+    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
       sessionKey,
       storeSessionKey: sessionKey,
-      acp: readySessionMeta(),
-    });
+      acp: persisted.currentMeta,
+    }));
+    installMutableAcpSessionMetaUpsert(persisted);
     const manager = new AcpSessionManager();
-    const turnPromise = manager
-      .runTurn({
-        provenance: "system",
-        cfg: baseCfg,
-        sessionKey,
-        text: "active turn",
-        mode: "prompt",
-        requestId: "r-active",
-      })
-      .catch(() => undefined);
-    await vi.waitFor(() => expect(runtimeState.runTurn).toHaveBeenCalledOnce());
+    const target = { cfg, sessionKey };
+    const input = {
+      ...target,
+      provenance: "system" as const,
+      mode: "prompt" as const,
+      text: "work",
+    };
+    const run = (requestId = "turn", config = cfg) =>
+      manager.runTurn({ ...input, cfg: config, requestId });
+    return { state, persisted, manager, target, input, run };
+  }
 
-    await disposeAcpSessionManagerInstance(manager, "gateway-shutdown");
-    await turnPromise;
+  function sourceMeta(): Partial<SessionAcpMeta> {
+    return {
+      backend: "source-backend",
+      runtimeSessionName: "source-runtime",
+      identity: {
+        state: "resolved",
+        source: "status",
+        acpxRecordId: "source-record",
+        acpxSessionId: "source-session",
+        agentSessionId: "source-agent-session",
+        lastUpdatedAt: 1,
+      },
+    };
+  }
 
-    expect(lifecycle).toEqual(["cancel", "close"]);
-    expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
-  });
-
-  it("re-ensures cached runtime handles when the runtime config changes", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
+  it("reuses idle handles across policy edits but replaces a changed backend owner", async () => {
+    const f = fixture();
     const allowlistCfg = {
       ...baseCfg,
-      tools: {
-        exec: {
-          mode: "allowlist",
-          safeBins: ["git"],
-        },
-      },
+      tools: { exec: { mode: "allowlist", safeBins: ["git"] } },
     } satisfies OpenClawConfig;
     const denyCfg = {
       ...baseCfg,
-      tools: {
-        exec: {
-          mode: "deny",
-          safeBins: ["node"],
-        },
-      },
+      tools: { exec: { mode: "deny", safeBins: ["node"] } },
     } satisfies OpenClawConfig;
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: allowlistCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "first",
-      mode: "prompt",
-      requestId: "r1",
+    await f.run("first", allowlistCfg);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30 * 24 * 60 * 60 * 1_000);
+    try {
+      await f.run("second", denyCfg);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(f.state.ensureSession).toHaveBeenCalledOnce();
+    expect(f.state.runTurn).toHaveBeenCalledTimes(2);
+    expect(f.state.close).not.toHaveBeenCalled();
+    expect(f.manager.getObservabilitySnapshot().runtimeCache).toEqual({
+      activeSessions: 1,
+      idleTtlMs: 0,
+      evictedTotal: 0,
     });
-    await manager.runTurn({
-      provenance: "system",
-      cfg: denyCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
+    const successor = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: successor.runtime,
     });
+    await f.run("third", denyCfg);
+    expect(successor.ensureSession).toHaveBeenCalledOnce();
+    expect(successor.runTurn).toHaveBeenCalledOnce();
+    expect(f.state.close).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "runtime-handle-replaced" }),
+    );
+  });
 
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
-    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
-    expectRecordFields(mockCallArg(runtimeState.close), {
+  it("disposes every retained handle and cancels the active turn before its close", async () => {
+    const f = fixture();
+    const idleSessionKey = "agent:claude:acp:idle";
+    hoisted.readAcpSessionEntryMock.mockImplementation(
+      ({ sessionKey }: { sessionKey: string }) => ({
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: readySessionMeta(),
+      }),
+    );
+    const entered = createDeferred();
+    const release = createDeferred();
+    const lifecycle: string[] = [];
+    f.state.runTurn.mockImplementation(async function* ({ handle }) {
+      if (handle.sessionKey === f.target.sessionKey) {
+        entered.resolve();
+        await release.promise;
+      }
+      yield { type: "done" };
+    });
+    f.state.cancel.mockImplementation(async ({ handle }) => {
+      lifecycle.push(`cancel:${handle.sessionKey}`);
+      release.resolve();
+    });
+    f.state.close.mockImplementation(async ({ handle }) => {
+      lifecycle.push(`close:${handle.sessionKey}`);
+    });
+    await f.manager.runTurn({ ...f.input, sessionKey: idleSessionKey, requestId: "idle" });
+    const active = f.run("active");
+    const settled = Promise.allSettled([active]);
+    try {
+      await entered.promise;
+      await disposeAcpSessionManagerInstance(f.manager, "gateway-shutdown");
+      await settled;
+    } finally {
+      release.resolve();
+      await settled;
+    }
+    expect(f.state.close).toHaveBeenCalledTimes(2);
+    expect(new Set(f.state.close.mock.calls.map(([input]) => input.handle.sessionKey))).toEqual(
+      new Set([idleSessionKey, f.target.sessionKey]),
+    );
+    expect(lifecycle.filter((event) => event.endsWith(f.target.sessionKey))).toEqual([
+      `cancel:${f.target.sessionKey}`,
+      `close:${f.target.sessionKey}`,
+    ]);
+    expect(f.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
+  });
+
+  it("closes a dead cached runtime before ensuring its replacement", async () => {
+    const f = fixture();
+    const lifecycle: string[] = [];
+    f.state.ensureSession
+      .mockImplementationOnce(async ({ sessionKey }) => {
+        lifecycle.push("ensure:old");
+        return { sessionKey, backend: "acpx", runtimeSessionName: "runtime-old" };
+      })
+      .mockImplementationOnce(async ({ sessionKey }) => {
+        lifecycle.push("ensure:new");
+        return { sessionKey, backend: "acpx", runtimeSessionName: "runtime-new" };
+      });
+    f.state.close.mockImplementation(async ({ handle }) => {
+      lifecycle.push(`close:${handle.runtimeSessionName}`);
+    });
+    f.state.getStatus
+      .mockResolvedValueOnce({ summary: "status=alive", details: { status: "alive" } })
+      .mockResolvedValueOnce({ summary: "status=dead", details: { status: "dead" } })
+      .mockResolvedValueOnce({ summary: "status=alive", details: { status: "alive" } });
+    await f.run("first");
+    await f.run("second");
+    expect(f.state.ensureSession).toHaveBeenCalledTimes(2);
+    expect(f.state.getStatus).toHaveBeenCalledTimes(3);
+    expect(f.state.runTurn).toHaveBeenCalledTimes(2);
+    expect(f.state.close).toHaveBeenCalledOnce();
+    expect(f.state.close).toHaveBeenCalledWith({
+      handle: expect.objectContaining({ runtimeSessionName: "runtime-old" }),
       reason: "runtime-handle-replaced",
     });
+    expect(lifecycle).toEqual(["ensure:old", "close:runtime-old", "ensure:new"]);
   });
 
-  it("re-ensures cached runtime handles when the backend reports the session is dead", async () => {
-    const runtimeState = createRuntime();
-    runtimeState.getStatus
-      .mockResolvedValueOnce({
-        summary: "status=alive",
-        details: { status: "alive" },
-      })
-      .mockResolvedValueOnce({
-        summary: "status=dead",
-        details: { status: "dead" },
-      })
-      .mockResolvedValueOnce({
-        summary: "status=alive",
-        details: { status: "alive" },
-      });
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
+  it("re-ensures cached handles when persisted session identity changes", async () => {
+    const identity = (generation: number): SessionAcpMeta["identity"] => ({
+      state: "resolved",
+      acpxRecordId: "record-1",
+      acpxSessionId: `acpx-session-${generation}`,
+      agentSessionId: `agent-session-${generation}`,
+      source: "status",
+      lastUpdatedAt: 1,
     });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "first",
-      mode: "prompt",
-      requestId: "r1",
-    });
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
-    });
-
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
-    expect(runtimeState.getStatus).toHaveBeenCalledTimes(3);
-    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
-  });
-
-  it("re-ensures cached runtime handles when persisted ACP session identity changes", async () => {
-    const runtimeState = createRuntime();
-    runtimeState.ensureSession
-      .mockResolvedValueOnce({
-        sessionKey: "agent:codex:acp:session-1",
+    const f = fixture({ runtimeSessionName: "runtime-1", identity: identity(1) });
+    for (const generation of [1, 2]) {
+      f.state.ensureSession.mockResolvedValueOnce({
+        sessionKey: f.target.sessionKey,
         backend: "acpx",
-        runtimeSessionName: "runtime-1",
+        runtimeSessionName: `runtime-${generation}`,
         acpxRecordId: "record-1",
-        backendSessionId: "acpx-session-1",
-        agentSessionId: "agent-session-1",
-      })
-      .mockResolvedValueOnce({
-        sessionKey: "agent:codex:acp:session-1",
-        backend: "acpx",
-        runtimeSessionName: "runtime-2",
-        acpxRecordId: "record-1",
-        backendSessionId: "acpx-session-2",
-        agentSessionId: "agent-session-2",
+        backendSessionId: `acpx-session-${generation}`,
+        agentSessionId: `agent-session-${generation}`,
       });
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    let currentMeta = readySessionMeta({
-      runtimeSessionName: "runtime-1",
-      identity: {
-        state: "resolved",
-        acpxRecordId: "record-1",
-        acpxSessionId: "acpx-session-1",
-        agentSessionId: "agent-session-1",
-        source: "status",
-        lastUpdatedAt: Date.now(),
-      },
-    });
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: currentMeta,
-    }));
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "first",
-      mode: "prompt",
-      requestId: "r1",
-    });
-
-    currentMeta = readySessionMeta({
+    }
+    await f.run("first");
+    f.persisted.currentMeta = readySessionMeta({
       runtimeSessionName: "runtime-2",
+      identity: identity(2),
+    });
+    await f.run("second");
+    expect(f.state.ensureSession).toHaveBeenCalledTimes(2);
+    expect(f.state.runTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores persisted identity, cwd and thinking into a new runtime after restart", async () => {
+    const f = fixture({
+      cwd: "/workspace/stale",
+      runtimeOptions: { cwd: "/workspace/project", thinking: "high" },
       identity: {
         state: "resolved",
-        acpxRecordId: "record-1",
-        acpxSessionId: "acpx-session-2",
-        agentSessionId: "agent-session-2",
         source: "status",
-        lastUpdatedAt: Date.now(),
+        acpxSessionId: "acpx-sid-1",
+        lastUpdatedAt: 1,
       },
     });
-
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
+    await f.run();
+    expect(f.state.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: f.target.sessionKey,
+        agent: "codex",
+        resumeSessionId: "acpx-sid-1",
+        cwd: "/workspace/project",
+        thinking: "high",
+      }),
+    );
+    expect(f.state.prepareFreshSession).not.toHaveBeenCalled();
+    expect(f.persisted.currentMeta.identity?.acpxSessionId).toBe("acpx-sid-1");
+    await expect(f.manager.getSessionStatus(f.target)).resolves.toMatchObject({
+      identity: { acpxSessionId: "acpx-sid-1" },
     });
-
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
-    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
 
-  it("rehydrates runtime handles after a manager restart", async () => {
-    const runtimeState = createRuntime();
+  it("recovers a destination-owned named session during failover without carrying source identity", async () => {
+    const cfg = {
+      acp: { ...baseCfg.acp, backend: "source-backend", fallbacks: ["destination-backend"] },
+    } satisfies OpenClawConfig;
+    const f = fixture(sourceMeta(), cfg);
+    f.state.ensureSession.mockImplementation(async ({ sessionKey }) => ({
+      sessionKey,
+      backend: "destination-backend",
+      runtimeSessionName: "destination-runtime",
+      acpxRecordId: "destination-record",
+      backendSessionId: "destination-session",
+    }));
+    hoisted.requireAcpRuntimeBackendMock.mockImplementation((backendId?: string) => {
+      if (backendId === "source-backend") {
+        throw new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "primary backend unavailable");
+      }
+      if (backendId === "destination-backend") {
+        return { id: backendId, runtime: f.state.runtime };
+      }
+      throw new Error(`unexpected backend ${backendId}`);
+    });
+    await f.run();
+    expect(f.state.prepareFreshSession).not.toHaveBeenCalled();
+    expect(f.state.ensureSession.mock.calls[0]?.[0].resumeSessionId).toBeUndefined();
+    expect(f.state.runTurn.mock.calls[0]?.[0].handle).toMatchObject({
+      acpxRecordId: "destination-record",
+      backendSessionId: "destination-session",
+    });
+    expect(f.state.runTurn.mock.calls[0]?.[0].handle).not.toHaveProperty("agentSessionId");
+    expect(f.persisted.currentMeta).toMatchObject({
+      backend: "destination-backend",
+      runtimeSessionName: "destination-runtime",
+      identity: { acpxRecordId: "destination-record", acpxSessionId: "destination-session" },
+    });
+    expect(f.persisted.currentMeta.identity).not.toHaveProperty("agentSessionId");
+  });
+
+  it("does not resurrect source identity when the destination returns no identifiers", async () => {
+    const cfg = {
+      acp: { ...baseCfg.acp, backend: "destination-backend" },
+    } satisfies OpenClawConfig;
+    const f = fixture(sourceMeta(), cfg);
+    f.state.ensureSession.mockImplementation(async ({ sessionKey }) => ({
+      sessionKey,
+      backend: "destination-backend",
+      runtimeSessionName: "destination-runtime",
+    }));
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
+      id: "destination-backend",
+      runtime: f.state.runtime,
     });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
+    await f.run();
+    expect(f.state.prepareFreshSession).not.toHaveBeenCalled();
+    expect(f.state.ensureSession.mock.calls[0]?.[0].resumeSessionId).toBeUndefined();
+    expect(f.state.runTurn.mock.calls[0]?.[0].handle).not.toHaveProperty("agentSessionId");
+    expect(f.persisted.currentMeta).toMatchObject({
+      backend: "destination-backend",
+      runtimeSessionName: "destination-runtime",
     });
-
-    const managerA = new AcpSessionManager();
-    await managerA.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "before restart",
-      mode: "prompt",
-      requestId: "r1",
-    });
-    const managerB = new AcpSessionManager();
-    await managerB.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r2",
-    });
-
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(f.persisted.currentMeta.identity).toBeUndefined();
   });
 
-  it("passes persisted ACP backend session identity back into ensureSession for configured bindings after restart", async () => {
-    const runtimeState = createRuntime();
+  it("preserves the source owner and identity when destination initialization fails", async () => {
+    const cfg = {
+      acp: { ...baseCfg.acp, backend: "destination-backend" },
+    } satisfies OpenClawConfig;
+    const f = fixture(sourceMeta(), cfg);
+    const sourceIdentity = f.persisted.currentMeta.identity;
+    const source = {
+      backend: "source-backend",
+      runtimeSessionName: "source-runtime",
+      identity: sourceIdentity,
+    };
+    f.state.ensureSession.mockImplementation(async () => {
+      expect(f.persisted.currentMeta).toMatchObject(source);
+      throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "destination unavailable");
+    });
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
+      id: "destination-backend",
+      runtime: f.state.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:demo-binding:default:deadbeef";
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
-      return {
-        sessionKey: key,
-        storeSessionKey: key,
-        acp: {
-          ...readySessionMeta(),
-          runtimeSessionName: key,
-          identity: {
-            state: "resolved",
-            source: "status",
-            acpxSessionId: "acpx-sid-1",
-            lastUpdatedAt: Date.now(),
-          },
-        },
-      };
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r-binding-restart",
-    });
-
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      sessionKey,
-      agent: "codex",
-      resumeSessionId: "acpx-sid-1",
-    });
+    await expect(f.run()).rejects.toMatchObject({ code: "ACP_SESSION_INIT_FAILED" });
+    expect(f.state.prepareFreshSession).not.toHaveBeenCalled();
+    expect(f.state.ensureSession.mock.calls[0]?.[0].resumeSessionId).toBeUndefined();
+    expect(f.persisted.currentMeta).toMatchObject(source);
+    expect(f.persisted.currentMeta.identity).toEqual(sourceIdentity);
   });
 
-  it("prefers the persisted agent session id when reopening an ACP runtime after restart", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    const sessionKey = "agent:gemini:acp:binding:discord:default:restart";
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
-      return {
-        sessionKey: key,
-        storeSessionKey: key,
-        acp: {
-          ...readySessionMeta(),
-          agent: "gemini",
-          runtimeSessionName: key,
-          identity: {
-            state: "resolved",
-            source: "status",
-            acpxSessionId: "acpx-sid-1",
-            agentSessionId: "gemini-sid-1",
-            lastUpdatedAt: Date.now(),
-          },
-        },
-      };
-    });
+  it.each([
+    { agent: "codex", model: "openai/gpt-5.4", supportsModel: true },
+    { agent: "opencode", model: "inherited/default", supportsModel: false },
+  ])(
+    "preserves legacy $agent model state across status and turn restart",
+    async ({ agent, model, supportsModel }) => {
+      const f = fixture({ agent });
+      f.state.ensureSession.mockImplementation(async (input) => {
+        if (!supportsModel && input.modelExplicit) {
+          throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Backend has no model capability");
+        }
+        return {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: "legacy-runtime",
+          backendSessionId: "legacy-session",
+        };
+      });
+      if (!supportsModel) {
+        f.state.setConfigOption.mockRejectedValue(
+          new AcpRuntimeError("ACP_BACKEND_UNSUPPORTED_CONTROL", "Model replay is unsupported"),
+        );
+      }
+      await f.manager.initializeSession({
+        ...f.target,
+        agent,
+        mode: "persistent",
+        runtimeOptions: { model },
+        modelExplicit: supportsModel,
+      });
+      expect(f.persisted.currentMeta.runtimeOptions?.model).toBe(model);
+      for (const [index, manager] of [f.manager, new AcpSessionManager()].entries()) {
+        await expect(manager.getSessionStatus(f.target)).resolves.toMatchObject({
+          runtimeOptions: { model },
+        });
+        const turn = manager.runTurn({ ...f.input, requestId: `model-replay-${index}` });
+        if (supportsModel) {
+          await turn;
+        } else {
+          await expect(turn).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
+        }
+      }
+      expect(f.state.runTurn).toHaveBeenCalledTimes(supportsModel ? 2 : 0);
+      expect(f.state.setConfigOption).toHaveBeenCalledTimes(2);
+      expect(f.state.setConfigOption.mock.calls[1]?.[0]).toMatchObject({
+        key: "model",
+        value: model,
+      });
+      expect(f.persisted.currentMeta.runtimeOptions?.model).toBe(model);
+    },
+  );
 
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r-binding-restart-gemini",
+  it("prefers the agent resume id then retries fresh without resurrecting stale identifiers", async () => {
+    const f = fixture({
+      identity: {
+        state: "resolved",
+        source: "status",
+        acpxSessionId: "acpx-sid-stale",
+        agentSessionId: "agent-sid-stale",
+        lastUpdatedAt: 1,
+      },
     });
-
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      sessionKey,
-      agent: "gemini",
-      resumeSessionId: "gemini-sid-1",
-    });
-  });
-
-  it("passes persisted cwd runtime options into ensureSession after restart", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    const sessionKey = "agent:codex:acp:binding:demo-binding:default:cwd-restart";
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
-      return {
-        sessionKey: key,
-        storeSessionKey: key,
-        acp: {
-          ...readySessionMeta(),
-          cwd: "/workspace/stale",
-          runtimeOptions: {
-            cwd: "/workspace/project",
-          },
-        },
-      };
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r-binding-restart-cwd",
-    });
-
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      sessionKey,
-      cwd: "/workspace/project",
-    });
-  });
-
-  it("passes persisted model runtime options into ensureSession after restart", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    const sessionKey = "agent:codex:acp:binding:demo-binding:default:model-restart";
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
-      return {
-        sessionKey: key,
-        storeSessionKey: key,
-        acp: {
-          ...readySessionMeta(),
-          runtimeOptions: {
-            model: "openai/gpt-5.4",
-          },
-        },
-      };
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r-binding-restart-model",
-    });
-
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      sessionKey,
-      model: "openai/gpt-5.4",
-    });
-  });
-
-  it("passes persisted thinking runtime options into ensureSession after restart", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    const sessionKey = "agent:codex:acp:binding:demo-binding:default:thinking-restart";
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
-      return {
-        sessionKey: key,
-        storeSessionKey: key,
-        acp: {
-          ...readySessionMeta(),
-          runtimeOptions: {
-            thinking: "high",
-          },
-        },
-      };
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r-binding-restart-thinking",
-    });
-
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      sessionKey,
-      thinking: "high",
-    });
-  });
-
-  it("does not resume persisted ACP identity for oneshot sessions after restart", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    const sessionKey = "agent:codex:acp:binding:demo-binding:default:oneshot";
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
-      return {
-        sessionKey: key,
-        storeSessionKey: key,
-        acp: {
-          ...readySessionMeta(),
-          runtimeSessionName: key,
-          mode: "oneshot",
-          identity: {
-            state: "resolved",
-            source: "status",
-            acpxSessionId: "acpx-sid-oneshot",
-            lastUpdatedAt: Date.now(),
-          },
-        },
-      };
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r-binding-oneshot",
-    });
-
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
-    const ensureInput = mockCallArg(runtimeState.ensureSession);
-    expectRecordFields(ensureInput, {
-      sessionKey,
-      agent: "codex",
-      mode: "oneshot",
-    });
-    expect(ensureInput?.resumeSessionId).toBeUndefined();
-  });
-
-  it("falls back to a fresh ensure without reusing stale agent session ids", async () => {
-    const runtimeState = createRuntime();
-    runtimeState.ensureSession.mockImplementation(async (inputUnknown: unknown) => {
-      const input = inputUnknown as {
-        sessionKey: string;
-        agent: string;
-        mode: "persistent" | "oneshot";
-        resumeSessionId?: string;
-      };
+    f.state.ensureSession.mockImplementation(async (input) => {
       if (input.resumeSessionId) {
         throw new AcpRuntimeError(
           "ACP_SESSION_INIT_FAILED",
@@ -617,81 +393,28 @@ describe("AcpSessionManager runtime handles", () => {
       return {
         sessionKey: input.sessionKey,
         backend: "acpx",
-        runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
+        runtimeSessionName: "fresh-runtime",
         backendSessionId: "acpx-sid-fresh",
       };
     });
-    runtimeState.getStatus.mockResolvedValue({
+    f.state.getStatus.mockResolvedValue({
       summary: "status=alive",
       backendSessionId: "acpx-sid-fresh",
       details: { status: "alive" },
     });
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    const sessionKey = "agent:codex:acp:binding:demo-binding:default:retry-fresh";
-    let currentMeta: SessionAcpMeta = {
-      ...readySessionMeta(),
-      runtimeSessionName: sessionKey,
-      identity: {
-        state: "resolved",
-        source: "status",
-        acpxSessionId: "acpx-sid-stale",
-        agentSessionId: "agent-sid-stale",
-        lastUpdatedAt: Date.now(),
-      },
-    };
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
-      return {
-        sessionKey: key,
-        storeSessionKey: key,
-        acp: currentMeta,
-      };
-    });
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
-      };
-      const next = params.mutate(currentMeta, { acp: currentMeta });
-      if (next) {
-        currentMeta = next;
-      }
-      return {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        acp: currentMeta,
-      };
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey,
-      text: "after restart",
-      mode: "prompt",
-      requestId: "r-binding-retry-fresh",
-    });
-
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
-    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
-      sessionKey,
+    await f.run();
+    expect(f.state.ensureSession).toHaveBeenCalledTimes(2);
+    expect(f.state.ensureSession.mock.calls[0]?.[0]).toMatchObject({
+      sessionKey: f.target.sessionKey,
       agent: "codex",
       resumeSessionId: "agent-sid-stale",
     });
-    const retryInput = mockCallArg(runtimeState.ensureSession, 1);
-    expect(retryInput.resumeSessionId).toBeUndefined();
-    const runTurnInput = mockCallArg(runtimeState.runTurn);
-    const handle = expectRecordFields(runTurnInput.handle, {
+    expect(f.state.ensureSession.mock.calls[1]?.[0].resumeSessionId).toBeUndefined();
+    expect(f.state.runTurn.mock.calls[0]?.[0].handle).toMatchObject({
       backendSessionId: "acpx-sid-fresh",
     });
-    expect(handle.agentSessionId).toBeUndefined();
-    expect(currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
-    expect(currentMeta.identity?.agentSessionId).toBeUndefined();
+    expect(f.state.runTurn.mock.calls[0]?.[0].handle.agentSessionId).toBeUndefined();
+    expect(f.persisted.currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
+    expect(f.persisted.currentMeta.identity?.agentSessionId).toBeUndefined();
   });
 });

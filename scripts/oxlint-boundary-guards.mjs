@@ -1,6 +1,14 @@
+import {
+  BOUNDARY_GUARD_FIXTURE_ROOT,
+  CHAINED_ASSERTION_EXCLUDED_ROOTS,
+  TYPE_ASSERTION_PRODUCTION_ROOTS,
+  TYPE_ASSERTION_TEST_FILE_SUFFIXES,
+  isSkippedTypeAssertionTestPath,
+  pathMatchesTypeAssertionRoot,
+} from "./lib/type-assertion-guard-scope.mjs";
+
 const EXPRESSION_WRAPPER_RE =
   /^(?:ChainExpression|ParenthesizedExpression|TSAsExpression|TSNonNullExpression|TSTypeAssertion)$/;
-const TEST_FILE_SUFFIXES = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
 
 function unwrapExpression(node) {
   let current = node;
@@ -10,16 +18,20 @@ function unwrapExpression(node) {
   return current;
 }
 
+function repositoryPath(context) {
+  const filename = context.physicalFilename.replaceAll("\\", "/");
+  const cwd = context.cwd.replaceAll("\\", "/");
+  return filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+}
+
 function restrictedCallRule({ allowedFiles = [], message, objects, property, roots }) {
   return {
     create(context) {
-      const filename = context.physicalFilename.replaceAll("\\", "/");
-      const cwd = context.cwd.replaceAll("\\", "/");
-      const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+      const repoPath = repositoryPath(context);
       if (
-        !filename.endsWith(".ts") ||
-        !roots.some((root) => repoPath === root || repoPath.startsWith(`${root}/`)) ||
-        TEST_FILE_SUFFIXES.some((suffix) => filename.endsWith(suffix)) ||
+        !repoPath.endsWith(".ts") ||
+        !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        TYPE_ASSERTION_TEST_FILE_SUFFIXES.some((suffix) => repoPath.endsWith(suffix)) ||
         allowedFiles.includes(repoPath)
       ) {
         return {};
@@ -41,6 +53,84 @@ function restrictedCallRule({ allowedFiles = [], message, objects, property, roo
           }
           context.report({ message, node: node.callee });
         },
+      };
+    },
+  };
+}
+
+// Adapted from dmmulroy/anti-slop@446268e5d15baa968eaec669ff65358d36ae6259, MIT.
+function isTypeAssertionExpression(node) {
+  return node.type === "TSAsExpression" || node.type === "TSTypeAssertion";
+}
+
+function isConstAssertion(node) {
+  const { typeAnnotation } = node;
+  return (
+    typeAnnotation.type === "TSTypeReference" &&
+    typeAnnotation.typeName.type === "Identifier" &&
+    typeAnnotation.typeName.name === "const"
+  );
+}
+
+function isOutermostAssertionInChain(node) {
+  let current = node;
+  let parent = node.parent;
+
+  while (parent.type === "ParenthesizedExpression" && parent.expression === current) {
+    current = parent;
+    parent = parent.parent;
+  }
+
+  return !isTypeAssertionExpression(parent) || parent.expression !== current;
+}
+
+function isForbiddenAssertionChain(node) {
+  let assertionCount = 0;
+  let hasNonConstAssertion = false;
+  let current = node;
+
+  while (isTypeAssertionExpression(current)) {
+    assertionCount += 1;
+    hasNonConstAssertion ||= !isConstAssertion(current);
+    current = unwrapExpressionParentheses(current.expression);
+  }
+
+  return assertionCount > 1 && hasNonConstAssertion;
+}
+
+function noChainedTypeAssertionsRule({ excludedRoots = [], roots }) {
+  return {
+    meta: {
+      type: "problem",
+      docs: {
+        description:
+          "Disallow chained TypeScript as and angle-bracket assertions, including parenthesized chains.",
+      },
+      messages: {
+        chained:
+          "This assertion chain discards type evidence. Keep the original precise type, or parse untrusted input at its boundary before narrowing it.",
+      },
+    },
+    create(context) {
+      const repoPath = repositoryPath(context);
+      if (
+        !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        excludedRoots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        isSkippedTypeAssertionTestPath(repoPath)
+      ) {
+        return {};
+      }
+
+      const checkTypeAssertion = (node) => {
+        if (!isOutermostAssertionInChain(node) || !isForbiddenAssertionChain(node)) {
+          return;
+        }
+        context.report({ node, messageId: "chained" });
+      };
+
+      return {
+        TSAsExpression: checkTypeAssertion,
+        TSTypeAssertion: checkTypeAssertion,
       };
     },
   };
@@ -149,7 +239,7 @@ function assertedExpression(node) {
 
 function assertedIdentifier(node) {
   let expression = assertedExpression(node);
-  while (expression.type === "TSAsExpression" || expression.type === "TSTypeAssertion") {
+  while (isTypeAssertionExpression(expression)) {
     expression = assertedExpression(expression);
   }
   return expression.type === "Identifier" ? expression : null;
@@ -160,17 +250,12 @@ function isNestedAssertion(node) {
   while (parent?.type === "ParenthesizedExpression") {
     parent = parent.parent;
   }
-  return (
-    (parent?.type === "TSAsExpression" || parent?.type === "TSTypeAssertion") &&
-    assertedExpression(parent) === node
-  );
+  return parent && isTypeAssertionExpression(parent) && assertedExpression(parent) === node;
 }
 
 function assertionFromExpression(expression) {
   const unwrapped = unwrapExpressionParentheses(expression);
-  return unwrapped.type === "TSAsExpression" || unwrapped.type === "TSTypeAssertion"
-    ? unwrapped
-    : null;
+  return isTypeAssertionExpression(unwrapped) ? unwrapped : null;
 }
 
 function normalizedTypeText(sourceText, type) {
@@ -266,7 +351,7 @@ function variableDeclarator(variable) {
 function knownValueEvidence(expression, scopes, boundary, visitedVariables) {
   const unwrapped = unwrapExpressionParentheses(expression);
 
-  if (unwrapped.type === "TSAsExpression" || unwrapped.type === "TSTypeAssertion") {
+  if (isTypeAssertionExpression(unwrapped)) {
     if (broadTypeKind(unwrapped.typeAnnotation) !== null) {
       return null;
     }
@@ -327,19 +412,7 @@ function knownValueEvidence(expression, scopes, boundary, visitedVariables) {
   );
 }
 
-function widenedBinding(variable, scopes) {
-  const declarator = variableDeclarator(variable);
-  if (
-    declarator === null ||
-    declarator.parent.type !== "VariableDeclaration" ||
-    declarator.parent.kind !== "const" ||
-    declarator.id.type !== "Identifier" ||
-    declarator.init === null ||
-    variable.references.some((reference) => reference.isWrite() && !reference.init)
-  ) {
-    return null;
-  }
-
+function widenedBinding(variable, scopes, declarator) {
   const boundary = functionBoundary(declarator);
   const declaredType = declarator.id.typeAnnotation?.typeAnnotation;
   const initializerAssertion = assertionFromExpression(declarator.init);
@@ -368,21 +441,26 @@ function resolveWidenedBinding(variable, scopes, boundary, assertedAt) {
     }
     visitedVariables.add(current);
 
-    const widened = widenedBinding(current, scopes);
-    if (widened !== null) {
-      return widened;
-    }
-
     const declarator = variableDeclarator(current);
     if (
       declarator === null ||
       declarator.parent.type !== "VariableDeclaration" ||
       declarator.parent.kind !== "const" ||
       declarator.id.type !== "Identifier" ||
-      (declarator.id.typeAnnotation !== null && declarator.id.typeAnnotation !== undefined) ||
       declarator.init === null ||
+      current.references.some((reference) => reference.isWrite() && !reference.init)
+    ) {
+      return null;
+    }
+
+    const widened = widenedBinding(current, scopes, declarator);
+    if (widened !== null) {
+      return widened;
+    }
+
+    if (
+      (declarator.id.typeAnnotation !== null && declarator.id.typeAnnotation !== undefined) ||
       declarator.end >= assertedAt ||
-      current.references.some((reference) => reference.isWrite() && !reference.init) ||
       functionBoundary(declarator) !== boundary
     ) {
       return null;
@@ -430,9 +508,7 @@ function noWidenThenAssertRule({ roots }) {
       },
     },
     create(context) {
-      const filename = context.physicalFilename.replaceAll("\\", "/");
-      const cwd = context.cwd.replaceAll("\\", "/");
-      const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+      const repoPath = repositoryPath(context);
       if (!roots.some((root) => repoPath === root || repoPath.startsWith(`${root}/`))) {
         return {};
       }
@@ -502,7 +578,11 @@ export default {
         "Use registerHttpRoute({ path, auth, match, handler }) and registerPluginHttpRoute for dynamic webhook paths.",
     }),
     "no-widen-then-assert": noWidenThenAssertRule({
-      roots: ["src", "extensions", "packages", "ui/src", "test/fixtures/oxlint-boundary-guards"],
+      roots: [...TYPE_ASSERTION_PRODUCTION_ROOTS, BOUNDARY_GUARD_FIXTURE_ROOT],
+    }),
+    "no-chained-type-assertions": noChainedTypeAssertionsRule({
+      roots: [...TYPE_ASSERTION_PRODUCTION_ROOTS, BOUNDARY_GUARD_FIXTURE_ROOT],
+      excludedRoots: CHAINED_ASSERTION_EXCLUDED_ROOTS,
     }),
   },
 };

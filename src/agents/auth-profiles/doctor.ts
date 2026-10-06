@@ -28,12 +28,8 @@ type FormatAuthDoctorHintParams = {
   profileId?: string;
 };
 
-// Keep local short-circuits and the plugin fallback in one seam so focused tests
-// can prove their ordering without loading the full provider runtime.
-async function formatAuthDoctorHintWithPluginBuilder(
-  params: FormatAuthDoctorHintParams,
-  buildPluginHint: typeof buildProviderAuthDoctorHintWithPlugin,
-): Promise<string> {
+/** Formats provider-specific auth doctor guidance for a profile/store. */
+export async function formatAuthDoctorHint(params: FormatAuthDoctorHintParams): Promise<string> {
   const normalizedProvider = normalizeProviderId(params.provider);
   if (
     normalizedProvider === "qwen-portal" &&
@@ -41,7 +37,7 @@ async function formatAuthDoctorHintWithPluginBuilder(
   ) {
     return QWEN_PORTAL_OAUTH_MIGRATION_HINT;
   }
-  const pluginHint = await buildPluginHint({
+  const pluginHint = await buildProviderAuthDoctorHintWithPlugin({
     provider: normalizedProvider,
     context: {
       config: params.cfg,
@@ -54,9 +50,4 @@ async function formatAuthDoctorHintWithPluginBuilder(
     return pluginHint;
   }
   return "";
-}
-
-/** Formats provider-specific auth doctor guidance for a profile/store. */
-export async function formatAuthDoctorHint(params: FormatAuthDoctorHintParams): Promise<string> {
-  return await formatAuthDoctorHintWithPluginBuilder(params, buildProviderAuthDoctorHintWithPlugin);
 }

@@ -1,6 +1,5 @@
 /** Process-local reverse registry from prepared agent directories to agent ids. */
-import fs from "node:fs";
-import path from "node:path";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -13,21 +12,7 @@ export function normalizeAgentDirRegistryPath(
   agentDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const resolved = path.resolve(resolveUserPath(agentDir, env));
-  const missingSegments: string[] = [];
-  let cursor = resolved;
-  while (true) {
-    try {
-      return path.join(fs.realpathSync.native(cursor), ...missingSegments.toReversed());
-    } catch {
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        return resolved;
-      }
-      missingSegments.push(path.basename(cursor));
-      cursor = parent;
-    }
-  }
+  return resolveIdentityPathViaExistingAncestorSync(resolveUserPath(agentDir, env));
 }
 
 /** Register a resolved agent directory for later reverse lookup. */
@@ -35,11 +20,16 @@ export function registerResolvedAgentDir(params: {
   agentId: string;
   agentDir: string;
   env?: NodeJS.ProcessEnv;
-}): void {
+}): boolean {
   const key = normalizeAgentDirRegistryPath(params.agentDir, params.env);
   const agentIds = agentIdsByDir.get(key) ?? new Set<string>();
-  agentIds.add(normalizeAgentId(params.agentId));
+  const agentId = normalizeAgentId(params.agentId);
+  if (agentIds.has(agentId)) {
+    return false;
+  }
+  agentIds.add(agentId);
   agentIdsByDir.set(key, agentIds);
+  return true;
 }
 
 /** Remove a reverse lookup only while it still belongs to the expected agent. */

@@ -1,4 +1,3 @@
-// Matrix plugin module implements env vars behavior.
 import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 
 const MATRIX_SCOPED_ENV_SUFFIXES = [

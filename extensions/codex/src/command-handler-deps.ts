@@ -1,16 +1,14 @@
-import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
+import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { installCodexComputerUse, readCodexComputerUseStatus } from "./app-server/computer-use.js";
 import { listAllCodexAppServerModels } from "./app-server/models.js";
-import type { JsonValue } from "./app-server/protocol.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
-import type { CodexPluginsManagementIO } from "./command-plugins-management.js";
+import type { CodexPluginsManagementIO } from "./command-plugin-config.js";
 import {
   codexControlRequest,
   readCodexStatusProbes,
   requestOptions,
   safeCodexControlRequest,
-  type CodexControlRequestOptions,
-  type SafeValue,
+  type SafeCodexControlRequestFn,
 } from "./command-rpc.js";
 import { resolveCodexDefaultWorkspaceDir } from "./conversation-binding-data.js";
 import {
@@ -26,20 +24,6 @@ import {
   resolveCodexCliSessionForBindingOnNode,
 } from "./node-cli-sessions.js";
 
-type CodexControlRequestFn = (
-  pluginConfig: unknown,
-  method: CodexControlMethod,
-  requestParams: JsonValue | undefined,
-  options?: CodexControlRequestOptions,
-) => Promise<JsonValue | undefined>;
-
-type SafeCodexControlRequestFn = (
-  pluginConfig: unknown,
-  method: CodexControlMethod,
-  requestParams: JsonValue | undefined,
-  options?: CodexControlRequestOptions,
-) => Promise<SafeValue<JsonValue | undefined>>;
-
 type ListCodexCliSessionsOnNodeFn = (
   params: Omit<Parameters<typeof listCodexCliSessionsOnNode>[0], "runtime">,
 ) => ReturnType<typeof listCodexCliSessionsOnNode>;
@@ -50,7 +34,9 @@ type ResolveCodexCliSessionForBindingOnNodeFn = (
 
 export type CodexCommandDeps = {
   bindingStore: CodexAppServerBindingStore;
-  codexControlRequest: CodexControlRequestFn;
+  codexControlRequest: (
+    ...args: Parameters<typeof codexControlRequest>
+  ) => ReturnType<typeof codexControlRequest>;
   listCodexAppServerModels: typeof listAllCodexAppServerModels;
   readCodexStatusProbes: typeof readCodexStatusProbes;
   requestOptions: typeof requestOptions;

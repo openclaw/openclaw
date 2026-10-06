@@ -25,8 +25,8 @@ function withNodeInstallEnv(args: GatewayServiceInstallArgs): GatewayServiceInst
 
 /** Returns a service controller bound to node-host labels across all platforms. */
 export function resolveNodeService(): GatewayService {
-  const base = resolveGatewayService();
-  const hasInstalledDefinition = base.hasInstalledDefinition;
+  const base = resolveGatewayService("node");
+  const { hasInstalledDefinition, isAbsent } = base;
   return {
     ...base,
     stage: (args) => base.stage(withNodeInstallEnv(args)),
@@ -43,7 +43,10 @@ export function resolveNodeService(): GatewayService {
     hasInstalledDefinition: hasInstalledDefinition
       ? (args) => hasInstalledDefinition({ ...args, env: withNodeServiceEnv(args.env ?? {}) })
       : undefined,
-    readCommand: (env) => base.readCommand(withNodeServiceEnv(env)),
+    isAbsent: isAbsent
+      ? (args) => isAbsent({ ...args, env: withNodeServiceEnv(args.env ?? {}) })
+      : undefined,
+    readCommand: (env, opts) => base.readCommand(withNodeServiceEnv(env), opts),
     readRuntime: (env, opts) => base.readRuntime(withNodeServiceEnv(env), opts),
   };
 }

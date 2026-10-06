@@ -1,6 +1,4 @@
-// Status link-channel tests cover channel link status summaries and redaction.
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
 
@@ -16,7 +14,7 @@ import { resolveLinkChannelContext } from "../status/link-channel.js";
 
 describe("resolveLinkChannelContext", () => {
   it("returns linked context from read-only inspected account state", async () => {
-    const account = { configured: true, enabled: true };
+    const account = { configured: true, enabled: true, linked: true };
     pluginRegistry.list = [
       {
         id: "quietchat",
@@ -29,32 +27,16 @@ describe("resolveLinkChannelContext", () => {
           },
         },
         status: {
-          buildChannelSummary: () => ({ linked: true, authAgeMs: 1234 }),
-        },
-      },
-    ];
-
-    const result = await resolveLinkChannelContext({} as OpenClawConfig);
-    expect(result?.linked).toBe(true);
-    expect(result?.authAgeMs).toBe(1234);
-    expect(result?.account).toBe(account);
-  });
-
-  it("degrades safely when account resolution throws", async () => {
-    pluginRegistry.list = [
-      {
-        id: "quietchat",
-        meta: { label: "QuietChat" },
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => {
-            throw new Error("missing secret");
+          buildChannelSummary: () => {
+            throw new Error("runtime summary must not receive inspection metadata");
           },
         },
       },
     ];
 
-    const result = await resolveLinkChannelContext({} as OpenClawConfig);
-    expect(result).toBeNull();
+    const result = await resolveLinkChannelContext({});
+    expect(result?.linked).toBe(true);
+    expect(result?.authAgeMs).toBeNull();
+    expect(result?.account).toBe(account);
   });
 });

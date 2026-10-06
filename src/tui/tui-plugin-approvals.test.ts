@@ -2,6 +2,7 @@ import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tu
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 
 type TestSelector = Component & {
@@ -31,14 +32,6 @@ function approvalPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 function createHarness() {
   const selectors: TestSelector[] = [];
   const addSystem = vi.fn();
@@ -52,6 +45,7 @@ function createHarness() {
       focus: vi.fn(),
       unfocus: vi.fn(),
       isFocused: vi.fn(() => true),
+      getBounds: () => undefined,
     } satisfies OverlayHandle;
     overlayHandles.push(handle);
     return handle;
@@ -165,23 +159,142 @@ describe("TUI plugin approvals", () => {
         id: "plugin:other",
         request: {
           ...approvalPayload().request,
+          agentId: "other",
           sessionKey: "agent:other:main",
         },
       }),
     );
     expect(harness.openOverlay).not.toHaveBeenCalled();
 
+    harness.setAgentId("other");
     harness.setSessionKey("agent:other:main");
     harness.controller.sessionChanged();
     expect(harness.openOverlay).toHaveBeenCalledTimes(1);
 
     harness.controller.handleEvent("plugin.approval.resolved", { id: "plugin:other" });
+    harness.setAgentId("main");
     harness.setSessionKey("agent:main:main");
     harness.listPluginApprovals.mockResolvedValueOnce([approvalPayload()]);
     await harness.controller.refresh();
 
     expect(harness.listPluginApprovals).toHaveBeenCalledTimes(1);
     expect(harness.openOverlay).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      label: "shows a fixed-store alias owned by the active agent",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: "main",
+      approvalSession: "support",
+      visible: true,
+    },
+    {
+      label: "matches normalized agent identities for a fixed-store alias",
+      selectedAgent: "Main",
+      selectedSession: "agent:main:support",
+      approvalAgent: " MAIN ",
+      approvalSession: "support",
+      visible: true,
+    },
+    {
+      label: "rejects a fixed-store alias owned by another agent",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: "work",
+      approvalSession: "support",
+      visible: false,
+    },
+    {
+      label: "rejects a fixed-store alias without explicit owner evidence",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: null,
+      approvalSession: "support",
+      visible: false,
+    },
+    {
+      label: "rejects a missing session key even with explicit owner evidence",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: "main",
+      approvalSession: null,
+      visible: false,
+    },
+    {
+      label: "rejects a matching canonical key with a contradictory explicit owner",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: "work",
+      approvalSession: "agent:main:support",
+      visible: false,
+    },
+    {
+      label: "accepts a canonical key whose parsed owner identifies the active agent",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: null,
+      approvalSession: "agent:main:support",
+      visible: true,
+    },
+    {
+      label: "rejects a different agent's canonical key with a colliding alias",
+      selectedAgent: "main",
+      selectedSession: "agent:main:support",
+      approvalAgent: "work",
+      approvalSession: "agent:work:support",
+      visible: false,
+    },
+    {
+      label: "rejects an ownerless foreign canonical key against a bare selected alias",
+      selectedAgent: "main",
+      selectedSession: "support",
+      approvalAgent: null,
+      approvalSession: "agent:work:support",
+      visible: false,
+    },
+    {
+      label: "rejects a foreign canonical key with a misleading explicit owner",
+      selectedAgent: "main",
+      selectedSession: "support",
+      approvalAgent: "main",
+      approvalSession: "agent:work:support",
+      visible: false,
+    },
+    {
+      label: "rejects a global approval without explicit owner evidence",
+      selectedAgent: "main",
+      selectedSession: "global",
+      approvalAgent: null,
+      approvalSession: "global",
+      visible: false,
+    },
+    {
+      label: "preserves case-sensitive opaque session references",
+      selectedAgent: "main",
+      selectedSession: "agent:main:matrix:group:!Room:example.org",
+      approvalAgent: "main",
+      approvalSession: "matrix:group:!room:example.org",
+      visible: false,
+    },
+  ])("$label", ({ selectedAgent, selectedSession, approvalAgent, approvalSession, visible }) => {
+    const harness = createHarness();
+    harness.setAgentId(selectedAgent);
+    harness.setSessionKey(selectedSession);
+
+    harness.controller.handleEvent(
+      "plugin.approval.requested",
+      approvalPayload({
+        request: {
+          ...approvalPayload().request,
+          agentId: approvalAgent,
+          sessionKey: approvalSession,
+        },
+      }),
+    );
+
+    expect(harness.openOverlay).toHaveBeenCalledTimes(visible ? 1 : 0);
   });
 
   it("preserves requested events received while a refresh is in flight", async () => {
@@ -416,5 +529,57 @@ describe("TUI plugin approvals", () => {
     expect(harness.clearTimeoutFn).toHaveBeenCalledTimes(1);
     expect(harness.clearTimeoutFn).toHaveBeenCalledWith(harness.timers[0]);
     expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["success", "stale", "failure"])(
+    "ignores an in-flight resolution's %s after disposal",
+    async (outcome) => {
+      const harness = createHarness();
+      const pending = deferred<{ ok: boolean }>();
+      harness.resolvePluginApproval.mockReturnValueOnce(pending.promise);
+      harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
+      harness.selectors[0]?.onSelect?.({ value: "deny", label: "Deny" });
+      expect(harness.resolvePluginApproval).toHaveBeenCalledExactlyOnceWith(
+        "plugin:skill-1",
+        "deny",
+      );
+      harness.controller.dispose();
+      harness.requestRender.mockClear();
+
+      if (outcome === "failure") {
+        pending.reject(new Error("gateway unavailable"));
+      } else {
+        pending.resolve({ ok: outcome === "success" });
+      }
+      await pending.promise.catch(() => undefined);
+
+      expect(harness.addSystem).not.toHaveBeenCalled();
+      expect(harness.listPluginApprovals).not.toHaveBeenCalled();
+      expect(harness.requestRender).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ignores a stale approval's refresh failure after disposal", async () => {
+    const harness = createHarness();
+    const pending = deferred<unknown[]>();
+    const started = deferred();
+    harness.resolvePluginApproval.mockResolvedValueOnce({ ok: false });
+    harness.listPluginApprovals.mockImplementationOnce(() => {
+      started.resolve();
+      return pending.promise;
+    });
+    harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
+    harness.selectors[0]?.onSelect?.({ value: "deny", label: "Deny" });
+    await started.promise;
+    const refresh = harness.controller.refresh();
+    harness.controller.dispose();
+    harness.addSystem.mockClear();
+    harness.requestRender.mockClear();
+
+    pending.reject(new Error("refresh unavailable"));
+    await refresh.catch(() => undefined);
+
+    expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.requestRender).not.toHaveBeenCalled();
   });
 });

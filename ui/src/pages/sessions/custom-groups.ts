@@ -1,4 +1,5 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 
 export function sessionCategoryNames(
@@ -18,11 +19,11 @@ type SessionGroupWriteResult = "completed" | "failed" | "stale";
 export async function rememberSessionCustomGroup(options: {
   name: string;
   knownCategories: readonly string[];
-  sessions: GroupMutationSessions | undefined;
+  sessions: GroupMutationSessions;
   isCurrent: () => boolean;
   onError: (message: string) => void;
 }): Promise<SessionGroupWriteResult> {
-  if (!options.sessions || options.knownCategories.includes(options.name)) {
+  if (options.knownCategories.includes(options.name)) {
     return "completed";
   }
   try {
@@ -39,7 +40,7 @@ export async function rememberSessionCustomGroup(options: {
     if (!options.isCurrent()) {
       return "stale";
     }
-    options.onError(String(error));
+    options.onError(formatUiError(error));
     return "failed";
   }
 }

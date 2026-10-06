@@ -6,6 +6,13 @@ import { Command } from "commander";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
+const findCallInStoreMock = vi.hoisted(() => vi.fn());
+const loadActiveCallsFromStoreMock = vi.hoisted(() => vi.fn());
+const tailscaleMocks = vi.hoisted(() => ({
+  cleanup: vi.fn(),
+  getSelfInfo: vi.fn(),
+  setup: vi.fn(),
+}));
 const sleepMock = vi.hoisted(() =>
   vi.fn(
     async (ms: number) =>
@@ -23,8 +30,20 @@ vi.mock("../api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api.js")>()),
   sleep: sleepMock,
 }));
+vi.mock("./manager/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./manager/store.js")>()),
+  findCallInStore: findCallInStoreMock,
+  loadActiveCallsFromStore: loadActiveCallsFromStoreMock,
+}));
+vi.mock("./webhook/tailscale.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./webhook/tailscale.js")>()),
+  cleanupTailscaleExposureRoute: tailscaleMocks.cleanup,
+  getTailscaleSelfInfo: tailscaleMocks.getSelfInfo,
+  setupTailscaleExposureRoutes: tailscaleMocks.setup,
+}));
 
 import { registerVoiceCallCli } from "./cli.js";
+import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function captureStdout() {
   let output = "";
@@ -38,9 +57,39 @@ function captureStdout() {
   };
 }
 
+function gatewayTransportError(code?: number): Error {
+  return Object.assign(new Error("gateway transport failed"), {
+    name: "GatewayTransportError",
+    kind: "closed",
+    connectionDetails: { url: "ws://127.0.0.1:18789" },
+    ...(code === undefined ? {} : { code }),
+  });
+}
+
+function gatewayRequestError(message: string, gatewayCode = "UNAVAILABLE"): Error {
+  return Object.assign(new Error(message), {
+    name: "GatewayClientRequestError",
+    gatewayCode,
+    retryable: false,
+  });
+}
+
+function gatewayCredentialsError(message: string): Error {
+  return Object.assign(new Error(message), {
+    name: "GatewayCredentialsRequiredError",
+    method: "voicecall.status",
+    configPath: "/tmp/openclaw.json",
+  });
+}
+
 describe("voice-call CLI status fallback", () => {
   afterEach(() => {
     callGatewayFromCliMock.mockReset();
+    findCallInStoreMock.mockReset();
+    loadActiveCallsFromStoreMock.mockReset();
+    tailscaleMocks.cleanup.mockReset();
+    tailscaleMocks.getSelfInfo.mockReset();
+    tailscaleMocks.setup.mockReset();
     sleepMock.mockReset();
     sleepMock.mockImplementation(
       async (ms: number) =>
@@ -55,65 +104,325 @@ describe("voice-call CLI status fallback", () => {
   function buildProgram(
     manager: Record<string, unknown>,
     config: Record<string, unknown> = {},
+    ensureRuntime = async () => ({ manager }) as never,
   ): Command {
     const program = new Command();
     registerVoiceCallCli({
       program,
       config: config as never,
-      ensureRuntime: async () => ({ manager }) as never,
-      logger: { info() {}, warn() {}, error() {}, debug() {} } as never,
+      coreConfig: {},
+      ensureRuntime,
     });
     return program;
   }
 
-  async function runStatusWithUnavailableGateway(
-    manager: Record<string, unknown>,
-    error = new Error("connect ECONNREFUSED 127.0.0.1:18789"),
-  ): Promise<unknown> {
-    callGatewayFromCliMock.mockRejectedValue(error);
-    const program = buildProgram(manager);
+  it("reports an ambiguous phone-call owner during setup without starting telephony", async () => {
+    const ensureRuntime = vi.fn();
+    const program = new Command();
+    registerVoiceCallCli({
+      program,
+      config: createVoiceCallBaseConfig(),
+      coreConfig: {
+        agents: { ownership: "explicit", entries: { operator: {}, support: {} } },
+      },
+      ensureRuntime,
+    });
     const capturer = captureStdout();
     try {
-      await program.parseAsync(["voicecall", "status", "--call-id", "call-1", "--json"], {
-        from: "user",
-      });
+      await program.parseAsync(["voicecall", "setup", "--json"], { from: "user" });
     } finally {
       capturer.restore();
     }
+    expect(JSON.parse(capturer.output())).toMatchObject({
+      ok: false,
+      checks: expect.arrayContaining([
+        {
+          id: "agent-owner",
+          ok: false,
+          message: expect.stringContaining(
+            "Set plugins.entries.voice-call.config.agentId to a configured agent ID.",
+          ),
+        },
+      ]),
+    });
+    expect(ensureRuntime).not.toHaveBeenCalled();
+  });
+
+  async function runStatusWithUnavailableGateway(params: {
+    persisted?: unknown;
+    error?: Error;
+    args?: string[];
+  }): Promise<unknown> {
+    callGatewayFromCliMock.mockRejectedValue(params.error ?? gatewayTransportError());
+    findCallInStoreMock.mockResolvedValue(params.persisted);
+    const ensureRuntime = vi.fn(async () => {
+      throw new Error("status fallback must not initialize the telephony runtime");
+    });
+    const program = new Command();
+    registerVoiceCallCli({
+      program,
+      config: {} as never,
+      coreConfig: {},
+      ensureRuntime,
+      stateRuntime: {} as never,
+    });
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(
+        ["voicecall", "status", ...(params.args ?? ["--call-id", "call-1"]), "--json"],
+        { from: "user" },
+      );
+    } finally {
+      capturer.restore();
+    }
+    expect(ensureRuntime).not.toHaveBeenCalled();
     return JSON.parse(capturer.output().trim());
   }
 
   it("uses the manager's persisted fallback when the gateway is unavailable", async () => {
     const result = await runStatusWithUnavailableGateway({
-      getActiveCalls: () => [],
-      getCallFromMemoryOrStore: async () => ({
+      persisted: {
         callId: "call-1",
         providerCallId: "CA123",
         state: "completed",
         endReason: "completed",
         endedAt: 1,
-      }),
+      },
     });
     expect(result).toMatchObject({ callId: "call-1", state: "completed" });
   });
 
   it("reports found:false when the call is neither active nor persisted", async () => {
-    const result = await runStatusWithUnavailableGateway({
-      getActiveCalls: () => [],
-      getCallFromMemoryOrStore: async () => undefined,
-    });
+    const result = await runStatusWithUnavailableGateway({});
     expect(result).toEqual({ found: false });
   });
 
+  it("lists persisted active calls without initializing the telephony runtime", async () => {
+    loadActiveCallsFromStoreMock.mockResolvedValue({
+      activeCalls: new Map([["call-1", { callId: "call-1", state: "ringing" }]]),
+    });
+    expect(await runStatusWithUnavailableGateway({ args: [] })).toEqual({
+      found: true,
+      calls: [{ callId: "call-1", state: "ringing" }],
+    });
+  });
+
   it("falls back after an abnormal local gateway close", async () => {
-    const result = await runStatusWithUnavailableGateway(
-      {
-        getActiveCalls: () => [],
-        getCallFromMemoryOrStore: async () => ({ callId: "call-1", state: "completed" }),
-      },
-      new Error("gateway closed (1006 abnormal closure (no close frame)): no close reason"),
-    );
+    const result = await runStatusWithUnavailableGateway({
+      persisted: { callId: "call-1", state: "completed" },
+      error: gatewayTransportError(1006),
+    });
     expect(result).toMatchObject({ callId: "call-1", state: "completed" });
+  });
+
+  it("keeps reachable gateway request failures out of the standalone runtime", async () => {
+    callGatewayFromCliMock.mockRejectedValue(
+      gatewayRequestError("Voice call runtime generation is retired; use the current registration"),
+    );
+    const ensureRuntime = vi.fn();
+    const program = buildProgram({}, {}, ensureRuntime);
+
+    await expect(
+      program.parseAsync(["voicecall", "call", "--message", "hello"], { from: "user" }),
+    ).rejects.toThrow(
+      "Gateway responded but voicecall failed: Voice call runtime generation is retired; use the current registration",
+    );
+    expect(ensureRuntime).not.toHaveBeenCalled();
+  });
+
+  it("keeps standalone serving after printing the call ID and joins signal cleanup", async () => {
+    callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
+    const printed = Promise.withResolvers<void>();
+    const stopping = Promise.withResolvers<void>();
+    const stopped = Promise.withResolvers<void>();
+    const originalListeners = new Set(process.listeners("SIGTERM"));
+    const originalExitCode = process.exitCode;
+    const stop = vi.fn(async () => {
+      stopping.resolve();
+      await stopped.promise;
+    });
+    const program = buildProgram(
+      {},
+      {},
+      async () =>
+        ({
+          config: { toNumber: "+15550001234" },
+          manager: { initiateCall: async () => ({ success: true, callId: "call-owned" }) },
+          stop,
+        }) as never,
+    );
+    let output = "";
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      output += String(chunk);
+      if (output.includes("call-owned")) {
+        printed.resolve();
+      }
+      return true;
+    }) as typeof process.stdout.write);
+    let completed = false;
+    const command = program.parseAsync(["voicecall", "call", "--message", "hello"], {
+      from: "user",
+    });
+    void command.then(
+      () => {
+        completed = true;
+      },
+      () => {},
+    );
+    try {
+      await printed.promise;
+      expect(JSON.parse(output)).toEqual({ callId: "call-owned" });
+      const handlers = process
+        .listeners("SIGTERM")
+        .filter((listener) => !originalListeners.has(listener));
+      expect(handlers).toHaveLength(1);
+      // Deliver to this invocation's handler without signaling the Vitest worker.
+      handlers[0]?.("SIGTERM");
+      handlers[0]?.("SIGTERM");
+      await stopping.promise;
+      expect(completed).toBe(false);
+      expect(stop).toHaveBeenCalledOnce();
+      stopped.resolve();
+      await command;
+      expect(process.listeners("SIGTERM")).toEqual([...originalListeners]);
+      expect(process.exitCode).toBe(143);
+    } finally {
+      for (const handler of process.listeners("SIGTERM")) {
+        if (!originalListeners.has(handler)) {
+          handler("SIGTERM");
+        }
+      }
+      stopped.resolve();
+      await command;
+      write.mockRestore();
+      process.exitCode = originalExitCode;
+    }
+  });
+
+  it.each(["creation", "operation"] as const)(
+    "joins accepted standalone %s when interrupted",
+    async (phase) => {
+      callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
+      const ready = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const originalListeners = new Set(process.listeners("SIGINT"));
+      const originalExitCode = process.exitCode;
+      const stop = vi.fn(async () => {});
+      const initiateCall = vi.fn(async () => {
+        ready.resolve();
+        await release.promise;
+        return { success: true, callId: "call-owned" };
+      });
+      const program = buildProgram({}, {}, async () => {
+        if (phase === "creation") {
+          ready.resolve();
+          await release.promise;
+        }
+        return { config: { toNumber: "+15550001234" }, manager: { initiateCall }, stop } as never;
+      });
+      const capturer = captureStdout();
+      const command = program.parseAsync(["voicecall", "call", "--message", "hello"], {
+        from: "user",
+      });
+      const outcome = command.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await ready.promise;
+        const handlers = process
+          .listeners("SIGINT")
+          .filter((listener) => !originalListeners.has(listener));
+        expect(handlers).toHaveLength(1);
+        handlers[0]?.("SIGINT");
+        expect(stop).not.toHaveBeenCalled();
+        release.resolve();
+        const result = await outcome;
+        if (phase === "creation") {
+          expect(result).toMatchObject({ message: "Voice call command interrupted by SIGINT" });
+          expect(initiateCall).not.toHaveBeenCalled();
+        } else {
+          expect(result).toBeUndefined();
+          expect(initiateCall).toHaveBeenCalledOnce();
+        }
+        expect(stop).toHaveBeenCalledOnce();
+        expect(process.listeners("SIGINT")).toEqual([...originalListeners]);
+        expect(process.exitCode).toBe(130);
+      } finally {
+        for (const handler of process.listeners("SIGINT")) {
+          if (!originalListeners.has(handler)) {
+            handler("SIGINT");
+          }
+        }
+        release.resolve();
+        await outcome;
+        capturer.restore();
+        process.exitCode = originalExitCode;
+      }
+    },
+  );
+
+  it("explains a standalone webhook port collision", async () => {
+    callGatewayFromCliMock.mockRejectedValue(gatewayTransportError());
+    const ensureRuntime = vi.fn(async () => {
+      throw Object.assign(new Error("listen failed"), { code: "EADDRINUSE" });
+    });
+    const program = buildProgram({}, { serve: { port: 3334 } }, ensureRuntime);
+
+    await expect(
+      program.parseAsync(["voicecall", "call", "--message", "hello"], { from: "user" }),
+    ).rejects.toThrow(
+      "Voice-call webhook port 3334 is already in use. A running Gateway probably already serves it",
+    );
+  });
+
+  it("keeps gateway credential failures out of the standalone runtime", async () => {
+    callGatewayFromCliMock.mockRejectedValue(
+      gatewayCredentialsError("gateway voicecall.status requires credentials"),
+    );
+    const ensureRuntime = vi.fn();
+    const program = buildProgram({}, {}, ensureRuntime);
+
+    await expect(
+      program.parseAsync(["voicecall", "status", "--json"], { from: "user" }),
+    ).rejects.toThrow(
+      "Gateway requires credentials: gateway voicecall.status requires credentials",
+    );
+    expect(ensureRuntime).not.toHaveBeenCalled();
+    expect(loadActiveCallsFromStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("redacts credential-bearing gateway URLs from operational errors", async () => {
+    callGatewayFromCliMock.mockRejectedValue(
+      Object.assign(
+        new Error(
+          "gateway closed (1008): policy wss://operator:hunter2secret@gw.example.ts.net:18789",
+        ),
+        {
+          name: "GatewayTransportError",
+          kind: "closed",
+          code: 1008,
+          connectionDetails: {
+            url: "wss://operator:hunter2secret@gw.example.ts.net:18789?token=tok123",
+          },
+        },
+      ),
+    );
+    const ensureRuntime = vi.fn();
+    const program = buildProgram({}, {}, ensureRuntime);
+
+    let thrown: unknown;
+    await program
+      .parseAsync(["voicecall", "status", "--json"], { from: "user" })
+      .catch((err: unknown) => {
+        thrown = err;
+      });
+
+    const text = thrown instanceof Error ? thrown.message : String(thrown);
+    expect(text).toContain("Gateway connection at wss://***:***@gw.example.ts.net:18789");
+    expect(text).not.toContain("hunter2secret");
+    expect(text).not.toContain("tok123");
+    expect(ensureRuntime).not.toHaveBeenCalled();
   });
 
   it("rejects non-decimal tail options through the registered command", async () => {
@@ -121,6 +430,116 @@ describe("voice-call CLI status fallback", () => {
     await expect(
       program.parseAsync(["voicecall", "tail", "--since", "0x10"], { from: "user" }),
     ).rejects.toThrow("Invalid numeric value for --since: 0x10");
+  });
+
+  it("exposes the webhook target and enabled stream paths", async () => {
+    tailscaleMocks.setup.mockResolvedValue("https://bot.example.ts.net/voice/webhook");
+    const program = buildProgram(
+      {},
+      {
+        serve: { port: 3334, path: "/voice/webhook" },
+        tailscale: { mode: "off", port: 443, path: "/voice/webhook" },
+        realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
+        streaming: { enabled: true, streamPath: "/voice/stream" },
+      },
+    );
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(
+        [
+          "voicecall",
+          "expose",
+          "--mode",
+          "funnel",
+          "--port",
+          "4444",
+          "--path",
+          "/edge/custom/webhook",
+          "--serve-path",
+          "/custom/webhook",
+        ],
+        { from: "user" },
+      );
+    } finally {
+      capturer.restore();
+    }
+
+    expect(tailscaleMocks.setup).toHaveBeenCalledWith({
+      mode: "funnel",
+      port: 443,
+      routes: [
+        {
+          path: "/edge/custom/webhook",
+          localUrl: "http://127.0.0.1:4444/custom/webhook",
+        },
+        {
+          path: "/edge/voice/stream/realtime",
+          localUrl: "http://127.0.0.1:4444/voice/stream/realtime",
+        },
+        {
+          path: "/voice/stream",
+          localUrl: "http://127.0.0.1:4444/voice/stream",
+        },
+      ],
+    });
+    expect(JSON.parse(capturer.output())).toMatchObject({
+      localUrl: "http://127.0.0.1:4444/custom/webhook",
+      streamPaths: ["/edge/voice/stream/realtime", "/voice/stream"],
+    });
+  });
+
+  it("reports failure when any exposure route cannot be mounted", async () => {
+    tailscaleMocks.setup.mockResolvedValue(null);
+    tailscaleMocks.getSelfInfo.mockResolvedValue(null);
+    const program = buildProgram(
+      {},
+      {
+        serve: { port: 3334, path: "/voice/webhook" },
+        tailscale: { mode: "off", port: 443, path: "/voice/webhook" },
+        realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
+        streaming: { enabled: false },
+      },
+    );
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(["voicecall", "expose", "--mode", "funnel"], { from: "user" });
+    } finally {
+      capturer.restore();
+    }
+
+    expect(JSON.parse(capturer.output())).toMatchObject({
+      ok: false,
+      publicUrl: null,
+    });
+  });
+
+  it("clears webhook and stream paths for both Tailscale modes", async () => {
+    const program = buildProgram(
+      {},
+      {
+        serve: { port: 3334, path: "/voice/webhook" },
+        tailscale: { mode: "off", port: 443, path: "/voice/webhook" },
+        realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
+        streaming: { enabled: true, streamPath: "/voice/stream" },
+      },
+    );
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(["voicecall", "expose", "--mode", "off"], { from: "user" });
+    } finally {
+      capturer.restore();
+    }
+
+    expect(tailscaleMocks.cleanup.mock.calls).toEqual(
+      ["/voice/webhook", "/voice/stream/realtime", "/voice/stream"].flatMap((exposurePath) => [
+        [{ mode: "serve", port: 443, path: exposurePath }],
+        [{ mode: "funnel", port: 443, path: exposurePath }],
+      ]),
+    );
+    expect(JSON.parse(capturer.output())).toMatchObject({
+      mode: "off",
+      streamPaths: ["/voice/stream/realtime", "/voice/stream"],
+    });
   });
 
   async function runCustomLogTailShortRead(
@@ -280,7 +699,7 @@ describe("voice-call CLI status fallback", () => {
 
   it("caps oversized legacy continue timeouts through the command", async () => {
     callGatewayFromCliMock
-      .mockRejectedValueOnce(new Error("unknown method: voicecall.continue.start"))
+      .mockRejectedValueOnce(gatewayRequestError("unknown method: voicecall.continue.start"))
       .mockResolvedValueOnce({ success: true, transcript: "done" });
     const program = buildProgram({}, { transcriptTimeoutMs: Number.MAX_SAFE_INTEGER });
     await program.parseAsync(
@@ -301,7 +720,7 @@ describe("voice-call CLI status fallback", () => {
       status: "pending",
       pollTimeoutMs: Number.NaN,
     });
-    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(50_000);
+    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(50_000);
     const program = buildProgram({}, { transcriptTimeoutMs: 100 });
     await expect(
       program.parseAsync(["voicecall", "continue", "--call-id", "call-1", "--message", "hello"], {
@@ -351,5 +770,59 @@ describe("voice-call CLI status fallback", () => {
     await vi.advanceTimersByTimeAsync(500);
     await rejected;
     expect(Date.now() - startedAtMs).toBe(1_500);
+  });
+
+  it("keeps the continue poll deadline on the monotonic clock across a wall-clock jump", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    callGatewayFromCliMock
+      .mockResolvedValueOnce({
+        operationId: "op-1",
+        status: "pending",
+        pollTimeoutMs: 5_000,
+      })
+      .mockResolvedValue({ status: "pending" });
+
+    const program = buildProgram({}, { transcriptTimeoutMs: 100 });
+    const execution = program.parseAsync(
+      ["voicecall", "continue", "--call-id", "call-1", "--message", "hello"],
+      { from: "user" },
+    );
+
+    // Let the start RPC resolve so the deadline seed (performance.now()=0,
+    // budget 5000ms) is captured, then let the first continue.result poll
+    // resolve and the 1000ms sleep elapse.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // Wall clock jumps forward 300s (NTP correction, resume from sleep). If the
+    // deadline were on the wall clock, the next remainingMs read would go
+    // negative and the loop would break immediately, reporting a timeout after
+    // ~1000ms of real polling. On the monotonic clock the 5000ms budget is
+    // unaffected and the poll keeps going.
+    const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(300_000);
+    // Advance past the next 1000ms sleep; the loop must keep polling instead
+    // of breaking on the wall-clock jump.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // Pre-fix (wall-clock deadline): the loop already broke on the jump and
+    // the command reported a premature timeout. Post-fix: the poll is still
+    // running and fires another continue.result RPC.
+    const settled = await Promise.race([
+      execution.then(
+        () => "resolved",
+        () => "rejected",
+      ),
+      Promise.resolve("pending" as const),
+    ]);
+    expect(settled).toBe("pending");
+    expect(callGatewayFromCliMock).toHaveBeenCalledTimes(4);
+    wallClockSpy.mockRestore();
+
+    // Draining the remaining monotonic budget (5000ms) finally times out.
+    const rejected = expect(execution).rejects.toThrow(
+      "voicecall continue timed out waiting for gateway operation",
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await rejected;
   });
 });

@@ -11,8 +11,18 @@ let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
 describe("doctor command", () => {
   beforeEach(async () => {
+    vi.doMock("./doctor-sandbox.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./doctor-sandbox.js")>();
+      return {
+        ...actual,
+        maybeRepairSandboxImages: async (
+          cfg: Parameters<typeof actual.maybeRepairSandboxImages>[0],
+        ) => cfg,
+        maybeRepairSandboxRegistryFiles: async () => {},
+      };
+    });
     doctorCommand = await loadDoctorCommandForTest({
-      unmockModules: ["./doctor-sandbox.js", "../flows/doctor-health-contributions.js"],
+      unmockModules: ["../flows/doctor-health-contributions.js"],
     });
   });
 
@@ -26,9 +36,8 @@ describe("doctor command", () => {
               scope: "shared",
             },
           },
-          list: [
-            {
-              id: "work",
+          entries: {
+            work: {
               workspace: "~/openclaw-work",
               sandbox: {
                 mode: "all",
@@ -38,7 +47,7 @@ describe("doctor command", () => {
                 },
               },
             },
-          ],
+          },
         },
       },
     });
@@ -51,7 +60,7 @@ describe("doctor command", () => {
       }
       const normalized = message.replace(/\s+/g, " ").trim();
       return (
-        normalized.includes('agents.list (id "work") sandbox docker') &&
+        normalized.includes("agents.entries.work sandbox docker") &&
         normalized.includes('scope resolves to "shared"')
       );
     });
@@ -82,7 +91,7 @@ describe("doctor command", () => {
 
     await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
-    const noteTitles = terminalNoteMock.mock.calls.map(([_, title]) => title);
+    const noteTitles = terminalNoteMock.mock.calls.map(([, title]) => title);
     expect(noteTitles).not.toContain("Extra workspace");
 
     homedirSpy.mockRestore();

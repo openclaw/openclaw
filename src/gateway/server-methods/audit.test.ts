@@ -59,6 +59,7 @@ describe("audit gateway methods", () => {
         remediation: [{ code: "verify_run_id", text: "Verify the exact run id." }],
       },
       decisions: [],
+      decisionDisplays: [],
       coverage: { state: "unknown", missingEvidence: ["run.record"] },
     });
   });
@@ -217,6 +218,28 @@ describe("audit gateway methods", () => {
     });
   });
 
+  it.each([
+    { kind: "agent_run", direction: "inbound" },
+    { kind: "agent_run", channel: "telegram" },
+    { kind: "message", sessionKey: "agent:main:main" },
+    { sessionKey: "agent:main:main", direction: "inbound" },
+    { sessionKey: "agent:main:main", channel: "telegram" },
+  ])(
+    "rejects impossible activity filters before storage: $kind $direction $channel",
+    async (params) => {
+      const respond = await runAuditHandler("audit.activity.list", params);
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringContaining("invalid audit.activity.list filters"),
+        }),
+      );
+      expect(listAuditEvents).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["audit.list", "audit.activity.list"] as const)(
     "rejects malformed cursors and inverted ranges for %s",
     async (method) => {
@@ -292,34 +315,6 @@ describe("audit gateway methods", () => {
     });
 
     await runAuditHandler("audit.run.inspect", {
-      runId: "run-1",
-      executionCursor: "1",
-      decisionCursor: "1",
-      decisionLimit: 25,
-    });
-    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
-      runId: "run-1",
-      executionOffset: 1,
-      executionLimit: 50,
-      decisionCursor: "1",
-      decisionLimit: 25,
-    });
-
-    await runAuditHandler("audit.run.inspect", {
-      runId: "run-1",
-      executionCursor: "001",
-      decisionCursor: "001",
-      decisionLimit: 25,
-    });
-    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
-      runId: "run-1",
-      executionOffset: 1,
-      executionLimit: 50,
-      decisionCursor: "001",
-      decisionLimit: 25,
-    });
-
-    await runAuditHandler("audit.run.inspect", {
       executionId: "execution-1",
       decisionCursor: "1",
       decisionLimit: 20,
@@ -328,6 +323,124 @@ describe("audit gateway methods", () => {
       executionId: "execution-1",
       decisionCursor: "1",
       decisionLimit: 20,
+    });
+  });
+
+  it("serializes only the safe decision projection", async () => {
+    const hostile = {
+      receipt: "U2_R6_GATEWAY_RECEIPT_SECRET_05d8",
+      resolutionRef: "U2_R6_GATEWAY_RESOLUTION_REF_SECRET_a941",
+      eventId: "U2_R6_GATEWAY_EVENT_ID_SECRET_7b21",
+      context: "U2_R6_GATEWAY_CONTEXT_SECRET_812a",
+      execution: "U2_R6_GATEWAY_EXECUTION_SECRET_469b",
+      run: "U2_R6_GATEWAY_RUN_SECRET_e8e7",
+      resource: "U2_R6_GATEWAY_RESOURCE_SECRET_170c",
+      target: "U2_R6_GATEWAY_TARGET_SECRET_1d49",
+      record: "U2_R6_GATEWAY_RECORD_SECRET_017b",
+      evaluator: "U2_R6_GATEWAY_EVALUATOR_SECRET_2aa3",
+      owner: "U2_R6_GATEWAY_OWNER_SECRET_f72d",
+      policy: "U2_R6_GATEWAY_POLICY_SECRET_7ae1",
+      grant: "U2_R6_GATEWAY_GRANT_SECRET_8da2",
+      reason: "U2_R6_GATEWAY_REASON_SECRET_bf5f",
+      remediationCode: "U2_R6_GATEWAY_REMEDIATION_CODE_SECRET_96c3",
+      remediationText: "U2_R6_GATEWAY_REMEDIATION_TEXT_SECRET_e403",
+      generic:
+        "U2_R6_GATEWAY_COMMAND_PATH_TOOL_INPUT_PERMISSION_TITLE_INPUT_METADATA_GENERIC_SECRET_66a1",
+    };
+    inspectExecutionIdentityRun.mockReturnValueOnce({
+      schemaVersion: 1,
+      run: { runId: "run-1", executionId: "execution-1", status: "known" },
+      identity: {
+        state: "unknown",
+        reasonCode: "run_not_found",
+        missingEvidence: ["run.record"],
+        remediation: [],
+      },
+      decisions: [
+        {
+          schemaVersion: 1,
+          receiptId: hostile.receipt,
+          contextId: hostile.context,
+          executionId: hostile.execution,
+          runId: hostile.run,
+          actionId: hostile.eventId,
+          occurredAt: 1,
+          action: {
+            family: "tool",
+            operation: "execute",
+            resourceRef: hostile.resource,
+            targetRef: hostile.target,
+            summary: hostile.generic,
+          },
+          decision: { outcome: "allowed", reasonCode: hostile.reason },
+          enforcement: {
+            coverageState: "enforced",
+            evaluatorRef: hostile.evaluator,
+            policyRefs: [hostile.policy],
+            grantRefs: [hostile.grant],
+            contextFieldsUsed: [],
+          },
+          source: {
+            owner: hostile.owner,
+            recordRef: hostile.resolutionRef,
+            decisionBoundary: hostile.record,
+          },
+          missingEvidence: [],
+          remediation: [{ code: hostile.remediationCode, text: hostile.remediationText }],
+        },
+      ],
+      decisionDisplays: [],
+      coverage: { state: "unknown", missingEvidence: ["run.record"] },
+    });
+
+    const respond = await runAuditHandler("audit.run.inspect", { executionId: "execution-1" });
+    const result = respond.mock.calls[0]?.[1];
+    const json = JSON.stringify(result);
+
+    expect(result).not.toHaveProperty("decisions");
+    expect(result).toEqual(
+      expect.objectContaining({ decisionDisplays: [], coverage: expect.any(Object) }),
+    );
+    for (const rawKey of ["receiptId", "resolutionRef", "eventId"]) {
+      expect(json).not.toContain(`"${rawKey}"`);
+    }
+    for (const secret of Object.values(hostile)) {
+      expect(json).not.toContain(secret);
+    }
+  });
+
+  it("preserves mirrored numeric cursors for execution paging", async () => {
+    const decisionCursor = "001";
+    await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      executionCursor: decisionCursor,
+      decisionCursor,
+      decisionLimit: 25,
+    });
+
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      executionOffset: 1,
+      executionLimit: 50,
+      decisionCursor,
+      decisionLimit: 25,
+    });
+  });
+
+  it("treats mirrored owner decision cursors as decision-only", async () => {
+    const decisionCursor = "a:2000:42";
+    await runAuditHandler("audit.run.inspect", {
+      runId: "run-1",
+      executionCursor: decisionCursor,
+      decisionCursor,
+      decisionLimit: 25,
+    });
+
+    expect(inspectExecutionIdentityRun).toHaveBeenLastCalledWith({
+      runId: "run-1",
+      executionLimit: 50,
+      decisionCursor,
+      decisionLimit: 25,
     });
   });
 

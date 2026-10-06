@@ -1,6 +1,6 @@
 import {
   copyReplyPayloadMetadata,
-  isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
 import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabilities.js";
@@ -9,9 +9,11 @@ import type { TtsAutoMode } from "../config/types.tts.js";
 import { createTtsDirectiveTextStreamCleaner } from "./directives.js";
 import { resolveStatusTtsSnapshot } from "./status-config.js";
 import { resolveConfiguredTtsMode } from "./tts-config.js";
+import type { PreparedTtsPreferences } from "./tts-preferences.js";
 
 export function shouldDeferFinalTtsText(params: {
   cfg: OpenClawConfig;
+  preparedTtsPreferences?: PreparedTtsPreferences;
   ttsAuto?: TtsAutoMode;
   agentId?: string;
   channelId?: string;
@@ -32,6 +34,7 @@ export function shouldDeferFinalTtsText(params: {
   }
   const status = resolveStatusTtsSnapshot({
     cfg: params.cfg,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     sessionAuto: params.ttsAuto,
     agentId: params.agentId,
     channelId: params.channelId,
@@ -61,11 +64,7 @@ export function mergeDeferredFinalText(streamedText: string, finalText?: string)
 }
 
 export function isCaptionedFinalTextPayload(payload: ReplyPayload): boolean {
-  return (
-    payload.isReasoning !== true &&
-    payload.isCommentary !== true &&
-    !isReplyPayloadStatusNotice(payload)
-  );
+  return isReplyPayloadTerminalContent(payload);
 }
 
 export function cleanDeferredFinalText(text: string | undefined): string {

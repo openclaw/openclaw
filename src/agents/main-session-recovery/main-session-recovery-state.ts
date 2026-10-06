@@ -1,18 +1,22 @@
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
-} from "../../auto-reply/reply/pending-final-delivery.js";
+} from "../../auto-reply/reply/pending-final-delivery-state.js";
 import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
   RestartRecoveryRun,
 } from "../../config/sessions.js";
+import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import {
   isAcpSessionKey,
   isCronSessionKey,
   isSubagentSessionKey,
 } from "../../routing/session-key.js";
-import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
+import {
+  buildMainSessionRecoveryClearPatch,
+  removeMainSessionRecoveryForegroundClaim,
+} from "./main-session-recovery-clear.js";
 import type {
   MainSessionRecoveryCommand,
   MainSessionRecoveryConflict,
@@ -20,7 +24,10 @@ import type {
   MainSessionRecoveryTransitionResult,
   MainSessionRecoveryView,
 } from "./main-session-recovery-types.js";
-import { MAX_RECOVERY_RETRIES } from "./main-session-restart-recovery-shared.js";
+import {
+  MAX_RECOVERY_RETRIES,
+  resolveRestartRecoveryTerminalClientRunId,
+} from "./main-session-restart-recovery-shared.js";
 
 export type {
   MainSessionRecoveryCommand,
@@ -47,6 +54,12 @@ function createCycle(cycleId: string): MainRestartRecoveryState {
     revision: 1,
     chargedAttempts: 0,
   };
+}
+
+export function getMainSessionRecoveryRetryCount(
+  state: MainRestartRecoveryState | undefined,
+): number {
+  return state ? state.chargedAttempts - (state.startedAttempt ?? 0) : 0;
 }
 
 function matchesObservation(
@@ -151,6 +164,16 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
   );
 }
 
+/** Failed foreground admission can leave an unfinished recovery cycle behind. */
+export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry): boolean {
+  return (
+    (entry.status === undefined || entry.status === "running" || entry.status === "failed") &&
+    entry.abortedLastRun !== true &&
+    entry.mainRestartRecovery !== undefined &&
+    !entry.mainRestartRecovery.tombstone
+  );
+}
+
 type MainRestartRecoveryRolloverEligibility =
   | { eligible: true }
   | {
@@ -180,16 +203,41 @@ export function inspectMainRestartRecoveryRolloverEligibility(
   return { eligible: true };
 }
 
+// A recovery aggregate stops owning work once every recorded run has a durable
+// terminal fact and no reservation, foreground claim, tombstone, or delivery
+// claim remains. Such terminal-only residue previously stayed authoritative
+// forever, failing every later admission with "changed while starting work"
+// (#118873). A live admitted recovery run always holds
+// restartRecoveryDeliveryRunId, so that gate keeps active work authoritative.
+export function isMainRestartRecoveryAggregateTerminalOnly(entry: SessionEntry): boolean {
+  const state = entry.mainRestartRecovery;
+  if (!state || state.tombstone || state.reservation || state.foregroundClaims) {
+    return false;
+  }
+  if (entry.restartRecoveryDeliveryRunId !== undefined) {
+    return false;
+  }
+  const runs = entry.restartRecoveryRuns;
+  return (
+    runs !== undefined &&
+    runs.length > 0 &&
+    runs.every((run) => hasRestartRecoveryTerminalRun(entry, run.runId))
+  );
+}
+
 // A healthy session can retain lifecycle fences after its final recovery owner
 // clears. With no active delivery or aggregate, those fences no longer own work.
 function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: string): boolean {
+  if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
+    return false;
+  }
   return (
     (entry.status === "running" &&
       entry.abortedLastRun !== true &&
-      entry.restartRecoveryRuns !== undefined &&
-      entry.mainRestartRecovery === undefined &&
       entry.restartRecoveryDeliveryRunId === undefined &&
-      isMainRestartRecoveryCandidate(entry, sessionKey)) ||
+      ((entry.restartRecoveryRuns !== undefined && entry.mainRestartRecovery === undefined) ||
+        // Terminal-only aggregate: every run settled, nothing owns work (#118873).
+        isMainRestartRecoveryAggregateTerminalOnly(entry))) ||
     // Sessions that are not running were permanently unadmittable while holding
     // recovery residue, returning "changed while starting work" forever
     // (production incident 2026-07-26). A row whose status is absent never
@@ -198,7 +246,6 @@ function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: s
     // so it must not gate the cleanup the way it does for the running case above.
     (entry.status !== "running" &&
       entry.mainRestartRecovery === undefined &&
-      isMainRestartRecoveryCandidate(entry, sessionKey) &&
       (entry.restartRecoveryRuns !== undefined || entry.abortedLastRun === true))
   );
 }
@@ -229,11 +276,9 @@ function inspectMainSessionRecovery(params: {
   if (
     entry.status !== "running" ||
     entry.abortedLastRun !== true ||
-    !isMainRestartRecoveryCandidate(entry, params.sessionKey)
+    !isMainRestartRecoveryCandidate(entry, params.sessionKey) ||
+    !state
   ) {
-    return { status: "inactive" };
-  }
-  if (!state) {
     return { status: "inactive" };
   }
   const observation = {
@@ -244,12 +289,13 @@ function inspectMainSessionRecovery(params: {
   if (state.reservation) {
     return { status: "blocked" };
   }
-  if (state.chargedAttempts >= MAX_RECOVERY_RETRIES) {
+  const retryCount = getMainSessionRecoveryRetryCount(state);
+  if (retryCount >= MAX_RECOVERY_RETRIES) {
     return {
       status: "exhausted",
       observation,
       reason:
-        `main-session restart recovery blocked after ${state.chargedAttempts} charged automatic resume attempts; ` +
+        `main-session restart recovery blocked after ${retryCount} automatic attempts without a started runtime turn; ` +
         MAIN_RESTART_RECOVERY_REMEDIATION_HINT,
     };
   }
@@ -269,10 +315,13 @@ function inspectMainSessionRecoveryForAdmission(params: {
     params.entry.status === "running" &&
     params.entry.abortedLastRun !== true &&
     params.entry.mainRestartRecovery &&
-    params.entry.restartRecoveryRuns?.length
+    params.entry.restartRecoveryRuns?.length &&
+    !isMainRestartRecoveryAggregateTerminalOnly(params.entry)
   ) {
-    // Standalone callers may use another process generation. Any admitted
-    // recovery fence remains authoritative until Gateway lifecycle settlement.
+    // Standalone callers may use another process generation. An admitted
+    // recovery fence remains authoritative until Gateway lifecycle settlement —
+    // but a terminal-only aggregate owns nothing and must not wedge standalone
+    // admission forever (#118873); the Gateway scan retires it durably.
     return { status: "blocked" };
   }
   if (
@@ -294,11 +343,25 @@ export function transitionMainSessionRecovery(
 ): MainSessionRecoveryTransitionResult {
   switch (command.kind) {
     case "mark_interrupted": {
-      if (!entry.mainRestartRecovery) {
+      // Queued announcements add fences too. Retain the executing turn before
+      // releasing its lifecycle identity so retries can join this recovery.
+      entry.restartRecoveryDeliverySourceRunId ??=
+        entry.restartRecoveryDeliveryRunId ?? entry.lifecycleRunId;
+      const state = entry.mainRestartRecovery;
+      if (!state) {
         entry.mainRestartRecovery = createCycle(command.cycleId);
+      } else if (state.foregroundClaims || state.reservation) {
+        // Restart owns continuation now. Process-bound foreground and reservation
+        // leases cannot authorize the old lifecycle after this durable handoff.
+        updateRecoveryState(entry, state, {
+          foregroundClaims: undefined,
+          reservation: undefined,
+        });
       }
       entry.status = "running";
+      entry.activeWriterRunId = undefined;
       entry.lifecycleRunId = undefined;
+      entry.lastRunId = undefined;
       entry.abortedLastRun = true;
       if (command.resetRuntime) {
         entry.startedAt = undefined;
@@ -328,7 +391,7 @@ export function transitionMainSessionRecovery(
         isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
         !entry.mainRestartRecovery
       ) {
-        // Rows interrupted by an older shipped version acquire identity before scanning.
+        // Acquire recovery identity before scanning interrupted rows.
         entry.mainRestartRecovery = createCycle(command.cycleId);
       }
       let state = entry.mainRestartRecovery;
@@ -352,6 +415,12 @@ export function transitionMainSessionRecovery(
         // A process restart makes dispatch outcome unknowable: retain the charge,
         // but release the stale slot so the next bounded attempt can proceed.
         updateRecoveryState(entry, state, { reservation: undefined });
+      }
+      if (entry.abortedLastRun !== true && isMainRestartRecoveryAggregateTerminalOnly(entry)) {
+        // The scan owns retiring dead residue: heal the row durably here so
+        // later admissions — including standalone inspect-only callers — never
+        // meet the stale aggregate (#118873).
+        Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
       }
       return {
         kind: "observed",
@@ -380,14 +449,11 @@ export function transitionMainSessionRecovery(
       if (command.attempt !== state.chargedAttempts + 1) {
         return { kind: "rejected", reason: "stale_revision" };
       }
-      const executionIdentityAdmission =
-        command.executionIdentity.state === "disabled"
-          ? undefined
-          : state.executionIdentity?.runId === command.runId
-            ? ({ kind: "retry-reference", token: state.executionIdentity } as const)
-            : undefined;
       updateRecoveryState(entry, state, {
-        ...(command.executionIdentity.state === "disabled" ? { executionIdentity: undefined } : {}),
+        executionIdentity:
+          command.executionIdentity.state === "enabled" && state.executionIdentity
+            ? state.executionIdentity
+            : undefined,
         chargedAttempts: command.attempt,
         reservation: {
           runId: command.runId,
@@ -404,34 +470,43 @@ export function transitionMainSessionRecovery(
           lifecycleGeneration: command.lifecycleGeneration,
           runId: command.runId,
           attempt: command.attempt,
-          ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
         },
       };
     }
-    case "bind_admitted_execution_identity": {
+    case "bind_admitted_execution_identity":
+    case "register_recovery_turn": {
       const state = entry.mainRestartRecovery;
       if (
         !state ||
         state.cycleId !== command.cycleId ||
-        // Recovery may reuse its public run id. The charged attempt is the
-        // durable admission fence that rejects delayed binds from older work.
+        // Keep attempt identity monotonic across successful starts. Resetting the
+        // counter itself would let delayed admission callbacks match newer work.
         state.chargedAttempts !== command.attempt ||
         entry.sessionId !== command.sessionId ||
         entry.lifecycleRunId !== command.runId ||
         !entry.restartRecoveryRuns?.some(
           (run) =>
             run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
-        ) ||
-        command.token.runId !== command.runId
+        )
       ) {
         return { kind: "rejected", reason: "stale_reservation" };
       }
-      if (state.executionIdentity) {
-        return JSON.stringify(state.executionIdentity) === JSON.stringify(command.token)
-          ? { kind: "no_change" }
-          : { kind: "rejected", reason: "stale_reservation" };
+      if (command.kind === "register_recovery_turn") {
+        if (state.startedAttempt === command.attempt) {
+          return { kind: "no_change" };
+        }
+        updateRecoveryState(entry, state, { startedAttempt: command.attempt });
+      } else {
+        if (state.executionIdentity) {
+          return JSON.stringify(state.executionIdentity) === JSON.stringify(command.token)
+            ? { kind: "no_change" }
+            : { kind: "rejected", reason: "stale_reservation" };
+        }
+        if (command.token.runId !== command.runId) {
+          return { kind: "rejected", reason: "stale_reservation" };
+        }
+        updateRecoveryState(entry, state, { executionIdentity: command.token });
       }
-      updateRecoveryState(entry, state, { executionIdentity: command.token });
       return { kind: "applied" };
     }
     case "cancel_reservation":
@@ -473,6 +548,7 @@ export function transitionMainSessionRecovery(
       });
       entry.abortedLastRun = false;
       entry.lifecycleRunId = command.runId;
+      entry.lastRunId = undefined;
       recordLifecycleFence(entry, {
         runId: command.runId,
         lifecycleGeneration: command.lifecycleGeneration,
@@ -485,7 +561,16 @@ export function transitionMainSessionRecovery(
           Object.assign(entry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         }
       }
-      return { kind: "admitted_recovery" };
+      return {
+        kind: "admitted_recovery",
+        admission: {
+          cycleId: state.cycleId,
+          attempt: state.chargedAttempts,
+          lifecycleGeneration: command.lifecycleGeneration,
+          runId: command.runId,
+          sessionId: command.sessionId,
+        },
+      };
     }
     case "mark_admitted_recovery_interrupted": {
       const state = entry.mainRestartRecovery;
@@ -494,7 +579,10 @@ export function transitionMainSessionRecovery(
       }
       if (
         !state ||
+        state.cycleId !== command.cycleId ||
+        state.chargedAttempts !== command.attempt ||
         state.reservation ||
+        state.foregroundClaims ||
         !entry.restartRecoveryRuns?.some(
           (run) =>
             run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
@@ -502,15 +590,25 @@ export function transitionMainSessionRecovery(
       ) {
         return { kind: "rejected", reason: "stale_reservation" };
       }
+      if (entry.lifecycleRunId !== command.runId) {
+        // A committed restoration may lose its response. Only that exact pending
+        // attempt is repeatable; retained run fences do not authorize newer work.
+        return entry.status === "running" &&
+          entry.abortedLastRun === true &&
+          entry.lifecycleRunId === undefined &&
+          entry.restartRecoveryDeliveryRunId === undefined
+          ? { kind: "no_change" }
+          : { kind: "rejected", reason: "stale_reservation" };
+      }
       entry.status = "running";
       entry.lifecycleRunId = undefined;
+      entry.lastRunId = undefined;
       entry.abortedLastRun = true;
       entry.startedAt = undefined;
       entry.endedAt = undefined;
       entry.runtimeMs = undefined;
       if (entry.restartRecoveryDeliveryRunId === command.runId) {
-        // Gateway accepted this RPC id before setup failed. Rotate it on retry
-        // or the dedupe cache replays that terminal pre-dispatch failure.
+        // Rotate the failed RPC id on retry so dedupe cannot replay its terminal failure.
         entry.restartRecoveryDeliveryRunId = undefined;
       }
       entry.updatedAt = command.now;
@@ -536,23 +634,19 @@ export function transitionMainSessionRecovery(
       if (state.tombstone) {
         return { kind: "rejected", reason: "already_tombstoned" };
       }
-      if (state.chargedAttempts >= MAX_RECOVERY_RETRIES) {
+      if (getMainSessionRecoveryRetryCount(state) >= MAX_RECOVERY_RETRIES) {
         // The final charge fences foreground work until the scheduler commits
         // the matching tombstone. Admitting here can race that reconciliation.
         return { kind: "rejected", reason: "recovery_exhausted" };
       }
-      const currentTokens =
+      const currentClaims =
         state.foregroundClaims?.lifecycleGeneration === command.lifecycleGeneration
-          ? state.foregroundClaims.tokens
-          : [];
-      const tokens = [...new Set([...currentTokens, command.claimId])].toSorted();
-      const currentRunIds =
-        state.foregroundClaims?.lifecycleGeneration === command.lifecycleGeneration
-          ? state.foregroundClaims.runIdsByClaimId
+          ? state.foregroundClaims
           : undefined;
+      const tokens = [...new Set([...(currentClaims?.tokens ?? []), command.claimId])].toSorted();
       const runIdsByClaimId = command.runId
-        ? { ...currentRunIds, [command.claimId]: command.runId }
-        : currentRunIds;
+        ? { ...currentClaims?.runIdsByClaimId, [command.claimId]: command.runId }
+        : currentClaims?.runIdsByClaimId;
       if (command.runId) {
         recordLifecycleFence(entry, {
           lifecycleGeneration: command.lifecycleGeneration,
@@ -613,26 +707,15 @@ export function transitionMainSessionRecovery(
       if (!state || !claims || !ownsForegroundClaim(state, command.claim)) {
         return { kind: "no_change" };
       }
-      const tokens = claims.tokens.filter((token) => token !== command.claim.claimId);
-      const runIdsByClaimId = Object.fromEntries(
-        Object.entries(claims.runIdsByClaimId ?? {}).filter(
-          ([token]) => token !== command.claim.claimId,
-        ),
+      const foregroundClaims = removeMainSessionRecoveryForegroundClaim(
+        claims,
+        command.claim.claimId,
       );
-      if (tokens.length === 0 && entry.abortedLastRun !== true) {
+      if (!foregroundClaims && entry.abortedLastRun !== true) {
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
         return { kind: "applied" };
       }
-      updateRecoveryState(entry, state, {
-        foregroundClaims:
-          tokens.length > 0
-            ? {
-                lifecycleGeneration: command.claim.lifecycleGeneration,
-                tokens,
-                ...(Object.keys(runIdsByClaimId).length > 0 ? { runIdsByClaimId } : {}),
-              }
-            : undefined,
-      });
+      updateRecoveryState(entry, state, { foregroundClaims });
       return { kind: "applied" };
     }
     case "tombstone": {
@@ -655,6 +738,7 @@ export function transitionMainSessionRecovery(
       entry.abortedLastRun = false;
       entry.status = "failed";
       entry.lifecycleRunId = undefined;
+      entry.lastRunId = resolveRestartRecoveryTerminalClientRunId(entry);
       entry.endedAt = command.now;
       entry.runtimeMs = Math.max(0, command.now - (entry.startedAt ?? command.now));
       entry.updatedAt = command.now;

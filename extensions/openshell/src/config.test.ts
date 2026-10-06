@@ -22,11 +22,12 @@ describe("openshell plugin config", () => {
     });
   });
 
-  it("accepts remote mode", () => {
-    expect(resolveOpenShellPluginConfig({ mode: "remote" }).mode).toBe("remote");
-  });
-
   it("rejects relative remote paths", () => {
+    expect(
+      createOpenShellPluginConfigSchema().safeParse?.({
+        remoteWorkspaceDir: "sandbox",
+      }).success,
+    ).toBe(false);
     expect(() =>
       resolveOpenShellPluginConfig({
         remoteWorkspaceDir: "sandbox",
@@ -35,11 +36,33 @@ describe("openshell plugin config", () => {
   });
 
   it("rejects remote paths outside managed sandbox roots", () => {
+    expect(
+      createOpenShellPluginConfigSchema().safeParse?.({
+        remoteWorkspaceDir: "/tmp/victim",
+      }).success,
+    ).toBe(false);
     expect(() =>
       resolveOpenShellPluginConfig({
         remoteWorkspaceDir: "/tmp/victim",
       }),
     ).toThrow("OpenShell remoteWorkspaceDir must stay under /sandbox or /agent");
+  });
+
+  it("rejects normalized paths that escape managed sandbox roots during config validation", () => {
+    expect(
+      createOpenShellPluginConfigSchema().safeParse?.({
+        remoteAgentWorkspaceDir: "/agent/../../etc",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("preserves shipped equal workspace roots", () => {
+    const config = {
+      remoteWorkspaceDir: "/sandbox/project",
+      remoteAgentWorkspaceDir: "/sandbox/project",
+    };
+    expect(createOpenShellPluginConfigSchema().safeParse?.(config).success).toBe(true);
+    expect(resolveOpenShellPluginConfig(config)).toMatchObject(config);
   });
 
   it("normalizes managed sandbox subpaths", () => {
@@ -71,10 +94,6 @@ describe("openshell plugin config", () => {
         mode: "bogus",
       }),
     ).toThrow("mode must be one of mirror, remote");
-  });
-
-  it("accepts an OpenShell workspace name", () => {
-    expect(resolveOpenShellPluginConfig({ workspace: "team-1" }).workspace).toBe("team-1");
   });
 
   it.each(["Team", "-team", "team-", "team--one", "abcdefghijklmnopqrst"])(

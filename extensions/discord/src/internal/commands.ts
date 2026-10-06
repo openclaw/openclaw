@@ -1,15 +1,12 @@
-// Discord plugin module implements commands behavior.
 import {
   ApplicationCommandOptionType,
   ApplicationCommandType,
   InteractionContextType,
   type RESTPostAPIApplicationCommandsJSONBody,
 } from "discord-api-types/v10";
-import type { BaseMessageInteractiveComponent } from "./components.js";
 import type { AutocompleteInteraction, CommandInteraction } from "./interactions.js";
 import { stripUndefinedFields as clean } from "./undefined-fields.js";
 
-type ConditionalCommandOption = (interaction: unknown) => boolean;
 type CommandOption = Record<string, unknown> & {
   name: string;
   description?: string;
@@ -19,6 +16,7 @@ type CommandOption = Record<string, unknown> & {
   autocomplete?: boolean | ((interaction: AutocompleteInteraction) => Promise<void>);
 };
 export type CommandOptions = CommandOption[];
+export type DiscordCommand = Command | CommandWithSubcommands;
 
 type RawSubcommandOption = {
   name?: unknown;
@@ -26,22 +24,15 @@ type RawSubcommandOption = {
   options?: RawSubcommandOption[];
 };
 
-function resolveConditionalCommandOption(
-  value: boolean | ConditionalCommandOption,
-  interaction: unknown,
-): boolean {
-  return typeof value === "function" ? value(interaction) : value;
-}
-
 export async function deferCommandInteractionIfNeeded(
   command: BaseCommand,
   interaction: CommandInteraction,
 ): Promise<void> {
-  if (!resolveConditionalCommandOption(command.defer, interaction)) {
+  if (!command.defer) {
     return;
   }
   await interaction.defer({
-    ephemeral: resolveConditionalCommandOption(command.ephemeral, interaction),
+    ephemeral: command.ephemeral,
   });
 }
 
@@ -62,77 +53,52 @@ function findSelectedSubcommand(
     : undefined;
 }
 
-function findCommandOption(
-  options: CommandOptions | undefined,
-  name: string | undefined,
-): CommandOption | undefined {
-  if (!name) {
-    return undefined;
-  }
-  return options?.find((option) => option.name === name);
-}
-
-function hasCommandOptions(
-  command: BaseCommand,
-): command is BaseCommand & { options?: CommandOptions } {
-  return "options" in command;
-}
-
 export function resolveFocusedCommandOptionAutocompleteHandler(
-  command: BaseCommand,
+  command: DiscordCommand,
   interaction: AutocompleteInteraction,
 ): ((interaction: AutocompleteInteraction) => Promise<void>) | undefined {
   const focusedName = interaction.options.getFocused()?.name;
   const options =
-    "subcommands" in command && Array.isArray(command.subcommands)
+    command.commandKind === "group"
       ? findSelectedSubcommand(command.subcommands, interaction)?.options
-      : hasCommandOptions(command)
-        ? command.options
-        : undefined;
-  const autocomplete = findCommandOption(options, focusedName)?.autocomplete;
+      : command.options;
+  const autocomplete = focusedName
+    ? options?.find((option) => option.name === focusedName)?.autocomplete
+    : undefined;
   return typeof autocomplete === "function" ? autocomplete : undefined;
 }
 
 export abstract class BaseCommand {
+  abstract readonly commandKind: "leaf" | "group";
   id?: string;
   abstract name: string;
   description?: string;
-  nameLocalizations?: Record<string, string>;
   descriptionLocalizations?: Record<string, string>;
-  defer: boolean | ConditionalCommandOption = false;
-  ephemeral: boolean | ConditionalCommandOption = false;
+  defer = false;
+  ephemeral = false;
   abstract type: ApplicationCommandType;
-  integrationTypes = [0, 1];
-  contexts = [
-    InteractionContextType.Guild,
-    InteractionContextType.BotDM,
-    InteractionContextType.PrivateChannel,
-  ];
-  permission?: bigint | bigint[];
-  components?: BaseMessageInteractiveComponent[];
-  guildIds?: string[];
   abstract serializeOptions(): unknown[] | undefined;
   serialize(): RESTPostAPIApplicationCommandsJSONBody {
     return clean({
       name: this.name,
-      name_localizations: this.nameLocalizations,
       description:
         this.type === ApplicationCommandType.ChatInput ? (this.description ?? "") : undefined,
       description_localizations: this.descriptionLocalizations,
       type: this.type,
       options: this.serializeOptions() as RESTPostAPIApplicationCommandsJSONBody["options"],
-      integration_types: this.integrationTypes,
-      contexts: this.contexts,
-      default_member_permissions: Array.isArray(this.permission)
-        ? this.permission.reduce((sum, entry) => sum | entry, 0n).toString()
-        : this.permission
-          ? this.permission.toString()
-          : null,
+      integration_types: [0, 1],
+      contexts: [
+        InteractionContextType.Guild,
+        InteractionContextType.BotDM,
+        InteractionContextType.PrivateChannel,
+      ],
+      default_member_permissions: null,
     }) as RESTPostAPIApplicationCommandsJSONBody;
   }
 }
 
 export abstract class Command extends BaseCommand {
+  readonly commandKind = "leaf";
   options?: CommandOptions;
   type = ApplicationCommandType.ChatInput;
   abstract run(interaction: unknown): unknown;
@@ -148,11 +114,12 @@ export abstract class Command extends BaseCommand {
         return { ...rest, autocomplete: true };
       }
       return option;
-    }) as unknown[];
+    });
   }
 }
 
 export abstract class CommandWithSubcommands extends BaseCommand {
+  readonly commandKind = "group";
   type = ApplicationCommandType.ChatInput;
   abstract subcommands: Command[];
   async run(interaction: CommandInteraction): Promise<unknown> {
@@ -172,7 +139,6 @@ export abstract class CommandWithSubcommands extends BaseCommand {
     return this.subcommands.map((command) =>
       clean({
         name: command.name,
-        name_localizations: command.nameLocalizations,
         description: command.description ?? "",
         description_localizations: command.descriptionLocalizations,
         type: ApplicationCommandOptionType.Subcommand,

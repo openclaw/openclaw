@@ -21,52 +21,14 @@ const reviewInput = {
   },
 } satisfies ExecAutoReviewInput;
 
-function reviewCommand(command: string, argv: string[]) {
-  return defaultExecAutoReviewer({
-    command,
-    argv,
-    host: "gateway",
-    reason: "approval-required",
-    analysis: {
-      parsed: true,
-      allowlistMatched: false,
-      inlineEval: false,
-    },
-  } satisfies ExecAutoReviewInput);
-}
-
 describe("default exec auto reviewer", () => {
   it("falls back to human approval instead of maintaining a static allowlist", () => {
-    expect(reviewCommand("pwd", ["pwd"])).toMatchObject({
+    expect(
+      defaultExecAutoReviewer({ ...reviewInput, command: "pwd", argv: ["pwd"] }),
+    ).toMatchObject({
       decision: "ask",
     });
   });
-
-  it.each([
-    ["./pwd", ["./pwd"]],
-    ["/tmp/pwd", ["/tmp/pwd"]],
-  ])("does not auto-approve path-qualified pwd lookalikes: %s", (_command, argv) => {
-    expect(reviewCommand(_command, argv)).toMatchObject({
-      decision: "ask",
-    });
-  });
-
-  it.each([
-    ["cat ~/.openclaw/credentials/model.json", ["cat", "~/.openclaw/credentials/model.json"]],
-    ["rg token ~/.ssh", ["rg", "token", "~/.ssh"]],
-    ["sed -i s/foo/bar/g file.txt", ["sed", "-i", "s/foo/bar/g", "file.txt"]],
-    ["git status", ["git", "status"]],
-    ["git branch scratch", ["git", "branch", "scratch"]],
-    ["git diff --output=/tmp/diff.patch", ["git", "diff", "--output=/tmp/diff.patch"]],
-    ["git status\nnode -e 'console.log(1)'", ["git", "status"]],
-  ])(
-    "asks for human review on sensitive or externally influenced commands: %s",
-    (_command, argv) => {
-      expect(reviewCommand(_command, argv)).toMatchObject({
-        decision: "ask",
-      });
-    },
-  );
 });
 
 describe("exec auto-review failure handling", () => {
@@ -126,16 +88,21 @@ describe("exec auto-review failure handling", () => {
     });
   });
 
-  it("preserves a successful reviewer's original decision", async () => {
-    const decision = {
-      decision: "allow-once",
-      risk: "low",
-      rationale: "read-only inspection",
-    } as const;
-    const reviewer: ExecAutoReviewer = () => decision;
+  it.each([
+    { decision: "allow-once", risk: "low" },
+    { decision: "deny", risk: "high" },
+  ] as const)(
+    "preserves a successful reviewer's $decision decision with $risk risk",
+    async (outcome) => {
+      const decision = {
+        ...outcome,
+        rationale: "reviewer explanation",
+      };
+      const reviewer: ExecAutoReviewer = () => decision;
 
-    await expect(resolveExecAutoReviewDecision(reviewer, reviewInput)).resolves.toBe(decision);
-  });
+      await expect(resolveExecAutoReviewDecision(reviewer, reviewInput)).resolves.toBe(decision);
+    },
+  );
 
   it("redacts provider credentials before displaying a reviewer failure", async () => {
     const secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ";

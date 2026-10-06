@@ -1,5 +1,6 @@
 /** Tests that configured-only secret target lookup avoids broad manifest rediscovery. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
   loadPluginManifestRegistryMock: vi.fn(() => {
@@ -11,72 +12,49 @@ const { getSecretTargetRegistryMock } = vi.hoisted(() => ({
   getSecretTargetRegistryMock: vi.fn(),
 }));
 
-const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
-  loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
-    ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-      if (dirName === "googlechat" && artifactBasename === "secret-contract-api.js") {
+const { channelTarget, loadBundledPublicArtifactMock } = vi.hoisted(() => {
+  const buildChannelTarget = (id: string, refPathPattern?: string): SecretTargetRegistryEntry => ({
+    id,
+    targetType: id,
+    configFile: "openclaw.json",
+    pathPattern: id,
+    ...(refPathPattern ? { refPathPattern } : {}),
+    secretShape: refPathPattern ? "sibling_ref" : "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  });
+  const loadArtifact = vi.fn(
+    ({ artifactCandidates, dirName }: { artifactCandidates: string[]; dirName: string }) => {
+      if (dirName === "googlechat" && artifactCandidates[0] === "secret-contract-api.js") {
+        return {
+          secretTargetRegistryEntries: [buildChannelTarget("channels.googlechat.serviceAccount")],
+        };
+      }
+      if (dirName === "telegram" && artifactCandidates[0] === "secret-contract-api.js") {
         return {
           secretTargetRegistryEntries: [
-            {
-              id: "channels.googlechat.serviceAccount",
-              targetType: "channels.googlechat.serviceAccount",
-              configFile: "openclaw.json",
-              pathPattern: "channels.googlechat.serviceAccount",
-              secretShape: "secret_input",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
+            buildChannelTarget("channels.telegram.botToken", "channels.telegram.botTokenRef"),
           ],
         };
       }
-      if (dirName === "telegram" && artifactBasename === "secret-contract-api.js") {
-        return {
-          secretTargetRegistryEntries: [
-            {
-              id: "channels.telegram.botToken",
-              targetType: "channels.telegram.botToken",
-              configFile: "openclaw.json",
-              pathPattern: "channels.telegram.botToken",
-              refPathPattern: "channels.telegram.botTokenRef",
-              secretShape: "sibling_ref",
-              expectedResolvedValue: "string",
-              includeInPlan: true,
-              includeInConfigure: true,
-              includeInAudit: true,
-            },
-          ],
-        };
-      }
-      throw new Error(
-        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
-      );
+      return null;
     },
-  ),
-}));
+  );
+  return { channelTarget: buildChannelTarget, loadBundledPublicArtifactMock: loadArtifact };
+});
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: loadPluginManifestRegistryMock,
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: loadBundledPublicArtifactMock,
 }));
 
 vi.mock("./target-registry-data.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./target-registry-data.js")>();
-  const channelTarget = (id: string) => ({
-    id,
-    targetType: id,
-    configFile: "openclaw.json" as const,
-    pathPattern: id,
-    secretShape: "secret_input" as const,
-    expectedResolvedValue: "string" as const,
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  });
   getSecretTargetRegistryMock.mockImplementation(
     (params?: { config?: { plugins?: { load?: { paths?: string[] } } } }) => {
       const loadPath = params?.config?.plugins?.load?.paths?.[0];
@@ -104,8 +82,22 @@ import {
 describe("secret target registry fast path", () => {
   beforeEach(() => {
     loadPluginManifestRegistryMock.mockClear();
-    loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
+    loadBundledPublicArtifactMock.mockClear();
     getSecretTargetRegistryMock.mockClear();
+  });
+
+  it("resolves core paths before loading channel or full registries", () => {
+    const pathSegments = ["models", "providers", "openai", "headers", "X.Trace"];
+    const target = resolveConfigSecretTargetByPath(pathSegments);
+
+    expect(target).toMatchObject({
+      pathSegments,
+      pathTokens: pathSegments,
+      providerId: "openai",
+    });
+    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalled();
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+    expect(getSecretTargetRegistryMock).not.toHaveBeenCalled();
   });
 
   it("resolves bundled channel targets by explicit channel id without manifest scans", () => {
@@ -116,11 +108,12 @@ describe("secret target registry fast path", () => {
     }
     expect(target.entry.id).toBe("channels.googlechat.serviceAccount");
     expect(target.refPathSegments).toBeUndefined();
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(loadBundledPublicArtifactMock).toHaveBeenCalledWith({
       dirName: "googlechat",
-      artifactBasename: "secret-contract-api.js",
+      artifactCandidates: ["secret-contract-api.js"],
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+    expect(getSecretTargetRegistryMock).not.toHaveBeenCalled();
   });
 
   it("discovers selected core config targets without loading plugin metadata", () => {
@@ -133,7 +126,7 @@ describe("secret target registry fast path", () => {
     );
 
     expect(targets.map((target) => target.entry.id)).toEqual(["gateway.auth.token"]);
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalled();
+    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalled();
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 

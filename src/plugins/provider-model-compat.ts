@@ -1,12 +1,15 @@
+import { resolveOpenAICompletionsCompat } from "@openclaw/ai/internal/openai-completions-compat";
 // Normalizes provider model compatibility metadata from plugins.
-import { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/openai";
-import { resolveOpenAICompletionsCompat } from "@openclaw/ai/transports";
+import "@openclaw/ai/internal/tool-schema";
+import { normalizeModelTransportBaseUrl } from "../agents/model-compat-catalog.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
-import { getModelProviderMetadataOwners } from "../agents/provider-request-config.js";
+import { getModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import "../llm/ai-transport-host.js";
 import type { Model } from "../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "./plugin-metadata-snapshot.types.js";
+// Tool-schema compat predicates moved into @openclaw/ai (agent-tools-parameter-schema);
+// re-export so existing core/plugin callers keep one canonical import site.
+export { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/tool-schema";
 
 export function extractModelCompat(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
@@ -53,20 +56,8 @@ export function resolveToolCallArgumentsEncoding(
   return extractModelCompat(modelOrCompat)?.toolCallArgumentsEncoding;
 }
 
-// Tool-schema compat predicates moved into @openclaw/ai (agent-tools-parameter-schema);
-// re-export so existing core/plugin callers keep one canonical import site.
-export { resolveUnsupportedToolSchemaKeywords };
-
 function isOpenAiCompletionsModel(model: Model): model is Model<"openai-completions"> {
   return model.api === "openai-completions";
-}
-
-function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messages"> {
-  return model.api === "anthropic-messages";
-}
-
-function normalizeAnthropicBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/v1\/?$/, "");
 }
 
 export function normalizeModelCompat(
@@ -75,11 +66,9 @@ export function normalizeModelCompat(
 ): Model {
   const baseUrl = model.baseUrl ?? "";
 
-  if (isAnthropicMessagesModel(model) && baseUrl) {
-    const normalized = normalizeAnthropicBaseUrl(baseUrl);
-    if (normalized !== baseUrl) {
-      return { ...model, baseUrl: normalized } as Model<"anthropic-messages">;
-    }
+  const normalized = normalizeModelTransportBaseUrl(model.api, baseUrl);
+  if (normalized !== baseUrl) {
+    return { ...model, baseUrl: normalized };
   }
 
   if (!isOpenAiCompletionsModel(model)) {
@@ -91,7 +80,9 @@ export function normalizeModelCompat(
     return model;
   }
   const resolvedProviderMetadataOwners =
-    providerMetadataOwners ?? getModelProviderMetadataOwners(model);
+    providerMetadataOwners ?? getModelProviderRequestRouteFacts(model)?.providerMetadataOwners;
+  // Metadata supplies its capability resolver explicitly; only execution facades
+  // install the transport host, which would pull runtime into plugin discovery.
   const resolved = resolveOpenAICompletionsCompat(model, (input) =>
     resolveProviderRequestCapabilities({
       ...input,

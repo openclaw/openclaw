@@ -1,14 +1,14 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Perplexity provider module implements model/runtime integration.
 import {
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createPerplexityWebSearchProviderBase,
+  hasPerplexityLegacyOverride,
+  resolvePerplexityConfig,
   resolvePerplexityWebSearchRuntimeMetadata,
 } from "./perplexity-web-search-provider.shared.js";
 
@@ -75,21 +75,15 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
   };
 }
 
-function hasPerplexityLegacyOverride(searchConfig?: Record<string, unknown>): boolean {
-  const perplexity = isRecord(searchConfig?.perplexity) ? searchConfig.perplexity : undefined;
-  return (
-    (typeof perplexity?.baseUrl === "string" && perplexity.baseUrl.trim().length > 0) ||
-    (typeof perplexity?.model === "string" && perplexity.model.trim().length > 0)
-  );
-}
-
 function createPerplexityToolDefinition(
   searchConfig?: Record<string, unknown>,
   runtimeTransport?: string,
 ): WebSearchProviderToolDefinition {
   const schemaTransport =
     runtimeTransport ??
-    (hasPerplexityLegacyOverride(searchConfig) ? "chat_completions" : undefined);
+    (hasPerplexityLegacyOverride(resolvePerplexityConfig(searchConfig))
+      ? "chat_completions"
+      : undefined);
 
   return {
     description:

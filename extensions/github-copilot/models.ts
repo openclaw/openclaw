@@ -1,25 +1,26 @@
-// Github Copilot plugin module implements models behavior.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  normalizeModelCompat,
-  supportsClaudeAdaptiveThinking,
-} from "openclaw/plugin-sdk/provider-model-shared";
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asPositiveSafeInteger,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveCopilotModelCompat,
+  resolveCopilotThinkingLevelMap,
   resolveCopilotTransportApi,
   resolveStaticCopilotModelOverride,
 } from "./model-metadata.js";
-import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 export const PROVIDER_ID = "github-copilot";
 
@@ -38,7 +39,6 @@ export function resolveCopilotForwardCompatModel(
     return undefined;
   }
 
-  // If the model is already in the registry, let the normal path handle it.
   const lowerModelId = normalizeOptionalLowercaseString(trimmedModelId) ?? "";
   const existing = ctx.modelRegistry.find(PROVIDER_ID, lowerModelId);
   if (existing) {
@@ -46,54 +46,33 @@ export function resolveCopilotForwardCompatModel(
   }
 
   const staticOverride = resolveStaticCopilotModelOverride(lowerModelId);
-  if (staticOverride) {
-    const compat = staticOverride.compat ?? resolveCopilotModelCompat(trimmedModelId);
-    return normalizeModelCompat({
-      id: trimmedModelId,
-      name: staticOverride.name ?? trimmedModelId,
-      provider: PROVIDER_ID,
-      api: staticOverride.api ?? resolveCopilotTransportApi(trimmedModelId),
-      reasoning: staticOverride.reasoning ?? false,
-      input: staticOverride.input ?? ["text", "image"],
-      cost: staticOverride.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: staticOverride.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-      ...(staticOverride.contextTokens !== undefined
-        ? { contextTokens: staticOverride.contextTokens }
-        : {}),
-      maxTokens: staticOverride.maxTokens ?? DEFAULT_MAX_TOKENS,
-      ...(staticOverride.thinkingLevelMap
-        ? { thinkingLevelMap: staticOverride.thinkingLevelMap }
-        : {}),
-      ...(compat ? { compat } : {}),
-    } as ProviderRuntimeModel);
-  }
-
-  // Catch-all: create a synthetic model definition for any unknown model ID.
-  // The Copilot API is OpenAI-compatible and will return its own error if the
-  // model isn't available on the user's plan. This lets new models be used
-  // by simply adding them to agents.defaults.models in openclaw.json — no
-  // code change required.
-  const reasoning = /^o[13](\b|$)/.test(lowerModelId) || isCopilotCodexModelId(lowerModelId);
-  const compat = resolveCopilotModelCompat(trimmedModelId);
+  // Unknown configured IDs remain usable; Copilot enforces account availability.
+  const reasoning = staticOverride
+    ? (staticOverride.reasoning ?? false)
+    : /^o[13](\b|$)/.test(lowerModelId) || isCopilotCodexModelId(lowerModelId);
+  const compat = staticOverride?.compat ?? resolveCopilotModelCompat(trimmedModelId);
   return normalizeModelCompat({
     id: trimmedModelId,
-    name: trimmedModelId,
+    name: staticOverride?.name ?? trimmedModelId,
     provider: PROVIDER_ID,
-    api: resolveCopilotTransportApi(trimmedModelId),
+    api: staticOverride?.api ?? resolveCopilotTransportApi(trimmedModelId),
     reasoning,
     // Optimistic: most Copilot models support images, and the API rejects
     // image payloads for text-only models rather than failing silently.
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    input: staticOverride?.input ?? ["text", "image"],
+    cost: staticOverride?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    ...(staticOverride?.contextTokens !== undefined
+      ? { contextTokens: staticOverride.contextTokens }
+      : {}),
+    maxTokens: staticOverride?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(staticOverride?.thinkingLevelMap
+      ? { thinkingLevelMap: staticOverride.thinkingLevelMap }
+      : {}),
     ...(compat ? { compat } : {}),
   } as ProviderRuntimeModel);
 }
 
-// Subset of the Copilot /models response shape that we depend on. We only read
-// fields we need; everything else is preserved as `unknown` so upstream changes
-// don't break parsing.
 type CopilotApiModelEntry = {
   id?: string;
   name?: string;
@@ -107,7 +86,6 @@ type CopilotApiModelEntry = {
   };
   capabilities?: {
     type?: string;
-    family?: string;
     limits?: {
       max_context_window_tokens?: number;
       max_output_tokens?: number;
@@ -117,7 +95,6 @@ type CopilotApiModelEntry = {
       vision?: boolean;
       tool_calls?: boolean;
       streaming?: boolean;
-      structured_outputs?: boolean;
       reasoning_effort?: string[] | null;
     };
   };
@@ -134,14 +111,8 @@ type CopilotModelSelectionMetadata = {
 
 const copilotModelSelectionMetadata = new WeakMap<object, CopilotModelSelectionMetadata>();
 
-function readCopilotModelSelectionMetadata(
-  model: CopilotCatalogModel,
-): CopilotModelSelectionMetadata | undefined {
-  return copilotModelSelectionMetadata.get(model);
-}
-
 export function isCopilotCatalogModelVisible(model: CopilotCatalogModel): boolean {
-  const metadata = readCopilotModelSelectionMetadata(model);
+  const metadata = copilotModelSelectionMetadata.get(model);
   return Boolean(
     metadata?.pickerEnabled &&
     metadata.policyState !== "disabled" &&
@@ -150,7 +121,7 @@ export function isCopilotCatalogModelVisible(model: CopilotCatalogModel): boolea
 }
 
 function isCopilotCatalogModelSelectable(model: CopilotCatalogModel): boolean {
-  const metadata = readCopilotModelSelectionMetadata(model);
+  const metadata = copilotModelSelectionMetadata.get(model);
   return Boolean(
     isCopilotCatalogModelVisible(model) && metadata?.streaming !== false && metadata?.toolCalls,
   );
@@ -166,8 +137,8 @@ function compareCopilotStarterCandidates(
   left: CopilotCatalogModel,
   right: CopilotCatalogModel,
 ): number {
-  const leftMetadata = readCopilotModelSelectionMetadata(left);
-  const rightMetadata = readCopilotModelSelectionMetadata(right);
+  const leftMetadata = copilotModelSelectionMetadata.get(left);
+  const rightMetadata = copilotModelSelectionMetadata.get(right);
   const previewDelta =
     Number(leftMetadata?.preview === true) - Number(rightMetadata?.preview === true);
   if (previewDelta !== 0) {
@@ -179,7 +150,9 @@ function compareCopilotStarterCandidates(
   if (categoryDelta !== 0) {
     return categoryDelta;
   }
-  const contextDelta = right.contextWindow - left.contextWindow;
+  const contextDelta =
+    (right.contextWindow ?? DEFAULT_CONTEXT_WINDOW) -
+    (left.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
   if (contextDelta !== 0) {
     return contextDelta;
   }
@@ -201,7 +174,7 @@ export function selectCopilotStarterModel(
   );
 }
 
-const COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS = 10_000;
+export const COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS = 10_000;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
 type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
   api: NonNullable<ModelDefinitionConfig["api"]>;
@@ -222,37 +195,18 @@ function mergeCopilotCompat(
   base: ModelDefinitionConfig["compat"] | undefined,
   reasoningEfforts: string[] | null | undefined,
 ): ModelDefinitionConfig["compat"] | undefined {
-  const supportedReasoningEfforts = Array.isArray(reasoningEfforts)
-    ? [
-        ...new Set(
-          reasoningEfforts
-            .map((effort) => normalizeOptionalLowercaseString(effort))
-            .filter((effort): effort is string => Boolean(effort)),
-        ),
-      ]
-    : [];
-  if (supportedReasoningEfforts.length === 0) {
+  if (!Array.isArray(reasoningEfforts)) {
     return base;
   }
   return {
     ...base,
-    supportedReasoningEfforts,
-  };
-}
-
-function resolveCopilotThinkingLevelMap(
-  api: ModelDefinitionConfig["api"],
-  modelId: string,
-  compat: ModelDefinitionConfig["compat"] | undefined,
-): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
-  const efforts = compat?.supportedReasoningEfforts;
-  if (api !== "anthropic-messages" || !Array.isArray(efforts)) {
-    return undefined;
-  }
-  const supportsAdaptiveEffort = supportsClaudeAdaptiveThinking({ id: modelId });
-  return {
-    xhigh: supportsAdaptiveEffort && efforts.includes("xhigh") ? "xhigh" : null,
-    max: supportsAdaptiveEffort && efforts.includes("max") ? "max" : null,
+    supportedReasoningEfforts: [
+      ...new Set(
+        reasoningEfforts
+          .map((effort) => normalizeOptionalLowercaseString(effort))
+          .filter((effort): effort is string => Boolean(effort)),
+      ),
+    ],
   };
 }
 
@@ -288,7 +242,7 @@ function mapCopilotApiModelToDefinition(
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id), supports?.reasoning_effort);
   const api = resolveCopilotApiForVendor(entry.vendor, id);
-  const thinkingLevelMap = resolveCopilotThinkingLevelMap(api, id, compat);
+  const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api);
 
   const definition: CopilotCatalogModel = {
     id,
@@ -326,8 +280,7 @@ type FetchCopilotModelCatalogParams = {
   copilotApiToken: string;
   /** Resolved baseUrl from the same token-exchange response. */
   baseUrl: string;
-  /** Optional fetch override for testing. */
-  fetchImpl?: typeof fetch;
+  headers?: Record<string, string>;
   /** Optional AbortSignal; defaults to a 10s timeout. */
   signal?: AbortSignal;
 };
@@ -339,13 +292,11 @@ type FetchCopilotModelCatalogParams = {
  * without manifest churn.
  *
  * Filters out non-chat objects (embeddings, routers) and internal router ids.
- * On any HTTP/parse failure the caller should fall back to the static manifest
- * catalog; this function throws so the caller decides the recovery shape.
+ * Failures propagate so the catalog owner can publish a truthful outcome.
  */
 export async function fetchCopilotModelCatalog(
   params: FetchCopilotModelCatalogParams,
 ): Promise<CopilotCatalogModel[]> {
-  const fetchImpl = params.fetchImpl ?? fetch;
   const trimmedBase = params.baseUrl.replace(/\/+$/, "");
   if (!trimmedBase) {
     throw new Error("fetchCopilotModelCatalog: baseUrl required");
@@ -358,21 +309,27 @@ export async function fetchCopilotModelCatalog(
   const timeoutId = controller
     ? setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS)
     : undefined;
+  let release: (() => Promise<void>) | undefined;
   try {
-    const res = await fetchImpl(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${params.copilotApiToken}`,
-        ...buildCopilotIdeHeaders(),
-        "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
-      },
+    const guarded = await fetchWithSsrFGuard({
+      url,
+      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(trimmedBase),
       signal: params.signal ?? controller?.signal,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          ...buildCopilotRuntimeHeaders({ headers: params.headers }),
+          Authorization: `Bearer ${params.copilotApiToken}`,
+        },
+      },
     });
+    release = guarded.release;
+    const res = guarded.response;
     if (!res.ok) {
-      // Static catalog fallback never consumes this body, so release the transport before cleanup.
+      // Failed discovery never consumes this body, so release the transport before cleanup.
       await res.body?.cancel().catch(() => undefined);
-      throw new Error(`Copilot /models fetch failed: HTTP ${res.status}`);
+      throw new LiveModelCatalogHttpError(PROVIDER_ID, res.status);
     }
     const data = await readProviderJsonArrayFieldResponse(res, "Copilot /models", "data");
     const seen = new Set<string>();
@@ -380,10 +337,7 @@ export async function fetchCopilotModelCatalog(
     for (const rawEntry of data) {
       const entry = asCopilotApiModelEntry(rawEntry);
       const def = mapCopilotApiModelToDefinition(entry);
-      if (!def) {
-        continue;
-      }
-      if (seen.has(def.id)) {
+      if (!def || seen.has(def.id)) {
         continue;
       }
       seen.add(def.id);
@@ -394,5 +348,6 @@ export async function fetchCopilotModelCatalog(
     if (timeoutId !== undefined) {
       clearTimeout(timeoutId);
     }
+    await release?.();
   }
 }

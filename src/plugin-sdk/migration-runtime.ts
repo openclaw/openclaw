@@ -4,6 +4,8 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { writeTextAtomic } from "@openclaw/fs-safe/atomic";
+import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { ensureAbsoluteDirectory, pathExists, root as openFsSafeRoot } from "../infra/fs-safe.js";
@@ -65,9 +67,6 @@ export function withCachedMigrationConfigRuntime(
     return undefined;
   }
   const configApi = runtime.config;
-  if (!configApi?.current || !configApi.mutateConfigFile) {
-    return runtime;
-  }
   let cachedConfig: MigrationProviderContext["config"] | undefined;
   const current = (): ReturnType<typeof configApi.current> => {
     cachedConfig ??= structuredClone(
@@ -92,36 +91,38 @@ export function withCachedMigrationConfigRuntime(
         cachedConfig = structuredClone(result.nextConfig);
         return result;
       },
-      ...(configApi.replaceConfigFile
-        ? {
-            replaceConfigFile: async (params) => {
-              const result = await configApi.replaceConfigFile(params);
-              cachedConfig = structuredClone(result.nextConfig);
-              return result;
-            },
-          }
-        : {}),
+      replaceConfigFile: async (params) => {
+        const result = await configApi.replaceConfigFile(params);
+        cachedConfig = structuredClone(result.nextConfig);
+        return result;
+      },
     },
   };
 }
 
-async function backupExistingMigrationTarget(
+async function allocateMigrationBackupPath(target: string, reportDir: string): Promise<string> {
+  const backupRoot = path.join(reportDir, "item-backups");
+  await fs.mkdir(backupRoot, { recursive: true });
+  const targetHash = sha256HexPrefixCore(path.resolve(target), 12);
+  const backupDir = await fs.mkdtemp(path.join(backupRoot, `${Date.now()}-${targetHash}-`));
+  return path.join(backupDir, path.basename(target));
+}
+
+/** Back up an existing migration target within the report's item backup directory. */
+export async function backupMigrationItemTarget(
   target: string,
   reportDir: string,
+  opts: { dereference?: boolean } = {},
 ): Promise<string | undefined> {
   if (!(await pathExists(target))) {
     return undefined;
   }
-  const backupRoot = path.join(reportDir, "item-backups");
-  await fs.mkdir(backupRoot, { recursive: true });
-  const targetHash = crypto
-    .createHash("sha256")
-    .update(path.resolve(target))
-    .digest("hex")
-    .slice(0, 12);
-  const backupDir = await fs.mkdtemp(path.join(backupRoot, `${Date.now()}-${targetHash}-`));
-  const backupPath = path.join(backupDir, path.basename(target));
-  await fs.cp(target, backupPath, { recursive: true, force: true });
+  const backupPath = await allocateMigrationBackupPath(target, reportDir);
+  await fs.cp(target, backupPath, {
+    recursive: true,
+    force: true,
+    ...(opts.dereference === undefined ? {} : { dereference: opts.dereference }),
+  });
   return backupPath;
 }
 
@@ -130,15 +131,7 @@ async function backupMemoryMigrationTarget(
   contents: Buffer,
   reportDir: string,
 ): Promise<string> {
-  const backupRoot = path.join(reportDir, "item-backups");
-  await fs.mkdir(backupRoot, { recursive: true });
-  const targetHash = crypto
-    .createHash("sha256")
-    .update(path.resolve(target))
-    .digest("hex")
-    .slice(0, 12);
-  const backupDir = await fs.mkdtemp(path.join(backupRoot, `${Date.now()}-${targetHash}-`));
-  const backupPath = path.join(backupDir, path.basename(target));
+  const backupPath = await allocateMigrationBackupPath(target, reportDir);
   await fs.writeFile(backupPath, contents, { flag: "wx", mode: 0o600 });
   return backupPath;
 }
@@ -207,13 +200,17 @@ async function openMemoryMigrationRoot(workspaceDir: string) {
 }
 
 function isFileAlreadyExistsError(err: unknown): boolean {
-  return Boolean(
-    err &&
-    typeof err === "object" &&
-    "code" in err &&
-    ((err as { code?: unknown }).code === "ERR_FS_CP_EEXIST" ||
-      (err as { code?: unknown }).code === "EEXIST"),
-  );
+  return hasNodeErrorCode(err, "ERR_FS_CP_EEXIST") || hasNodeErrorCode(err, "EEXIST");
+}
+
+function markMigrationItemFailure(
+  item: MigrationItem,
+  error: unknown,
+  conflict = isFileAlreadyExistsError(error),
+): MigrationItem {
+  return conflict
+    ? markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS)
+    : markMigrationItemError(item, error instanceof Error ? error.message : String(error));
 }
 
 function readArchiveRelativePath(item: MigrationItem): string {
@@ -273,10 +270,7 @@ export async function archiveMigrationItem(
       details: { ...item.details, archivePath, archiveRelativePath: relativePath },
     };
   } catch (err) {
-    if (isFileAlreadyExistsError(err)) {
-      return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
-    }
-    return markMigrationItemError(item, err instanceof Error ? err.message : String(err));
+    return markMigrationItemFailure(item, err);
   }
 }
 
@@ -289,30 +283,29 @@ export async function copyMigrationFileItem(
   if (!item.source || !item.target) {
     return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);
   }
+  let result = item;
   try {
     const targetExists = await pathExists(item.target);
     if (targetExists && !opts.overwrite) {
       return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
     }
     const backupPath = opts.overwrite
-      ? await backupExistingMigrationTarget(item.target, reportDir)
+      ? await backupMigrationItemTarget(item.target, reportDir)
       : undefined;
+    // Keep the recovery path when a subsequent copy fails.
+    result = {
+      ...item,
+      details: { ...item.details, ...(backupPath ? { backupPath } : {}) },
+    };
     await fs.mkdir(path.dirname(item.target), { recursive: true });
     await fs.cp(item.source, item.target, {
       recursive: true,
       force: Boolean(opts.overwrite),
       errorOnExist: !opts.overwrite,
     });
-    return {
-      ...item,
-      status: "migrated",
-      details: { ...item.details, ...(backupPath ? { backupPath } : {}) },
-    };
+    return { ...result, status: "migrated" };
   } catch (err) {
-    if (isFileAlreadyExistsError(err)) {
-      return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
-    }
-    return markMigrationItemError(item, err instanceof Error ? err.message : String(err));
+    return markMigrationItemFailure(result, err);
   }
 }
 
@@ -334,6 +327,16 @@ export async function copyMemoryMigrationFileItem(
   let relativeTarget: string | undefined;
   let targetCreated = false;
   let safeRoot: Awaited<ReturnType<typeof openMemoryMigrationRoot>> | undefined;
+  const persistRecoveryStatus = async (status: MemoryMigrationRecoveryStatus, target: string) => {
+    if (recoveryRecordPath && backupPath && journalRecoveryPath) {
+      await persistMemoryMigrationRecoveryRecord(recoveryRecordPath, {
+        backupPath,
+        recoveryPath: journalRecoveryPath,
+        status,
+        target,
+      });
+    }
+  };
   try {
     const workspaceDir = path.resolve(opts.workspaceDir);
     relativeTarget = path.relative(workspaceDir, path.resolve(item.target));
@@ -344,19 +347,11 @@ export async function copyMemoryMigrationFileItem(
       maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
       symlinks: "reject",
     });
-    const { buffer: sourceBuffer } = await sourceRoot.read(path.basename(item.source), {
-      hardlinks: "reject",
-      maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
-      symlinks: "reject",
-    });
+    const { buffer: sourceBuffer } = await sourceRoot.read(path.basename(item.source));
     assertMemoryMigrationSourceRevision(item, sourceBuffer);
     const replaceExisting = opts.overwrite === true && (await safeRoot.exists(relativeTarget));
     if (replaceExisting) {
-      const existing = await safeRoot.read(relativeTarget, {
-        hardlinks: "reject",
-        maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
-        symlinks: "reject",
-      });
+      const existing = await safeRoot.read(relativeTarget);
       backupPath = await backupMemoryMigrationTarget(item.target, existing.buffer, reportDir);
       stagingDir = path.join(".openclaw-memory-import-staging", crypto.randomUUID());
       stagedRelative = path.join(stagingDir, path.basename(relativeTarget));
@@ -372,19 +367,10 @@ export async function copyMemoryMigrationFileItem(
       });
       recoveryPath = plannedRecoveryPath;
       await safeRoot.move(relativeTarget, stagedRelative, { overwrite: false });
-      const staged = await safeRoot.read(stagedRelative, {
-        hardlinks: "reject",
-        maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
-        symlinks: "reject",
-      });
+      const staged = await safeRoot.read(stagedRelative);
       if (!staged.buffer.equals(existing.buffer)) {
         backupPath = await backupMemoryMigrationTarget(item.target, staged.buffer, reportDir);
-        await persistMemoryMigrationRecoveryRecord(recoveryRecordPath, {
-          backupPath,
-          recoveryPath: plannedRecoveryPath,
-          status: "prepared",
-          target: item.target,
-        });
+        await persistRecoveryStatus("prepared", item.target);
       }
     }
     // Exclusive create keeps a destination that races the import user-owned.
@@ -393,14 +379,7 @@ export async function copyMemoryMigrationFileItem(
       mode: 0o600,
     });
     targetCreated = true;
-    if (recoveryRecordPath && backupPath && journalRecoveryPath) {
-      await persistMemoryMigrationRecoveryRecord(recoveryRecordPath, {
-        backupPath,
-        recoveryPath: journalRecoveryPath,
-        status: "complete",
-        target: item.target,
-      });
-    }
+    await persistRecoveryStatus("complete", item.target);
     if (stagedRelative) {
       await safeRoot.remove(stagedRelative);
       stagedRelative = undefined;
@@ -441,30 +420,21 @@ export async function copyMemoryMigrationFileItem(
         // Keep the journal and staged original for operator recovery.
       }
     }
-    if (recoveryRecordPath && backupPath && journalRecoveryPath) {
-      await persistMemoryMigrationRecoveryRecord(recoveryRecordPath, {
-        backupPath,
-        recoveryPath: journalRecoveryPath,
-        status: targetCreated ? "complete" : recoveryPath ? "recovery-required" : "safe",
-        target: item.target,
-      }).catch(() => undefined);
-    }
+    await persistRecoveryStatus(
+      targetCreated ? "complete" : recoveryPath ? "recovery-required" : "safe",
+      item.target,
+    ).catch(() => undefined);
     const details = {
       ...item.details,
       ...(backupPath ? { backupPath } : {}),
       ...(recoveryPath ? { recoveryPath } : {}),
       ...(recoveryRecordPath ? { recoveryRecordPath } : {}),
     };
-    if (isFileAlreadyExistsError(error) || errorCode(error) === "already-exists") {
-      return {
-        ...markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS),
-        details,
-      };
-    }
-    return {
-      ...markMigrationItemError(item, error instanceof Error ? error.message : String(error)),
-      details,
-    };
+    return markMigrationItemFailure(
+      { ...item, details },
+      error,
+      isFileAlreadyExistsError(error) || errorCode(error) === "already-exists",
+    );
   }
 }
 

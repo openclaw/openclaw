@@ -11,36 +11,26 @@ import {
 
 setupCliBundleMcpTestHarness();
 
+function prepareLoopbackConfig(url: string) {
+  return prepareBundleProbeCliConfig({
+    additionalConfig: {
+      mcpServers: {
+        openclaw: {
+          type: "http",
+          url,
+          headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+        },
+      },
+    },
+  });
+}
+
 describe("prepareCliBundleMcpConfig resume hash", () => {
   it("stabilizes the resume hash when only the OpenClaw loopback port changes", async () => {
     // Loopback ports are volatile per gateway run and should not force CLI
     // session abandonment when stable MCP semantics are unchanged.
-    const first = await prepareBundleProbeCliConfig({
-      additionalConfig: {
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:23119/mcp",
-            headers: {
-              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-            },
-          },
-        },
-      },
-    });
-    const second = await prepareBundleProbeCliConfig({
-      additionalConfig: {
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:24567/mcp",
-            headers: {
-              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-            },
-          },
-        },
-      },
-    });
+    const first = await prepareLoopbackConfig("http://127.0.0.1:23119/mcp");
+    const second = await prepareLoopbackConfig("http://127.0.0.1:24567/mcp");
 
     expect(first.mcpConfigHash).not.toBe(second.mcpConfigHash);
     expect(first.mcpResumeHash).toBe(second.mcpResumeHash);
@@ -50,32 +40,8 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
   });
 
   it("changes the resume hash when stable MCP semantics change", async () => {
-    const first = await prepareBundleProbeCliConfig({
-      additionalConfig: {
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:23119/mcp",
-            headers: {
-              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-            },
-          },
-        },
-      },
-    });
-    const second = await prepareBundleProbeCliConfig({
-      additionalConfig: {
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:23119/other",
-            headers: {
-              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-            },
-          },
-        },
-      },
-    });
+    const first = await prepareLoopbackConfig("http://127.0.0.1:23119/mcp");
+    const second = await prepareLoopbackConfig("http://127.0.0.1:23119/other");
 
     expect(first.mcpResumeHash).not.toBe(second.mcpResumeHash);
 
@@ -108,6 +74,14 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
     expect(first.mcpConfigHash).not.toBe(approval.mcpConfigHash);
     expect(first.mcpResumeHash).toBe(approval.mcpResumeHash);
     expect(approval.mcpResumeHash).not.toBe(otherSurface.mcpResumeHash);
+    const delegated = await prepare({
+      surface: "cli",
+      operatorApprovalOnly: true,
+      approvalArmed: true,
+      proposalRef: { current: proposed },
+    });
+    expect(delegated.mcpConfigHash).not.toBe(approval.mcpConfigHash);
+    expect(delegated.mcpResumeHash).toBe(approval.mcpResumeHash);
     const binding = {
       sessionId: "native-cli-session",
       authProfileId: "claude-cli:ops",
@@ -142,5 +116,6 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
     await first.cleanup?.();
     await approval.cleanup?.();
     await otherSurface.cleanup?.();
+    await delegated.cleanup?.();
   });
 });

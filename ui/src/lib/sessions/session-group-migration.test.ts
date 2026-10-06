@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
+import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSessionCapability } from "./index.ts";
+import { createTestSessionCapability, sessionsResult } from "./session-capability.test-support.ts";
 import type { SessionGateway } from "./session-capability.ts";
 
 function createGateway(request: ReturnType<typeof vi.fn>, scopes: string[]): SessionGateway {
@@ -30,6 +32,7 @@ function createGatewayHarness(request: ReturnType<typeof vi.fn>, scopes: string[
   const gateway = createGateway(request, scopes);
   let snapshot = gateway.snapshot;
   const listeners = new Set<(next: SessionGateway["snapshot"]) => void>();
+  const events = new Set<(event: GatewayEventFrame) => void>();
   return {
     gateway: {
       get snapshot() {
@@ -39,8 +42,14 @@ function createGatewayHarness(request: ReturnType<typeof vi.fn>, scopes: string[
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
-      subscribeEvents: () => () => undefined,
+      subscribeEvents(listener) {
+        events.add(listener);
+        return () => events.delete(listener);
+      },
     } satisfies SessionGateway,
+    emitEvent: (event: GatewayEventFrame) => {
+      events.forEach((listener) => listener(event));
+    },
     publish(connected: boolean) {
       snapshot = { ...snapshot, phase: connected ? "connected" : "stopped" };
       for (const listener of listeners) {
@@ -55,6 +64,64 @@ afterEach(() => {
 });
 
 describe("legacy session group migration", () => {
+  it.each(["current", "disconnected", "disposed"] as const)(
+    "settles overlapping automatic group invalidations for a %s owner",
+    async (boundary) => {
+      const stale = createDeferred<{ groups: { name: string }[] }>();
+      let reads = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.groups.list") {
+          return ++reads === 1 ? stale.promise : { groups: [{ name: "Current" }] };
+        }
+        if (method === "sessions.groups.defaults") {
+          return { defaults: [{ name: "Current", cwd: "/workspace/current", worktree: true }] };
+        }
+        return sessionsResult([], 1);
+      });
+      const harness = createGatewayHarness(request, ["operator.write"]);
+      const bootstrap = createConnectionBootstrapCoordinator();
+      bootstrap.synchronize({ client: harness.gateway.snapshot.client, connected: true });
+      const sessions = createSessionCapability(
+        harness.gateway,
+        {
+          state: { selectedId: "main" },
+          subscribe: () => () => {},
+        },
+        { connectionBootstrap: bootstrap },
+      );
+      const invalidate = () =>
+        harness.emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: { reason: "groups" },
+        });
+      try {
+        invalidate();
+        await vi.waitFor(() => expect(reads).toBe(1));
+        const completion = bootstrap.run(sessions.groupsLoad, async () => {});
+        invalidate();
+        if (boundary === "disconnected") {
+          harness.publish(false);
+        } else if (boundary === "disposed") {
+          sessions.dispose();
+        }
+        stale.resolve({ groups: [{ name: "Stale" }] });
+        await completion;
+        expect(reads).toBe(boundary === "current" ? 2 : 1);
+        if (boundary === "current") {
+          expect(sessions.state.groupSettings).toEqual([
+            expect.objectContaining({ name: "Current", cwd: "/workspace/current", worktree: true }),
+          ]);
+          expect(sessions.groupsStatus()).toBe("ready");
+        }
+      } finally {
+        stale.resolve({ groups: [] });
+        sessions.dispose();
+        bootstrap.reset();
+      }
+    },
+  );
+
   it("does not migrate browser groups without operator.write", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     localStorage.setItem("openclaw:sessions:custom-groups", JSON.stringify(["Research"]));
@@ -64,7 +131,7 @@ describe("legacy session group migration", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const sessions = createSessionCapability(createGateway(request, ["operator.read"]));
+    const sessions = createTestSessionCapability(createGateway(request, ["operator.read"]));
 
     await sessions.groupsLoad();
 
@@ -91,7 +158,7 @@ describe("legacy session group migration", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const sessions = createSessionCapability(createGateway(request, ["operator.write"]));
+    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
 
     await sessions.groupsLoad();
 
@@ -123,7 +190,7 @@ describe("session group catalog loading", () => {
         methods: ["sessions.groups.list", "sessions.groups.defaults", "sessions.groups.update"],
       },
     } as GatewayHelloOk;
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.groupsLoad();
     expect(sessions.state.groupSettings).toEqual([
@@ -149,7 +216,7 @@ describe("session group catalog loading", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const sessions = createSessionCapability(createGateway(request, ["operator.write"]));
+    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
 
     await expect(sessions.groupsLoad()).resolves.toBeNull();
 
@@ -180,7 +247,7 @@ describe("session group catalog loading", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const sessions = createSessionCapability(createGateway(request, ["operator.write"]));
+    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
 
     await expect(sessions.groupsLoad()).resolves.toBeNull();
     expect(sessions.groupsStatus()).toBe("unavailable");
@@ -213,7 +280,7 @@ describe("session group catalog loading", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const sessions = createSessionCapability(createGateway(request, ["operator.write"]));
+    const sessions = createTestSessionCapability(createGateway(request, ["operator.write"]));
 
     const backgroundLoad = sessions.groupsLoad();
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("sessions.groups.defaults", {}));
@@ -265,7 +332,7 @@ describe("session group catalog loading", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const harness = createGatewayHarness(request, ["operator.write"]);
-    const sessions = createSessionCapability(harness.gateway);
+    const sessions = createTestSessionCapability(harness.gateway);
 
     const staleLoad = sessions.groupsLoad();
     await vi.waitFor(() => expect(calls).toBe(1));

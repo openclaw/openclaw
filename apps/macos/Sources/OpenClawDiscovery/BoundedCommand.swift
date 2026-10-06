@@ -2,16 +2,13 @@ import Foundation
 import Subprocess
 
 enum BoundedCommand {
-    private static let defaultOutputLimit = 8 * 1024 * 1024
-
     static func run(
         path: String,
         arguments: [String],
         environment: [String: String]? = nil,
-        timeout: TimeInterval,
-        outputLimit: Int = defaultOutputLimit) async -> String?
+        timeout: TimeInterval) async -> String?
     {
-        guard timeout > 0, outputLimit > 0 else { return nil }
+        guard timeout > 0 else { return nil }
 
         let executable: Executable = path.contains("/")
             ? .path(.init(path))
@@ -28,11 +25,10 @@ enum BoundedCommand {
                         executable,
                         arguments: Arguments(arguments),
                         environment: subprocessEnvironment,
-                        output: .string(limit: outputLimit))
+                        output: .string(limit: 8 * 1024 * 1024))
+                    let output = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard result.terminationStatus.isSuccess,
-                          let output = result.standardOutput?
-                              .trimmingCharacters(in: .whitespacesAndNewlines),
-                              !output.isEmpty
+                          !output.isEmpty
                     else {
                         return nil
                     }

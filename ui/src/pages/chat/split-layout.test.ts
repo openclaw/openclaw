@@ -1,17 +1,17 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { normalizeChatSplitLayout } from "./split-layout-persistence.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
 import {
   applyUiCommandToSplitLayout,
   closePane,
   findPane,
   insertPane,
-  normalizeChatSplitLayout,
   panesOf,
   resizeColumns,
   resizePanes,
   setActivePane,
   setPaneSession,
-  type ChatSplitLayout,
 } from "./split-layout.ts";
 
 function createSinglePaneLayout(sessionKey: string): ChatSplitLayout {
@@ -36,22 +36,6 @@ describe("chat split layout", () => {
       columns: [
         { id: "c1", panes: [{ id: "p1", sessionKey: "main" }], paneWeights: [1] },
         { id: "c2", panes: [{ id: "p2", sessionKey: "main" }], paneWeights: [1] },
-      ],
-      columnWeights: [0.5, 0.5],
-      activePaneId: "p2",
-    });
-  });
-
-  it("composes the split layout from an ephemeral single pane", () => {
-    expect(createSinglePaneLayout("main")).toEqual({
-      columns: [{ id: "c1", panes: [{ id: "p1", sessionKey: "main" }], paneWeights: [1] }],
-      columnWeights: [1],
-      activePaneId: "p1",
-    });
-    expect(insertPane(createSinglePaneLayout("main"), "p1", "dropped", "left")).toEqual({
-      columns: [
-        { id: "c2", panes: [{ id: "p2", sessionKey: "dropped" }], paneWeights: [1] },
-        { id: "c1", panes: [{ id: "p1", sessionKey: "main" }], paneWeights: [1] },
       ],
       columnWeights: [0.5, 0.5],
       activePaneId: "p2",
@@ -131,7 +115,7 @@ describe("chat split layout", () => {
     expect(panesOf(layout)).not.toBe(layout.columns.at(0)?.panes);
   });
 
-  it("maps UI split, focus, and close commands onto pane state", () => {
+  it("maps UI split and focus commands onto pane state", () => {
     const initial = setActivePane(setPaneSession(createSplitLayout("main"), "p2", "source"), "p1");
     const split = applyUiCommandToSplitLayout(
       initial,
@@ -154,12 +138,6 @@ describe("chat split layout", () => {
       sessionKey: "main",
     });
     expect(focused?.activePaneId).toBe("p1");
-
-    const closed = applyUiCommandToSplitLayout(focused!, {
-      kind: "close-pane",
-      sessionKey: "agent:main:new",
-    });
-    expect(closed && panesOf(closed).map((pane) => pane.sessionKey)).toEqual(["main", "source"]);
   });
 
   it("resizes only a boundary pair and clamps each side to fifteen percent", () => {

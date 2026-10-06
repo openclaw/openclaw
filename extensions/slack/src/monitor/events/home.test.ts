@@ -1,8 +1,13 @@
 // Slack tests cover home plugin behavior.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-
-let registerSlackHomeEvents: typeof import("./home.js").registerSlackHomeEvents;
-let createSlackSystemEventTestHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
+import { WebAPIPlatformError, WebClient } from "@slack/web-api";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SlackMonitorContext } from "../context.js";
+import {
+  updateSlackSuggestedPrompts,
+  type SlackSuggestedPromptsOutcome,
+} from "../suggested-prompts.js";
+import { registerSlackHomeEvents } from "./home.js";
+import { createSlackSystemEventTestHarness } from "./system-event-test-harness.js";
 
 type HomeHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
@@ -31,9 +36,11 @@ function createHomeContext(params?: {
   };
 }
 
-function createAgentHomeContext(params?: { suggestedPromptsResult?: boolean }) {
+function createAgentHomeContext(outcome: SlackSuggestedPromptsOutcome = "accepted") {
   const harness = createSlackSystemEventTestHarness();
-  const setSlackSuggestedPrompts = vi.fn(async () => params?.suggestedPromptsResult ?? true);
+  const setSlackSuggestedPrompts = vi
+    .fn<SlackMonitorContext["setSlackSuggestedPrompts"]>()
+    .mockResolvedValue(outcome);
   const recordSlackAgentView = vi.fn(async () => undefined);
   harness.ctx.accountId = "default";
   harness.ctx.setSlackSuggestedPrompts = setSlackSuggestedPrompts;
@@ -47,11 +54,6 @@ function createAgentHomeContext(params?: { suggestedPromptsResult?: boolean }) {
 }
 
 describe("registerSlackHomeEvents", () => {
-  beforeAll(async () => {
-    ({ registerSlackHomeEvents } = await import("./home.js"));
-    ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -116,7 +118,7 @@ describe("registerSlackHomeEvents", () => {
     });
   });
 
-  it("records Agent View only after Slack accepts threadless prompts", async () => {
+  it("records Agent View after Slack accepts threadless prompts", async () => {
     const { setSlackSuggestedPrompts, recordSlackAgentView, getHomeHandler } =
       createAgentHomeContext();
 
@@ -148,10 +150,16 @@ describe("registerSlackHomeEvents", () => {
     );
   });
 
-  it("keeps Assistant View out of Agent mode when threadless prompts are rejected", async () => {
-    const { recordSlackAgentView, getHomeHandler } = createAgentHomeContext({
-      suggestedPromptsResult: false,
-    });
+  it("records Agent View when Slack answers the threadless probe with internal_error", async () => {
+    const { setSlackSuggestedPrompts, recordSlackAgentView, getHomeHandler } =
+      createAgentHomeContext("internal_error");
+    const client = new WebClient();
+    vi.spyOn(client.assistant.threads, "setSuggestedPrompts").mockRejectedValue(
+      new WebAPIPlatformError({ ok: false, error: "internal_error" }),
+    );
+    setSlackSuggestedPrompts.mockImplementation((input) =>
+      updateSlackSuggestedPrompts({ ...input, botToken: "", client }),
+    );
 
     await getHomeHandler()!({
       event: {
@@ -163,8 +171,27 @@ describe("registerSlackHomeEvents", () => {
       body: {},
     });
 
-    expect(recordSlackAgentView).not.toHaveBeenCalled();
+    expect(recordSlackAgentView).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["rejected", "failed"] as const)(
+    "does not record Agent View for a %s probe",
+    async (outcome) => {
+      const { recordSlackAgentView, getHomeHandler } = createAgentHomeContext(outcome);
+
+      await getHomeHandler()!({
+        event: {
+          type: "app_home_opened",
+          user: "U123",
+          channel: "D123",
+          tab: "messages",
+        },
+        body: {},
+      });
+
+      expect(recordSlackAgentView).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not track or publish mismatched events", async () => {
     const trackEvent = vi.fn();

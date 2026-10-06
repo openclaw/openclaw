@@ -9,7 +9,7 @@ import {
   enrichCronJsonWithStatus,
   getCronChannelOptions,
   parseAt,
-  parseCronToolsAllow,
+  parseCronStringList,
   parsePositiveCronDurationMs,
   printCronList,
   printCronShow,
@@ -26,7 +26,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   const logs: string[] = [];
   const runtime = {
-    log: (msg: string) => logs.push(msg),
+    log: (msg: string) => logs.push(...msg.split("\n")),
     error: () => {},
     exit: () => {},
   } as RuntimeEnv;
@@ -90,6 +90,29 @@ describe("printCronList", () => {
 
     printCronList([jobWithTarget], runtime);
     expectLogsToInclude(logs, "isolated");
+  });
+
+  it.each(
+    [
+      { at: "2027-01-15T12:34:56.789Z", expected: "2027-01-15 12:34Z" },
+      { at: "+010000-01-15T12:34:56.789Z", expected: "+010000-01-15 12:34Z" },
+      { at: "-000001-01-15T12:34:56.789Z", expected: "-000001-01-15 12:34Z" },
+      { at: "not-a-time", expected: "-" },
+    ].flatMap((entry) => [
+      { ...entry, output: "list" },
+      { ...entry, output: "show" },
+    ]),
+  )("preserves one-shot ISO year in cron $output for $at", ({ at, expected, output }) => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({ schedule: { kind: "at", at }, state: {} });
+
+    if (output === "list") {
+      printCronList([job], runtime);
+    } else {
+      printCronShow(job, runtime);
+    }
+
+    expectLogsToInclude(logs, `${output === "show" ? "schedule: " : ""}at ${expected}`);
   });
 
   it.each([
@@ -293,6 +316,38 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "malformed-job");
   });
 
+  it.each([
+    {
+      schedule: { kind: "every", everyMs: 90_001 },
+      expected: "every 1m 30s 1ms",
+    },
+    {
+      schedule: { kind: "cron", expr: "* * * * *", staggerMs: 1_001 },
+      expected: "cron * * * * * (stagger 1s 1ms)",
+    },
+  ] as const)(
+    "preserves configured duration precision in list and show: $expected",
+    ({ schedule, expected }) => {
+      const job = createBaseJob({ schedule, state: {} });
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, expected);
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expectLogsToInclude(show.logs, `schedule: ${expected}`);
+    },
+  );
+
+  it("preserves configured duration precision near the timestamp limit", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    printCronShow(
+      createBaseJob({ schedule: { kind: "every", everyMs: 8_639_999_999_999_999 }, state: {} }),
+      runtime,
+    );
+    expectLogsToInclude(logs, "schedule: every 99999999d 23h 59m 59s 999ms");
+  });
+
   it("shows stagger label for cron schedules", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
@@ -326,6 +381,53 @@ describe("printCronList", () => {
     const show = createRuntimeLogCapture();
     printCronShow(job, show.runtime);
     expectLogsToInclude(show.logs, "trigger: once=yes; evals=4;");
+  });
+
+  it("includes condition triggers on stream schedules", () => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      trigger: { script: "json({ fire: true })" },
+      state: {},
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "stream node events.mjs+trigger");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "schedule: stream node events.mjs+trigger");
+  });
+
+  it.each([false, true])("shows disabled stream sources with running=%s", (running) => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      state: {
+        streamStatus: "disabled",
+        streamError: "stream sources require cron.triggers.enabled=true",
+        lastRunStatus: "ok",
+        lastDeliveryStatus: "not-delivered",
+        deliverySuppressionReason: "silent",
+        ...(running ? { runningAtMs: Date.now() } : {}),
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const row = list.logs.find((line) => line.includes(job.id)) ?? "";
+    expect(row).toContain(running ? "running" : "disabled");
+    expect(row).not.toContain("idle");
+    expect(row).not.toContain("ok (suppressed)");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expect(show.logs).toContain(`status: ${running ? "running" : "disabled"}`);
+    expectLogsToInclude(show.logs, "stream status: disabled");
+    expectLogsToInclude(
+      show.logs,
+      "stream error: stream sources require cron.triggers.enabled=true",
+    );
+    expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: running ? "running" : "ok" });
   });
 
   it("shows on-exit schedules in list and show output", () => {
@@ -368,6 +470,144 @@ describe("printCronList", () => {
     expect(singleLine).toContain("error");
     expect(singleLine).not.toContain("(1x)");
   });
+
+  it.each([
+    ["required", false, "not-delivered", "HTTP 503", "ok (not delivered)"],
+    ["best-effort", true, "not-delivered", "HTTP 503", "ok (not delivered)"],
+    ["default", undefined, "not-delivered", "HTTP 503", "ok (not delivered)"],
+    ["required", false, "unknown", "request timed out", "delivery unknown"],
+    ["best-effort", true, "unknown", "request timed out", "delivery unknown"],
+  ] as const)(
+    "shows %s delivery outcomes (best effort %s, status %s) without changing JSON status",
+    (_policy, bestEffort, deliveryStatus, deliveryError, expectedStatus) => {
+      const job = createBaseJob({
+        id: "delivery-job",
+        delivery: {
+          mode: "webhook",
+          to: "https://example.invalid/hook",
+          bestEffort,
+        },
+        state: {
+          lastRunStatus: "ok",
+          lastDeliveryStatus: deliveryStatus,
+          lastDeliveryError: deliveryError,
+        },
+      });
+
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, expectedStatus);
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expectLogsToInclude(show.logs, `status: ${expectedStatus}`);
+      expectLogsToInclude(show.logs, `last delivery error: ${deliveryError}`);
+
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({
+        status: "ok",
+        state: { lastRunStatus: "ok", lastDeliveryStatus: deliveryStatus },
+      });
+      expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
+        jobs: [{ status: "ok" }],
+      });
+    },
+  );
+
+  it.each(["empty", "silent", "heartbeat", "channel_transform"] as const)(
+    "shows recorded %s suppression without changing JSON delivery status",
+    (deliverySuppressionReason) => {
+      const job = createBaseJob({
+        state: {
+          lastRunStatus: "ok",
+          lastDeliveryStatus: "not-delivered",
+          lastDelivered: false,
+          deliverySuppressionReason,
+        },
+      });
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, "ok (suppressed)");
+      expect(list.logs.join("\n")).not.toContain("ok (not delivered)");
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expectLogsToInclude(show.logs, "status: ok (suppressed)");
+      expectLogsToInclude(show.logs, "last delivery: not-delivered");
+      expectLogsToInclude(show.logs, `last delivery suppression: ${deliverySuppressionReason}`);
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({
+        status: "ok",
+        state: {
+          lastDeliveryStatus: "not-delivered",
+          lastDelivered: false,
+          deliverySuppressionReason,
+        },
+      });
+    },
+  );
+
+  it.each(
+    [
+      {
+        label: "disabled",
+        enabled: false,
+        running: false,
+        runStatus: "ok" as const,
+        expectedStatus: "disabled",
+      },
+      {
+        label: "running",
+        enabled: true,
+        running: true,
+        runStatus: "ok" as const,
+        expectedStatus: "running",
+      },
+      {
+        label: "paused but force-running",
+        enabled: false,
+        running: true,
+        runStatus: "ok" as const,
+        expectedStatus: "running",
+      },
+      {
+        label: "failed",
+        enabled: true,
+        running: false,
+        runStatus: "error" as const,
+        expectedStatus: "error",
+      },
+    ].flatMap((entry) => [
+      { ...entry, deliverySuppressionReason: undefined },
+      { ...entry, deliverySuppressionReason: "silent" as const },
+    ]),
+  )(
+    "does not let prior non-delivery ($deliverySuppressionReason) override a $label automation",
+    ({ enabled, running, runStatus, expectedStatus, deliverySuppressionReason }) => {
+      const job = createBaseJob({
+        enabled,
+        state: {
+          lastRunStatus: runStatus,
+          lastDeliveryStatus: "not-delivered",
+          deliverySuppressionReason,
+          ...(running ? { runningAtMs: Date.now() } : {}),
+        },
+      });
+
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, expectedStatus);
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+
+      expectLogsToInclude(show.logs, `status: ${expectedStatus}`);
+      expect(show.logs.join("\n")).not.toContain("ok (not delivered)");
+      expect(show.logs.join("\n")).not.toContain("status: ok (suppressed)");
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: expectedStatus });
+      expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
+        jobs: [{ status: expectedStatus }],
+      });
+    },
+  );
 
   it("shows why the scheduler auto-disabled a job without changing JSON status", () => {
     const runFailures = createBaseJob({
@@ -650,9 +890,9 @@ describe("parseAt", () => {
 });
 
 describe("getCronChannelOptions", () => {
-  it("falls back to a generic channel placeholder when no plugins are loaded", () => {
+  it("falls back to a channel plugin id placeholder when no plugins are loaded", () => {
     hoisted.listChannelPluginsMock.mockReturnValue([]);
-    expect(getCronChannelOptions()).toBe("last|<channel-id>");
+    expect(getCronChannelOptions()).toBe("last|<channel-plugin-id>");
   });
 
   it("lists discovered channel plugin ids when plugins are available", () => {
@@ -661,19 +901,19 @@ describe("getCronChannelOptions", () => {
   });
 });
 
-describe("parseCronToolsAllow", () => {
+describe("parseCronStringList", () => {
   it.each([
     { input: "exec,read,write", expected: ["exec", "read", "write"] },
     { input: "exec, read, write", expected: ["exec", "read", "write"] },
     { input: "exec read write", expected: ["exec", "read", "write"] },
     { input: " exec  read,write ", expected: ["exec", "read", "write"] },
     { input: ["exec", "read", "write"], expected: ["exec", "read", "write"] },
+    { input: undefined, expected: undefined },
+    { input: "", expected: [] },
+    { input: " ,  ", expected: [] },
+    { input: [], expected: [] },
   ])("parses $input", ({ input, expected }) => {
-    expect(parseCronToolsAllow(input)).toEqual(expected);
-  });
-
-  it("returns undefined for empty input", () => {
-    expect(parseCronToolsAllow(" ,  ")).toBeUndefined();
+    expect(parseCronStringList(input)).toEqual(expected);
   });
 });
 
@@ -720,8 +960,8 @@ describe("parsePositiveCronDurationMs", () => {
   it("rejects durations that overflow to a non-finite millisecond value (#83906)", () => {
     // A finite mantissa can still overflow once multiplied by a large unit factor.
     expect(parsePositiveCronDurationMs(`1${"0".repeat(302)}d`)).toBeNull();
-    // A large-but-finite result is still accepted.
-    expect(parsePositiveCronDurationMs(`9${"0".repeat(15)}ms`)).toBe(9_000_000_000_000_000);
+    expect(parsePositiveCronDurationMs("8640000000000000ms")).toBe(8_640_000_000_000_000);
+    expect(parsePositiveCronDurationMs("8640000000000001ms")).toBeNull();
   });
 });
 

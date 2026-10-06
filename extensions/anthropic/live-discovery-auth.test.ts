@@ -65,14 +65,24 @@ describe("anthropic live model discovery auth", () => {
   it("sends a subscription OAuth token as a bearer credential", async () => {
     const headers = await readDiscoveryHeaders("sk-ant-oat01-test-token");
     expect(headers.get("authorization")).toBe("Bearer sk-ant-oat01-test-token");
+    expect(headers.get("x-api-key")).toBeNull();
     expect(headers.get("anthropic-version")).toBe("2023-06-01");
   });
 
-  it("never pairs an OAuth bearer credential with x-api-key", async () => {
-    // Anthropic rejects the request outright when both auth headers are present,
-    // so the OAuth branch must replace x-api-key rather than add to it.
-    const headers = await readDiscoveryHeaders("sk-ant-oat01-test-token");
-    expect(headers.get("x-api-key")).toBeNull();
+  it("does not resolve Anthropic credentials for Claude CLI-only catalog scope", async () => {
+    const resolveProviderApiKey = vi.fn(() => {
+      throw new Error("unselected Anthropic credential read");
+    });
+
+    await expect(
+      buildAnthropicProvider().catalog?.run?.({
+        ...buildCatalogContext("unused"),
+        providerIds: ["claude-cli"],
+        resolveProviderApiKey,
+      }),
+    ).resolves.toBeNull();
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
+    expect(guardedFetchCalls).toEqual([]);
   });
 
   it("keeps shipped models Anthropic does not publish while adding discovered ones", async () => {

@@ -6,7 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { LOOPBACK_PORT_PROBE_HOSTS, probePortUsage } from "../infra/ports-probe.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { waitForPidToExit } from "../test-utils/process-tree.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import {
   installLaunchAgent,
@@ -19,7 +24,7 @@ import {
   uninstallLaunchAgent,
 } from "./launchd.js";
 import type { GatewayServiceEnv } from "./service-types.js";
-import { resolveGatewayService, startGatewayService } from "./service.js";
+import { readGatewayServiceState, resolveGatewayService, startGatewayService } from "./service.js";
 
 const WAIT_INTERVAL_MS = 200;
 const WAIT_TIMEOUT_MS = 30_000;
@@ -163,6 +168,114 @@ describeLaunchdIntegration("launchd integration", () => {
   let homeDir = "";
   const stdout = new PassThrough();
 
+  it("real launchctl: node-host LaunchAgent stop/restart survives a co-located busy Gateway port (#124296)", async () => {
+    // Real-world proof for https://github.com/openclaw/openclaw/issues/124296:
+    // this drives actual `launchctl` LaunchAgents (no mocked port-inspection
+    // or launchctl calls) to reproduce the reported false-positive
+    // "gateway port is still busy" failure and confirm the fix resolves it.
+    const testId = randomUUID().slice(0, 8);
+    const gatewayPort = 19_500 + (Number.parseInt(testId.slice(0, 4), 16) % 400);
+
+    // Real "gateway" LaunchAgent that genuinely binds the scratch port, so
+    // the port really is busy for the whole test — no port mocking at all.
+    const gatewayHomeDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), `openclaw-launchd-int-gw-${testId}-`),
+    );
+    const gatewayEnv: GatewayServiceEnv = {
+      HOME: gatewayHomeDir,
+      OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.launchd-int-gw-${testId}`,
+      OPENCLAW_LOG_PREFIX: `gateway-launchd-int-gw-${testId}`,
+      OPENCLAW_GATEWAY_PORT: String(gatewayPort),
+    };
+
+    // Real "node-host" LaunchAgent, co-located on the same machine, tagged
+    // with the node service kind. It never binds the gateway port itself.
+    const nodeHomeDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), `openclaw-launchd-int-node-${testId}-`),
+    );
+    const nodeEnv: GatewayServiceEnv = {
+      HOME: nodeHomeDir,
+      OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.launchd-int-node-${testId}`,
+      OPENCLAW_LOG_PREFIX: `gateway-launchd-int-node-${testId}`,
+      OPENCLAW_SERVICE_KIND: "node",
+      OPENCLAW_GATEWAY_PORT: String(gatewayPort),
+    };
+
+    try {
+      await installLaunchAgent({
+        env: gatewayEnv,
+        stdout,
+        programArguments: [
+          process.execPath,
+          "-e",
+          `require("node:http").createServer((_req,res)=>res.end("ok")).listen(${gatewayPort}, "127.0.0.1", () => {}); setInterval(() => {}, 1000);`,
+        ],
+      });
+      await waitForRunningRuntime({ env: gatewayEnv });
+
+      // Prove the gateway port is genuinely bound right now via a real TCP
+      // probe (no launchd-status inference) before exercising the node-host
+      // lifecycle against it. This closes the gap where a LaunchAgent could
+      // report "running" before its listener has actually bound the port.
+      await expect
+        .poll(() => probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS), {
+          timeout: 10_000,
+          interval: 100,
+        })
+        .toBe("busy");
+
+      await installLaunchAgent({
+        env: nodeEnv,
+        stdout,
+        programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
+      });
+      const nodeBefore = await waitForRunningRuntime({ env: nodeEnv });
+
+      // Re-confirm the port is still genuinely busy immediately before the
+      // stop call, so the assertion below is tied to a real, current probe.
+      await expect(probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS)).resolves.toBe("busy");
+
+      // The gateway port is genuinely still bound by the co-located gateway
+      // LaunchAgent right now. Stopping the node-host LaunchAgent must not
+      // fail with the false-positive "gateway port is still busy" error.
+      await expect(stopLaunchAgent({ env: nodeEnv, stdout })).resolves.not.toThrow();
+      await waitForNotRunningRuntime({ env: nodeEnv });
+
+      // Confirm the co-located gateway is genuinely untouched throughout.
+      const gatewayStillRunning = await readLaunchAgentRuntime(gatewayEnv);
+      expect(gatewayStillRunning.status).toBe("running");
+
+      // Re-install (stop leaves it uninstalled-from-runtime-state in some
+      // paths depending on service semantics) and exercise restart too.
+      await installLaunchAgent({
+        env: nodeEnv,
+        stdout,
+        programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
+      });
+      await waitForRunningRuntime({ env: nodeEnv, pidNot: nodeBefore.pid });
+      const nodeRunningBeforeRestart = await readLaunchAgentRuntime(nodeEnv);
+
+      // Re-probe immediately before restart too: the port must still be
+      // genuinely busy (real TCP probe, not inferred from launchd status)
+      // for this to be a valid proof of the restart-guard fix.
+      await expect(probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS)).resolves.toBe("busy");
+
+      await expect(restartLaunchAgent({ env: nodeEnv, stdout })).resolves.not.toThrow();
+      await expectRuntimePidReplaced({
+        env: nodeEnv,
+        previousPid: nodeRunningBeforeRestart.pid ?? nodeBefore.pid,
+      });
+
+      const gatewayStillRunningAfterRestart = await readLaunchAgentRuntime(gatewayEnv);
+      expect(gatewayStillRunningAfterRestart.status).toBe("running");
+    } finally {
+      await uninstallLaunchAgent({ env: nodeEnv, stdout }).catch(() => {});
+      await uninstallLaunchAgent({ env: gatewayEnv, stdout }).catch(() => {});
+      await fs.rm(nodeHomeDir, { recursive: true, force: true });
+      await fs.rm(gatewayHomeDir, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   beforeAll(async () => {
     const testId = randomUUID().slice(0, 8);
     homeDir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-launchd-int-${testId}-`));
@@ -185,6 +298,142 @@ describeLaunchdIntegration("launchd integration", () => {
       await fs.rm(homeDir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("refuses real run-node publication while a sibling LaunchAgent holds checkout dist", async ({
+    signal,
+  }) => {
+    const id = randomUUID().slice(0, 8);
+    // openclaw-temp-dir: allow native service cleanup to retain evidence if retirement fails.
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dist-fence-")),
+    );
+    const home = path.join(root, "home");
+    const checkout = path.join(root, "openclaw-checkout");
+    const dist = path.join(checkout, "dist");
+    const entry = path.join(dist, "entry.cjs");
+    const siblingProfile = `dist-sibling-${id}`;
+    const selectedProfile = `dist-selected-${id}`;
+    const siblingEnv: GatewayServiceEnv = {
+      HOME: home,
+      OPENCLAW_PROFILE: siblingProfile,
+      OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.${siblingProfile}`,
+      OPENCLAW_LOG_PREFIX: siblingProfile,
+    };
+    let portClaim: Awaited<ReturnType<typeof acquireTestPortBlock>> | undefined;
+    let nativeAttempted = false;
+    let nativeRetired = false;
+    let servicePid: number | undefined;
+    let commandAttempted = false;
+    let commandSettled = false;
+    await runQaGatewayFixture(
+      async () => {
+        await fs.mkdir(home);
+        await fs.mkdir(dist, { recursive: true });
+        await fs.mkdir(path.join(root, "tmp"));
+        await fs.writeFile(
+          path.join(checkout, "package.json"),
+          '{"name":"openclaw","version":"0.0.0"}\n',
+        );
+        const files = new Map([
+          ["entry.cjs", "setInterval(() => {}, 1000);\n"],
+          ["retained-chunk.js", "export const retained = true;\n"],
+        ]);
+        for (const [name, bytes] of files) {
+          await fs.writeFile(path.join(dist, name), bytes);
+        }
+        portClaim = await acquireTestPortBlock({ offsets: [0], signal });
+        const selectedEnv: NodeJS.ProcessEnv = {
+          PATH: process.env.PATH,
+          HOME: home,
+          USERPROFILE: home,
+          TMPDIR: path.join(root, "tmp"),
+          OPENCLAW_PROFILE: selectedProfile,
+          OPENCLAW_STATE_DIR: path.join(home, `.openclaw-${selectedProfile}`),
+          OPENCLAW_CONFIG_PATH: path.join(home, `.openclaw-${selectedProfile}`, "openclaw.json"),
+          OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.${selectedProfile}`,
+          OPENCLAW_GATEWAY_PORT: String(portClaim.port),
+          OPENCLAW_FORCE_BUILD: "1",
+        };
+        const selected = await readGatewayServiceState(resolveGatewayService(), {
+          env: selectedEnv,
+          requireEffective: true,
+          requireLoadedCommand: true,
+        });
+        expect(selected.installed).toBe(false);
+        expect(selected.command).toBeNull();
+        expect(selected.loadState.status).toBe("not-loaded");
+        expect(selected.runtime?.missingUnit).toBe(true);
+        expect(await probePortUsage(portClaim.port, LOOPBACK_PORT_PROBE_HOSTS)).toBe("free");
+        await expect(fs.access(resolveLaunchAgentPlistPath(siblingEnv))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect((await readLaunchAgentRuntime(siblingEnv)).missingUnit).toBe(true);
+        nativeAttempted = true;
+        await installLaunchAgent({
+          env: siblingEnv,
+          environment: {
+            HOME: home,
+            OPENCLAW_PROFILE: siblingProfile,
+            OPENCLAW_SERVICE_KIND: "gateway",
+          },
+          stdout,
+          programArguments: [process.execPath, entry, "gateway"],
+          workingDirectory: checkout,
+        });
+        const before = await waitForRunningRuntime({ env: siblingEnv });
+        servicePid = before.pid;
+        commandAttempted = true;
+        const result = await runNodeScript(
+          [path.resolve("scripts/run-node.mjs"), "models", "status"],
+          selectedEnv,
+          undefined,
+          { cwd: checkout, signal, requireProcessTreeExit: true, maxBuffer: 128 * 1024 },
+        );
+        commandSettled = result.error === undefined && result.status !== null;
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain(
+          `Refusing to rebuild dist while a managed Gateway (profile ${siblingProfile})`,
+        );
+        expect(result.stderr).toContain(entry);
+        expect(result.stderr).toContain(`openclaw gateway stop --profile ${siblingProfile}`);
+        expect(result.stderr).not.toContain("Building TypeScript");
+        expect((await fs.readdir(dist)).toSorted()).toEqual([...files.keys()].toSorted());
+        for (const [name, bytes] of files) {
+          expect(await fs.readFile(path.join(dist, name), "utf8")).toBe(bytes);
+        }
+        expect((await waitForRunningRuntime({ env: siblingEnv })).pid).toBe(before.pid);
+      },
+      async () => {
+        if (nativeAttempted) {
+          await uninstallLaunchAgent({ env: siblingEnv, stdout });
+          await waitForNotRunningRuntime({ env: siblingEnv });
+          await expect(fs.access(resolveLaunchAgentPlistPath(siblingEnv))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          expect((await readLaunchAgentRuntime(siblingEnv)).missingUnit).toBe(true);
+          if (servicePid === undefined) {
+            throw new Error(
+              `Synthetic service PID was never captured; cleanup remains unverified at ${root}`,
+            );
+          }
+          expect(
+            await waitForPidToExit(servicePid),
+            `Synthetic service PID ${servicePid} has not exited; retained ${root}`,
+          ).toBe(true);
+        }
+        nativeRetired = true;
+      },
+      async () => {
+        await portClaim?.release();
+      },
+      async () => {
+        if (nativeRetired && (!commandAttempted || commandSettled)) {
+          await fs.rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+  }, 90_000);
 
   it("restarts launchd service and keeps it running with a new pid", async () => {
     const launchEnv = launchEnvOrThrow(env);

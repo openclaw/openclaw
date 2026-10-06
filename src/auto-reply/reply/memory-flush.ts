@@ -1,35 +1,20 @@
 // Builds memory flush prompts when conversation context exceeds model budget.
 import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anthropic";
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
-import { resolveContextTokensForModel } from "../../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import {
+  findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
-  resolveMergedModelProviderModels,
 } from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-
-export function resolveMemoryFlushContextWindowTokens(params: {
-  modelId?: string;
-  agentCfgContextTokens?: number;
-  cfg?: OpenClawConfig;
-  provider?: string;
-}): number {
-  return (
-    resolveContextTokensForModel({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.modelId,
-      contextTokensOverride: params.agentCfgContextTokens,
-      allowAsyncLoad: false,
-    }) ?? DEFAULT_CONTEXT_TOKENS
-  );
-}
 
 export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
   const parsed = parseNonNegativeByteSize(
@@ -44,7 +29,42 @@ function resolvePositiveTokenCount(value: number | undefined): number | undefine
     : undefined;
 }
 
+export function resolveEffectivePromptTokens(
+  basePromptTokens?: number,
+  lastOutputTokens?: number,
+  promptTokenEstimate?: number,
+): number {
+  const base = Math.max(0, basePromptTokens ?? 0);
+  const output = Math.max(0, lastOutputTokens ?? 0);
+  const estimate = Math.max(0, promptTokenEstimate ?? 0);
+  // Flush gating projects the next input context by adding the previous
+  // completion and the current user prompt estimate.
+  return base + output + estimate;
+}
+
+export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
+  const trimmed = normalizeOptionalString(prompt);
+  if (!trimmed) {
+    return undefined;
+  }
+  const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
+  const tokens = asPositiveFiniteNumber(estimateMessagesTokens([message]));
+  return tokens === undefined ? undefined : Math.ceil(tokens);
+}
+
+/** Resolves the blocking threshold using the selected reserve and server floor. */
+export function resolveCompactionThreshold(params: {
+  contextWindowTokens: number;
+  reserveTokensFloor: number;
+  minimumThresholdTokens?: number;
+}): number {
+  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
+  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
+  return Math.max(0, contextWindow - reserveTokens, Math.floor(params.minimumThresholdTokens ?? 0));
+}
+
 export function resolveResponsesServerCompactionThreshold(params: {
+  contextWindowTokens: number;
   cfg?: OpenClawConfig;
   provider?: string;
   modelId?: string;
@@ -58,10 +78,12 @@ export function resolveResponsesServerCompactionThreshold(params: {
   const normalizeModelId = (value: string) =>
     normalizeStaticProviderModelId(normalizedProvider, value).trim().toLowerCase();
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
-  const configuredModel = resolveMergedModelProviderModels({
-    models: providerConfig?.models,
+  const configuredModel = findConfiguredProviderModel(
+    providerConfig,
+    provider,
+    modelId,
     normalizeModelId,
-  }).get(normalizeModelId(modelId));
+  );
   const { defaultParams, modelParams } = resolveModelExtraParamSources({
     config: params.cfg,
     provider,
@@ -74,10 +96,7 @@ export function resolveResponsesServerCompactionThreshold(params: {
         provider,
         api: configuredModel?.api ?? providerConfig?.api ?? "anthropic-messages",
         baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
-        contextWindow:
-          configuredModel?.contextWindow ??
-          providerConfig?.contextWindow ??
-          resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
+        contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
       },
       extraParams,
     ).threshold;
@@ -93,48 +112,11 @@ export function resolveResponsesServerCompactionThreshold(params: {
         (normalizedProvider === "openai" ? "openai-responses" : undefined),
       baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? defaultOpenAIBaseUrl,
       compat: configuredModel?.compat,
-      contextWindow:
-        configuredModel?.contextWindow ??
-        providerConfig?.contextWindow ??
-        resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
+      contextTokens: configuredModel?.contextTokens ?? params.contextWindowTokens,
+      contextWindow: configuredModel?.contextWindow ?? params.contextWindowTokens,
     },
     extraParams,
   ).threshold;
-}
-
-function resolveMemoryFlushGateState<
-  TEntry extends Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
->(params: {
-  entry?: TEntry;
-  tokenCount?: number;
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  softThresholdTokens: number;
-  minimumThresholdTokens?: number;
-}): { entry: TEntry; totalTokens: number; threshold: number } | null {
-  if (!params.entry) {
-    return null;
-  }
-
-  const totalTokens =
-    resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
-  if (!totalTokens || totalTokens <= 0) {
-    return null;
-  }
-
-  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
-  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
-  const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
-  const threshold = Math.max(
-    0,
-    contextWindow - reserveTokens - softThreshold,
-    Math.floor(params.minimumThresholdTokens ?? 0),
-  );
-  if (threshold <= 0) {
-    return null;
-  }
-
-  return { entry: params.entry, totalTokens, threshold };
 }
 
 export function shouldRunMemoryFlush(params: {
@@ -148,20 +130,13 @@ export function shouldRunMemoryFlush(params: {
    * SessionEntry.totalTokens (which may be stale/unknown).
    */
   tokenCount?: number;
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  softThresholdTokens: number;
+  threshold: number;
 }): boolean {
-  const state = resolveMemoryFlushGateState(params);
-  if (!state || state.totalTokens < state.threshold) {
-    return false;
-  }
-
-  if (hasAlreadyFlushedForCurrentCompaction(state.entry)) {
-    return false;
-  }
-
-  return true;
+  return Boolean(
+    shouldRunPreflightCompaction(params) &&
+    params.entry &&
+    !hasAlreadyFlushedForCurrentCompaction(params.entry),
+  );
 }
 
 export function shouldRunPreflightCompaction(params: {
@@ -172,13 +147,19 @@ export function shouldRunPreflightCompaction(params: {
    * of any cached SessionEntry total.
    */
   tokenCount?: number;
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  softThresholdTokens: number;
-  minimumThresholdTokens?: number;
+  threshold: number;
 }): boolean {
-  const state = resolveMemoryFlushGateState(params);
-  return Boolean(state && state.totalTokens >= state.threshold);
+  if (!params.entry) {
+    return false;
+  }
+  const totalTokens =
+    resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
+  return (
+    typeof totalTokens === "number" &&
+    totalTokens > 0 &&
+    params.threshold > 0 &&
+    totalTokens >= params.threshold
+  );
 }
 
 /**

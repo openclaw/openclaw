@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { asSafeIntegerInRange } from "../packages/normalization-core/src/number-coercion.ts";
 import { isRecord as isUnknownRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
+import { RUNTIME_POSTBUILD_STAMP_FILE } from "./lib/local-build-metadata-paths.mts";
 import { spawnPnpmRunner, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
   createVitestProcessCompletion,
@@ -16,6 +17,22 @@ import {
 
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
+  // Whole-file opt-in gates: without the flag every case skips, so the file has no pass evidence.
+  ["extensions/anthropic/cli-output.compaction.live.test.ts", ["OPENCLAW_LIVE_CLAUDE_COMPACTION"]],
+  [
+    "extensions/codex/src/app-server/approval-requester.real-binary.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_APPROVAL_REQUESTER"],
+  ],
+  [
+    "extensions/codex/src/app-server/async-questions.real-binary.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_ASYNC_QUESTIONS"],
+  ],
+  [
+    "extensions/codex/src/app-server/thread-lifecycle.restricted-mcp.real-binary.live.test.ts",
+    ["OPENCLAW_LIVE_CODEX_RESTRICTED_MCP"],
+  ],
+  ["extensions/ollama/ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA"]],
+  ["extensions/twitch/src/plugin.live.test.ts", ["TWITCH_LIVE_TEST"]],
   [
     "extensions/codex/src/app-server/native-subagent-monitor.live.test.ts",
     ["OPENCLAW_LIVE_CODEX_NATIVE_SUBAGENT"],
@@ -26,17 +43,50 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ],
   ["src/agents/agent-mcp-style.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/cli-runner/bundle-mcp.gemini.live.test.ts", ["OPENCLAW_LIVE_CLI_MCP_GEMINI"]],
+  [
+    "src/agents/cli-runner/execute.compaction-watchdog.claude.live.test.ts",
+    ["OPENCLAW_LIVE_CLAUDE_COMPACTION"],
+  ],
   ["src/agents/embedded-agent-runner.cache.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/live-cache-regression.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
   ["src/agents/provider-headers.live.test.ts", ["OPENCLAW_LIVE_CACHE_TEST"]],
+  // Frozen release candidates before the announce-family move retain this path.
+  ["src/agents/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
+  [
+    "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
+    ["OPENCLAW_LIVE_OPENAI_COMPACTION"],
+  ],
   ["src/agents/subagents/announce/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
+  [
+    "src/agents/subagents/announce/subagent-continuation.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_E2E"],
+  ],
+  [
+    "src/agents/subagents/announce/subagent-followup-yield.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_E2E"],
+  ],
+  [
+    "src/agents/subagents/announce/subagent-late-reply.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_STRESS"],
+  ],
+  [
+    "src/agents/subagents/announce/subagent-yield-pause.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_STRESS"],
+  ],
+  [
+    "src/agents/subagents/announce/subagent-yield-resume.live.test.ts",
+    ["OPENCLAW_LIVE_SUBAGENT_STRESS"],
+  ],
+  ["src/agents/tools/sessions-send-peer.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_STRESS"]],
   ["src/agents/tools/image-tool.ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA_IMAGE"]],
   ["src/agents/tools/image-tool.providers.live.test.ts", ["OPENCLAW_LIVE_IMAGE_TOOL_TEST"]],
+  ["extensions/openai/realtime-meeting.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
   [
     "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
     ["OPENCLAW_LIVE_GPT_LIVE"],
   ],
   ["extensions/openai/realtime-quicksilver.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
+  ["extensions/openai/realtime-talk-defaults.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
   ["src/skills/workshop/experience-review.live.test.ts", ["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]],
   ["src/system-agent/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL"]],
   ["src/gateway/android-node.capabilities.live.test.ts", ["OPENCLAW_LIVE_ANDROID_NODE"]],
@@ -48,12 +98,19 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/gateway/gateway-openai-long-context.live.test.ts", ["OPENCLAW_LIVE_OPENAI_LONG_CONTEXT"]],
   ["src/gateway/gateway-trajectory-export.live.test.ts", ["OPENCLAW_LIVE_CODEX_HARNESS"]],
   ["src/infra/push-apns-http2.live.test.ts", ["OPENCLAW_LIVE_APNS_REACHABILITY"]],
+  ["test/e2e/crabbox-sandbox.live.test.ts", ["OPENCLAW_E2E_CRABBOX"]],
   ["test/image-generation.infer-cli.live.test.ts", ["OPENCLAW_LIVE_INFER_CLI_TEST"]],
 ]);
 const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "todo"]);
 const QA_RUNTIME_LIVE_TEST = "extensions/qa-lab/src/matrix-channel-driver.lifecycle.live.test.ts";
 const QA_RUNTIME_ARTIFACT = "dist/extensions/qa-lab/runtime-api.js";
-type ProcessSignal = `SIG${string}`;
+const SOURCE_PERFORMANCE_ARTIFACT = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
+type LiveShardPreparation = {
+  env: NodeJS.ProcessEnv;
+  profile: string;
+  requiredArtifact: string;
+  runtimeEnv?: NodeJS.ProcessEnv;
+};
 
 /** Live-test shards included in release validation. */
 export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
@@ -212,6 +269,10 @@ function isExtensionInRange(file: string, start: string, end: string) {
   return first !== undefined && first >= start && first <= end;
 }
 
+function isSourceGatewayLiveTest(file: string) {
+  return file.startsWith("src/gateway/") || file.startsWith("src/system-agent/");
+}
+
 function isGatewayBackendLiveTest(file: string) {
   return (
     file === "src/gateway/gateway-acp-bind.live.test.ts" ||
@@ -233,6 +294,7 @@ function isExtensionMediaLiveTest(file: string) {
     file === "extensions/music-generation-providers.live.test.ts" ||
     file === "extensions/minimax/minimax.live.test.ts" ||
     file === "extensions/openai/openai-tts.live.test.ts" ||
+    file === "extensions/tts-local-cli/speech-provider.live.test.ts" ||
     file === "extensions/video-generation-providers.live.test.ts" ||
     file === "extensions/volcengine/tts.live.test.ts" ||
     file === "extensions/vydra/vydra.live.test.ts"
@@ -263,6 +325,40 @@ function isMoonshotLiveTest(file: string) {
   return file.startsWith("extensions/moonshot/");
 }
 
+// The frozen 2026.9.8 and 2026.9.9 candidates retain three intentionally skipped single-case
+// live files. The trusted tooling checkout owns shard selection, so omit those
+// candidate files here rather than weakening the per-file passing-assertion guard.
+const RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES = new Set([
+  "src/gateway/gateway-progress-refresh.live.test.ts",
+  "src/agents/embedded-agent-runner.responses-output-limit.live.test.ts",
+  "test/gateway-subagent-restart.live.test.ts",
+]);
+const RELEASE_WAIVED_LIVE_FILES = new Map<string, ReadonlySet<string>>([
+  ["2026.9.8", RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES],
+  ["2026.9.9", RELEASE_2026_9_8_AND_9_WAIVED_LIVE_FILES],
+]);
+
+export function withoutReleaseWaivedLiveFiles(
+  files: string[],
+  candidateVersion: string | undefined,
+) {
+  const waived = candidateVersion ? RELEASE_WAIVED_LIVE_FILES.get(candidateVersion) : undefined;
+  return waived ? files.filter((file) => !waived.has(file)) : files;
+}
+
+function readCandidateVersion(repoRoot = process.cwd()) {
+  try {
+    const manifest: unknown = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"),
+    );
+    return isUnknownRecord(manifest) && typeof manifest.version === "string"
+      ? manifest.version
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Selects the live test files belonging to one shard name.
  */
@@ -278,13 +374,11 @@ export function selectLiveShardFiles(shard: string, files = collectAllLiveTestFi
     case "native-live-src-agents-zai-coding":
       return files.filter((file) => file === "src/agents/zai.live.test.ts");
     case "native-live-src-gateway":
-      return files.filter(
-        (file) => file.startsWith("src/gateway/") || file.startsWith("src/system-agent/"),
-      );
+      return files.filter(isSourceGatewayLiveTest);
     case "native-live-src-gateway-core":
       return files.filter(
         (file) =>
-          (file.startsWith("src/gateway/") || file.startsWith("src/system-agent/")) &&
+          isSourceGatewayLiveTest(file) &&
           !isGatewayBackendLiveTest(file) &&
           !isGatewayProfilesLiveTest(file),
       );
@@ -293,7 +387,12 @@ export function selectLiveShardFiles(shard: string, files = collectAllLiveTestFi
     case "native-live-src-gateway-backends":
       return files.filter(isGatewayBackendLiveTest);
     case "native-live-src-infra":
-      return files.filter((file) => file.startsWith("src/infra/"));
+      return files.filter(
+        (file) =>
+          file.startsWith("src/infra/") ||
+          file.startsWith("src/cli/") ||
+          file.startsWith("src/commands/"),
+      );
     case "native-live-test":
       return files.filter((file) => file.startsWith("test/"));
     case "native-live-extensions-a-k":
@@ -387,14 +486,42 @@ export function buildLiveShardPnpmArgs(files: string[], passthroughArgs: string[
 /**
  * Resolves build profiles required by selected live tests.
  */
-export function resolveLiveShardPreparation(files: string[]) {
-  return files.includes(QA_RUNTIME_LIVE_TEST)
-    ? {
-        env: { OPENCLAW_BUILD_PRIVATE_QA: "1" },
-        profile: "qaRuntime",
-        requiredArtifact: QA_RUNTIME_ARTIFACT,
-      }
-    : null;
+export function resolveLiveShardPreparation(files: string[]): LiveShardPreparation | null {
+  const gatewayProfiles = files.some(isGatewayProfilesLiveTest);
+  // Gateway/worker fixtures and vision requests load compiled runtime plugins.
+  // Build before Vitest; direct CLI launches cannot bootstrap a cold checkout.
+  if (
+    files.some(isSourceGatewayLiveTest) ||
+    files.some((file) => file.startsWith("test/e2e/qa-lab/runtime/")) ||
+    files.includes("src/infra/heartbeat-runner.live.test.ts") ||
+    files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
+    files.includes("extensions/openai/openai.live.test.ts")
+  ) {
+    return {
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: SOURCE_PERFORMANCE_ARTIFACT,
+      ...(gatewayProfiles
+        ? {
+            runtimeEnv: {
+              OPENCLAW_DISABLE_BONJOUR: "1",
+              OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+              OPENCLAW_LIVE_TEST_QUIET: "0",
+              OPENCLAW_LOG_LEVEL: "info",
+              OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+            },
+          }
+        : {}),
+    };
+  }
+  if (files.includes(QA_RUNTIME_LIVE_TEST)) {
+    return {
+      env: { OPENCLAW_BUILD_PRIVATE_QA: "1" },
+      profile: "qaRuntime",
+      requiredArtifact: QA_RUNTIME_ARTIFACT,
+    };
+  }
+  return null;
 }
 
 /**
@@ -431,19 +558,6 @@ function normalizeReportFilePath(value: unknown, repoRoot = process.cwd()) {
     return text.split(path.sep).join("/");
   }
   return repoRelative.split(path.sep).join("/");
-}
-
-function collectReportedLiveTestFiles(payload: unknown, repoRoot = process.cwd()) {
-  if (!isUnknownRecord(payload) || !Array.isArray(payload.testResults)) {
-    return null;
-  }
-  return new Set(
-    payload.testResults
-      .map((result) =>
-        normalizeReportFilePath(isUnknownRecord(result) ? result.name : undefined, repoRoot),
-      )
-      .filter((name) => name.length > 0),
-  );
 }
 
 function isDisabledOptInAssertion(assertion: Record<string, unknown>) {
@@ -591,38 +705,33 @@ export function validateLiveShardReportPayload(
     return { ok: false, reason: "Vitest report has no passing live tests." };
   }
   if (expectedFiles.length > 0) {
-    const reportedFiles = collectReportedLiveTestFiles(payload, repoRoot);
     const fileEvidence = collectReportedLiveTestFileEvidence(payload, repoRoot);
-    if (!reportedFiles || !fileEvidence) {
+    if (!fileEvidence) {
       return { ok: false, reason: "Vitest report is missing testResults file evidence." };
     }
-    const missingFiles = expectedFiles
-      .map((file) => normalizeReportFilePath(file, repoRoot))
-      .filter((file) => !reportedFiles.has(file));
+    const normalizedFiles = expectedFiles.map((file) => normalizeReportFilePath(file, repoRoot));
+    const missingFiles = normalizedFiles.filter((file) => !fileEvidence.has(file));
     if (missingFiles.length > 0) {
       return {
         ok: false,
         reason: `Vitest report missing selected live test file evidence: ${missingFiles.join(", ")}`,
       };
     }
-    const enabledPassFiles = expectedFiles
-      .map((file) => normalizeReportFilePath(file, repoRoot))
-      .filter((file) => countEnabledLivePasses(file, fileEvidence.get(file), env) > 0);
-    if (enabledPassFiles.length === 0) {
+    if (
+      !normalizedFiles.some((file) => countEnabledLivePasses(file, fileEvidence.get(file), env) > 0)
+    ) {
       return {
         ok: false,
         reason: "Vitest report has no enabled selected live test files with passing assertions.",
       };
     }
-    const noPassFiles = expectedFiles
-      .map((file) => normalizeReportFilePath(file, repoRoot))
-      .filter((file) => {
-        const evidence = fileEvidence.get(file);
-        return (
-          countEnabledLivePasses(file, evidence, env) < 1 &&
-          !isDisabledOptionalLiveShardFile(file, evidence, env)
-        );
-      });
+    const noPassFiles = normalizedFiles.filter((file) => {
+      const evidence = fileEvidence.get(file);
+      return (
+        countEnabledLivePasses(file, evidence, env) < 1 &&
+        !isDisabledOptionalLiveShardFile(file, evidence, env)
+      );
+    });
     if (noPassFiles.length > 0) {
       return {
         ok: false,
@@ -661,12 +770,32 @@ function validateLiveShardReport(
 /**
  * Builds spawn options for the live-shard Vitest child.
  */
-export function buildLiveShardSpawnParams(env = process.env, platform = process.platform) {
+export function buildLiveShardSpawnParams(
+  env = process.env,
+  platform = process.platform,
+  runtimeEnv?: NodeJS.ProcessEnv,
+) {
   return {
     detached: shouldUseDetachedVitestProcessGroup(platform),
-    env,
+    env: { ...env, ...runtimeEnv },
     stdio: "inherit",
   } satisfies Pick<PnpmRunnerParams, "detached" | "env" | "stdio">;
+}
+
+export function resolveLiveShardBuildEntrypoint(exists = fs.existsSync): string[] {
+  // Release harnesses run this trusted shard router from a frozen candidate
+  // checkout. Prefer its current TypeScript builder, then its native ancestor.
+  if (exists("scripts/build-all.mts")) {
+    return ["--import", "tsx", "scripts/build-all.mts"];
+  }
+  if (exists("scripts/build-all.mjs")) {
+    return ["scripts/build-all.mjs"];
+  }
+  throw new Error("Live test shard cannot find scripts/build-all.{mts,mjs}");
+}
+
+export function resolveLiveShardBuildProfile(profile: string, helpOutput: string): string {
+  return helpOutput.split("\n").includes(`  ${profile}`) ? profile : "full";
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -694,7 +823,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
   let files;
   try {
-    files = selectLiveShardFiles(shard);
+    files = withoutReleaseWaivedLiveFiles(selectLiveShardFiles(shard), readCandidateVersion());
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     usage();
@@ -719,14 +848,32 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.log(
       `[test:live:shard] preparing ${preparation.profile} for ${preparation.requiredArtifact}`,
     );
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/build-all.mts", preparation.profile],
-      {
-        env: { ...process.env, ...preparation.env },
-        stdio: "inherit",
-      },
-    );
+    const buildEntrypoint = resolveLiveShardBuildEntrypoint();
+    const help = spawnSync(process.execPath, [...buildEntrypoint, "--help"], {
+      env: { ...process.env, ...preparation.env },
+      encoding: "utf8",
+    });
+    if (help.error) {
+      console.error(help.error);
+      process.exit(1);
+    }
+    if (help.signal) {
+      process.kill(process.pid, help.signal);
+      process.exit(1);
+    }
+    if ((help.status ?? 1) !== 0) {
+      process.exit(help.status ?? 1);
+    }
+    const buildProfile = resolveLiveShardBuildProfile(preparation.profile, help.stdout);
+    if (buildProfile !== preparation.profile) {
+      console.log(
+        `[test:live:shard] ${preparation.profile} is unavailable; preparing full build instead`,
+      );
+    }
+    const result = spawnSync(process.execPath, [...buildEntrypoint, buildProfile], {
+      env: { ...process.env, ...preparation.env },
+      stdio: "inherit",
+    });
     if (result.error) {
       console.error(result.error);
       process.exit(1);
@@ -750,24 +897,25 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const reportPath = buildLiveShardReportPath(shard, process.env);
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   removeLiveShardReportFile(reportPath);
-  const spawnParams = buildLiveShardSpawnParams(process.env);
+  const spawnParams = buildLiveShardSpawnParams(
+    process.env,
+    process.platform,
+    preparation?.runtimeEnv,
+  );
   const child = spawnPnpmRunner({
     pnpmArgs: buildLiveShardPnpmArgs(files, addLiveShardReportArgs(passthroughArgs, reportPath)),
     ...spawnParams,
   });
-  let forwardedSignal: ProcessSignal | null = null;
-  const teardown = installVitestProcessGroupCleanup({
+  const cleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
     forceSignalDelayMs: 100,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
   });
   createVitestProcessCompletion({ child, detached: spawnParams.detached })
-    .finally(teardown)
+    .finally(cleanup.teardown)
     .then(
       ({ code, signal }) => {
+        const forwardedSignal = cleanup.getForwardedSignal();
         if (forwardedSignal) {
           process.kill(process.pid, forwardedSignal);
           return;

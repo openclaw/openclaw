@@ -10,7 +10,7 @@ import java.util.Locale
 const val actionAskOpenClaw = "ai.openclaw.app.action.ASK_OPENCLAW"
 
 /** Debug action that opens the Voice tab directly for Android E2E automation. */
-const val actionOpenVoiceE2e = "ai.openclaw.app.debug.OPEN_VOICE_E2E"
+val actionOpenVoiceE2e = "${BuildConfig.APPLICATION_ID}.OPEN_VOICE_E2E"
 
 /** Intent extra that carries an optional assistant prompt for app actions. */
 const val extraAssistantPrompt = "prompt"
@@ -22,7 +22,6 @@ enum class HomeDestination {
   Connect,
   Chat,
   Voice,
-  Screen,
   Settings,
 }
 
@@ -55,11 +54,6 @@ data class SharedAttachment(
   val mimeType: String,
 )
 
-private data class SharedAttachmentSelection(
-  val attachments: List<SharedAttachment>,
-  val droppedCount: Int,
-)
-
 internal val SHARED_ATTACHMENT_MIME_ALLOWLIST =
   setOf(
     "image/*",
@@ -75,7 +69,6 @@ internal val SHARED_ATTACHMENT_MIME_ALLOWLIST =
 
 internal val SHARED_AUDIO_DOCUMENT_MIME_TYPES =
   SHARED_ATTACHMENT_MIME_ALLOWLIST.filterNot { it == "image/*" || it == "video/*" }.toTypedArray()
-internal val SHARED_VIDEO_MIME_TYPES = arrayOf("video/*")
 
 /**
  * Parses app-owned navigation actions that should open a specific home tab.
@@ -85,6 +78,7 @@ fun parseHomeDestinationIntent(intent: Intent?): HomeDestination? {
   return when {
     // Debug-only shortcut keeps E2E navigation out of release builds.
     BuildConfig.DEBUG && action == actionOpenVoiceE2e -> HomeDestination.Voice
+
     else -> null
   }
 }
@@ -95,12 +89,13 @@ fun parseHomeDestinationIntent(intent: Intent?): HomeDestination? {
 fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
   val action = intent?.action ?: return null
   return when (action) {
-    Intent.ACTION_ASSIST ->
+    Intent.ACTION_ASSIST -> {
       AssistantLaunchRequest(
         source = "assist",
         prompt = null,
         autoSend = false,
       )
+    }
 
     actionAskOpenClaw -> {
       val prompt = intent.getStringExtra(extraAssistantPrompt)?.trim()?.ifEmpty { null }
@@ -111,7 +106,9 @@ fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
       )
     }
 
-    else -> null
+    else -> {
+      null
+    }
   }
 }
 
@@ -123,36 +120,21 @@ fun parseShareLaunchIntent(
   val action = intent?.action ?: return null
   if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return null
 
+  val indexedText =
+    if (action == Intent.ACTION_SEND_MULTIPLE) intent.getCharSequenceArrayListExtra(Intent.EXTRA_TEXT) else null
   val text =
-    listOf(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString())
-      .mapNotNull { value -> value?.trim()?.takeIf { it.isNotEmpty() } }
+    listOf(intent.getStringExtra(Intent.EXTRA_SUBJECT))
+      .plus(indexedText ?: listOfNotNull(intent.getCharSequenceExtra(Intent.EXTRA_TEXT)))
+      .plus(intent.clipData?.run { (0 until itemCount).map { getItemAt(it).text } }.orEmpty())
+      .mapNotNull { value -> value?.toString()?.trim()?.takeIf { it.isNotEmpty() } }
       .distinct()
       .joinToString(separator = "\n\n")
       .ifEmpty { null }
-  val attachmentSelection = sharedAttachments(intent, action, resolveMimeType)
-
-  if (text == null && attachmentSelection.attachments.isEmpty() && attachmentSelection.droppedCount == 0) return null
-  return ShareLaunchRequest(
-    text = text,
-    attachments = attachmentSelection.attachments,
-    droppedAttachmentCount = attachmentSelection.droppedCount,
-  )
-}
-
-private fun sharedAttachments(
-  intent: Intent,
-  action: String,
-  resolveMimeType: (Uri) -> String?,
-): SharedAttachmentSelection {
   val streamUris =
-    when (action) {
-      Intent.ACTION_SEND ->
-        listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
-
-      Intent.ACTION_SEND_MULTIPLE ->
-        IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
-
-      else -> emptyList()
+    if (action == Intent.ACTION_SEND) {
+      listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
+    } else {
+      IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
     }
   val clipUris =
     intent.clipData
@@ -190,9 +172,11 @@ private fun sharedAttachments(
     }
     resolved += SharedAttachment(uri = uri, kind = kind, mimeType = requireNotNull(mimeType))
   }
-  return SharedAttachmentSelection(
+  if (text == null && resolved.isEmpty() && droppedCount == 0) return null
+  return ShareLaunchRequest(
+    text = text,
     attachments = resolved,
-    droppedCount = droppedCount,
+    droppedAttachmentCount = droppedCount,
   )
 }
 

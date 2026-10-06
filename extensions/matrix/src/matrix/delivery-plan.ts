@@ -3,14 +3,15 @@ import { createHash } from "node:crypto";
 import type {
   ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
-  MessageReceipt,
   MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getMatrixRuntime } from "../runtime.js";
+import { resolveMatrixReplyToEventId, resolveMatrixThreadRootId } from "./relations.js";
 import type { MatrixClient } from "./sdk.js";
-import type { MatrixMessageWireDispatch } from "./sdk/client-base.js";
+import type { MatrixMessageWireDispatch } from "./sdk/message-wire-dispatch.js";
 import { withResolvedMatrixSendClient } from "./send/client.js";
+import { createMatrixSendReceipt, type MatrixReceiptEvent } from "./send/receipt.js";
 import { resolveMatrixRoomId } from "./send/targets.js";
 import type { MatrixOutboundContent } from "./send/types.js";
 
@@ -37,6 +38,14 @@ type MatrixDeliveryIdentity = {
   queueId: string;
   partIndex: number;
   partCount: number;
+};
+
+type MatrixDeliveryTarget = {
+  identity: MatrixDeliveryIdentity;
+  accountId?: string | null;
+  roomId: string;
+  transactionScopeId: string;
+  wireEventType: "m.room.message" | "m.room.encrypted";
 };
 
 type MatrixDeliveryPlan = {
@@ -160,16 +169,7 @@ function decodePlan(bytes: Uint8Array): MatrixDeliveryPlan {
   return value;
 }
 
-function assertPlanIdentity(
-  plan: MatrixDeliveryPlan,
-  params: {
-    identity: MatrixDeliveryIdentity;
-    accountId?: string | null;
-    roomId: string;
-    transactionScopeId: string;
-    wireEventType: "m.room.message" | "m.room.encrypted";
-  },
-): void {
+function assertPlanIdentity(plan: MatrixDeliveryPlan, params: MatrixDeliveryTarget): void {
   if (
     plan.queueId !== params.identity.queueId ||
     plan.partIndex !== params.identity.partIndex ||
@@ -228,13 +228,9 @@ export function resolveMatrixDurableDeliveryIdentity(params: {
   };
 }
 
-export async function loadMatrixDeliveryPlan(params: {
-  identity: MatrixDeliveryIdentity;
-  accountId?: string | null;
-  roomId: string;
-  transactionScopeId: string;
-  wireEventType: "m.room.message" | "m.room.encrypted";
-}): Promise<MatrixDeliveryPlan | null> {
+export async function loadMatrixDeliveryPlan(
+  params: MatrixDeliveryTarget,
+): Promise<MatrixDeliveryPlan | null> {
   const entry = await createDeliveryPlanStore().lookup(planKey(params.identity));
   if (!entry) {
     return null;
@@ -247,15 +243,12 @@ export async function loadMatrixDeliveryPlan(params: {
   return structuredClone(plan);
 }
 
-export async function persistMatrixDeliveryPlan(params: {
-  identity: MatrixDeliveryIdentity;
-  accountId?: string | null;
-  roomId: string;
-  transactionScopeId: string;
-  wireEventType: "m.room.message" | "m.room.encrypted";
-  events: readonly MatrixPreparedEvent[];
-  dispatch: MatrixMessageWireDispatch;
-}): Promise<MatrixDeliveryPlan> {
+export async function persistMatrixDeliveryPlan(
+  params: MatrixDeliveryTarget & {
+    events: readonly MatrixPreparedEvent[];
+    dispatch: MatrixMessageWireDispatch;
+  },
+): Promise<MatrixDeliveryPlan> {
   if (params.events.length === 0) {
     throw new Error("Matrix durable delivery plan must contain at least one event");
   }
@@ -308,24 +301,24 @@ export async function persistMatrixDeliveryPlan(params: {
 
 async function loadQueuePlans(queueId: string): Promise<MatrixDeliveryPlan[]> {
   const store = createDeliveryPlanStore();
-  const keys = (await store.entries())
-    .filter((entry) => entry.key.startsWith(queuePrefix(queueId)))
-    .map((entry) => entry.key);
-  return await Promise.all(
-    keys.map(async (key) => {
-      const entry = await store.lookup(key);
-      if (!entry) {
-        throw new MatrixDeliveryPlanInvariantError(
-          "Matrix durable delivery plan disappeared during reconciliation",
-        );
-      }
-      const plan = decodePlan(entry.bytes);
-      if (key !== planKey(plan)) {
-        throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
-      }
-      return plan;
-    }),
-  );
+  const entries = await store.entries();
+  const prefix = entries.length > 0 ? queuePrefix(queueId) : "";
+  const keys = entries.filter((entry) => entry.key.startsWith(prefix)).map((entry) => entry.key);
+  const plans: MatrixDeliveryPlan[] = [];
+  for (const key of keys) {
+    const entry = await store.lookup(key);
+    if (!entry) {
+      throw new MatrixDeliveryPlanInvariantError(
+        "Matrix durable delivery plan disappeared during reconciliation",
+      );
+    }
+    const plan = decodePlan(entry.bytes);
+    if (key !== planKey(plan)) {
+      throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
+    }
+    plans.push(plan);
+  }
+  return plans;
 }
 
 function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void {
@@ -349,39 +342,6 @@ function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void 
       "Matrix ambiguous delivery has an incomplete event plan",
     );
   }
-}
-
-function createReconciledMatrixReceipt(params: {
-  results: readonly { eventId: string; receiptKind: MessageReceiptPartKind }[];
-  replyToId?: string;
-  threadId?: string;
-}): MessageReceipt {
-  const uniqueResults = params.results.filter(
-    (result, index, results) =>
-      results.findIndex((entry) => entry.eventId === result.eventId) === index,
-  );
-  const platformMessageIds = uniqueResults.map((result) => result.eventId);
-  return {
-    ...(platformMessageIds[0] ? { primaryPlatformMessageId: platformMessageIds[0] } : {}),
-    platformMessageIds,
-    parts: uniqueResults.map((result, index) => {
-      const part: NonNullable<MessageReceipt["parts"]>[number] = {
-        platformMessageId: result.eventId,
-        kind: result.receiptKind,
-        index,
-      };
-      if (params.replyToId) {
-        part.replyToId = params.replyToId;
-      }
-      if (params.threadId) {
-        part.threadId = params.threadId;
-      }
-      return part;
-    }),
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    ...(params.threadId ? { threadId: params.threadId } : {}),
-    sentAt: Date.now(),
-  };
 }
 
 async function requireTransactionScope(client: MatrixClient): Promise<string> {
@@ -417,10 +377,7 @@ export async function reconcileMatrixUnknownSend(
         const roomId = await resolveMatrixRoomId(client, ctx.to);
         const wireEventType = await client.getMessageWireEventType(roomId);
         const orderedPlans = [...plans].toSorted((left, right) => left.partIndex - right.partIndex);
-        const results: Array<{
-          eventId: string;
-          receiptKind: MessageReceiptPartKind;
-        }> = [];
+        const results = new Map<string, MatrixReceiptEvent>();
         for (const plan of orderedPlans) {
           assertPlanIdentity(plan, {
             identity: plan,
@@ -430,38 +387,36 @@ export async function reconcileMatrixUnknownSend(
             wireEventType,
           });
           for (const event of plan.events) {
-            results.push({
-              eventId: await client.sendMessage(
-                roomId,
-                event.content,
-                event.transactionId,
-                async (dispatch) => {
-                  await persistMatrixDeliveryPlan({
-                    identity: plan,
-                    accountId: ctx.accountId,
-                    roomId,
-                    transactionScopeId,
-                    wireEventType,
-                    events: plan.events,
-                    dispatch,
-                  });
-                },
-              ),
-              receiptKind: event.receiptKind,
-            });
+            const messageId = await client.sendMessage(
+              roomId,
+              event.content,
+              event.transactionId,
+              async (dispatch) => {
+                await persistMatrixDeliveryPlan({
+                  identity: plan,
+                  accountId: ctx.accountId,
+                  roomId,
+                  transactionScopeId,
+                  wireEventType,
+                  events: plan.events,
+                  dispatch,
+                });
+              },
+            );
+            if (!results.has(messageId)) {
+              const replyToId = resolveMatrixReplyToEventId(event.content);
+              results.set(messageId, {
+                messageId,
+                kind: event.receiptKind,
+                ...(replyToId ? { replyToId } : {}),
+              });
+            }
           }
         }
-        const replyToId =
-          ctx.effectiveReplyToId !== undefined
-            ? ctx.effectiveReplyToId
-            : ctx.replyToMode === "off"
-              ? undefined
-              : ctx.replyToId;
-        const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
-        const receipt = createReconciledMatrixReceipt({
-          results,
-          ...(replyToId ? { replyToId } : {}),
-          ...(threadId ? { threadId } : {}),
+        const receipt = createMatrixSendReceipt({
+          roomId,
+          events: [...results.values()],
+          threadId: resolveMatrixThreadRootId(orderedPlans[0]!.events[0]!.content),
         });
         return {
           status: "sent",
@@ -503,8 +458,10 @@ export async function reconcileMatrixUnknownSend(
 export async function cleanupMatrixDeliveryPlans(ctx: { queueId: string }): Promise<void> {
   const store = createDeliveryPlanStore();
   await store.deleteExpired();
-  const keys = (await store.entries())
-    .filter((entry) => entry.key.startsWith(queuePrefix(ctx.queueId)))
-    .map((entry) => entry.key);
-  await Promise.all(keys.map(async (key) => await store.delete(key)));
+  const entries = await store.entries();
+  const prefix = entries.length > 0 ? queuePrefix(ctx.queueId) : "";
+  const keys = entries.filter((entry) => entry.key.startsWith(prefix)).map((entry) => entry.key);
+  for (const key of keys) {
+    await store.delete(key);
+  }
 }

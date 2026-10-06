@@ -1,13 +1,12 @@
-// Openai plugin module implements default models behavior.
-import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
 import {
   applyAgentDefaultModelPrimary,
+  ensureModelAllowlistEntry,
   resolveAgentModelPrimaryValue,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
-export const OPENAI_DEFAULT_MODEL = "openai/gpt-5.6-sol";
-export const OPENAI_CODEX_DEFAULT_MODEL = "openai/gpt-5.6-sol";
+export const OPENAI_DEFAULT_MODEL = "openai/gpt-6-astra";
+export const OPENAI_CODEX_DEFAULT_MODEL = "openai/gpt-6-astra";
 export const OPENAI_DEFAULT_IMAGE_MODEL = "gpt-image-2";
 export const OPENAI_DEFAULT_TTS_MODEL = "gpt-4o-mini-tts";
 export const OPENAI_DEFAULT_TTS_VOICE = "alloy";

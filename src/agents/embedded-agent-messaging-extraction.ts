@@ -1,4 +1,5 @@
 /** Extracts message delivery evidence from embedded-agent tool calls and results. */
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -6,10 +7,11 @@ import {
   normalizeOptionalStringifiedId,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDeliveredCurrentSourceReply } from "../infra/outbound/source-reply-mirror.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import {
   normalizeLegacyInteractiveReply,
@@ -33,7 +35,54 @@ export function extractMessagingToolSourceReplyPayload(
   if (status && status !== "sent") {
     return undefined;
   }
-  const sourceReply = readRecord(details.sourceReply) ?? details;
+  return readSourceReplyPayload(details, readRecord(details.sourceReply) ?? details);
+}
+
+/**
+ * Reads the final reply a `canDeliverSourceReply` tool authored in `details.sourceReply`.
+ * Unlike internal-ui mirrors, nothing has been sent yet: the host delivers the payload
+ * to the current source and records it in the transcript after delivery. A reply needs
+ * text or media; `final: false` is not a deliverable reply, so the model continues as
+ * usual. Callers must already have verified the tool's capability and invocation scope.
+ */
+export function extractToolAuthoredSourceReplyPayload(
+  result: unknown,
+): MessagingToolSourceReplyPayload | undefined {
+  const details = readToolResultDetails(result);
+  const sourceReply = details ? readRecord(details.sourceReply) : undefined;
+  if (!details || !sourceReply || sourceReply.final === false) {
+    return undefined;
+  }
+  const payload = readSourceReplyPayload(details, sourceReply);
+  if (!payload) {
+    return undefined;
+  }
+  // Same admission as source-reply delivery: blank text and blank media entries are
+  // dropped there, and attachments ride along but do not qualify a reply on their own.
+  const hasDeliverableContent =
+    Boolean(payload.text?.trim()) || resolveSourceReplyMediaUrls(payload).length > 0;
+  return hasDeliverableContent ? payload : undefined;
+}
+
+/**
+ * The media a source reply delivers: `mediaUrls` when present, else `mediaUrl`,
+ * without blank entries. Delivery and tool-authored admission share it.
+ */
+export function resolveSourceReplyMediaUrls(
+  payload: Pick<MessagingToolSourceReplyPayload, "mediaUrl" | "mediaUrls">,
+): string[] {
+  const media = payload.mediaUrls?.length
+    ? payload.mediaUrls
+    : payload.mediaUrl
+      ? [payload.mediaUrl]
+      : [];
+  return media.filter((value) => value.trim().length > 0);
+}
+
+function readSourceReplyPayload(
+  details: Record<string, unknown>,
+  sourceReply: Record<string, unknown>,
+): MessagingToolSourceReplyPayload | undefined {
   const payload: MessagingToolSourceReplyPayload = {};
   const text = readStringValue(sourceReply.text) ?? readStringValue(details.message);
   if (text) {
@@ -48,11 +97,40 @@ export function extractMessagingToolSourceReplyPayload(
     : Array.isArray(details.mediaUrls)
       ? details.mediaUrls
       : [];
-  const mediaUrls = uniqueStrings(
-    rawMediaUrls.filter((value): value is string => typeof value === "string"),
-  );
+  const mediaUrls = rawMediaUrls.filter((value): value is string => typeof value === "string");
   if (mediaUrls.length > 0) {
     payload.mediaUrls = mediaUrls;
+  }
+  if (Array.isArray(sourceReply.attachments)) {
+    const attachments = sourceReply.attachments.flatMap((value) => {
+      const attachment = readRecord(value);
+      if (!attachment) {
+        return [];
+      }
+      const projected: ReplyMediaAttachment = {};
+      for (const key of ["path", "url", "mediaUrl", "filePath", "mimeType", "name"] as const) {
+        const fieldText = readStringValue(attachment[key]);
+        if (fieldText) {
+          projected[key] = fieldText;
+        }
+      }
+      if (typeof attachment.trustedLocalMedia === "boolean") {
+        projected.trustedLocalMedia = attachment.trustedLocalMedia;
+      }
+      for (const key of ["durationMs", "width", "height"] as const) {
+        const number = asNonNegativeFiniteNumber(attachment[key]);
+        if (number !== undefined) {
+          projected[key] = number;
+        }
+      }
+      return [projected];
+    });
+    if (attachments.length > 0) {
+      payload.attachments = attachments;
+    }
+  }
+  if (typeof sourceReply.trustedLocalMedia === "boolean") {
+    payload.trustedLocalMedia = sourceReply.trustedLocalMedia;
   }
   if (sourceReply.audioAsVoice === true || details.audioAsVoice === true) {
     payload.audioAsVoice = true;
@@ -74,11 +152,11 @@ export function extractMessagingToolSourceReplyPayload(
   if (idempotencyKey) {
     payload.idempotencyKey = idempotencyKey;
   }
+  if (details.sourceReplyTranscriptOwner === true) {
+    payload.transcriptOwner = true;
+  }
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
-
-// Core tool names that are allowed to emit trusted local media artifacts.
-// Plugin tools must be explicitly passed as trusted run-local names by the caller.
 
 function resolveMessageToolTarget(params: {
   action: string;
@@ -227,11 +305,11 @@ export function extractMessagingToolSend(
       return undefined;
     }
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
-    const to = normalizeTargetForProvider(provider, toRaw);
     const pluginExtractionArgs = { ...args, to: toRaw };
     const pluginExtracted = providerId
       ? getChannelPlugin(providerId)?.actions?.extractToolSend?.({ args: pluginExtractionArgs })
       : null;
+    const to = normalizeTargetForProvider(provider, pluginExtracted?.to ?? toRaw);
     const resolvedAccountId = normalizeOptionalString(pluginExtracted?.accountId) ?? accountId;
     const threadId =
       normalizeOptionalString(pluginExtracted?.threadId) ?? normalizeOptionalString(args.threadId);
@@ -346,4 +424,44 @@ export function extractMessagingToolSendResult(
     threadImplicit: threadEvidence.threadImplicit === true ? true : undefined,
     threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
+}
+
+export function isDeliveredMessagingToolSendToCurrentSource(params: {
+  send: MessagingToolSend | undefined;
+  config?: OpenClawConfig;
+  currentProvider?: string;
+  currentAccountId?: string;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+  currentThreadId?: string;
+  sessionKey?: string;
+  deliveredPayload?: unknown;
+}): boolean {
+  const send = params.send;
+  if (!send?.to) {
+    return false;
+  }
+  return isDeliveredCurrentSourceReply({
+    action: "send",
+    channel: send.provider,
+    accountId: send.accountId,
+    currentAccountId: params.currentAccountId,
+    actionParams: {
+      target: send.to,
+      ...(send.threadSuppressed
+        ? { topLevel: true }
+        : send.threadId
+          ? { threadId: send.threadId }
+          : {}),
+    },
+    cfg: params.config ?? {},
+    sessionKey: params.sessionKey,
+    toolContext: {
+      currentChannelProvider: params.currentProvider,
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadTs: params.currentThreadId,
+    },
+    deliveredPayload: params.deliveredPayload,
+  });
 }

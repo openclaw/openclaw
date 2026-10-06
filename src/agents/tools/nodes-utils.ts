@@ -1,11 +1,7 @@
-/**
- * Nodes lookup helpers.
- *
- * Loads paired nodes from Gateway and resolves requested/default nodes with legacy pair-list fallback.
- */
+import crypto from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../packages/gateway-protocol/src/system-run-execution-context.js";
+import { parseNodeList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
@@ -19,64 +15,6 @@ type DefaultNodeSelectionOptions = {
   fallback?: DefaultNodeFallback;
   preferLocalMac?: boolean;
 };
-
-function messageFromError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof (error as { message?: unknown }).message === "string"
-  ) {
-    return (error as { message: string }).message;
-  }
-  if (typeof error === "object" && error !== null) {
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
-function shouldFallbackToPairList(error: unknown): boolean {
-  const message = normalizeOptionalLowercaseString(messageFromError(error)) ?? "";
-  if (!message.includes("node.list")) {
-    return false;
-  }
-  return (
-    message.includes("unknown method") ||
-    message.includes("method not found") ||
-    message.includes("not implemented") ||
-    message.includes("unsupported")
-  );
-}
-
-async function loadNodes(opts: GatewayCallOptions, signal?: AbortSignal): Promise<NodeListNode[]> {
-  try {
-    const res = await callGatewayTool("node.list", opts, {}, { signal });
-    return parseNodeList(res);
-  } catch (error) {
-    if (!shouldFallbackToPairList(error)) {
-      throw error;
-    }
-    // Older gateways only expose paired-node state; preserve node tools until node.list exists.
-    const res = await callGatewayTool("node.pair.list", opts, {}, { signal });
-    const { paired } = parsePairingList(res);
-    return paired.map((n) => ({
-      nodeId: n.nodeId,
-      displayName: n.displayName,
-      platform: n.platform,
-      remoteIp: n.remoteIp,
-    }));
-  }
-}
 
 function isLocalMacNode(node: NodeListNode): boolean {
   return (
@@ -97,14 +35,11 @@ function compareDefaultNodeOrder(
   b: NodeListNode,
   recencyField: "connectedAtMs" | "lastSeenAtMs",
 ): number {
-  const recencyOrder = compareNewestTimestamp(a[recencyField], b[recencyField]);
-  if (recencyOrder !== 0) {
-    return recencyOrder;
-  }
-  return a.nodeId.localeCompare(b.nodeId);
+  return (
+    compareNewestTimestamp(a[recencyField], b[recencyField]) || a.nodeId.localeCompare(b.nodeId)
+  );
 }
 
-/** Selects the implicit node target when a tool call omits an explicit node query. */
 export function selectDefaultNodeFromList(
   nodes: NodeListNode[],
   options: DefaultNodeSelectionOptions = {},
@@ -139,8 +74,11 @@ export function selectDefaultNodeFromList(
   // Once the pool is known to be offline, stale connection timestamps must not
   // outrank the durable last-seen signal used to choose the wake target.
   const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
-  const ordered = [...candidates].toSorted((a, b) => compareDefaultNodeOrder(a, b, recencyField));
-  return ordered[0] ?? null;
+  return candidates.reduce<NodeListNode | null>(
+    (best, node) =>
+      best === null || compareDefaultNodeOrder(node, best, recencyField) < 0 ? node : best,
+    null,
+  );
 }
 
 function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
@@ -151,15 +89,35 @@ function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
   });
 }
 
-/** Lists Gateway nodes, falling back to paired-node records for older Gateway versions. */
 export async function listNodes(
   opts: GatewayCallOptions,
   signal?: AbortSignal,
 ): Promise<NodeListNode[]> {
-  return loadNodes(opts, signal);
+  // In-process calls share this build; every transported call replaces this from hello.
+  let supportsContext = true;
+  const res = await callGatewayTool(
+    "node.list",
+    opts,
+    {},
+    {
+      signal,
+      onHelloOk: (hello) => {
+        supportsContext =
+          hello.features.capabilities?.includes(SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY) === true;
+      },
+    },
+  );
+  // Older Gateways expose unknown node caps but strip the new field from system.run.
+  const nodes = parseNodeList(res);
+  if (!supportsContext) {
+    // Only transport can lack support; these records were decoded for this RPC.
+    for (const node of nodes) {
+      node.caps = node.caps?.filter((cap) => cap !== SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY);
+    }
+  }
+  return nodes;
 }
 
-/** Resolves a node id from an already-loaded node list using shared node matching rules. */
 export function resolveNodeIdFromList(
   nodes: NodeListNode[],
   query?: string,
@@ -173,97 +131,37 @@ export function resolveNodeIdFromList(
   });
 }
 
-/** Tool-supplied error wording for {@link resolveEligibleNodeFromList}. */
-export type EligibleNodeMessages = {
-  /** Explicit exact-id match that is not eligible; `eligibleIds` is the sorted list (or "none"). */
-  ineligibleExact: (query: string, eligibleIds: string) => string;
-  /** Display-name/query resolution among eligible nodes failed (unknown/ambiguous). */
-  nameResolveFailed: (reason: string, eligibleIds: string) => string;
-  /** No eligible node exists. */
-  noneEligible: () => string;
-  /** Several eligible nodes and no query to disambiguate. */
-  multipleEligible: (eligible: NodeListNode[]) => string;
-};
-
-function formatNodeIdList(nodes: NodeListNode[]): string {
-  return nodes.length > 0
-    ? nodes
-        .map((node) => node.nodeId)
-        .toSorted()
-        .join(", ")
-    : "none";
+export async function resolveAgentNodeId(opts: GatewayCallOptions, query: string) {
+  return (await resolveAgentNode(opts, query)).nodeId;
 }
 
-/**
- * Resolves a capability-gated node from the FULL node list, keeping control off
- * the wrong device. An exact node-id match (case-sensitive, then -insensitive to
- * mirror display-name matching) is checked against every node first, so an
- * ineligible id can never fall through to an eligible node that merely shares its
- * display name. Display-name/query resolution runs only among eligible nodes and
- * rejects ambiguity. Any tool that filters nodes by capability must resolve
- * through here rather than handing a pre-filtered list to {@link resolveNodeIdFromList}.
- */
-export function resolveEligibleNodeFromList(
-  nodes: NodeListNode[],
-  query: string | undefined,
-  isEligible: (node: NodeListNode) => boolean,
-  messages: EligibleNodeMessages,
-): NodeListNode {
-  const eligible = nodes.filter(isEligible);
-  const trimmed = query?.trim();
-  if (trimmed) {
-    const eligibleIds = formatNodeIdList(eligible);
-    const lowerTrimmed = trimmed.toLowerCase();
-    const exactNode =
-      nodes.find((node) => node.nodeId === trimmed) ??
-      nodes.find((node) => node.nodeId.toLowerCase() === lowerTrimmed);
-    if (exactNode) {
-      if (!isEligible(exactNode)) {
-        throw new Error(messages.ineligibleExact(trimmed, eligibleIds));
-      }
-      return exactNode;
-    }
-    try {
-      const nodeId = resolveNodeIdFromList(eligible, trimmed, false);
-      const match = eligible.find((node) => node.nodeId === nodeId);
-      if (match) {
-        return match;
-      }
-    } catch (err) {
-      throw new Error(messages.nameResolveFailed(formatErrorMessage(err), eligibleIds), {
-        cause: err,
-      });
-    }
-    throw new Error(`node not found: ${trimmed}`);
-  }
-  const only = eligible.length === 1 ? eligible.at(0) : undefined;
-  if (only) {
-    return only;
-  }
-  if (eligible.length === 0) {
-    throw new Error(messages.noneEligible());
-  }
-  throw new Error(messages.multipleEligible(eligible));
-}
-
-/** Loads nodes from the Gateway and resolves the requested or default node id. */
-export async function resolveAgentNodeId(
-  opts: GatewayCallOptions,
-  query?: string,
-  allowDefault = false,
-) {
-  return (await resolveAgentNode(opts, query, allowDefault)).nodeId;
-}
-
-/** Loads nodes from the Gateway and returns the requested or default node record. */
 export async function resolveAgentNode(
   opts: GatewayCallOptions,
-  query?: string,
-  allowDefault = false,
+  query: string,
 ): Promise<NodeListNode> {
-  const nodes = await loadNodes(opts);
-  return resolveNodeFromNodeList(nodes, query, {
-    allowDefault,
-    pickDefaultNode,
-  });
+  return resolveNodeFromNodeList(await listNodes(opts), query);
+}
+
+export async function invokeAgentNodeCommand(params: {
+  gatewayOpts: GatewayCallOptions;
+  nodeId: string;
+  command: string;
+  commandParams: Record<string, unknown>;
+  timeoutMs?: number;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}): Promise<unknown> {
+  const raw = await callGatewayTool<{ payload: unknown }>(
+    "node.invoke",
+    params.gatewayOpts,
+    {
+      nodeId: params.nodeId,
+      command: params.command,
+      params: params.commandParams,
+      timeoutMs: params.timeoutMs,
+      idempotencyKey: params.idempotencyKey ?? crypto.randomUUID(),
+    },
+    { signal: params.signal },
+  );
+  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : raw;
 }

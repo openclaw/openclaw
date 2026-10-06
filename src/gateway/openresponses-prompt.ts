@@ -1,8 +1,8 @@
-// Prompt adapter from OpenAI Responses input items to OpenClaw agent messages.
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
   IMAGE_ONLY_USER_MESSAGE,
+  renderConversationToolCall,
 } from "./agent-prompt.js";
 import type { ContentPart, ItemParam } from "./open-responses.schema.js";
 
@@ -15,10 +15,7 @@ function extractTextContent(content: string | ContentPart[]): string {
   }
   return content
     .map((part) => {
-      if (part.type === "input_text") {
-        return part.text;
-      }
-      if (part.type === "output_text") {
+      if (part.type === "input_text" || part.type === "output_text") {
         return part.text;
       }
       return "";
@@ -27,19 +24,14 @@ function extractTextContent(content: string | ContentPart[]): string {
     .join("\n");
 }
 
-function hasImageContent(content: string | ContentPart[]): boolean {
-  return typeof content !== "string" && content.some((part) => part.type === "input_image");
-}
-
-function hasFileContent(content: string | ContentPart[]): boolean {
-  return typeof content !== "string" && content.some((part) => part.type === "input_file");
-}
-
 function placeholderForActiveTurn(content: string | ContentPart[]): string {
-  if (hasImageContent(content)) {
+  if (typeof content === "string") {
+    return "";
+  }
+  if (content.some((part) => part.type === "input_image")) {
     return IMAGE_ONLY_USER_MESSAGE;
   }
-  if (hasFileContent(content)) {
+  if (content.some((part) => part.type === "input_file")) {
     return FILE_ONLY_USER_MESSAGE;
   }
   return "";
@@ -76,11 +68,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
   for (const item of input) {
     if (item.type === "message") {
       const content = extractTextContent(item.content).trim();
-      // Substitute a placeholder for an image-only or file-only active user turn
-      // so the turn is not dropped and the downstream agent command (which requires
-      // non-empty message text) still runs with the attached image or file context,
-      // matching /v1/chat/completions. Historical media-only turns stay skipped
-      // because their bytes are not replayed.
+      // Preserve media-only active turns; historical media bytes are not replayed.
       const body =
         content || (item === activeUserMessage ? placeholderForActiveTurn(item.content) : "");
       if (!body) {
@@ -98,6 +86,14 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
       conversationEntries.push({
         role: normalizedRole,
         entry: { sender, body },
+      });
+    } else if (item.type === "function_call") {
+      conversationEntries.push({
+        role: "assistant",
+        entry: {
+          sender: "Assistant",
+          body: renderConversationToolCall({ ...item, id: item.call_id ?? item.id }),
+        },
       });
     } else if (item.type === "function_call_output") {
       conversationEntries.push({

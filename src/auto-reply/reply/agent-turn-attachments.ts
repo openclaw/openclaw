@@ -1,10 +1,9 @@
-/** Resolves media attachments available to the current agent turn. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment as AgentTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { MediaAttachment } from "../../media-understanding/types.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import type { MsgContext } from "../templating.js";
 import {
   type RecentInboundHistoryImage,
@@ -12,25 +11,9 @@ import {
 } from "./history-media.js";
 import { hasInboundMedia } from "./inbound-media.js";
 
-const agentTurnMediaRuntimeLoader = createLazyImportLoader(
+export const loadAgentTurnMediaRuntime = createLazyPromise(
   () => import("./dispatch-acp-media.runtime.js"),
 );
-
-/** Lazily loads media runtime dependencies for agent-turn attachments. */
-export function loadAgentTurnMediaRuntime() {
-  return agentTurnMediaRuntimeLoader.load();
-}
-
-/** Runtime surface needed to resolve agent-turn media attachments. */
-type AgentTurnAttachmentRuntime = Pick<
-  Awaited<ReturnType<typeof loadAgentTurnMediaRuntime>>,
-  | "MediaAttachmentCache"
-  | "isImageAttachment"
-  | "isMediaUnderstandingSkipError"
-  | "normalizeAttachments"
-  | "resolveMediaAttachmentLocalRoots"
->;
-
 const AGENT_TURN_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const AGENT_TURN_ATTACHMENT_TIMEOUT_MS = 1_000;
 
@@ -41,13 +24,19 @@ function hasInboundHistoryMedia(ctx: MsgContext): boolean {
   );
 }
 
-/** Resolves image attachments for the current agent turn and recent image history. */
+/** Current-turn image indexes already represented by media-understanding text. */
+export function collectDescribedImageAttachmentIndexes(ctx: MsgContext): Set<number> {
+  return new Set(
+    ctx.MediaUnderstanding?.filter((output) => output.kind === "image.description").map(
+      (output) => output.attachmentIndex,
+    ) ?? [],
+  );
+}
+
 export async function resolveAgentTurnAttachments(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
-  runtime?: AgentTurnAttachmentRuntime;
   includeRecentHistoryImages?: boolean;
-  includeAttachmentIndexes?: boolean;
 }): Promise<{
   attachments: AgentTurnAttachment[];
   attachmentIndexes?: number[];
@@ -60,7 +49,7 @@ export async function resolveAgentTurnAttachments(params: {
   ) {
     return { attachments: [], recentHistoryImages: [] };
   }
-  const runtime = params.runtime ?? (await loadAgentTurnMediaRuntime());
+  const runtime = await loadAgentTurnMediaRuntime();
   const currentAttachments = runtime
     .normalizeAttachments(params.ctx)
     .map((attachment) =>
@@ -95,6 +84,9 @@ export async function resolveAgentTurnAttachments(params: {
       cfg: params.cfg,
       ctx: params.ctx,
     }),
+    // The scoped root set is authoritative: merging sessionless defaults back in would restore
+    // the shared workspace/sandbox parents for sandboxed sessions.
+    includeDefaultLocalPathRoots: false,
   });
   const results: AgentTurnAttachment[] = [];
   const resultIndexes: number[] = [];
@@ -141,16 +133,21 @@ export async function resolveAgentTurnAttachments(params: {
     }
   };
 
+  const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
   let currentImageResolved = false;
-  const hasCurrentMedia = currentAttachments.length > 0;
   const hasCurrentImageCandidate = currentAttachments.some(runtime.isImageAttachment);
   for (const attachment of currentAttachments) {
+    if (describedImageIndexes.has(attachment.index) && runtime.isImageAttachment(attachment)) {
+      // A described image satisfies this turn without rehydrating it or reviving image history.
+      currentImageResolved = true;
+      continue;
+    }
     currentImageResolved = (await resolveImageAttachment(attachment)) || currentImageResolved;
   }
   if (
     includeRecentHistoryImages &&
     !currentImageResolved &&
-    (!hasCurrentMedia || hasCurrentImageCandidate)
+    (currentAttachments.length === 0 || hasCurrentImageCandidate)
   ) {
     // History images are only used when the current turn did not already provide an image.
     for (const attachment of historyAttachments) {
@@ -159,12 +156,11 @@ export async function resolveAgentTurnAttachments(params: {
   }
   return {
     attachments: results,
-    ...(params.includeAttachmentIndexes ? { attachmentIndexes: resultIndexes } : {}),
+    attachmentIndexes: resultIndexes,
     recentHistoryImages: resolvedHistoryImages,
   };
 }
 
-/** Converts inline image content into ACP attachment payloads. */
 export function resolveInlineAgentImageAttachments(
   images: Array<{ data: string; mimeType: string }> | undefined,
 ): AgentTurnAttachment[] {

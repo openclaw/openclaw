@@ -24,11 +24,7 @@ struct CameraPTZStatusResponse: Encodable, Equatable, Sendable {
     let canHome: Bool
 }
 
-struct CameraPTZState: Encodable, Equatable, Sendable {
-    let panDegrees: Double?
-    let tiltDegrees: Double?
-    let zoomPercent: Double?
-}
+typealias CameraPTZState = OpenClawCameraPTZAxisValues
 
 struct CameraPTZControlResponse: Encodable, Equatable, Sendable {
     let deviceId: String
@@ -49,7 +45,7 @@ enum CameraPTZError: LocalizedError, Equatable {
         case let .invalidRequest(message):
             "INVALID_REQUEST: \(message)"
         case let .deviceNotFound(deviceId):
-            "CAMERA_DEVICE_NOT_FOUND: \(deviceId)"
+            "CAMERA_DEVICE_NOT_FOUND: \(deviceId); run camera.list for current device IDs"
         case let .unsupported(message):
             "CAMERA_PTZ_UNSUPPORTED: \(message)"
         case let .axisUnsupported(axis):
@@ -64,11 +60,8 @@ enum CameraPTZError: LocalizedError, Equatable {
     private static func describe(_ state: CameraPTZState?) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let state,
-              let data = try? encoder.encode(state),
-              let json = String(data: data, encoding: .utf8)
-        else { return "unavailable" }
-        return json
+        guard let state, let data = try? encoder.encode(state) else { return "unavailable" }
+        return String(bytes: data, encoding: .utf8)!
     }
 }
 
@@ -136,6 +129,7 @@ protocol CameraPTZControlling: AnyObject {
 
 protocol CameraPTZBackend: Sendable {
     func open(deviceId: String) throws -> any CameraPTZControlling
+    func withCaptureSession<T>(deviceId: String, body: () throws -> T) throws -> T
 }
 
 actor CameraPTZService: CameraPTZServicing {
@@ -160,28 +154,32 @@ actor CameraPTZService: CameraPTZServicing {
 
     func status(deviceId: String) throws -> CameraPTZStatusResponse {
         let deviceId = try self.resolveDeviceId(deviceId)
-        return try self.withController(deviceId: deviceId) { controller in
-            try Self.makeStatusResponse(deviceId: deviceId, raw: controller.status())
+        return try self.backend.withCaptureSession(deviceId: deviceId) {
+            try self.withController(deviceId: deviceId) { controller in
+                try Self.makeStatusResponse(deviceId: deviceId, raw: controller.status())
+            }
         }
     }
 
     func control(_ params: OpenClawCameraPTZControlParams) throws -> CameraPTZControlResponse {
         let deviceId = try self.resolveDeviceId(params.deviceId)
         let axes = try Self.validateControl(params)
-        return try self.withController(deviceId: deviceId) { controller in
-            let status = try Self.executableStatus(controller.status())
-            let plan = switch params.operation {
-            case .home: try Self.planHome(status: status)
-            case .set, .move: try Self.planMotion(
-                    status: status,
-                    operation: params.operation,
-                    axes: axes)
+        return try self.backend.withCaptureSession(deviceId: deviceId) {
+            try self.withController(deviceId: deviceId) { controller in
+                let status = try Self.executableStatus(controller.status())
+                let plan = switch params.operation {
+                case .home: try Self.planHome(status: status)
+                case .set, .move: try Self.planMotion(
+                        status: status,
+                        operation: params.operation,
+                        axes: axes)
+                }
+                return try self.execute(
+                    plan: plan,
+                    controller: controller,
+                    deviceId: deviceId,
+                    operation: params.operation)
             }
-            return try Self.execute(
-                plan: plan,
-                controller: controller,
-                deviceId: deviceId,
-                operation: params.operation)
         }
     }
 
@@ -277,33 +275,18 @@ actor CameraPTZService: CameraPTZServicing {
             guard let pan = status.pan, let tilt = status.tilt else {
                 throw CameraPTZError.axisUnsupported(axes.panDegrees != nil ? "pan" : "tilt")
             }
-            let appliedPan: Int32
-            if let panDegrees = axes.panDegrees {
-                let requested = Self.requestedDegrees(
-                    value: panDegrees,
-                    current: Self.arcsecondsToDegrees(pan.current),
-                    operation: operation)
-                appliedPan = pan.range.normalize(Self.degreesToArcseconds(requested))
-                if Self.valuesDiffer(Self.arcsecondsToDegrees(appliedPan), requested) {
-                    adjusted.append("panDegrees")
+            func planAngle(_ value: Double?, axis: CameraPTZRawAxisStatus, name: String) -> Int32 {
+                guard let value else { return axis.current }
+                let requested = operation == .move ? Self.arcsecondsToDegrees(axis.current) + value : value
+                let applied = axis.range.normalize(Self.degreesToArcseconds(requested))
+                if Self.valuesDiffer(Self.arcsecondsToDegrees(applied), requested) {
+                    adjusted.append(name)
                 }
-            } else {
-                appliedPan = pan.current
+                return applied
             }
-            let appliedTilt: Int32
-            if let tiltDegrees = axes.tiltDegrees {
-                let requested = Self.requestedDegrees(
-                    value: tiltDegrees,
-                    current: Self.arcsecondsToDegrees(tilt.current),
-                    operation: operation)
-                appliedTilt = tilt.range.normalize(Self.degreesToArcseconds(requested))
-                if Self.valuesDiffer(Self.arcsecondsToDegrees(appliedTilt), requested) {
-                    adjusted.append("tiltDegrees")
-                }
-            } else {
-                appliedTilt = tilt.current
-            }
-            plannedPanTilt = (appliedPan, appliedTilt)
+            plannedPanTilt = (
+                planAngle(axes.panDegrees, axis: pan, name: "panDegrees"),
+                planAngle(axes.tiltDegrees, axis: tilt, name: "tiltDegrees"))
         }
 
         var plannedZoom: Int32?
@@ -332,15 +315,7 @@ actor CameraPTZService: CameraPTZServicing {
         return WritePlan(panTilt: panTilt, zoom: status.zoom?.range.default, adjusted: [])
     }
 
-    private static func requestedDegrees(
-        value: Double,
-        current: Double,
-        operation: OpenClawCameraPTZOperation) -> Double
-    {
-        operation == .move ? current + value : value
-    }
-
-    private static func execute(
+    private func execute(
         plan: WritePlan,
         controller: any CameraPTZControlling,
         deviceId: String,
@@ -361,28 +336,72 @@ actor CameraPTZService: CameraPTZServicing {
             }
         } catch {
             guard !applied.isEmpty else { throw error }
-            throw self.partialError(applied: applied, controller: controller, failure: error)
+            controller.close()
+            throw self.partialError(applied: applied, deviceId: deviceId, failure: error)
         }
 
+        // A writing UVC connection can echo its pending setpoint instead of the committed camera position.
+        controller.close()
         let finalStatus: CameraPTZRawStatus
+        var statusFailure: Error?
         do {
-            finalStatus = try self.executableStatus(controller.status())
+            finalStatus = try self.withController(deviceId: deviceId) {
+                do {
+                    return try Self.executableStatus($0.status())
+                } catch {
+                    statusFailure = error
+                    throw error
+                }
+            }
         } catch {
-            throw self.partialError(applied: applied, controller: controller, failure: error)
+            throw self.partialError(applied: applied, deviceId: deviceId, failure: statusFailure ?? error)
+        }
+
+        let requestedAxes: [(String, Int32?, CameraPTZRawAxisStatus?)] = [
+            ("panDegrees", plan.panTilt?.pan, finalStatus.pan),
+            ("tiltDegrees", plan.panTilt?.tilt, finalStatus.tilt),
+            ("zoomPercent", plan.zoom, finalStatus.zoom),
+        ]
+        var mismatches: [String] = []
+        for (name, target, axis) in requestedAxes {
+            guard let target else { continue }
+            guard let axis else {
+                mismatches.append("\(name) requested=\(target) observed=unavailable")
+                continue
+            }
+            guard abs(Int64(axis.current) - Int64(target)) > Int64(max(0, axis.range.step)) else {
+                continue
+            }
+            let requested = name == "zoomPercent"
+                ? axis.range.percent(of: target)
+                : Self.arcsecondsToDegrees(target)
+            let observed = name == "zoomPercent"
+                ? axis.range.percent(of: axis.current)
+                : Self.arcsecondsToDegrees(axis.current)
+            mismatches.append("\(name) requested=\(requested) observed=\(observed)")
+        }
+        guard mismatches.isEmpty else {
+            throw CameraPTZError.partial(
+                applied: applied,
+                state: Self.makeState(finalStatus),
+                failure: mismatches.joined(separator: "; ") +
+                    "; confirm a video stream reaches the camera and disable on-camera AI framing/tracking")
         }
         return CameraPTZControlResponse(
             deviceId: deviceId,
             operation: operation,
-            state: self.makeState(finalStatus),
+            state: Self.makeState(finalStatus),
             adjusted: plan.adjusted)
     }
 
-    private static func partialError(
+    private func partialError(
         applied: [String],
-        controller: any CameraPTZControlling,
+        deviceId: String,
         failure: Error) -> CameraPTZError
     {
-        let state = try? self.makeState(self.executableStatus(controller.status()))
+        let state = try? self.withController(deviceId: deviceId) {
+            try Self.makeState(Self.executableStatus($0.status()))
+        }
         return .partial(
             applied: applied,
             state: state,

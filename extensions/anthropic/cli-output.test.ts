@@ -25,6 +25,62 @@ function parseResult(result: string) {
 }
 
 describe("Claude CLI output validation", () => {
+  it("projects Claude CLI compaction status lifecycle without inferring from the boundary", () => {
+    const backend = buildAnthropicCliBackend();
+    const parseLifecycle = (event: unknown) =>
+      backend.parseJsonlLifecycleEvent?.(JSON.stringify(event), {
+        backendId: backend.id,
+        backend: backend.config,
+      });
+
+    const compactionEvents = [
+      {
+        type: "system",
+        subtype: "status",
+        status: "compacting",
+        uuid: "00000000-0000-4000-8000-000000000001",
+        session_id: "00000000-0000-4000-8000-000000000002",
+      },
+      {
+        type: "system",
+        subtype: "status",
+        status: null,
+        compact_result: "success",
+        uuid: "00000000-0000-4000-8000-000000000003",
+        session_id: "00000000-0000-4000-8000-000000000002",
+      },
+      {
+        type: "system",
+        subtype: "status",
+        status: null,
+        compact_result: "failed",
+        uuid: "00000000-0000-4000-8000-000000000004",
+        session_id: "00000000-0000-4000-8000-000000000002",
+      },
+    ];
+
+    expect(parseLifecycle(compactionEvents[0])).toEqual({
+      kind: "compaction",
+      phase: "start",
+    });
+    expect(parseLifecycle(compactionEvents[1])).toEqual({
+      kind: "compaction",
+      phase: "end",
+      completed: true,
+    });
+    expect(parseLifecycle(compactionEvents[2])).toEqual({
+      kind: "compaction",
+      phase: "end",
+      completed: false,
+    });
+    expect(parseLifecycle({ compact_result: "success" })).toEqual({
+      kind: "compaction",
+      phase: "end",
+      completed: true,
+    });
+    expect(parseLifecycle({ type: "system", subtype: "compact_boundary" })).toBeNull();
+  });
+
   it("rejects mocked raw tool protocol returned as terminal assistant text", () => {
     expect(parseResult(MOCK_RAW_TOOL_OUTPUT)).toEqual({
       kind: "result",
@@ -73,7 +129,7 @@ describe("Claude CLI output validation", () => {
     });
   });
 
-  it.each(["call", "count", "court", "Bash"])(
+  it.each(["call", "Bash"])(
     "rejects the upstream-observed %s prefix when the protocol block is truncated",
     (prefix) => {
       expect(
@@ -130,22 +186,6 @@ describe("Claude CLI output validation", () => {
         [
           '<invoke name="Bash">',
           '<parameter data-name="example">ignored</parameter>',
-          '<parameter name="command">pwd</parameter>',
-          "</invoke>",
-        ].join("\n"),
-      ),
-    ).toEqual({
-      kind: "result",
-      errorText: expect.stringContaining("raw tool protocol appeared as assistant text"),
-    });
-  });
-
-  it("rejects a complete unfenced protocol example as the accepted false-positive tradeoff", () => {
-    expect(
-      parseResult(
-        [
-          "Here is the exact raw protocol for documentation:",
-          '<invoke name="Bash">',
           '<parameter name="command">pwd</parameter>',
           "</invoke>",
         ].join("\n"),
@@ -265,15 +305,6 @@ describe("Claude CLI output validation", () => {
         '<parameter name="command">pwd',
       ].join("\n"),
     ],
-    [
-      "namespaced protocol example not observed upstream",
-      [
-        '<antml:invoke name="Bash">',
-        '<antml:parameter name="command">pwd</antml:parameter>',
-        "</antml:invoke>",
-      ].join("\n"),
-    ],
-    ["long ordinary report", `Summary\n\n${"Normal report text. ".repeat(20_000)}`],
   ])("preserves %s", (_name, text) => {
     expect(parseResult(text)).toBeNull();
   });

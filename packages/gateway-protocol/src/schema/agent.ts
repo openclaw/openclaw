@@ -48,6 +48,9 @@ const AgentInternalEventSchema = closedObject({
   status: Type.String({ enum: [...AGENT_INTERNAL_EVENT_STATUSES] }),
   statusLabel: Type.String(),
   result: Type.String(),
+  // The producer records placeholder substitution independently of its display text.
+  noVisibleResult: Type.Optional(Type.Boolean()),
+  modelRouteChange: Type.Optional(Type.String()),
   attachments: Type.Optional(Type.Array(AgentGeneratedAttachmentSchema)),
   mediaUrls: Type.Optional(Type.Array(Type.String())),
   statsLine: Type.Optional(Type.String()),
@@ -65,6 +68,13 @@ export const AgentEventSchema = closedObject({
   data: Type.Record(Type.String(), Type.Unknown()),
 });
 
+const MessageActionReplyModeSchema = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("first"),
+  Type.Literal("all"),
+  Type.Literal("batched"),
+]);
+
 /** Caller-supplied routing hints. Authorization must use trusted runtime context. */
 const MessageActionToolContextSchema = closedObject({
   currentChannelId: Type.Optional(Type.String()),
@@ -73,14 +83,7 @@ const MessageActionToolContextSchema = closedObject({
   currentChannelProvider: Type.Optional(Type.String()),
   currentThreadTs: Type.Optional(Type.String()),
   currentMessageId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
-  replyToMode: Type.Optional(
-    Type.Union([
-      Type.Literal("off"),
-      Type.Literal("first"),
-      Type.Literal("all"),
-      Type.Literal("batched"),
-    ]),
-  ),
+  replyToMode: Type.Optional(MessageActionReplyModeSchema),
   hasRepliedRef: Type.Optional(
     closedObject({
       value: Type.Boolean(),
@@ -90,11 +93,21 @@ const MessageActionToolContextSchema = closedObject({
   skipCrossContextDecoration: Type.Optional(Type.Boolean()),
 });
 
+const MessageActionReplyFactsSchema = Type.Union([
+  closedObject({ replyToId: NonEmptyString, source: Type.Literal("explicit") }),
+  closedObject({
+    replyToId: NonEmptyString,
+    source: Type.Literal("implicit"),
+    mode: Type.Union([Type.Literal("first"), Type.Literal("all")]),
+  }),
+]);
+
 /** Request to execute a channel message action through a configured adapter. */
 export const MessageActionParamsSchema = closedObject({
   channel: NonEmptyString,
   action: NonEmptyString,
   params: Type.Record(Type.String(), Type.Unknown()),
+  reply: Type.Optional(MessageActionReplyFactsSchema),
   accountId: Type.Optional(Type.String()),
   requesterAccountId: Type.Optional(Type.String()),
   requesterSenderId: Type.Optional(Type.String()),
@@ -247,12 +260,7 @@ export const ConversationTurnResultSchema = Type.Union([
     channel: NonEmptyString,
     messageId: Type.Optional(NonEmptyString),
     correlationPersisted: Type.Boolean(),
-    status: Type.Union([
-      Type.Literal("sent"),
-      Type.Literal("queued"),
-      Type.Literal("suppressed"),
-      Type.Literal("unknown"),
-    ]),
+    status: ConversationSendResultSchema.properties.status,
     error: NonEmptyString,
   }),
 ]);
@@ -289,6 +297,10 @@ export const AgentParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
   // Backend-owned continuations can bind work to an already-admitted transcript.
   expectedExistingSessionId: Type.Optional(NonEmptyString),
+  // Null binds the original generation before a lifecycle revision was assigned.
+  expectedExistingSessionLifecycleRevision: Type.Optional(
+    Type.Union([NonEmptyString, Type.Null()]),
+  ),
   thinking: Type.Optional(Type.String()),
   deliver: Type.Optional(Type.Boolean()),
   attachments: Type.Optional(Type.Array(Type.Unknown())),

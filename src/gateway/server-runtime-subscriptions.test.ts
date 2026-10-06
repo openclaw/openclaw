@@ -1,47 +1,49 @@
 // Tests for gateway runtime subscription wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createChannelParticipantAdmissionEvidence } from "../../test/helpers/channel-admission-evidence.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  configureExecutionIdentityAdmissionSink,
-  enqueueExecutionIdentityContextAtAdmission,
-  hasExecutionIdentityAdmissionSink,
-} from "../audit/execution-identity-admission.js";
-import { consumeChannelAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
-import type { CronServiceState } from "../cron/service/state.js";
-import { tryFinishCronTaskRunWithoutHistory } from "../cron/service/task-runs.js";
-import {
-  emitAgentAuditEvent,
+  type AgentEventPayload,
   emitAgentEvent,
+  emitAgentEventForOwner,
+  getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
+import {
+  claimAgentRunContext,
+  getAgentRunContextOwnerStatus as ownerStatus,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
+import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import {
+  PROGRESS_CARD_REFRESH_SOURCE_TOOL,
+  progressCardRefreshRunProjection,
+} from "../sessions/input-provenance.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
-  emitSessionTranscriptUpdate,
-  type InternalSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+  waitForChatAbortControllerRemoval,
+  waitForChatAbortTerminalPersistence,
+} from "./chat-abort-lifecycle-internal.js";
+import { abortChatRunById, removeChatAbortControllerEntry } from "./chat-abort.js";
+import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
+import type { AgentEventHandlerOptions } from "./server-chat.js";
+import { registerActivitySummaryPublicationTests } from "./server-runtime-subscriptions.activity-summary.test-support.js";
 import {
-  createTaskRecord,
-  markTaskLostById,
-  markTaskTerminalById,
-  recordTaskProgressByRunId,
-} from "../tasks/task-registry.js";
-import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
-import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-  createToolEventRecipientRegistry,
-} from "./server-chat-state.js";
-import type { TaskEventPayload } from "./server-methods/task-summary.js";
-import { TerminalSessionManager } from "./terminal/session-manager.js";
-import {
-  baseOpenRequest,
-  makeFakePty,
-  taskAgentOwner,
-} from "./terminal/session-manager.test-helpers.js";
+  createSubscriptionTestFixture,
+  lifecycleState,
+  readLifecycleState,
+  registerSubscriptionChatRun,
+  registerAuditSubscriptionTests,
+} from "./server-runtime-subscriptions.test-support.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -50,86 +52,116 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-const warn = vi.fn();
-const mockLog: SubsystemLogger = {
-  subsystem: "gateway-test",
-  isEnabled: () => true,
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn,
-  error: vi.fn(),
-  fatal: vi.fn(),
-  raw: vi.fn(),
-  child: () => mockLog,
-};
+const { warn, createParams } = createSubscriptionTestFixture();
 
 const auditTestState = vi.hoisted(() => ({
-  enabled: true,
-  messageMode: "off" as "off" | "direct" | "all",
   created: 0,
   recorded: 0,
+  messages: 0,
   identityRecorded: 0,
   decisionRecorded: 0,
-  executionIdentityEnabled: false,
   stopped: 0,
 }));
 const agentEventHandlerMocks = vi.hoisted(() => ({
   create: vi.fn(),
+  persistLifecycle: vi.fn<
+    typeof import("./session-lifecycle-state.js").persistGatewaySessionLifecycleEvent
+  >(async () => {}),
+  resolveSession: vi.fn(() => ({ sessionKey: "agent:main:main", agentId: "main" })),
 }));
 const transcriptBroadcastMocks = vi.hoisted(() => ({
   useActualHandler: false,
-  readMessageCount: vi.fn(),
+  readMessageById: vi.fn(),
 }));
-const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+const runtimeConfigState = vi.hoisted(() => ({ value: {} as OpenClawConfig }));
+const observeActivitySummary = vi.hoisted(() =>
+  vi.fn<
+    (
+      options: Parameters<
+        typeof import("./session-activity-summaries.js").createSessionActivitySummaries
+      >[0],
+    ) => void
+  >(),
+);
+
+vi.mock("./session-activity-summaries.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-activity-summaries.js")>();
+  return {
+    ...actual,
+    createSessionActivitySummaries: (
+      options: Parameters<typeof actual.createSessionActivitySummaries>[0],
+    ) => {
+      observeActivitySummary(options);
+      return actual.createSessionActivitySummaries(options);
+    },
+  };
+});
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => runtimeConfigState.value,
 }));
 
-vi.mock("../audit/audit-config.js", () => ({
-  isAuditLedgerEnabled: () => auditTestState.enabled,
-  isExecutionIdentityCollectionEnabled: () => auditTestState.executionIdentityEnabled,
-  resolveAuditMessageMode: () => auditTestState.messageMode,
-}));
-
-vi.mock("../audit/audit-recorder.js", () => ({
-  createAuditEventRecorder: () => {
-    auditTestState.created += 1;
-    return {
-      record: vi.fn(() => {
-        auditTestState.recorded += 1;
-      }),
-      recordTool: vi.fn(),
-      recordMessage: vi.fn(),
-      recordExecutionIdentity: vi.fn(() => {
-        auditTestState.identityRecorded += 1;
-        return true;
-      }),
-      recordExecutionDecision: vi.fn(() => {
-        auditTestState.decisionRecorded += 1;
-        return true;
-      }),
-      stop: vi.fn(async () => {
-        auditTestState.stopped += 1;
-      }),
-    };
-  },
-}));
+vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../audit/audit-recorder.js")>();
+  return {
+    createAuditEventRecorder: (options: Parameters<typeof actual.createAuditEventRecorder>[0]) => {
+      auditTestState.created += 1;
+      return actual.createAuditEventRecorder({
+        ...options,
+        writer: {
+          ready: Promise.resolve(),
+          record: (event) => {
+            if (event.kind === "message") {
+              auditTestState.messages += 1;
+            } else {
+              auditTestState.recorded += 1;
+            }
+            return true;
+          },
+          recordExecutionIdentity: () => {
+            auditTestState.identityRecorded += 1;
+            return true;
+          },
+          recordExecutionDecision: () => {
+            auditTestState.decisionRecorded += 1;
+            return true;
+          },
+          recordExecutionDecisionWork: () => true,
+          stop: async () => {
+            auditTestState.stopped += 1;
+          },
+        },
+      });
+    },
+  };
+});
 
 vi.mock("./server-chat.js", () => ({
   createAgentEventHandler: (...args: unknown[]) => agentEventHandlerMocks.create(...args),
 }));
 
+// mock-isolation: Subscription custody tests control persistence without a database.
+vi.mock("./session-lifecycle-state.js", () => ({
+  persistGatewaySessionLifecycleEvent: agentEventHandlerMocks.persistLifecycle,
+  prepareGatewaySessionLifecycleEvent:
+    (
+      params: Parameters<
+        typeof import("./session-lifecycle-state.js").persistGatewaySessionLifecycleEvent
+      >[0],
+    ) =>
+    () =>
+      agentEventHandlerMocks.persistLifecycle(params),
+}));
+
 vi.mock("./server-session-key.js", () => ({
-  resolveSessionKeyForRun: () => "agent:main:main",
+  resolveSessionForRun: agentEventHandlerMocks.resolveSession,
 }));
 
 vi.mock("./session-transcript-readers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-transcript-readers.js")>();
   return {
     ...actual,
-    readSessionMessageCountAsync: transcriptBroadcastMocks.readMessageCount,
+    readSessionMessageByIdAsync: transcriptBroadcastMocks.readMessageById,
   };
 });
 
@@ -154,45 +186,28 @@ vi.mock("./server-session-events.js", async (importOriginal) => {
 });
 
 const { startGatewayEventSubscriptions } = await import("./server-runtime-subscriptions.js");
-type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
 
-function createParams(): SubscriptionParams {
-  return {
-    log: mockLog,
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    nodeSendToSession: vi.fn(),
-    agentRunSeq: new Map(),
-    chatRunState: createChatRunState(),
-    toolEventRecipients: createToolEventRecipientRegistry(),
-    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-    chatAbortControllers: new Map(),
-    restartRecoveryCandidates: new Map(),
-    terminalSessions: { closeAgentSessions: vi.fn() },
-  };
-}
+type LifecycleTransition = { state: string; lifecycle?: ReturnType<typeof readLifecycleState> };
 
 describe("startGatewayEventSubscriptions", () => {
   let unsubs: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    auditTestState.enabled = true;
-    auditTestState.messageMode = "off";
     auditTestState.created = 0;
     auditTestState.recorded = 0;
+    auditTestState.messages = 0;
     auditTestState.identityRecorded = 0;
     auditTestState.decisionRecorded = 0;
-    auditTestState.executionIdentityEnabled = false;
     auditTestState.stopped = 0;
     transcriptBroadcastMocks.useActualHandler = false;
-    transcriptBroadcastMocks.readMessageCount.mockReset();
+    transcriptBroadcastMocks.readMessageById.mockReset();
     runtimeConfigState.value = {};
+    agentEventHandlerMocks.persistLifecycle.mockReset().mockResolvedValue(undefined);
+    agentEventHandlerMocks.resolveSession.mockClear();
     agentEventHandlerMocks.create.mockReset().mockImplementation(() => {
       throw new Error("server-chat lazy load failure");
     });
-    installInMemoryTaskRegistryRuntime();
   });
 
   afterEach(async () => {
@@ -201,97 +216,165 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs?.heartbeatUnsub();
     unsubs?.transcriptUnsub();
     unsubs?.lifecycleUnsub();
-    void unsubs?.taskUnsub();
     resetAgentEventsForTest();
-    resetTaskRegistryForTests({ persist: false });
     configureExecutionIdentityAdmissionSink(() => false)();
   });
 
-  it("records audit events by default and stops the recorder on unsubscribe", async () => {
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({
-      runId: "enabled-audit",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    expect(auditTestState.recorded).toBe(1);
-    expect(hasExecutionIdentityAdmissionSink()).toBe(true);
-    expect(
-      enqueueExecutionIdentityContextAtAdmission(
-        {
-          runId: "gateway-admission",
-          agentId: "main",
-          ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
-          runtime: { kind: "embedded" },
+  it.each([
+    "same-id reset",
+    "replacement",
+    "missing row",
+    "missing row without ID",
+    "missing projection",
+  ])("does not attach a successor row after a queued %s", async (change) => {
+    const prepared = createDeferred();
+    const original = { sessionId: "original" };
+    let current: typeof original | undefined = change.startsWith("missing row")
+      ? undefined
+      : original;
+    let admitted = change !== "missing projection";
+    const projection = {
+      capture: () => current,
+      ensureMaterialized: () => prepared.promise,
+      withPreparedExactRows: async (_queries: unknown, consume: (read: unknown) => unknown) => {
+        await prepared.promise;
+        return { kind: "complete" as const, value: consume(undefined) };
+      },
+      isCurrent: (record: typeof original) => record === current,
+      snapshot: () => ({ row: current ? { key: "agent:main:queued", ...current } : null }),
+    } as unknown as SessionRowProjection;
+    const delivered = vi.fn();
+    agentEventHandlerMocks.create.mockImplementation((options: AgentEventHandlerOptions) =>
+      Object.assign(
+        (event: AgentEventPayload) => {
+          delivered(
+            options.loadGatewaySessionLifecycleSnapshotForEvent?.("agent:main:queued", {
+              agentId: "main",
+              ownerEvent: event,
+            }).row,
+          );
         },
-        { enabled: true, runtimeInstanceId: "runtime-1" },
-      )?.accepted,
-    ).toBe(true);
-    expect(auditTestState.identityRecorded).toBe(1);
-    await unsubs.agentUnsub();
-    expect(auditTestState.stopped).toBe(1);
-    expect(hasExecutionIdentityAdmissionSink()).toBe(false);
-  });
-
-  it("owns channel evidence collection for the configured gateway lifecycle", async () => {
-    auditTestState.executionIdentityEnabled = true;
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    const evidence = createChannelParticipantAdmissionEvidence({
-      channelId: "test",
-      participantId: "person-1",
-    });
-    expect(evidence).toBeDefined();
-
-    await unsubs.agentUnsub();
-    expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({ ingressState: "unknown" });
-    expect(
-      createChannelParticipantAdmissionEvidence({
-        channelId: "test",
-        participantId: "person-2",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("keeps retention maintenance but creates no producers when audit.enabled is false", async () => {
-    auditTestState.enabled = false;
-    unsubs = startGatewayEventSubscriptions(createParams());
-
-    expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({
-      runId: "disabled-private",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
+        { dispose: vi.fn() },
+      ),
+    );
+    unsubs = startGatewayEventSubscriptions({
+      ...createParams(),
+      getSessionRowProjection: () => (admitted ? projection : undefined),
     });
     emitAgentEvent({
-      runId: "disabled-public",
+      runId: "queued-owner",
+      agentId: "main",
+      sessionKey: "agent:main:queued",
+      sessionId: change === "missing row without ID" ? undefined : "original",
       stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
+      data: { phase: "start", startedAt: 1 },
     });
-    expect(auditTestState.recorded).toBe(0);
-    await waitForFast(() => expect(warn).toHaveBeenCalledOnce());
-    warn.mockClear();
-    // Disabled wiring must still unsubscribe cleanly.
-    await unsubs.agentUnsub();
-    expect(auditTestState.stopped).toBe(1);
+    current = { sessionId: change === "replacement" ? "successor" : "original" };
+    admitted = true;
+    prepared.resolve();
+    await waitForFast(() => expect(delivered).toHaveBeenCalledWith(null));
+  });
+
+  registerActivitySummaryPublicationTests(
+    (projection, signal) => {
+      const params = createParams();
+      unsubs = startGatewayEventSubscriptions({
+        ...params,
+        signal: signal ?? params.signal,
+        getSessionRowProjection: () => projection,
+      });
+      return { params, unsubs };
+    },
+    () => observeActivitySummary.mock.calls[0]?.[0].onChanged,
+  );
+
+  it("broadcasts suspension immediately and stops with the gateway lifecycle", () => {
+    resetGatewayWorkAdmission();
+    const params = createParams();
+    unsubs = startGatewayEventSubscriptions(params);
+    try {
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      suspension?.drain();
+      suspension?.commit();
+      suspension?.release();
+      expect(vi.mocked(params.broadcast).mock.calls).toEqual([
+        ["gateway.suspension", { phase: "preparing" }],
+        ["gateway.suspension", { phase: "draining" }],
+        ["gateway.suspension", { phase: "prepared" }],
+        ["gateway.suspension", { phase: "accepting" }],
+      ]);
+      unsubs.lifecycleUnsub();
+      vi.mocked(params.broadcast).mockClear();
+      tryBeginGatewaySuspendAdmission(() => {})?.rollback();
+      expect(params.broadcast).not.toHaveBeenCalled();
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  registerAuditSubscriptionTests({
+    start: () => {
+      unsubs = startGatewayEventSubscriptions(createParams());
+      return unsubs;
+    },
+    runtimeConfigState,
+    auditTestState,
+    warn,
   });
 
   it("logs lazy agent event handler failures", async () => {
+    const runId = "run-claimed-terminal";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const claimId = claimAgentRunContext(
+      runId,
+      {
+        lifecycleGeneration,
+        sessionId: "session-1",
+      },
+      { exclusive: true, ownsContext: true, trackOwner: true },
+    );
+    if (!claimId) {
+      throw new Error("expected terminal event claim");
+    }
+    agentEventHandlerMocks.resolveSession.mockReturnValueOnce({
+      sessionKey: "global",
+      agentId: "research",
+    });
+    agentEventHandlerMocks.persistLifecycle.mockRejectedValue(new Error("terminal write rejected"));
     unsubs = startGatewayEventSubscriptions(createParams());
 
-    emitAgentEvent({
-      runId: "run-1",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
+    emitAgentEventForOwner(
+      {
+        runId,
+        sessionId: "session-1",
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+      },
+      claimId,
+    );
 
-    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(2));
+    expect(agentEventHandlerMocks.persistLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "research",
+        assertCommitAllowed: expect.any(Function),
+      }),
+    );
+    expect(agentEventHandlerMocks.resolveSession).toHaveBeenCalledWith(runId, {
+      agentId: undefined,
+      projection: undefined,
+    });
     expect(warn).toHaveBeenCalledWith(
       "Agent event dispatch failed",
-      expect.objectContaining({ runId: "run-1", stream: "lifecycle" }),
+      expect.objectContaining({ runId, stream: "lifecycle" }),
     );
+    expect(warn).toHaveBeenCalledWith(
+      "Terminal session persistence failed",
+      expect.objectContaining({ runId }),
+    );
+    expect(ownerStatus(runId, claimId, lifecycleGeneration)).toBe("clear-requested");
+    releaseAgentRunContext(runId, claimId);
   });
 
   it("disposes a loaded agent event handler on unsubscribe", async () => {
@@ -346,27 +429,522 @@ describe("startGatewayEventSubscriptions", () => {
     ).toEqual({ active: true, runIds: ["run-ops"] });
   });
 
-  it("logs transcript handler failures", async () => {
-    unsubs = startGatewayEventSubscriptions(createParams());
+  it("drives a registered chat run through the terminal persistence transition table", async () => {
+    const runId = "run-lifecycle-table";
+    const sessionKey = "agent:main:main";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const params = createParams();
+    const registration = registerSubscriptionChatRun(params, {
+      runId,
+      sessionId: "session-lifecycle-table",
+      sessionKey,
+      lifecycleGeneration,
+    });
+    const entry = registration.entry;
+    const transitions: LifecycleTransition[] = [
+      { state: "Registered", lifecycle: readLifecycleState(entry) },
+    ];
+    agentEventHandlerMocks.create.mockReturnValue(Object.assign(vi.fn(), { dispose: vi.fn() }));
+    unsubs = startGatewayEventSubscriptions(params);
 
-    emitSessionTranscriptUpdate({
-      sessionFile: "/tmp/sess.jsonl",
+    emitAgentEvent({
+      runId,
+      lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    transitions.push({ state: "Start-normalized", lifecycle: readLifecycleState(entry) });
+    await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
+
+    emitAgentEvent({
+      runId,
+      lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "error", error: "retryable provider failure", endedAt: 2_000 },
+    });
+    emitAgentEvent({
+      runId,
+      lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 2_500 },
+    });
+    expect(agentEventHandlerMocks.persistLifecycle).not.toHaveBeenCalled();
+
+    const terminalPersistence = createDeferred();
+    agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
+
+    emitAgentEvent({
+      runId,
+      lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "end", endedAt: 3_000 },
+    });
+    const ownedPersistence = entry.projectSessionTerminalPersistence;
+    transitions.push({ state: "Persisting", lifecycle: readLifecycleState(entry) });
+
+    try {
+      expect(ownedPersistence).toBeInstanceOf(Promise);
+      terminalPersistence.resolve();
+      await waitForChatAbortTerminalPersistence(entry);
+      expect(entry.projectSessionTerminalPersisted).toBe(true);
+    } finally {
+      terminalPersistence.resolve();
+      await waitForChatAbortTerminalPersistence(entry);
+    }
+    transitions.push({ state: "Persisted", lifecycle: readLifecycleState(entry) });
+
+    registration.cleanup();
+    transitions.push({ state: "Removed" });
+    expect(params.chatAbortControllers.has(runId)).toBe(false);
+    expect(transitions).toEqual([
+      { state: "Registered", lifecycle: lifecycleState(true) },
+      { state: "Start-normalized", lifecycle: lifecycleState(true, false) },
+      {
+        state: "Persisting",
+        lifecycle: lifecycleState(false, true, 3_000, ownedPersistence, false),
+      },
+      { state: "Persisted", lifecycle: lifecycleState(false, false, 3_000, undefined, true) },
+      { state: "Removed" },
+    ]);
+  });
+
+  it.each(
+    ["removed", "replacement", "retired replacement", "newer write"].flatMap((change) =>
+      [true, false].map((persisted) => ({ change, persisted })),
+    ),
+  )(
+    "settles captured terminal ownership after $change (persisted=$persisted)",
+    async ({ change, persisted }) => {
+      const params = createParams();
+      const runId = "captured-terminal";
+      const sessionKey = "agent:main:captured-terminal";
+      const register = () =>
+        registerSubscriptionChatRun(params, {
+          runId,
+          sessionId: "captured-session",
+          sessionKey,
+        }).entry;
+      const entry = register();
+      const terminal = createDeferred();
+      const successor = createDeferred();
+      const firstDispatchEntered = createDeferred();
+      const firstDispatch = createDeferred();
+      const successorDispatchEntered = createDeferred();
+      const failure = new Error("captured terminal write failed");
+      const successorDispatchFailure = new Error("successor terminal dispatch failed");
+      agentEventHandlerMocks.persistLifecycle
+        .mockReturnValueOnce(terminal.promise)
+        .mockReturnValueOnce(successor.promise);
+      agentEventHandlerMocks.create.mockReturnValue(
+        Object.assign(
+          async (event: AgentEventPayload) => {
+            if (event.data.endedAt === 2_000) {
+              firstDispatchEntered.resolve();
+              await firstDispatch.promise;
+            } else {
+              successorDispatchEntered.resolve();
+              throw successorDispatchFailure;
+            }
+          },
+          { dispose: vi.fn() },
+        ),
+      );
+      unsubs = startGatewayEventSubscriptions(params);
+      const emitTerminal = (endedAt: number) =>
+        emitAgentEvent({
+          runId,
+          sessionKey,
+          sessionId: entry.sessionId,
+          stream: "lifecycle",
+          data: { phase: "end", endedAt },
+        });
+      let firstSettled = false;
+      let firstDrain: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
+      try {
+        emitTerminal(2_000);
+        expect(entry.projectSessionTerminalPending).toBe(true);
+        expect(entry.projectSessionTerminalPersisted).toBe(false);
+        expect(entry.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
+        firstDrain = waitForChatAbortTerminalPersistence(entry).then(
+          () => {
+            firstSettled = true;
+            return { ok: true as const };
+          },
+          (error: unknown) => {
+            firstSettled = true;
+            return { ok: false as const, error };
+          },
+        );
+        const recovery = {
+          runId,
+          sessionKey,
+          sessionId: entry.sessionId,
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          observedAt: 2_000,
+        };
+        params.restartRecoveryCandidates.set(runId, recovery);
+        let current = entry;
+        if (change !== "newer write") {
+          expect(removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry)).toBe(
+            true,
+          );
+        }
+        if (change.includes("replacement")) {
+          current = register();
+        }
+        if (change !== "removed") {
+          emitTerminal(3_000);
+          params.restartRecoveryCandidates.set(runId, { ...recovery, observedAt: 3_000 });
+        }
+        if (change === "retired replacement") {
+          expect(removeChatAbortControllerEntry(params.chatAbortControllers, runId, current)).toBe(
+            true,
+          );
+        }
+        const currentState = readLifecycleState(current);
+        await awaitGateBeforeSettlement(
+          firstDispatchEntered.promise,
+          firstDrain,
+          "Terminal ownership settled before its held dispatch was released",
+        );
+        expect(firstSettled).toBe(false);
+        if (change !== "removed") {
+          await successorDispatchEntered.promise;
+        }
+        if (persisted) {
+          terminal.resolve();
+        } else {
+          terminal.reject(failure);
+        }
+        await terminal.promise.catch(() => {});
+        firstDispatch.resolve();
+        expect(await firstDrain).toEqual(persisted ? { ok: true } : { ok: false, error: failure });
+        if (change === "newer write") {
+          expect(readLifecycleState(entry)).toEqual(currentState);
+        } else {
+          expect(entry.projectSessionTerminalPending).toBe(false);
+          expect(entry.projectSessionTerminalPersistence).toBeUndefined();
+          expect(entry.projectSessionTerminalPersisted).toBe(persisted);
+          expect(
+            await waitForChatAbortControllerRemoval({
+              entries: params.chatAbortControllers,
+              targets: [{ runId, entry }],
+              timeoutMs: 1_000,
+            }),
+          ).toBe(persisted);
+          if (!persisted) {
+            await expect(waitForChatAbortTerminalPersistence(entry)).rejects.toBe(failure);
+          }
+        }
+        if (change === "removed") {
+          expect(params.restartRecoveryCandidates.get(runId)).toEqual(recovery);
+        } else {
+          expect(params.chatAbortControllers.get(runId)).toBe(
+            change === "retired replacement" ? undefined : current,
+          );
+          expect(readLifecycleState(current)).toEqual(currentState);
+          expect(params.restartRecoveryCandidates.get(runId)?.observedAt).toBe(3_000);
+        }
+        if (change === "newer write") {
+          successor.resolve();
+          await successor.promise;
+          // Finishing the earlier receipt must not erase its accepted successor.
+          await expect(waitForChatAbortTerminalPersistence(entry)).rejects.toBe(
+            successorDispatchFailure,
+          );
+        }
+      } finally {
+        firstDispatch.resolve();
+        terminal.resolve();
+        successor.resolve();
+        await Promise.allSettled([firstDrain, terminal.promise, successor.promise]);
+      }
+    },
+  );
+
+  it.each(["start", "end"] as const)(
+    "generation-fences a current lifecycle %s event from a retired registration",
+    async (phase) => {
+      const runId = `run-retired-${phase}`;
+      const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
+      const params = createParams();
+      const registration = registerSubscriptionChatRun(params, {
+        runId,
+        sessionId: `session-retired-${phase}`,
+        sessionKey: "agent:main:main",
+        lifecycleGeneration: `${currentLifecycleGeneration}-retired`,
+      });
+      const registered = readLifecycleState(registration.entry);
+      agentEventHandlerMocks.create.mockReturnValue(
+        Object.assign(
+          () => {
+            throw new Error("different generation dispatch failed");
+          },
+          { dispose: vi.fn() },
+        ),
+      );
+      unsubs = startGatewayEventSubscriptions(params);
+
+      emitAgentEvent({
+        runId,
+        lifecycleGeneration: currentLifecycleGeneration,
+        stream: "lifecycle",
+        data: phase === "start" ? { phase, startedAt: 1_000 } : { phase, endedAt: 1_000 },
+      });
+
+      expect(readLifecycleState(registration.entry)).toEqual(registered);
+      await unsubs.agentUnsub();
+      expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce();
+      await expect(
+        waitForChatAbortTerminalPersistence(registration.entry),
+      ).resolves.toBeUndefined();
+    },
+  );
+
+  it.each([
+    { result: "visible persistence", hidden: false, dispatchFails: false, persistenceFails: false },
+    { result: "hidden no-write", hidden: true, dispatchFails: false, persistenceFails: false },
+    {
+      result: "hidden dispatch failure",
+      hidden: true,
+      dispatchFails: true,
+      persistenceFails: false,
+    },
+    {
+      result: "visible no-write dispatch failure",
+      hidden: false,
+      projectSessionLifecycle: false,
+      dispatchFails: true,
+      persistenceFails: false,
+    },
+    {
+      result: "dispatch failure with an accepted write",
+      hidden: false,
+      dispatchFails: true,
+      persistenceFails: false,
+    },
+    {
+      result: "dispatch and persistence failures",
+      hidden: false,
+      dispatchFails: true,
+      persistenceFails: true,
+    },
+  ])(
+    "joins accepted terminal dispatch before settling $result",
+    async ({ hidden, projectSessionLifecycle, dispatchFails, persistenceFails }) => {
+      const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
+      const runId = "run-abort-persistence-bridge";
+      const sessionKey = "agent:main:main";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const params = createParams();
+      const inspectors = createGatewayServerActiveWorkInspectors({
+        chatAbortControllers: params.chatAbortControllers,
+        chatQueuedTurns: new Map(),
+        cron: {},
+      });
+      const registration = registerSubscriptionChatRun(params, {
+        runId,
+        sessionId: "session-abort-persistence-bridge",
+        sessionKey,
+        lifecycleGeneration,
+        ...(hidden ? { controlUiVisible: false, projectSessionActive: false } : {}),
+      });
+      const entry = registration.entry;
+      claimAgentRunContext(runId, {
+        lifecycleGeneration,
+        sessionId: entry.sessionId,
+        sessionKey,
+        ...(projectSessionLifecycle === false ? { projectSessionLifecycle: false } : {}),
+        ...(hidden
+          ? progressCardRefreshRunProjection({
+              kind: "internal_system",
+              sourceTool: PROGRESS_CARD_REFRESH_SOURCE_TOOL,
+            })
+          : {}),
+      });
+      const dispatchEntered = createDeferred();
+      const releaseDispatch = createDeferred();
+      const dispatchFinished = createDeferred();
+      const terminalPersistence = createDeferred();
+      const dispatchFailure = new Error("accepted terminal dispatch failed");
+      const persistenceFailure = new Error("accepted terminal write failed");
+      agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
+      agentEventHandlerMocks.create.mockImplementation((options: AgentEventHandlerOptions) => {
+        const handler = actual.createAgentEventHandler(options);
+        return Object.assign(
+          async (event: AgentEventPayload) => {
+            dispatchEntered.resolve();
+            try {
+              await releaseDispatch.promise;
+              if (dispatchFails) {
+                throw dispatchFailure;
+              }
+              await handler(event);
+            } finally {
+              dispatchFinished.resolve();
+            }
+          },
+          { dispose: () => handler.dispose() },
+        );
+      });
+      unsubs = startGatewayEventSubscriptions(params);
+      expect(
+        abortChatRunById(
+          {
+            ...params,
+            removeChatRun: (sessionId, clientRunId, key) =>
+              params.chatRunState.registry.remove(sessionId, clientRunId, key),
+          },
+          { runId, sessionKey, stopReason: "user" },
+        ),
+      ).toEqual({ aborted: true });
+      let settled = false;
+      const waiter = waitForChatAbortTerminalPersistence(entry).then(
+        () => {
+          settled = true;
+          return { ok: true as const };
+        },
+        (error: unknown) => {
+          settled = true;
+          return { ok: false as const, error };
+        },
+      );
+      try {
+        await dispatchEntered.promise;
+        expect(settled).toBe(false);
+        expect(params.chatAbortControllers.get(runId)).toBe(entry);
+        expect(entry.projectSessionTerminalPending).toBe(true);
+        expect(createGatewayActiveWorkSnapshot(inspectors).counts.terminalPersistence).toBe(
+          hidden ? 0 : 1,
+        );
+        if (hidden || projectSessionLifecycle === false) {
+          expect(entry.projectSessionTerminalPersistence).toBeUndefined();
+        } else {
+          expect(entry.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
+        }
+        releaseDispatch.resolve();
+        await dispatchFinished.promise;
+        if (!hidden && projectSessionLifecycle !== false) {
+          expect(settled).toBe(false);
+          expect(params.chatAbortControllers.get(runId)).toBe(entry);
+          if (persistenceFails) {
+            terminalPersistence.reject(persistenceFailure);
+          } else {
+            terminalPersistence.resolve();
+          }
+        }
+        const outcome = await waiter;
+        const failure = persistenceFails
+          ? persistenceFailure
+          : dispatchFails
+            ? dispatchFailure
+            : undefined;
+        expect(outcome).toEqual(failure ? { ok: false, error: failure } : { ok: true });
+        if (hidden) {
+          expect(agentEventHandlerMocks.persistLifecycle).not.toHaveBeenCalled();
+          expect(params.broadcast).not.toHaveBeenCalled();
+          expect(params.broadcastToConnIds).not.toHaveBeenCalled();
+          expect(params.nodeSendToSession).not.toHaveBeenCalled();
+        }
+        if (dispatchFails) {
+          expect(warn).toHaveBeenCalledWith(
+            "Agent event dispatch failed",
+            expect.objectContaining({ error: dispatchFailure }),
+          );
+        } else {
+          expect(warn).not.toHaveBeenCalled();
+        }
+        expect(entry.projectSessionTerminalPending).toBe(false);
+        expect(params.chatAbortControllers.has(runId)).toBe(false);
+        expect(createGatewayActiveWorkSnapshot(inspectors).blockers).toEqual([]);
+      } finally {
+        releaseDispatch.resolve();
+        terminalPersistence.resolve();
+        await waiter;
+        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+      }
+    },
+  );
+
+  it("keeps a newer terminal reservation when an older no-write dispatch fails", async () => {
+    const params = createParams();
+    const runId = "replaced-terminal-dispatch";
+    const registration = registerSubscriptionChatRun(params, {
+      runId,
+      sessionId: "replaced-terminal-session",
       sessionKey: "agent:main:main",
-    } as InternalSessionTranscriptUpdate);
-
-    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
-    expect(warn).toHaveBeenCalledWith(
-      "Transcript update dispatch failed",
-      expect.objectContaining({ sessionKey: "agent:main:main" }),
+    });
+    const entry = registration.entry;
+    claimAgentRunContext(runId, {
+      sessionId: entry.sessionId,
+      sessionKey: entry.sessionKey,
+      projectSessionLifecycle: false,
+    });
+    const olderDispatch = { entered: createDeferred(), release: createDeferred() };
+    const newerDispatch = { entered: createDeferred(), release: createDeferred() };
+    const dispatches = [olderDispatch, newerDispatch];
+    const failure = new Error("terminal dispatch failed");
+    agentEventHandlerMocks.create.mockReturnValue(
+      Object.assign(
+        async () => {
+          const dispatch = dispatches.shift();
+          if (!dispatch) {
+            throw new Error("Unexpected terminal dispatch");
+          }
+          dispatch.entered.resolve();
+          await dispatch.release.promise;
+          throw failure;
+        },
+        { dispose: vi.fn() },
+      ),
     );
+    unsubs = startGatewayEventSubscriptions(params);
+    const emitTerminal = () =>
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end", endedAt: 2_000 } });
+    let older: Promise<void> | undefined;
+    let newer: Promise<void> | undefined;
+    try {
+      emitTerminal();
+      older = waitForChatAbortTerminalPersistence(entry);
+      const olderRejected = expect(older).rejects.toBe(failure);
+      await olderDispatch.entered.promise;
+      emitTerminal();
+      newer = waitForChatAbortTerminalPersistence(entry);
+      const newerRejected = expect(newer).rejects.toBe(failure);
+      await newerDispatch.entered.promise;
+      registration.cleanup();
+      olderDispatch.release.resolve();
+      await olderRejected;
+      expect(entry.projectSessionTerminalPending).toBe(true);
+      expect(params.chatAbortControllers.get(runId)).toBe(entry);
+      newerDispatch.release.resolve();
+      await newerRejected;
+      expect(entry.projectSessionTerminalPending).toBe(false);
+      expect(params.chatAbortControllers.size).toBe(0);
+    } finally {
+      olderDispatch.release.resolve();
+      newerDispatch.release.resolve();
+      await Promise.allSettled([older, newer]);
+      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+    }
   });
 
   it("logs real asynchronous transcript failures and recovers the broadcast queue", async () => {
     transcriptBroadcastMocks.useActualHandler = true;
+    const failedRead = createDeferred();
     const persistenceFailure = new Error("session transcript read failed");
-    transcriptBroadcastMocks.readMessageCount
-      .mockRejectedValueOnce(persistenceFailure)
-      .mockResolvedValueOnce(2);
+    const transcriptPosition = { source: "recovered-generation", rawSeq: 7 };
+    const storedMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "visible answer" }],
+      __openclaw: { transcriptPosition },
+    };
+    transcriptBroadcastMocks.readMessageById
+      .mockImplementationOnce(async () => {
+        await failedRead.promise;
+        throw persistenceFailure;
+      })
+      .mockResolvedValueOnce({ found: true, oversized: false, seq: 2, message: storedMessage });
 
     const params = createParams();
     params.sessionEventSubscribers.subscribe("conn-transcript");
@@ -376,7 +954,7 @@ describe("startGatewayEventSubscriptions", () => {
       emitSessionTranscriptUpdate({
         sessionFile: "/tmp/openclaw-transcript-dispatch.sqlite",
         sessionKey: "agent:main:main",
-        message: { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
+        message: { role: "assistant", content: [{ type: "text", text: "stale queued answer" }] },
         messageId,
         target: {
           agentId: "main",
@@ -386,10 +964,20 @@ describe("startGatewayEventSubscriptions", () => {
         },
       });
 
-    emitMessage("failed-message");
+    const admission = tryBeginGatewayRootWorkAdmission("test:transcript-publisher");
+    if (!admission) {
+      throw new Error("Transcript publisher admission was closed");
+    }
+    await admission.run(async () => emitMessage("failed-message"));
+    admission.release();
     await waitForFast(() =>
-      expect(transcriptBroadcastMocks.readMessageCount).toHaveBeenCalledOnce(),
+      expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledOnce(),
     );
+    try {
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    } finally {
+      failedRead.resolve();
+    }
     await waitForFast(() =>
       expect(warn).toHaveBeenCalledWith("Transcript update dispatch failed", {
         sessionKey: "agent:main:main",
@@ -406,11 +994,32 @@ describe("startGatewayEventSubscriptions", () => {
         sessionKey: "agent:main:main",
         messageId: "recovered-message",
         messageSeq: 2,
+        message: expect.objectContaining({
+          content: storedMessage.content,
+          __openclaw: expect.objectContaining({ transcriptPosition }),
+        }),
       }),
       new Set(["conn-transcript"]),
+      undefined,
     );
-    expect(transcriptBroadcastMocks.readMessageCount).toHaveBeenCalledTimes(2);
+    expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledOnce();
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("broadcasts progress-card retirement without session-list subscribers", () => {
+    const params = createParams();
+    unsubs = startGatewayEventSubscriptions(params);
+    emitSessionLifecycleEvent({
+      sessionKey: "global",
+      agentId: "work",
+      reason: "progress-card-reset",
+    });
+    expect(params.broadcast).toHaveBeenCalledWith(
+      "progressCard.changed",
+      { sessionKey: "agent:work:global", revision: null },
+      { sessionKeys: ["global"], agentId: "work" },
+    );
   });
 
   it("logs lifecycle handler failures", async () => {
@@ -423,420 +1032,5 @@ describe("startGatewayEventSubscriptions", () => {
       "Lifecycle event dispatch failed",
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
-  });
-
-  it("broadcasts bounded public task summaries with ledger statuses", async () => {
-    const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
-    unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
-    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
-
-    const completed = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Completed task",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      terminalSummary: "x".repeat(10_000),
-    });
-    const lost = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Lost task",
-      status: "lost",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-
-    if (!completed || !lost) {
-      throw new Error("expected task records to be created");
-    }
-    const taskUpsertsById = new Map(
-      broadcast.mock.calls
-        .filter(([event]) => event === "task")
-        .map(([, payload]) => payload as TaskEventPayload)
-        .filter(
-          (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-            payload.action === "upserted",
-        )
-        .map((payload) => [payload.task.id, payload.task]),
-    );
-    expect(broadcast).toHaveBeenCalledWith("task", expect.anything(), { dropIfSlow: true });
-    // Runtime registry statuses translate to the public ledger vocabulary.
-    expect(taskUpsertsById.get(completed.taskId)?.status).toBe("completed");
-    expect(taskUpsertsById.get(lost.taskId)?.status).toBe("failed");
-    // Unbounded status text from providers/shells must be truncated on the wire.
-    const wireTerminalSummary = taskUpsertsById.get(completed.taskId)?.terminalSummary;
-    expect(wireTerminalSummary).toBeTruthy();
-    expect(wireTerminalSummary?.length ?? 0).toBeLessThan(10_000);
-
-    void unsubs?.taskUnsub();
-    await waitForFast(() => expect(getTaskRegistryObservers()).toBeNull());
-    broadcast.mockClear();
-    createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "After dispose",
-      status: "queued",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    expect(broadcast).not.toHaveBeenCalled();
-  });
-
-  it("throttles live subagent progress per task and flushes before terminal status", async () => {
-    const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
-    unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
-    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
-    vi.useFakeTimers();
-    vi.setSystemTime(10_000);
-
-    const primary = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:main:subagent:primary",
-      runId: "run-throttle-primary",
-      task: "Implement live progress",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    const secondary = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:main:subagent:secondary",
-      runId: "run-throttle-secondary",
-      task: "Review live progress",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    if (!primary || !secondary) {
-      throw new Error("expected task records");
-    }
-    broadcast.mockClear();
-
-    for (const text of ["first", "second", "third"]) {
-      emitAgentEvent({
-        runId: primary.runId!,
-        stream: "assistant",
-        data: { text },
-      });
-    }
-    emitAgentEvent({
-      runId: secondary.runId!,
-      stream: "thinking",
-      data: { text: "parallel" },
-    });
-
-    await vi.advanceTimersByTimeAsync(999);
-    expect(broadcast).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    const firstFlush = broadcast.mock.calls
-      .filter(([event]) => event === "task")
-      .map(([, payload]) => payload as TaskEventPayload)
-      .filter(
-        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-          payload.action === "upserted",
-      );
-    expect(firstFlush).toHaveLength(2);
-    expect(firstFlush.find((event) => event.task.id === primary.taskId)?.task.lastActivity).toBe(
-      "third",
-    );
-    expect(firstFlush.find((event) => event.task.id === secondary.taskId)?.task.lastActivity).toBe(
-      "parallel",
-    );
-
-    broadcast.mockClear();
-    emitAgentEvent({
-      runId: secondary.runId!,
-      stream: "assistant",
-      data: { text: "OpenClaw runtime context (internal): Keep internal details private." },
-    });
-    await vi.advanceTimersByTimeAsync(1_000);
-    const sanitizedActivity = broadcast.mock.calls.find(
-      ([event, payload]) =>
-        event === "task" &&
-        (payload as TaskEventPayload).action === "upserted" &&
-        (payload as Extract<TaskEventPayload, { action: "upserted" }>).task.id === secondary.taskId,
-    )?.[1] as Extract<TaskEventPayload, { action: "upserted" }> | undefined;
-    expect(sanitizedActivity?.task).not.toHaveProperty("lastActivity");
-    expect(JSON.stringify(sanitizedActivity)).not.toContain("OpenClaw runtime context");
-
-    broadcast.mockClear();
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "assistant",
-      data: { text: "third" },
-    });
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(broadcast).not.toHaveBeenCalled();
-
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "assistant",
-      data: { text: "final activity" },
-    });
-    markTaskTerminalById({ taskId: primary.taskId, status: "succeeded", endedAt: Date.now() });
-    const terminalFlush = broadcast.mock.calls
-      .filter(([event]) => event === "task")
-      .map(([, payload]) => payload as TaskEventPayload)
-      .filter(
-        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-          payload.action === "upserted" && payload.task.id === primary.taskId,
-      );
-    expect(terminalFlush.map((event) => event.task.status)).toEqual(["running", "completed"]);
-    expect(terminalFlush[0]?.task.lastActivity).toBe("final activity");
-    expect(terminalFlush[1]?.task).not.toHaveProperty("lastActivity");
-
-    broadcast.mockClear();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(broadcast).not.toHaveBeenCalled();
-  });
-
-  it("suppresses identical task summaries without delaying status transitions", async () => {
-    const broadcast = vi.fn<SubscriptionParams["broadcast"]>();
-    unsubs = startGatewayEventSubscriptions({ ...createParams(), broadcast });
-    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
-    const runId = "run-identical-task-summary";
-    const task = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:main:subagent:summary",
-      runId,
-      task: "Avoid duplicate broadcasts",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: 100,
-      lastEventAt: 100,
-    });
-    if (!task) {
-      throw new Error("expected task record");
-    }
-    broadcast.mockClear();
-
-    for (let index = 0; index < 2; index += 1) {
-      recordTaskProgressByRunId({
-        runId,
-        runtime: "subagent",
-        lastEventAt: 200,
-        progressSummary: "Working",
-      });
-    }
-    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 300 });
-
-    const taskEvents = broadcast.mock.calls
-      .filter(([event]) => event === "task")
-      .map(([, payload]) => payload as TaskEventPayload)
-      .filter(
-        (payload): payload is Extract<TaskEventPayload, { action: "upserted" }> =>
-          payload.action === "upserted",
-      );
-    expect(taskEvents.map((event) => event.task.status)).toEqual(["running", "completed"]);
-  });
-
-  it.each(["succeeded", "failed", "cancelled", "timed_out", "lost"] as const)(
-    "closes task-run terminals exactly once for a %s transition",
-    async (status) => {
-      const closeAgentSessions = vi.fn(() => 1);
-      unsubs = startGatewayEventSubscriptions({
-        ...createParams(),
-        terminalSessions: { closeAgentSessions },
-      });
-      await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
-
-      const task = createTaskRecord({
-        runtime: "cron",
-        requesterSessionKey: "",
-        ownerKey: "",
-        scopeKind: "system",
-        task: `${status} cron task`,
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-      });
-      if (!task) {
-        throw new Error("expected task record");
-      }
-      const terminalize = () => {
-        if (status === "lost") {
-          markTaskLostById({ taskId: task.taskId, endedAt: 2_000 });
-          return;
-        }
-        markTaskTerminalById({
-          taskId: task.taskId,
-          status,
-          endedAt: 2_000,
-        });
-      };
-
-      terminalize();
-      terminalize();
-
-      expect(closeAgentSessions).toHaveBeenCalledOnce();
-      expect(closeAgentSessions).toHaveBeenCalledWith(task.taskId);
-    },
-  );
-
-  it("closes a completed cron task terminal while preserving a conversation terminal", async () => {
-    const taskPty = makeFakePty();
-    const persistentPty = makeFakePty();
-    const ptys = [taskPty, persistentPty];
-    const manager = new TerminalSessionManager({
-      emit: vi.fn(),
-      spawn: async () => ptys.shift() ?? makeFakePty(),
-    });
-    unsubs = startGatewayEventSubscriptions({
-      ...createParams(),
-      terminalSessions: manager,
-    });
-    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
-
-    const runId = "cron:job-1:run-1";
-    const runSessionKey = "agent:main:cron:job-1:run:run-1";
-    const task = createTaskRecord({
-      runtime: "cron",
-      requesterSessionKey: "",
-      ownerKey: "",
-      scopeKind: "system",
-      childSessionKey: runSessionKey,
-      runId,
-      task: "Cron task",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    if (!task) {
-      throw new Error("expected task record");
-    }
-    const taskOpen = await manager.open(
-      baseOpenRequest({
-        owner: taskAgentOwner(runSessionKey, task.taskId),
-      }),
-    );
-    const persistentOpen = await manager.open(
-      baseOpenRequest({ owner: { kind: "agent", agentSessionKey: "agent:main:main" } }),
-    );
-    if (!taskOpen.ok || !persistentOpen.ok) {
-      throw new Error("expected terminal sessions");
-    }
-
-    tryFinishCronTaskRunWithoutHistory({ deps: { log: mockLog } } as unknown as CronServiceState, {
-      taskRunId: runId,
-      status: "ok",
-      endedAt: 2_000,
-      childSessionKey: runSessionKey,
-    });
-
-    expect(taskPty.killed).toBe(true);
-    expect(persistentPty.killed).toBe(false);
-    expect(manager.size).toBe(1);
-    expect(manager.listAgent("agent:main:main")).toHaveLength(1);
-  });
-
-  it("closes task-run terminals only after the authoritative task becomes terminal", async () => {
-    const events: string[] = [];
-    const closeAgentSessions = vi.fn((taskId: string) => {
-      events.push(`terminal:${taskId}`);
-      return 1;
-    });
-    const broadcast = vi.fn<SubscriptionParams["broadcast"]>((event, payload) => {
-      if (event === "task" && (payload as TaskEventPayload).action === "upserted") {
-        const taskPayload = payload as Extract<TaskEventPayload, { action: "upserted" }>;
-        events.push(`task:${taskPayload.task.status}`);
-      }
-    });
-    unsubs = startGatewayEventSubscriptions({
-      ...createParams(),
-      broadcast,
-      terminalSessions: { closeAgentSessions },
-    });
-    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
-
-    const runSessionKey = "agent:main:cron:job-1:run:run-1";
-    const task = createTaskRecord({
-      runtime: "cron",
-      requesterSessionKey: "",
-      ownerKey: "",
-      scopeKind: "system",
-      childSessionKey: runSessionKey,
-      task: "Cron task",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    if (!task) {
-      throw new Error("expected task record");
-    }
-    expect(closeAgentSessions).not.toHaveBeenCalled();
-    expect(events).toEqual(["task:running"]);
-
-    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_000 });
-    expect(closeAgentSessions).toHaveBeenCalledOnce();
-    expect(closeAgentSessions).toHaveBeenCalledWith(task.taskId);
-    expect(events).toEqual(["task:running", "task:completed", `terminal:${task.taskId}`]);
-
-    // Later terminal-row updates cannot close terminals opened by a newer owner.
-    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_001 });
-    expect(closeAgentSessions).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a replacement gateway's task observer when a stale unsub runs late", async () => {
-    const staleBroadcast = vi.fn<SubscriptionParams["broadcast"]>();
-    const staleSubs = startGatewayEventSubscriptions({
-      ...createParams(),
-      broadcast: staleBroadcast,
-    });
-    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
-    const staleObservers = getTaskRegistryObservers();
-
-    const replacementBroadcast = vi.fn<SubscriptionParams["broadcast"]>();
-    unsubs = startGatewayEventSubscriptions({
-      ...createParams(),
-      broadcast: replacementBroadcast,
-    });
-    await waitForFast(() => {
-      const current = getTaskRegistryObservers();
-      expect(current).not.toBeNull();
-      expect(current).not.toBe(staleObservers);
-    });
-
-    // The stale dispose must not clear the replacement's observer slot.
-    await staleSubs.taskUnsub();
-    await staleSubs.agentUnsub();
-    staleSubs.heartbeatUnsub();
-    staleSubs.transcriptUnsub();
-    staleSubs.lifecycleUnsub();
-    expect(getTaskRegistryObservers()).not.toBeNull();
-
-    createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "After stale dispose",
-      status: "queued",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    expect(replacementBroadcast).toHaveBeenCalledWith("task", expect.anything(), {
-      dropIfSlow: true,
-    });
-    expect(staleBroadcast).not.toHaveBeenCalledWith("task", expect.anything(), {
-      dropIfSlow: true,
-    });
   });
 });

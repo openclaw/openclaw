@@ -9,7 +9,9 @@ title: "Voice wake (macOS)"
 
 ## Requirements
 
-Voice Wake and push-to-talk require macOS 26 or newer. On older macOS the controls are hidden from the Voice settings page, which shows the macOS 26 requirement instead.
+Voice Wake and push-to-talk require macOS 26 or newer. Their device controls
+appear in **Dashboard → Settings → Talk → This Mac**, which reports when voice
+features are unavailable on this Mac.
 
 Voice Wake requires Apple Speech to support on-device recognition for the selected language. The app refuses to start passive wake-word listening when that local-only contract is unavailable; it never falls back to network recognition. Push-to-talk, Talk Mode, and Quick Chat dictation are explicit user actions and may use Apple Speech network services for broader language coverage.
 
@@ -26,29 +28,38 @@ Voice Wake requires Apple Speech to support on-device recognition for the select
 - Hard stop: 120s (`captureHardStop`) to prevent runaway sessions.
 - Debounce between sessions: 350ms (`debounceAfterSend`) after a send.
 - The overlay is driven via `VoiceWakeOverlayController`, with committed/volatile text coloring.
-- After send, the recognizer restarts cleanly to listen for the next trigger.
+- After send, a fresh recognition task listens for the next trigger. Talk, Voice Wake, push-to-talk, and Quick Chat dictation reuse their recognizer while the selected language is unchanged; stopping capture still releases the microphone and cancels the task.
 
 ## Lifecycle invariants
 
-- If Voice Wake is enabled and permissions are granted, the wake-word recognizer stays listening, except during an active push-to-talk capture.
-- Overlay dismissal, including manual dismiss via the X button, always resumes the recognizer: `VoiceSessionCoordinator.overlayDidDismiss` calls `VoiceWakeRuntime.refresh(state:)` on every dismiss path. See [Voice overlay](/platforms/mac/voice-overlay) for the session/token model.
+- If Voice Wake is enabled and permissions are granted, the wake-word recognizer stays listening, except while push-to-talk or Talk Mode owns the microphone.
+- Overlay dismissal, including manual dismiss via the X button, requests a recognizer refresh. Listening resumes only after all active voice owners have released their pauses; dismissing an overlay cannot restart it during capture or Talk shutdown. See [Voice overlay](/platforms/mac/voice-overlay) for the session/token model.
 
 ## Push-to-talk specifics
 
-- Hotkey detection uses a global `.flagsChanged` monitor for right Option (`keyCode 61` + `.option`). It only observes events, never swallows them.
-- Capture lives in `VoicePushToTalk`: starts Speech immediately, streams partials to the overlay, and calls `VoiceWakeForwarder` on release.
-- Starting push-to-talk pauses the wake-word runtime to avoid dueling audio taps; it restarts automatically after release.
+- Hotkey detection observes `.flagsChanged` and the physical right-Option flag. Releasing right Option ends the hold even while left Option remains down. Events are never swallowed.
+- Capture lives in `VoicePushToTalk`: after permissions resolve, Speech starts only if the same hold remains active. Release allows up to 1.5 seconds for final Speech results before forwarding; an empty capture dismisses immediately.
+- Disabling push-to-talk or entering Talk Mode cancels pending or active capture without forwarding. Push-to-talk stays unavailable until Talk shutdown finishes, even if its preference changes meanwhile.
+- Starting push-to-talk pauses the wake-word runtime to avoid competing audio taps. The pause remains through the final Speech drain and is released after audio teardown.
+- A fresh hold adopts visible overlay text, including a previous capture still awaiting final Speech results, without forwarding the replaced capture twice.
 - Permissions: requires Microphone + Speech; receiving key events needs Accessibility/Input Monitoring approval.
 - External keyboards: some do not expose right Option as expected. Offer a fallback shortcut if users report misses.
 
 ## User-facing settings
 
+Open **Dashboard → Settings → Talk → This Mac** in the macOS app for device
+voice settings. Microphone and speech permissions are under
+**Dashboard → Settings → This Mac → Permissions**.
+
 - **Voice Wake** toggle: enables the wake-word runtime.
 - **Hold Right Option to talk**: enables the push-to-talk monitor.
-- If the selected language lacks on-device recognition on this Mac, Voice Wake stays disabled while push-to-talk and Talk Mode remain available.
-- Language and mic pickers, a live level meter, a trigger-word table, and a tester (local-only, never forwards).
-- The mic picker preserves the last selection if a device disconnects, shows a disconnected hint, and temporarily falls back to the system default until it returns.
-- **Sounds**: chimes on trigger detect and on send, defaulting to the macOS "Glass" system sound. Pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) per event, or choose **No Sound**.
+- If the selected language lacks on-device recognition on this Mac, the page explains why Voice Wake cannot be enabled. An already-enabled Voice Wake setting can still be turned off; push-to-talk and Talk Mode remain available.
+- Language and microphone pickers select this Mac's input. **System Default** uses the system microphone.
+- The primary language includes the current system locale marked **(System)**. Selecting it saves its concrete locale identifier (for example, `en_US`), as the native picker did; it does not save an empty string or `system` marker. Existing system markers resolve to this option for display without rewriting the saved preference. Unavailable additional languages are omitted from the displayed selection.
+- The microphone test opens a native panel with a live level meter and uses the wake-word capture pipeline without forwarding speech. Diagnostics yield to Talk Mode and push-to-talk. Choose **Done** to close the panel and release its microphone capture.
+- Trigger words are Gateway settings on the **Talk** page and remain editable in a regular browser. The Mac's wake runtime uses the Primary Gateway's trigger words; opening another Gateway window does not retarget that runtime.
+- If a selected microphone disconnects, the voice runtime temporarily uses the system default and retains the selection for when it returns.
+- Trigger and send chime toggles turn each sound on or off. The page also controls whether wake starts Talk Mode, push-to-talk, Talk phase sounds, Shift-to-stop, and realtime relay.
 
 ## Forwarding behavior
 
@@ -63,7 +74,7 @@ Voice Wake requires Apple Speech to support on-device recognition for the select
 ## Quick verification
 
 - Toggle push-to-talk on, hold Right Option, speak, release: overlay should show partials then send.
-- While holding, the menu-bar ears should stay enlarged (`triggerVoiceEars(ttl: nil)`); they drop after release.
+- The menu-bar ears stay enlarged while the voice overlay is visible and return to normal when it dismisses.
 
 ## Related
 

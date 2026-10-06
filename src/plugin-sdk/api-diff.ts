@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { PluginSdkApiDeclarationSection } from "./api-baseline-declaration-closure.js";
 import { renderPluginSdkApiBaseline, type PluginSdkApiExport } from "./api-baseline.js";
 
@@ -9,13 +10,9 @@ const ENTRYPOINTS_PATH = "scripts/lib/plugin-sdk-entrypoints.json";
 const PRIVATE_ENTRYPOINTS_PATH = "scripts/lib/plugin-sdk-private-local-only-subpaths.json";
 const REPORT_ITEM_LIMIT = 40;
 const REPORT_TEXT_LINE_LIMIT = 20;
-const REPORT_AFFECTED_EXPORT_LIMIT = 5;
 const REPORT_BYTE_LIMIT = 64 * 1024;
 
-export type PluginSdkApiExportSnapshot = Pick<
-  PluginSdkApiExport,
-  "closureHash" | "declaration" | "kind"
->;
+type PluginSdkApiExportSnapshot = Pick<PluginSdkApiExport, "closureHash" | "declaration" | "kind">;
 
 type PluginSdkApiDiffExport = Pick<
   PluginSdkApiExport,
@@ -33,13 +30,13 @@ export type PluginSdkApiDiffSurface = {
   modules: PluginSdkApiDiffModule[];
 };
 
-export type PluginSdkApiDeclarationChange = {
+type PluginSdkApiDeclarationChange = {
   after: string | null;
   before: string | null;
   name: string;
 };
 
-export type PluginSdkApiExportChange = {
+type PluginSdkApiExportChange = {
   after: PluginSdkApiExportSnapshot | null;
   before: PluginSdkApiExportSnapshot | null;
   change: "added" | "reachable" | "removed" | "signature";
@@ -49,13 +46,13 @@ export type PluginSdkApiExportChange = {
   importSpecifier: string;
 };
 
-export type PluginSdkApiEntrypointChange = {
+type PluginSdkApiEntrypointChange = {
   entrypoint: string;
   exportNames: string[];
   importSpecifier: string;
 };
 
-export type PluginSdkApiDiffPayload = {
+type PluginSdkApiDiffPayload = {
   entrypointsAdded: PluginSdkApiEntrypointChange[];
   entrypointsRemoved: PluginSdkApiEntrypointChange[];
   exports: PluginSdkApiExportChange[];
@@ -64,6 +61,13 @@ export type PluginSdkApiDiffPayload = {
 export type PluginSdkApiDiff = PluginSdkApiDiffPayload & {
   digest: string;
 };
+
+export function createPluginSdkApiDiff(payload: PluginSdkApiDiffPayload): PluginSdkApiDiff {
+  return {
+    ...payload,
+    digest: createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex"),
+  };
+}
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -214,8 +218,8 @@ function collectDeclarationChanges(
   before: readonly PluginSdkApiDeclarationSection[],
   after: readonly PluginSdkApiDeclarationSection[],
 ): PluginSdkApiDeclarationChange[] {
-  const beforeByKey = new Map((before ?? []).map((section) => [sectionKey(section), section]));
-  const afterByKey = new Map((after ?? []).map((section) => [sectionKey(section), section]));
+  const beforeByKey = new Map(before.map((section) => [sectionKey(section), section]));
+  const afterByKey = new Map(after.map((section) => [sectionKey(section), section]));
   const removedByName = new Map<string, string[]>();
   const addedByName = new Map<string, string[]>();
   for (const [key, section] of beforeByKey) {
@@ -244,22 +248,6 @@ function collectDeclarationChanges(
     }
   }
   return changes;
-}
-
-function exportSections(
-  surface: PluginSdkApiDiffSurface,
-  exportSurface: PluginSdkApiDiffExport | undefined,
-): PluginSdkApiDeclarationSection[] {
-  if (!exportSurface) {
-    return [];
-  }
-  return (exportSurface.closureSectionIds ?? []).map((id) => {
-    const section = surface.declarationSections[id];
-    if (!section) {
-      throw new Error(`Plugin SDK API render references missing declaration section ${id}`);
-    }
-    return section;
-  });
 }
 
 function moduleChange(moduleSurface: PluginSdkApiDiffModule): PluginSdkApiEntrypointChange {
@@ -314,70 +302,46 @@ export function diffPluginSdkApi(
     for (const exportName of [...exportNames].toSorted(compareText)) {
       const beforeExport = beforeExports.get(exportName);
       const afterExport = afterExports.get(exportName);
+      let change: PluginSdkApiExportChange["change"];
       if (!beforeExport && afterExport) {
-        payload.exports.push({
-          after: snapshot(afterExport),
-          before: null,
-          change: "added",
-          declarationChanges: collectDeclarationChanges([], exportSections(after, afterExport)),
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
+        change = "added";
+      } else if (beforeExport && !afterExport) {
+        change = "removed";
+      } else if (!beforeExport || !afterExport) {
         continue;
-      }
-      if (beforeExport && !afterExport) {
-        payload.exports.push({
-          after: null,
-          before: snapshot(beforeExport),
-          change: "removed",
-          declarationChanges: collectDeclarationChanges(exportSections(before, beforeExport), []),
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
-        continue;
-      }
-      if (!beforeExport || !afterExport) {
-        continue;
-      }
-      if (
+      } else if (
         beforeExport.kind !== afterExport.kind ||
         beforeExport.declaration !== afterExport.declaration
       ) {
-        payload.exports.push({
-          after: snapshot(afterExport),
-          before: snapshot(beforeExport),
-          change: "signature",
-          declarationChanges: collectDeclarationChanges(
-            exportSections(before, beforeExport),
-            exportSections(after, afterExport),
-          ),
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
+        change = "signature";
       } else if (beforeExport.closureHash !== afterExport.closureHash) {
-        payload.exports.push({
-          after: snapshot(afterExport),
-          before: snapshot(beforeExport),
-          change: "reachable",
-          declarationChanges: collectDeclarationChanges(
-            exportSections(before, beforeExport),
-            exportSections(after, afterExport),
-          ),
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
+        change = "reachable";
+      } else {
+        continue;
       }
+      payload.exports.push({
+        after: snapshot(afterExport),
+        before: snapshot(beforeExport),
+        change,
+        declarationChanges: [],
+        entrypoint,
+        exportName,
+        importSpecifier: moduleSurface.importSpecifier,
+      });
     }
   }
 
-  return {
-    ...payload,
-    digest: createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex"),
-  };
+  // Exports already carry the complete affected surface. Keep the v1 declaration detail in
+  // its first canonical export instead of multiplying shared closure text across every export.
+  const firstExport = payload.exports[0];
+  if (firstExport) {
+    firstExport.declarationChanges = collectDeclarationChanges(
+      before.declarationSections,
+      after.declarationSections,
+    );
+  }
+
+  return createPluginSdkApiDiff(payload);
 }
 
 export function hasPluginSdkApiChanges(diff: PluginSdkApiDiff): boolean {
@@ -401,22 +365,6 @@ function appendText(lines: string[], label: "after" | "before", text: string | n
   if (textLines.length > REPORT_TEXT_LINE_LIMIT) {
     lines.push(`      … ${textLines.length - REPORT_TEXT_LINE_LIMIT} more lines`);
   }
-}
-
-function truncateUtf8(text: string, maxBytes: number): string {
-  const bytes = Buffer.from(text, "utf8");
-  if (bytes.length <= maxBytes) {
-    return text;
-  }
-  let end = maxBytes;
-  while (end > 0) {
-    const excludedByte = bytes[end];
-    if (excludedByte === undefined || (excludedByte & 0xc0) !== 0x80) {
-      break;
-    }
-    end -= 1;
-  }
-  return bytes.subarray(0, end).toString("utf8");
 }
 
 function appendExportChanges(
@@ -446,22 +394,14 @@ function appendExportChanges(
   }
 }
 
-type DeclarationReportChange = PluginSdkApiDeclarationChange & { affectedExports: string[] };
-
 function collectDeclarationReportChanges(
   changes: readonly PluginSdkApiExportChange[],
-): DeclarationReportChange[] {
-  const grouped = new Map<string, DeclarationReportChange>();
+): PluginSdkApiDeclarationChange[] {
+  const grouped = new Map<string, PluginSdkApiDeclarationChange>();
   for (const change of changes) {
-    const affectedExport = `${change.importSpecifier} :: ${change.exportName}`;
     for (const declaration of change.declarationChanges) {
       const key = `${declaration.name}\0${declaration.before ?? ""}\0${declaration.after ?? ""}`;
-      const current = grouped.get(key);
-      if (current) {
-        current.affectedExports.push(affectedExport);
-      } else {
-        grouped.set(key, { ...declaration, affectedExports: [affectedExport] });
-      }
+      grouped.set(key, declaration);
     }
   }
   return [...grouped.values()].toSorted(
@@ -505,44 +445,32 @@ export function formatPluginSdkApiDiffReport(params: {
     }
   }
 
-  appendExportChanges(
-    lines,
-    "Exports removed",
-    diff.exports.filter((change) => change.change === "removed"),
-  );
-  appendExportChanges(
-    lines,
-    "Exports added",
-    diff.exports.filter((change) => change.change === "added"),
-  );
-  appendExportChanges(
-    lines,
-    "Signatures changed",
-    diff.exports.filter((change) => change.change === "signature"),
-  );
+  lines.push("", `## Affected exports (${diff.exports.length})`);
+  for (const change of diff.exports.slice(0, REPORT_ITEM_LIMIT)) {
+    lines.push("", `- \`${change.importSpecifier}\` — \`${change.exportName}\` (${change.change})`);
+  }
+  if (diff.exports.length > REPORT_ITEM_LIMIT) {
+    lines.push("", `… ${diff.exports.length - REPORT_ITEM_LIMIT} more affected exports`);
+  }
 
+  for (const [kind, title] of [
+    ["removed", "Exports removed"],
+    ["added", "Exports added"],
+    ["signature", "Signatures changed"],
+  ] as const) {
+    appendExportChanges(
+      lines,
+      title,
+      diff.exports.filter((change) => change.change === kind),
+    );
+  }
   const reachable = collectDeclarationReportChanges(diff.exports);
   if (reachable.length > 0) {
-    const affectedCount = diff.exports.filter(
-      (change) => change.declarationChanges.length > 0,
-    ).length;
-    lines.push(
-      "",
-      `## Reachable declarations changed (${reachable.length}; affects ${affectedCount} exports)`,
-    );
+    lines.push("", `## Reachable declarations changed (${reachable.length})`);
     for (const change of reachable.slice(0, REPORT_ITEM_LIMIT)) {
       lines.push("", `- \`${change.name}\``);
       appendText(lines, "before", change.before);
       appendText(lines, "after", change.after);
-      const affected = change.affectedExports.toSorted(compareText);
-      lines.push(
-        `    affects: ${affected
-          .slice(0, REPORT_AFFECTED_EXPORT_LIMIT)
-          .map((value) => `\`${value}\``)
-          .join(
-            ", ",
-          )}${affected.length > REPORT_AFFECTED_EXPORT_LIMIT ? ` (+${affected.length - REPORT_AFFECTED_EXPORT_LIMIT} more)` : ""}`,
-      );
     }
     if (reachable.length > REPORT_ITEM_LIMIT) {
       lines.push("", `… ${reachable.length - REPORT_ITEM_LIMIT} more reachable declarations`);
@@ -554,5 +482,5 @@ export function formatPluginSdkApiDiffReport(params: {
     return report;
   }
   const suffix = "\n\n… summary truncated; inspect the JSON artifact.\n";
-  return `${truncateUtf8(report, REPORT_BYTE_LIMIT - Buffer.byteLength(suffix, "utf8"))}${suffix}`;
+  return `${truncateUtf8Prefix(report, REPORT_BYTE_LIMIT - Buffer.byteLength(suffix, "utf8"))}${suffix}`;
 }

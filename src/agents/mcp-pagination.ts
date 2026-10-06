@@ -1,5 +1,6 @@
 /** Shared bounded pagination for MCP list operations. */
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 type McpPaginationPage<T> = {
@@ -19,7 +20,7 @@ type McpPaginationRequest = {
   signal: AbortSignal;
 };
 
-type CollectMcpPaginatedItemsParams<TInput, TOutput = TInput> = {
+type CollectMcpPaginatedItemsParams<T> = {
   label: string;
   itemLabel: string;
   timeoutMs: number;
@@ -27,8 +28,7 @@ type CollectMcpPaginatedItemsParams<TInput, TOutput = TInput> = {
   maxItems: number;
   maxBytes: number;
   signal?: AbortSignal;
-  loadPage: (request: McpPaginationRequest) => Promise<McpPaginationPage<TInput>>;
-  mapItem?: (item: TInput) => TOutput | undefined;
+  loadPage: (request: McpPaginationRequest) => Promise<McpPaginationPage<T>>;
 };
 
 function positiveInteger(value: number, label: string): number {
@@ -43,9 +43,9 @@ function abortError(signal: AbortSignal, label: string): Error {
 }
 
 /** Collects one complete MCP list under a single bounded lifecycle. */
-export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
-  params: CollectMcpPaginatedItemsParams<TInput, TOutput>,
-): Promise<TOutput[]> {
+export async function collectMcpPaginatedItems<T>(
+  params: CollectMcpPaginatedItemsParams<T>,
+): Promise<T[]> {
   const timeoutMs = clampPositiveTimerTimeoutMs(params.timeoutMs);
   if (timeoutMs === undefined) {
     throw new Error(`${params.label} requires a positive timeout`);
@@ -61,7 +61,7 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
   if (signal.aborted) {
     throw abortError(signal, params.label);
   }
-  const deadlineAtMs = Date.now() + timeoutMs;
+  const deadlineAtMs = performance.now() + timeoutMs;
   const timeoutError = new Error(`${params.label} timed out after ${timeoutMs}ms`);
   const deadlineTimer = setTimeout(() => deadlineController.abort(timeoutError), timeoutMs);
   deadlineTimer.unref?.();
@@ -69,19 +69,13 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
     if (signal.aborted) {
       throw abortError(signal, params.label);
     }
-    if (Date.now() >= deadlineAtMs) {
+    if (performance.now() >= deadlineAtMs) {
       deadlineController.abort(timeoutError);
       throw timeoutError;
     }
   };
 
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(abortError(signal, params.label));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-
-  const items: TOutput[] = [];
+  const items: T[] = [];
   const seenCursors = new Set<string>();
   let collectedBytes = 0;
   let cursor: string | undefined;
@@ -89,10 +83,11 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
   try {
     for (let pageNumber = 0; pageNumber < maxPages; pageNumber += 1) {
       assertActive();
-      const page = await Promise.race([
+      const page = await racePromiseWithAbortSignal(
         params.loadPage({ cursor, requestTimeoutMs: timeoutMs, signal }),
-        aborted,
-      ]);
+        signal,
+        () => abortError(signal, params.label),
+      );
       assertActive();
       const measured = boundedJsonUtf8Bytes(
         page.serializedValue ?? { items: page.items, nextCursor: page.nextCursor },
@@ -104,17 +99,16 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
       collectedBytes += measured.bytes;
 
       for (const item of page.items) {
-        const mapped = params.mapItem ? params.mapItem(item) : (item as unknown as TOutput);
-        if (mapped === undefined) {
+        if (item === undefined) {
           continue;
         }
         if (items.length >= maxItems) {
           throw new Error(`${params.label} exceeded ${maxItems} ${params.itemLabel}`);
         }
-        items.push(mapped);
+        items.push(item);
       }
 
-      // Synchronous page projection can consume the deadline or abort its caller.
+      // Synchronous page processing can consume the deadline or abort its caller.
       // Never accept either a terminal page or its continuation after ownership ends.
       const nextCursor = page.nextCursor;
       assertActive();
@@ -130,8 +124,5 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
     throw new Error(`${params.label} exceeded ${maxPages} pages`);
   } finally {
     clearTimeout(deadlineTimer);
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
   }
 }

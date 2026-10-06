@@ -1,4 +1,3 @@
-// Telegram helper module supports setup surface.helpers behavior.
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
   applySetupAccountConfigPatch,
@@ -13,8 +12,7 @@ import {
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "./accounts.js";
-import { promptTelegramAllowFromForAccount } from "./setup-core.js";
-import { telegramSetupAdapter } from "./setup-core.js";
+import { promptTelegramAllowFromForAccount, telegramSetupAdapter } from "./setup-core.js";
 
 const channel = "telegram" as const;
 

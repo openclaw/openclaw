@@ -7,18 +7,16 @@ describe("generated extension asset lint planning", () => {
     const generatedAsset = "extensions/canvas/src/host/a2ui/a2ui.bundle.js";
     const extensionTest = "extensions/canvas/scripts/bundle-a2ui.test.ts";
     const result = detectChangedLanes([generatedAsset, extensionTest]);
-    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+    const plan = createChangedCheckPlan(result, {
+      lintOnly: true,
+      env: { PATH: "/usr/bin" },
+    });
 
     expect(result.lanes.extensionTests).toBe(true);
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
         name: "lint extension changed file",
-        args: [
-          "scripts/run-oxlint.mjs",
-          "--tsconfig",
-          "config/tsconfig/oxlint.extensions.json",
-          extensionTest,
-        ],
+        args: ["scripts/run-oxlint.mjs", "--tsconfig", "extensions/tsconfig.json", extensionTest],
       }),
     );
     expect(

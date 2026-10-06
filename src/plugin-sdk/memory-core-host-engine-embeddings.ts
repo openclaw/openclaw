@@ -14,69 +14,48 @@ export function createLocalEmbeddingProvider(..._args: unknown[]): Promise<never
 }
 
 export {
-  applyEmbeddingBatchOutputLine,
   buildBatchHeaders,
-  buildCaseInsensitiveExtensionGlob,
   buildEmbeddingBatchGroupOptions,
   buildRemoteBaseUrlPolicy,
   classifyMemoryMultimodalPath,
   createRemoteEmbeddingProvider,
   debugEmbeddingsLog,
+  embeddingProviderOwnsDestination,
   EmbeddingBatchUnavailableError,
   EMBEDDING_BATCH_ENDPOINT,
-  enforceEmbeddingMaxInputTokens,
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
   extractBatchErrorMessage,
-  fetchRemoteEmbeddingVectors,
   formatBatchErrorDetail,
   formatUnavailableBatchError,
-  getMemoryMultimodalExtensions,
   hasNonTextEmbeddingParts,
   isEmbeddingBatchUnavailableError,
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
-  normalizeBatchBaseUrl,
   normalizeEmbeddingModelWithPrefixes,
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
-  resolveBatchCompletionFromStatus,
-  resolveCompletedBatchResult,
+  resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,
   resolveRemoteEmbeddingClient,
   runEmbeddingBatchGroups,
+  runEmbeddingBatches,
   sanitizeAndNormalizeEmbedding,
   sanitizeEmbeddingCacheHeaders,
-  throwIfBatchCompletionError,
-  throwIfBatchTerminalFailure,
+  waitForEmbeddingBatch,
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 
 export type {
-  BatchCompletionResult,
-  BatchHttpClientConfig,
   EmbeddingBatchExecutionParams,
   EmbeddingBatchStatus,
   EmbeddingInput,
   ProviderBatchOutputLine,
   RemoteEmbeddingClient,
-  RemoteEmbeddingProviderId,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
-export {
-  getMemoryEmbeddingProvider,
-  listMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviderAdapters,
-  listRegisteredMemoryEmbeddingProviders,
-} from "../plugins/memory-embedding-provider-runtime.js";
+export { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-profiles/runtime-snapshots.js";
-export { clearMemoryEmbeddingProviders } from "../plugins/memory-embedding-providers.js";
-/**
- * @deprecated New embedding providers should use `api.registerEmbeddingProvider(...)`
- * and `contracts.embeddingProviders`. This memory-specific registrar remains
- * available only for compatibility while existing providers migrate.
- */
-export { registerMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,

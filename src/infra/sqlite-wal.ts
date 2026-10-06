@@ -1,55 +1,96 @@
 // Configures SQLite WAL and related pragmas for local stores.
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
-import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import type { Result } from "@openclaw/normalization-core/result";
-import { isSqliteLockError } from "./sqlite-transaction.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { GatewayScheduler } from "./gateway-scheduler.js";
+import {
+  normalizeSqliteNonNegativeInteger,
+  runWithSqliteBusyTimeout,
+  setSqliteBusyTimeout,
+} from "./sqlite-busy-timeout.js";
+import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import {
+  createSqliteWalCheckpoint,
+  type SqliteWalCheckpointMode,
+  type SqliteWalCheckpointOptions,
+  type SqliteWalHealth,
+} from "./sqlite-wal-checkpoint.js";
+import { resolvePathJournalPolicy } from "./sqlite-wal-filesystem.js";
+import {
+  reclaimSqliteWalFreePages,
+  type SqliteWalReclamationOptions,
+  type SqliteWalReclamationResult,
+} from "./sqlite-wal-reclamation.js";
+import {
+  detectSqliteWalSplitBrain,
+  terminateForSqliteWalSplitBrain,
+  type SqliteWalSplitBrainEvent,
+} from "./sqlite-wal-split-brain.js";
+import {
+  cancelSqliteWalWriteAdmission,
+  createSqliteWalMaintenanceScheduler,
+  type SqliteWalPeriodicRequest,
+  type SqliteWalPeriodicResult,
+} from "./sqlite-wal-write-admission.js";
+
+export type { SqliteWalHealth } from "./sqlite-wal-checkpoint.js";
+export type { SqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
-const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
+// Inline automatic checkpoints run on the committing connection, and while a
+// reader keeps the log from resetting every later commit above this threshold
+// retries one and syncs the database file. Worker-maintained writers disable it
+// when they register their owner and skip checkpoint-only ticks; worker
+// connections tick inline, so this threshold only bounds an unmaintained writer.
+const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 16_384;
+const DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS = 10 * 1000;
 const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
 // SQLite applies this ceiling when a fully checkpointed WAL resets on the next
-// commit. Keep it well above the usual ~4 MiB autocheckpoint window so only
-// pathological high-water marks pay the truncation cost.
+// commit. It matches the inline autocheckpoint threshold so only pathological
+// high-water marks pay the truncation cost.
 const DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
-// 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
-// bounded so maintenance can never behave like a blocking full VACUUM.
-const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
-const LINUX_NFS_SUPER_MAGIC = 0x6969;
-const LINUX_SMB_SUPER_MAGIC = 0x517b;
-const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
-const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
-const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
-// Filesystem classification runs during database open, so never let the fallback probe stall it.
-const MOUNT_COMMAND_TIMEOUT_MS = 1_000;
-const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 
-type IntervalHandle = ReturnType<typeof setInterval> & {
-  unref?: () => void;
-};
+const log = createSubsystemLogger("infra/sqlite-wal");
+const maintenanceScheduler = new GatewayScheduler();
+let nextMaintenanceId = 0;
 
-type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
-type SqliteFilesystemJournalPolicy = "rollback" | "unsupported" | "wal";
-type MountEntry = { mountPoint: string; fsType: string; source?: string };
+// Gateway bootstrap loads the database owner before admitting turns. Long-lived
+// maintenance timers must not retain the context of a turn that opens a database.
+export const runInSqliteMaintenanceContext = AsyncLocalStorage.snapshot();
 
 export type SqliteWalMaintenance = {
+  /** Last maintenance observation; reading it never checkpoints or probes storage. */
+  readonly health?: SqliteWalHealth;
   checkpoint: () => boolean;
+  maintainPeriodic?: (
+    request: SqliteWalPeriodicRequest,
+    admit?: (stage: "transaction" | "commit") => void,
+    maintain?: () => void,
+  ) => SqliteWalPeriodicResult;
+  reclaimFreePages: (options?: SqliteWalReclamationOptions) => SqliteWalReclamationResult;
+  /** Inspect this retained WAL connection, independently of checkpoint completion elsewhere. */
+  inspectIdle?: () => "healthy" | "retire";
+  /** Retire timer admission and join accepted maintenance before closing its database. */
+  stop: () => Promise<void>;
+  /** Final checkpoint; synchronous exit cleanup cancels work without joining it. */
   close: (options?: { checkpointMode?: SqliteWalCheckpointMode }) => boolean;
 };
 
 /** Options controlling WAL autocheckpoint and periodic checkpoint behavior. */
-export type SqliteWalMaintenanceOptions = {
+export type SqliteWalMaintenanceOptions = SqliteWalCheckpointOptions & {
   autoCheckpointPages?: number;
   busyTimeoutMs?: number;
   checkpointIntervalMs?: number;
   checkpointMode?: SqliteWalCheckpointMode;
-  databaseLabel?: string;
-  databasePath?: string;
-  onCheckpointError?: (error: unknown) => void;
+  /** Owner-held synchronous exclusion around maintenance writes, including periodic vacuum. */
+  runMaintenance?: (operation: () => boolean) => boolean;
 };
 
 export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
@@ -57,10 +98,9 @@ export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
   synchronous?: "NORMAL";
 };
 
-function configureSqliteBusyTimeout(db: DatabaseSync, busyTimeoutMs: number): number {
-  const normalizedTimeoutMs = normalizeNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs");
-  db.exec(`PRAGMA busy_timeout = ${normalizedTimeoutMs};`);
-  return normalizedTimeoutMs;
+/** Restrict inspection connections without changing journal or persistence policy. */
+export function configureSqliteReadOnlyPragmas(db: DatabaseSync): void {
+  db.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
 }
 
 // auto_vacuum only takes effect when set before the first page is written.
@@ -81,243 +121,9 @@ export function configureSqlitePreSchemaPragmas(
   options: Pick<SqliteConnectionPragmaOptions, "busyTimeoutMs"> = {},
 ): void {
   if (options.busyTimeoutMs !== undefined) {
-    configureSqliteBusyTimeout(db, options.busyTimeoutMs);
+    setSqliteBusyTimeout(db, options.busyTimeoutMs);
   }
   enableIncrementalAutoVacuumForFreshDatabase(db);
-}
-
-function normalizeNonNegativeInteger(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function findExistingVolumePaths(
-  targetPath: string,
-): { canonicalPath: string; originalPath: string } | null {
-  let current = path.resolve(targetPath);
-  while (true) {
-    let stats: ReturnType<typeof fs.statSync>;
-    try {
-      stats = fs.statSync(current);
-    } catch {
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return null;
-      }
-      current = parent;
-      continue;
-    }
-    const existingPath = fs.realpathSync(current);
-    return {
-      canonicalPath: stats.isDirectory() ? existingPath : path.dirname(existingPath),
-      originalPath: stats.isDirectory() ? current : path.dirname(current),
-    };
-  }
-}
-
-function decodeMountPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_match, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
-}
-
-function parseProcMountInfoEntries(contents: string): MountEntry[] {
-  const entries: MountEntry[] = [];
-  for (const line of contents.split("\n")) {
-    const separator = line.indexOf(" - ");
-    if (separator === -1) {
-      continue;
-    }
-    const fields = line.slice(0, separator).split(" ");
-    const suffixFields = line.slice(separator + 3).split(" ");
-    const mountPoint = fields[4];
-    const fsType = suffixFields[0];
-    if (mountPoint && fsType) {
-      entries.push({
-        mountPoint: decodeMountPath(mountPoint),
-        fsType,
-        ...(suffixFields[1] ? { source: decodeMountPath(suffixFields[1]) } : {}),
-      });
-    }
-  }
-  return entries;
-}
-
-function parseMountCommandEntries(contents: string): MountEntry[] {
-  const entries: MountEntry[] = [];
-  for (const line of contents.split("\n")) {
-    const linuxMatch = /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line);
-    if (linuxMatch) {
-      const source = linuxMatch[1];
-      const mountPoint = linuxMatch[2];
-      const fsType = linuxMatch[3];
-      if (source && mountPoint && fsType) {
-        entries.push({ source, mountPoint, fsType });
-      }
-      continue;
-    }
-    const bsdMatch = /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
-    if (bsdMatch) {
-      const source = bsdMatch[1];
-      const mountPoint = bsdMatch[2];
-      const fsType = bsdMatch[3];
-      if (source && mountPoint && fsType) {
-        entries.push({ source, mountPoint, fsType });
-      }
-    }
-  }
-  return entries;
-}
-
-function isMountCommandTimeout(error: unknown): boolean {
-  return (
-    error !== null && typeof error === "object" && "code" in error && error.code === "ETIMEDOUT"
-  );
-}
-
-function readMountEntries(): Result<MountEntry[], "timeout"> {
-  try {
-    return {
-      ok: true,
-      value: parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8")),
-    };
-  } catch {
-    // macOS/BSD expose filesystem type names in `mount` output instead of
-    // Linux superblock magic, so keep this fallback for named filesystem types.
-  }
-  try {
-    return {
-      ok: true,
-      value: parseMountCommandEntries(
-        String(
-          process.getBuiltinModule("node:child_process").execFileSync("mount", [], {
-            killSignal: "SIGKILL",
-            timeout: MOUNT_COMMAND_TIMEOUT_MS,
-          }),
-        ),
-      ),
-    };
-  } catch (error) {
-    return isMountCommandTimeout(error) ? { ok: false, error: "timeout" } : { ok: true, value: [] };
-  }
-}
-
-function isPathWithinMount(targetPath: string, mountPoint: string): boolean {
-  const resolvedTarget = path.resolve(targetPath);
-  const resolvedMountPoint = path.resolve(mountPoint);
-  return (
-    resolvedTarget === resolvedMountPoint ||
-    resolvedMountPoint === path.parse(resolvedMountPoint).root ||
-    resolvedTarget.startsWith(`${resolvedMountPoint}${path.sep}`)
-  );
-}
-
-function isSshfsMountSource(source: string | undefined): boolean {
-  if (!source) {
-    return false;
-  }
-  const normalized = source.toLowerCase();
-  return (
-    normalized === "sshfs" ||
-    normalized.startsWith("sshfs#") ||
-    normalized.startsWith("sshfs@") ||
-    /^(?:[^/\s:]+@)?[^/\s:]+:.*/u.test(source)
-  );
-}
-
-function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJournalPolicy {
-  const normalized = entry.fsType.toLowerCase();
-  if (normalized.startsWith("nfs") || NETWORK_FILESYSTEM_TYPES.has(normalized)) {
-    return "rollback";
-  }
-  if (normalized === "fuse.sshfs") {
-    return "unsupported";
-  }
-  if ((normalized === "macfuse" || normalized === "osxfuse") && isSshfsMountSource(entry.source)) {
-    return "unsupported";
-  }
-  return "wal";
-}
-
-function resolveMountEntryJournalPolicy(
-  targetPath: string,
-  mountEntries: MountEntry[],
-): SqliteFilesystemJournalPolicy {
-  const mountEntry = mountEntries
-    .filter((entry) => isPathWithinMount(targetPath, entry.mountPoint))
-    .toSorted((a, b) => b.mountPoint.length - a.mountPoint.length)[0];
-  return mountEntry ? resolveMountTypeJournalPolicy(mountEntry) : "wal";
-}
-
-function combineMountEntryJournalPolicies(
-  targetPaths: readonly string[],
-): SqliteFilesystemJournalPolicy {
-  const mountResult = readMountEntries();
-  if (!mountResult.ok) {
-    return "rollback";
-  }
-  const policies = new Set(
-    targetPaths.map((targetPath) => resolveMountEntryJournalPolicy(targetPath, mountResult.value)),
-  );
-  if (policies.has("unsupported")) {
-    return "unsupported";
-  }
-  return policies.has("rollback") ? "rollback" : "wal";
-}
-
-function isWindowsUncPath(targetPath: string): boolean {
-  return (
-    /^\\\\\?\\UNC\\[^\\]+\\[^\\]+/i.test(targetPath) ||
-    /^\\\\(?![?.]\\)[^\\]+\\[^\\]+/.test(targetPath)
-  );
-}
-
-function isWindowsDrivePath(targetPath: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(targetPath) || /^\\\\\?\\[A-Za-z]:[\\/]/i.test(targetPath);
-}
-
-function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJournalPolicy {
-  if (process.platform === "win32") {
-    const normalizedTargetPath = path.win32.normalize(targetPath);
-    if (isWindowsUncPath(normalizedTargetPath)) {
-      return "rollback";
-    }
-    if (isWindowsDrivePath(normalizedTargetPath)) {
-      try {
-        return isWindowsUncPath(path.win32.normalize(fs.realpathSync.native(targetPath)))
-          ? "rollback"
-          : "wal";
-      } catch {
-        // Windows can deny SMB path normalization when parent components are
-        // unreadable. Treat an unclassifiable opened database as network-backed.
-        return "rollback";
-      }
-    }
-  }
-  const checkedPaths = findExistingVolumePaths(targetPath);
-  if (!checkedPaths) {
-    return "wal";
-  }
-  const mountLookupPaths = [checkedPaths.originalPath, checkedPaths.canonicalPath];
-  if (typeof fs.statfsSync !== "function") {
-    return combineMountEntryJournalPolicies(mountLookupPaths);
-  }
-  try {
-    const filesystemType = fs.statfsSync(checkedPaths.canonicalPath).type;
-    if (
-      filesystemType === LINUX_NFS_SUPER_MAGIC ||
-      filesystemType === LINUX_SMB_SUPER_MAGIC ||
-      filesystemType === LINUX_CIFS_SUPER_MAGIC ||
-      filesystemType === LINUX_SMB2_SUPER_MAGIC
-    ) {
-      return "rollback";
-    }
-  } catch {
-    return combineMountEntryJournalPolicies(mountLookupPaths);
-  }
-  return combineMountEntryJournalPolicies(mountLookupPaths);
 }
 
 function readJournalModeResult(row: unknown): string | null {
@@ -338,15 +144,6 @@ function hasInMemoryMainDatabase(db: DatabaseSync): boolean {
   return main?.file === "";
 }
 
-function readCheckpointBusyResult(row: unknown): boolean {
-  if (!row || typeof row !== "object") {
-    return false;
-  }
-  const record = row as Record<string, unknown>;
-  const value = record.busy ?? Object.values(record)[0];
-  return value === 1 || value === 1n;
-}
-
 function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintenanceOptions): void {
   const row = db.prepare("PRAGMA journal_mode = DELETE;").get();
   const journalMode = readJournalModeResult(row);
@@ -365,7 +162,7 @@ function enableWalJournalMode(
   retryTimeoutMs: number,
   options: SqliteWalMaintenanceOptions,
 ): boolean {
-  const deadline = Date.now() + retryTimeoutMs;
+  const deadline = performance.now() + retryTimeoutMs;
   let restoreBusyTimeout = false;
   try {
     while (true) {
@@ -386,14 +183,14 @@ function enableWalJournalMode(
           `${label}${location} could not enable WAL; SQLite kept journal_mode=${journalMode ?? "unknown"}.`,
         );
       } catch (error) {
-        const remainingMs = deadline - Date.now();
+        const remainingMs = Math.max(0, deadline - performance.now());
         if (!isSqliteLockError(error) || remainingMs <= 0) {
           throw error;
         }
         if (!restoreBusyTimeout) {
           // A busy handler can be bypassed to avoid deadlock. Disable it after
           // the first BUSY so explicit retries cannot overrun this deadline.
-          configureSqliteBusyTimeout(db, 0);
+          setSqliteBusyTimeout(db, 0);
           restoreBusyTimeout = true;
         }
         Atomics.wait(
@@ -406,7 +203,7 @@ function enableWalJournalMode(
     }
   } finally {
     if (restoreBusyTimeout) {
-      configureSqliteBusyTimeout(db, retryTimeoutMs);
+      setSqliteBusyTimeout(db, retryTimeoutMs);
     }
   }
 }
@@ -437,17 +234,24 @@ export function configureSqliteWalMaintenance(
   db: DatabaseSync,
   options: SqliteWalMaintenanceOptions = {},
 ): SqliteWalMaintenance {
-  const busyTimeoutMs =
-    options.busyTimeoutMs === undefined ? 0 : configureSqliteBusyTimeout(db, options.busyTimeoutMs);
-  const autoCheckpointPages = normalizeNonNegativeInteger(
+  const busyTimeoutMs = options.busyTimeoutMs ?? 0;
+  if (options.busyTimeoutMs !== undefined) {
+    setSqliteBusyTimeout(db, options.busyTimeoutMs);
+  }
+  const autoCheckpointPages = normalizeSqliteNonNegativeInteger(
     options.autoCheckpointPages ?? DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
     "autoCheckpointPages",
   );
-  const checkpointIntervalMs = normalizeNonNegativeInteger(
+  const checkpointIntervalMs = normalizeSqliteNonNegativeInteger(
     options.checkpointIntervalMs ?? DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
     "checkpointIntervalMs",
   );
   const timerIntervalMs = Math.min(checkpointIntervalMs, MAX_TIMER_TIMEOUT_MS);
+  // Checkpoint-only ticks keep commits off the checkpoint between periodic passes.
+  const checkpointTickMs =
+    checkpointIntervalMs > DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS
+      ? DEFAULT_SQLITE_WAL_CHECKPOINT_TICK_MS
+      : 0;
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
   const periodicCheckpointMode = options.checkpointMode ?? "PASSIVE";
   const journalPolicy = options.databasePath
@@ -458,72 +262,233 @@ export function configureSqliteWalMaintenance(
   }
   if (journalPolicy === "rollback") {
     requireRollbackJournalMode(db, options);
-    return {
-      checkpoint: () => true,
-      close: () => true,
-    };
   }
-  if (!enableWalJournalMode(db, busyTimeoutMs, options)) {
+  if (journalPolicy === "rollback" || !enableWalJournalMode(db, busyTimeoutMs, options)) {
     return {
       checkpoint: () => true,
+      reclaimFreePages: (reclaimOptions = {}) =>
+        reclaimSqliteWalFreePages(db, () => true, reclaimOptions),
+      stop: async () => {},
       close: () => true,
     };
   }
   enableMacosCheckpointFullfsync(db);
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
   db.exec(`PRAGMA journal_size_limit = ${DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES};`);
+  const tripwireDatabasePath =
+    process.platform === "linux" && options.databasePath && fs.existsSync(options.databasePath)
+      ? fs.realpathSync.native(options.databasePath)
+      : undefined;
+  let invalidated = false;
+  let splitBrainDetectionEnabled = Boolean(tripwireDatabasePath);
+  const checkpointOwner = createSqliteWalCheckpoint(
+    db,
+    options,
+    DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES,
+  );
+  const runCheckpoint = checkpointOwner.checkpoint;
 
-  const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
+  const runMaintenance = (operation: () => boolean): boolean => {
+    if (invalidated) {
+      return false;
+    }
     try {
-      const row = db.prepare(`PRAGMA wal_checkpoint(${mode});`).get();
-      if (readCheckpointBusyResult(row)) {
-        const label = options.databaseLabel ?? "sqlite database";
-        const error = new Error(`${label} WAL checkpoint ${mode} remained busy`);
-        options.onCheckpointError?.(error);
-        return false;
-      }
-      return true;
+      return options.runMaintenance ? options.runMaintenance(operation) : operation();
     } catch (error) {
-      options.onCheckpointError?.(error);
+      checkpointOwner.recordError(error);
       return false;
     }
   };
-
-  // Bounded page release for databases opened with auto_vacuum=INCREMENTAL.
-  // A no-op elsewhere, and never a blocking full VACUUM: unbounded vacuums on
-  // the event loop have starved channel sockets in production (#83712).
-  const runIncrementalVacuum = (): void => {
-    try {
-      db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS});`);
-    } catch (error) {
-      options.onCheckpointError?.(error);
+  const checkpoint = (): boolean => runMaintenance(() => runCheckpoint(checkpointMode));
+  const reclaimFreePages = (
+    reclaimOptions: SqliteWalReclamationOptions = {},
+  ): SqliteWalReclamationResult => {
+    let result: SqliteWalReclamationResult | undefined;
+    let failure: { error: unknown } | undefined;
+    runMaintenance(() => {
+      try {
+        result = reclaimSqliteWalFreePages(db, runCheckpoint, reclaimOptions);
+        return result.checkpointCompleted;
+      } catch (error) {
+        failure = { error };
+        throw error;
+      }
+    });
+    if (failure) {
+      throw failure.error;
     }
+    if (!result) {
+      throw new Error("SQLite page reclamation owner is unavailable");
+    }
+    return { ...result, checkpoint: checkpointOwner.snapshot };
   };
 
-  const checkpoint = (): boolean => runCheckpoint(checkpointMode);
-
-  let timer: IntervalHandle | null = null;
+  const scope = maintenanceScheduler.scope();
+  const maintenanceId = `sqlite-wal:${++nextMaintenanceId}`;
+  // The periodic pass sets the vacuum budget; the next run consumes it, ticks add none.
+  let nextPageBudget = 0;
+  const maintainPeriodic = (
+    request: SqliteWalPeriodicRequest,
+    admit?: (stage: "transaction" | "commit") => void,
+    maintain?: () => void,
+  ): SqliteWalPeriodicResult => {
+    if (invalidated) {
+      return { reclaimedPages: 0 };
+    }
+    if (request.checkpoint) {
+      checkpointOwner.adopt(request.checkpoint);
+    }
+    let reclaimedPages = 0;
+    const quiet = request.maxPages === 0;
+    const runTickCheckpoint = (mode: SqliteWalCheckpointMode) =>
+      checkpointOwner.checkpoint(mode, { quiet });
+    runMaintenance(() => {
+      const reclaimed = reclaimSqliteWalFreePages(db, runTickCheckpoint, {
+        checkpointMode: request.checkpointMode,
+        maxPages: request.maxPages,
+        beforeMutation: () => admit?.("transaction"),
+        onCommit: () => admit?.("commit"),
+      });
+      const checkpointed = reclaimed.checkpointCompleted;
+      if (
+        checkpointed &&
+        reclaimed.freePagesBefore !== null &&
+        reclaimed.remainingFreePages !== null
+      ) {
+        reclaimedPages = Math.min(
+          reclaimed.vacuumPagesRequested,
+          reclaimed.freePagesBefore - reclaimed.remainingFreePages,
+        );
+      }
+      if (
+        checkpointed &&
+        request.checkpointMode === "PASSIVE" &&
+        (checkpointOwner.health?.walBytes ?? 0) > DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES
+      ) {
+        // A completed PASSIVE checkpoint need not recycle its high-water file
+        // until another commit. Try once without waiting for readers or writers.
+        admit?.("transaction");
+        runWithSqliteBusyTimeout(db, 0, () => runTickCheckpoint("TRUNCATE"));
+      }
+      if (checkpointed && request.maxPages > 0 && !request.continuation) {
+        try {
+          maintain?.();
+        } catch (error) {
+          if (!isSqliteLockError(error)) {
+            throw error;
+          }
+        }
+      }
+      return checkpointed;
+    });
+    return { reclaimedPages, checkpoint: checkpointOwner.snapshot };
+  };
+  const maintain = createSqliteWalMaintenanceScheduler(
+    db,
+    maintainPeriodic,
+    (maxPages) =>
+      timerIntervalMs > 0 && !scope.signal.aborted && !invalidated
+        ? { maxPages, checkpointMode: periodicCheckpointMode, checkpoint: checkpointOwner.snapshot }
+        : undefined,
+    checkpointOwner.adopt,
+    (error) => checkpointOwner.recordError(error),
+    () => {
+      const budget = nextPageBudget;
+      nextPageBudget = 0;
+      return budget;
+    },
+  );
   if (timerIntervalMs > 0) {
-    timer = setInterval(() => {
-      runCheckpoint(periodicCheckpointMode);
-      runIncrementalVacuum();
-    }, timerIntervalMs) as IntervalHandle;
-    timer.unref?.();
+    runInSqliteMaintenanceContext(() =>
+      scope.schedule({
+        id: `${maintenanceId}:periodic`,
+        delayMs: timerIntervalMs,
+        everyMs: timerIntervalMs,
+        run: () => {
+          // Inspect the published handle before identity admission or synchronous cleanup.
+          if (tripwireDatabasePath && splitBrainDetectionEnabled) {
+            let splitBrain: SqliteWalSplitBrainEvent | undefined;
+            try {
+              splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
+            } catch (error) {
+              splitBrainDetectionEnabled = false;
+              log.warn("SQLite WAL split-brain detection disabled", {
+                databaseLabel: options.databaseLabel,
+                databasePath: tripwireDatabasePath,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+            if (splitBrain) {
+              invalidated = true;
+              scope.beginClose();
+              terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+            }
+          }
+          nextPageBudget = 512;
+          return maintain();
+        },
+      }),
+    );
+  }
+  if (checkpointTickMs > 0) {
+    runInSqliteMaintenanceContext(() =>
+      scope.schedule({
+        id: `${maintenanceId}:tick`,
+        delayMs: checkpointTickMs,
+        everyMs: checkpointTickMs,
+        run: maintain,
+      }),
+    );
   }
 
+  const beginClose = () => {
+    runInSqliteMaintenanceContext(() => scope.beginClose());
+    return cancelSqliteWalWriteAdmission(db);
+  };
+
   return {
+    get health() {
+      return checkpointOwner.health;
+    },
     checkpoint,
+    maintainPeriodic,
+    reclaimFreePages,
+    inspectIdle: () => (runMaintenance(checkpointOwner.inspectIdle) ? "healthy" : "retire"),
+    stop: async () => {
+      try {
+        await beginClose();
+      } finally {
+        await runInSqliteMaintenanceContext(() => scope.stop());
+      }
+    },
     close: (closeOptions) => {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
+      void beginClose();
+      if (invalidated) {
+        return false;
       }
       // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on
       // readers and has starved the event loop for seconds under fleet churn.
       // Orderly dispose/delete keeps TRUNCATE so sidecars are flushed for unlink.
-      return runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode);
+      return runMaintenance(() => runCheckpoint(closeOptions?.checkpointMode ?? checkpointMode));
     },
   };
+}
+
+type SqliteExitRegistration = { close: () => void; fired: boolean };
+type SqliteExitGroup = {
+  pending: Set<SqliteExitRegistration>;
+  dispatch: () => void;
+};
+let lastSqliteExitGroup: SqliteExitGroup | undefined;
+
+function detachEmptySqliteExitGroup(group: SqliteExitGroup): void {
+  if (group.pending.size > 0) {
+    return;
+  }
+  if (lastSqliteExitGroup === group) {
+    lastSqliteExitGroup = undefined;
+  }
+  process.removeListener("exit", group.dispatch);
 }
 
 /**
@@ -532,16 +497,41 @@ export function configureSqliteWalMaintenance(
  * runtime shutdowns do not accumulate listeners on shared worker processes.
  */
 export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
-  const closeOnExit = () => {
-    try {
-      closeAll();
-    } catch {
-      // Exit-time close is best-effort; unclean exits rely on WAL recovery.
-    }
-  };
-  process.once("exit", closeOnExit);
+  const registration = { close: closeAll, fired: false };
+  let group = lastSqliteExitGroup;
+  // Preserve intervening owners, such as capture finalization before database close.
+  if (!group || process.listeners("exit").at(-1) !== group.dispatch) {
+    const pending = new Set([registration]);
+    const created: SqliteExitGroup = {
+      pending,
+      dispatch: () => {
+        // Snapshot this batch before callbacks; disposal cannot skip an admitted close.
+        const snapshot = [...pending];
+        for (const entry of snapshot) {
+          if (entry.fired) {
+            continue;
+          }
+          entry.fired = true;
+          pending.delete(entry);
+          detachEmptySqliteExitGroup(created);
+          try {
+            entry.close();
+          } catch {
+            // Exit-time close is best-effort; unclean exits rely on WAL recovery.
+          }
+        }
+      },
+    };
+    // Keep the dispatcher until the last callback starts, including nested emissions.
+    process.on("exit", created.dispatch);
+    lastSqliteExitGroup = group = created;
+  } else {
+    group.pending.add(registration);
+  }
+  const owner = group;
   return () => {
-    process.removeListener("exit", closeOnExit);
+    owner.pending.delete(registration);
+    detachEmptySqliteExitGroup(owner);
   };
 }
 
@@ -552,11 +542,25 @@ export function configureSqliteConnectionPragmas(
 ): SqliteWalMaintenance {
   const { foreignKeys, synchronous, ...walOptions } = options;
   const maintenance = configureSqliteWalMaintenance(db, walOptions);
-  if (synchronous) {
-    db.exec(`PRAGMA synchronous = ${synchronous};`);
+  try {
+    if (synchronous) {
+      db.exec(`PRAGMA synchronous = ${synchronous};`);
+    }
+    if (foreignKeys) {
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
+    return maintenance;
+  } catch (error) {
+    // The caller cannot dispose maintenance until this function returns it.
+    try {
+      maintenance.close();
+    } catch (closeError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, closeError],
+        "SQLite connection pragma configuration and WAL maintenance cleanup both failed.",
+        error,
+      );
+    }
+    throw error;
   }
-  if (foreignKeys) {
-    db.exec("PRAGMA foreign_keys = ON;");
-  }
-  return maintenance;
 }

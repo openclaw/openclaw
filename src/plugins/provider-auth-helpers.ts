@@ -1,4 +1,3 @@
-// Builds provider auth credentials from config and plugin metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -9,6 +8,7 @@ import {
   upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow,
 } from "../agents/auth-profiles/profiles.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,7 +21,7 @@ import {
 } from "../config/types.secrets.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
@@ -45,7 +45,7 @@ function buildEnvSecretRef(id: string): SecretRef {
 }
 
 function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawConfig): SecretRef {
-  const envVars = getProviderEnvVars(provider, {
+  const envVars = getProviderEnvVarsCore(provider, {
     ...(config ? { config } : {}),
     includeUntrustedWorkspacePlugins: false,
   });
@@ -63,19 +63,13 @@ function resolveApiKeySecretInput(
   input: SecretInput,
   options?: ApiKeyStorageOptions,
 ): SecretInput {
-  if (input !== null && typeof input === "object") {
-    const coercedRef = coerceSecretRef(input);
-    if (!coercedRef || !isValidSecretRef(coercedRef)) {
-      throw new Error("API key SecretRef is invalid.");
-    }
-    return coercedRef;
-  }
-  if (options?.secretInputMode === "plaintext") {
+  const objectInput = input !== null && typeof input === "object";
+  if (!objectInput && options?.secretInputMode === "plaintext") {
     return normalizeSecretInput(input);
   }
   const coercedRef = coerceSecretRef(input);
-  if (coercedRef) {
-    if (!isValidSecretRef(coercedRef)) {
+  if (objectInput || coercedRef) {
+    if (!coercedRef || !isValidSecretRef(coercedRef)) {
       throw new Error("API key SecretRef is invalid.");
     }
     return coercedRef;
@@ -104,18 +98,10 @@ export function buildApiKeyCredential(
   metadata?: Record<string, string>;
 } {
   const secretInput = resolveApiKeySecretInput(provider, input, options);
-  if (typeof secretInput === "string") {
-    return {
-      type: "api_key",
-      provider,
-      key: secretInput,
-      ...(metadata ? { metadata } : {}),
-    };
-  }
   return {
     type: "api_key",
     provider,
-    keyRef: secretInput,
+    ...(typeof secretInput === "string" ? { key: secretInput } : { keyRef: secretInput }),
     ...(metadata ? { metadata } : {}),
   };
 }
@@ -153,7 +139,6 @@ export function applyAuthProfileConfig(
     preferProfileFirst?: boolean;
   },
 ): OpenClawConfig {
-  const normalizedProvider = resolveProviderIdForAuth(params.provider, { config: cfg });
   const profiles = {
     ...cfg.auth?.profiles,
     [params.profileId]: {
@@ -164,93 +149,84 @@ export function applyAuthProfileConfig(
     },
   };
 
-  const configuredProviderProfiles = Object.entries(cfg.auth?.profiles ?? {})
-    .filter(
-      ([, profile]) =>
-        resolveProviderIdForAuth(profile.provider, { config: cfg }) === normalizedProvider,
-    )
-    .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
-
-  // Maintain `auth.order` when it already exists. Additionally, if we detect
-  // mixed auth modes for the same provider, keep the newly selected profile first.
-  const matchingProviderOrderEntries = Object.entries(cfg.auth?.order ?? {}).filter(
-    ([providerId]) => resolveProviderIdForAuth(providerId, { config: cfg }) === normalizedProvider,
-  );
-  const existingProviderOrder =
-    matchingProviderOrderEntries.length > 0
-      ? uniqueStrings(matchingProviderOrderEntries.flatMap(([, order]) => order))
-      : undefined;
+  const next = { ...cfg, auth: { ...cfg.auth, profiles } };
+  const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {});
+  const orderEntries = Object.entries(cfg.auth?.order ?? {});
   const preferProfileFirst = params.preferProfileFirst ?? true;
-  const reorderedProviderOrder =
-    existingProviderOrder && preferProfileFirst
-      ? [
-          params.profileId,
-          ...existingProviderOrder.filter((profileId) => profileId !== params.profileId),
-        ]
-      : existingProviderOrder;
-  const hasMixedConfiguredModes = configuredProviderProfiles.some(
-    ({ profileId, mode }) => profileId !== params.profileId && mode !== params.mode,
-  );
-  const derivedProviderOrder =
-    existingProviderOrder === undefined && preferProfileFirst && hasMixedConfiguredModes
-      ? [
-          params.profileId,
-          ...configuredProviderProfiles
-            .map(({ profileId }) => profileId)
-            .filter((profileId) => profileId !== params.profileId),
-        ]
-      : undefined;
-  const baseOrder =
-    matchingProviderOrderEntries.length > 0
-      ? Object.fromEntries(
-          Object.entries(cfg.auth?.order ?? {}).filter(
-            ([providerId]) =>
-              resolveProviderIdForAuth(providerId, { config: cfg }) !== normalizedProvider,
-          ),
-        )
-      : cfg.auth?.order;
-  const order =
-    existingProviderOrder !== undefined
-      ? {
-          ...baseOrder,
-          [normalizedProvider]: reorderedProviderOrder?.includes(params.profileId)
-            ? reorderedProviderOrder
-            : [...(reorderedProviderOrder ?? []), params.profileId],
-        }
-      : derivedProviderOrder
-        ? {
-            ...baseOrder,
-            [normalizedProvider]: derivedProviderOrder,
-          }
-        : baseOrder;
-  return {
-    ...cfg,
-    auth: {
-      ...cfg.auth,
-      profiles,
-      ...(order ? { order } : {}),
-    },
-  };
+  // Aliases only affect ordering. A config-only profile insertion must not
+  // discover plugins (and open their state database) when order cannot change.
+  if (
+    orderEntries.length === 0 &&
+    (!preferProfileFirst ||
+      !configuredProfiles.some(
+        ([profileId, profile]) => profileId !== params.profileId && profile.mode !== params.mode,
+      ))
+  ) {
+    return next;
+  }
+
+  const normalizedProvider = resolveProviderIdForAuth(params.provider, {
+    config: cfg,
+    storedCredential: true,
+  });
+  const matchesProvider = (provider: string, storedCredential = false) =>
+    resolveProviderIdForAuth(provider, { config: cfg, storedCredential }) === normalizedProvider;
+  const matchingOrderEntries = orderEntries.filter(([provider]) => matchesProvider(provider));
+  let providerOrder: string[] | undefined;
+  if (matchingOrderEntries.length > 0) {
+    const existingOrder = uniqueStrings(matchingOrderEntries.flatMap(([, order]) => order));
+    providerOrder = preferProfileFirst
+      ? [params.profileId, ...existingOrder.filter((profileId) => profileId !== params.profileId)]
+      : existingOrder.includes(params.profileId)
+        ? existingOrder
+        : [...existingOrder, params.profileId];
+  } else if (preferProfileFirst) {
+    const peers = configuredProfiles.filter(([, profile]) =>
+      matchesProvider(profile.provider, true),
+    );
+    if (
+      peers.some(
+        ([profileId, profile]) => profileId !== params.profileId && profile.mode !== params.mode,
+      )
+    ) {
+      providerOrder = [
+        params.profileId,
+        ...peers
+          .map(([profileId]) => profileId)
+          .filter((profileId) => profileId !== params.profileId),
+      ];
+    }
+  }
+  if (providerOrder) {
+    next.auth.order = {
+      ...Object.fromEntries(orderEntries.filter(([provider]) => !matchesProvider(provider))),
+      [normalizedProvider]: providerOrder,
+    };
+  }
+  return next;
 }
 
 /** Returns true when config still names a removed auth profile. */
 export function configReferencesAuthProfile(cfg: OpenClawConfig, profileId: string): boolean {
   return (
     Boolean(cfg.auth?.profiles?.[profileId]) ||
-    Object.values(cfg.auth?.order ?? {}).some((order) => order.includes(profileId))
+    Object.values(cfg.auth?.order ?? {}).some((order) => order.includes(profileId)) ||
+    Object.values(cfg.models?.providers ?? {}).some((provider) => provider.apiKey === profileId)
   );
 }
 
 /**
- * Counterpart to {@link applyAuthProfileConfig}: drops a profile from
- * `auth.profiles` and every `auth.order` list. An emptied provider order is
- * deleted rather than left as `[]`, because an authored empty order is a hard
- * "select no profiles" instruction and would disable the provider entirely.
+ * Drops a profile from `auth.profiles`, every `auth.order` list, and provider-entry
+ * `apiKey` references. An emptied provider order is deleted rather than left as
+ * `[]`, because an authored empty order is a hard "select no profiles" instruction.
  */
 export function removeAuthProfileConfig(cfg: OpenClawConfig, profileId: string): OpenClawConfig {
   if (!configReferencesAuthProfile(cfg, profileId)) {
     return cfg;
   }
+  const authReferencesProfile =
+    Boolean(cfg.auth?.profiles?.[profileId]) ||
+    Object.values(cfg.auth?.order ?? {}).some((providerOrder) => providerOrder.includes(profileId));
   const profiles = Object.fromEntries(
     Object.entries(cfg.auth?.profiles ?? {}).filter(([id]) => id !== profileId),
   );
@@ -268,13 +244,27 @@ export function removeAuthProfileConfig(cfg: OpenClawConfig, profileId: string):
     {},
   );
   const { order: _droppedOrder, ...auth } = cfg.auth ?? {};
+  const providers = Object.fromEntries(
+    Object.entries(cfg.models?.providers ?? {}).map(([providerId, provider]) => {
+      if (provider.apiKey !== profileId) {
+        return [providerId, provider];
+      }
+      const { apiKey: _droppedApiKey, ...nextProvider } = provider;
+      return [providerId, nextProvider];
+    }),
+  );
   return {
     ...cfg,
-    auth: {
-      ...auth,
-      profiles,
-      ...(Object.keys(order).length > 0 ? { order } : {}),
-    },
+    ...(authReferencesProfile
+      ? {
+          auth: {
+            ...auth,
+            profiles,
+            ...(Object.keys(order).length > 0 ? { order } : {}),
+          },
+        }
+      : {}),
+    ...(cfg.models?.providers ? { models: { ...cfg.models, providers } } : {}),
   };
 }
 
@@ -300,16 +290,14 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .map((entry) => path.join(agentsRoot, entry.name, "agent"));
 
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const dir of [normalized, ...discovered]) {
-    const real = safeRealpathSync(path.resolve(dir));
-    if (real && !seen.has(real)) {
-      seen.add(real);
-      result.push(real);
-    }
-  }
-  return result;
+  // Publish the shared profile before siblings decide whether to inherit it.
+  const sharedAgentDir = safeRealpathSync(resolveSharedMainAuthAgentDir());
+  return uniqueStrings(
+    [normalized, ...discovered].flatMap((dir) => {
+      const real = safeRealpathSync(path.resolve(dir));
+      return real ? [real] : [];
+    }),
+  ).toSorted((left, right) => Number(right === sharedAgentDir) - Number(left === sharedAgentDir));
 }
 
 export async function writeOAuthCredentials(

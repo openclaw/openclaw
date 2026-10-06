@@ -3,12 +3,16 @@ import { randomUUID } from "node:crypto";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import {
   movePendingDeliveryQueueEntryNamespace,
   replacePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite-namespace.js";
-import { terminalizePendingDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
+import {
+  countPendingDeliveryQueueEntries,
+  terminalizePendingDeliveryQueueEntry,
+} from "../delivery-queue-sqlite.js";
 import {
   collectPayloadMediaSources,
   resolveOutboundMediaAccessForSend,
@@ -44,6 +48,7 @@ import {
   mapPreparedOutboundAcceptedPayloads,
   projectPreparedOutboundBatchForStorage,
 } from "./prepared-batch.js";
+import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 const LEGACY_PREPARATION_LEASE_MS = 5 * 60_000;
 const LEGACY_PREPARATION_LEASE_RENEW_MS = 30_000;
@@ -51,28 +56,29 @@ const LEGACY_PREPARATION_LEASE_RENEW_MS = 30_000;
 function withLegacyPreparationLease(
   entry: LegacyQueuedDeliveryPreparation,
   ownerId: string,
-  now = Date.now(),
 ): LegacyQueuedDeliveryPreparation {
   return {
     ...entry,
     retainOnFailure: true,
     legacyPreparationOwnerId: ownerId,
-    legacyPreparationLeaseExpiresAt: now + LEGACY_PREPARATION_LEASE_MS,
+    legacyPreparationLeaseExpiresAt: Date.now() + LEGACY_PREPARATION_LEASE_MS,
   };
 }
 
-function hasActiveLegacyPreparationLease(
-  entry: LegacyQueuedDeliveryPreparation,
-  now = Date.now(),
-): boolean {
+function hasActiveLegacyPreparationLease(entry: LegacyQueuedDeliveryPreparation): boolean {
   return Boolean(
     entry.legacyPreparationOwnerId &&
     typeof entry.legacyPreparationLeaseExpiresAt === "number" &&
-    entry.legacyPreparationLeaseExpiresAt > now,
+    entry.legacyPreparationLeaseExpiresAt > Date.now(),
   );
 }
 
 function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClawConfig) {
+  const reply = normalizeOutboundReplyFacts({
+    reply: entry.reply,
+    replyToId: entry.replyToId,
+    replyToMode: entry.replyToMode,
+  });
   return {
     cfg,
     channel: entry.channel,
@@ -83,8 +89,7 @@ function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClaw
     payloads: entry.payloads,
     renderedBatchPlan: entry.renderedBatchPlan,
     threadId: entry.threadId,
-    replyToId: entry.replyToId,
-    replyToMode: entry.replyToMode,
+    reply,
     formatting: entry.formatting,
     identity: entry.identity,
     bestEffort: entry.bestEffort,
@@ -98,7 +103,6 @@ function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClaw
     preparedMessageId: entry.preparedMessageId,
     deliveryCompletion: entry.deliveryCompletion,
     completionRetention: entry.completionRetention,
-    skipQueue: true,
   } as const;
 }
 
@@ -108,14 +112,16 @@ async function prepareLegacyEntryCheckpoint(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
+  hookRunner?: HookRunner;
 }): Promise<"checkpointed" | "skipped"> {
   const preparationParams = buildLegacyPreparationParams(params.entry, params.cfg);
+  const reply = preparationParams.reply;
   const needsUnknownReconciliation =
     params.entry.recoveryState === "send_attempt_started" ||
     params.entry.recoveryState === "unknown_after_send";
   const legacyUnknownSendReconciliation = needsUnknownReconciliation
     ? await reconcileUnknownQueuedDelivery({
-        entry: params.entry,
+        entry: { ...params.entry, reply },
         payloads: params.entry.payloads,
         cfg: params.cfg,
         warn: (message) => params.log.warn(message),
@@ -149,27 +155,24 @@ async function prepareLegacyEntryCheckpoint(params: {
   if (prepareForReplay) {
     let modifiersStarted = false;
     let leaseLost = false;
-    const renewLease = (): void => {
-      if (leaseLost) {
-        return;
-      }
-      const renewed = withLegacyPreparationLease(sourceEntry, params.ownerId);
-      if (
-        !replacePendingDeliveryQueueEntry({
-          queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-          expectedEntry: sourceEntry,
-          replacementEntry: renewed,
-          stateDir: params.stateDir,
-        })
-      ) {
-        leaseLost = true;
-        return;
-      }
-      sourceEntry = renewed;
-    };
     const renewLeaseSafely = (): void => {
       try {
-        renewLease();
+        if (leaseLost) {
+          return;
+        }
+        const renewed = withLegacyPreparationLease(sourceEntry, params.ownerId);
+        if (
+          !replacePendingDeliveryQueueEntry({
+            queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+            expectedEntry: sourceEntry,
+            replacementEntry: renewed,
+            stateDir: params.stateDir,
+          })
+        ) {
+          leaseLost = true;
+          return;
+        }
+        sourceEntry = renewed;
       } catch (error) {
         leaseLost = true;
         params.log.warn(
@@ -181,7 +184,8 @@ async function prepareLegacyEntryCheckpoint(params: {
     leaseTimer.unref();
     try {
       preparedBatch = await prepareOutboundPayloadBatch(preparationParams, {
-        onBeforeFirstModifier: () => {
+        hookRunner: params.hookRunner,
+        onBeforeFirstModifier: async () => {
           if (leaseLost) {
             throw new Error(`Legacy delivery ${params.entry.id} preparation lease was lost`);
           }
@@ -239,6 +243,8 @@ async function prepareLegacyEntryCheckpoint(params: {
   const {
     payloads: _legacyPayloads,
     replyPayloadSendingHook: _legacyReplyHook,
+    replyToId: _legacyReplyToId,
+    replyToMode: _legacyReplyToMode,
     legacyPreparationState: _legacyPreparationState,
     legacyPreparationOwnerId: _legacyPreparationOwnerId,
     legacyPreparationLeaseExpiresAt: _legacyPreparationLeaseExpiresAt,
@@ -264,6 +270,7 @@ async function prepareLegacyEntryCheckpoint(params: {
     retainOnFailure: true,
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatch),
     renderedBatchPlan: createRenderedMessageBatchPlan(acceptedPayloads),
+    ...(reply ? { reply } : {}),
     ...(!prepareForReplay &&
     (legacyUnknownSendReconciliation?.status === "sent" ||
       legacyUnknownSendReconciliation?.status === "not_sent")
@@ -377,13 +384,11 @@ async function finalizePreparedMigration(params: {
       ...params.entry,
       cfg: params.cfg,
       payloads: acceptedPayloads,
-      skipQueue: true,
     };
     const staged = await stageQueuePayloadMedia({
       payloads: acceptedPayloads,
       mediaAccess: resolveOutboundMediaAccessForSend(
         mediaParams,
-        params.entry.channel,
         collectPayloadMediaSources(acceptedPayloads),
       ),
       maxBytes: resolveOutboundMediaMaxBytes({
@@ -448,20 +453,27 @@ async function finalizePreparedMigration(params: {
     return "moved";
   } finally {
     if (!stagedArtifactsTransferred) {
-      cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
+      await cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
       await releaseSpoolArtifacts(stagedArtifacts, params.stateDir);
     }
   }
 }
 
-const activeLegacyMigrations = new Map<string, Promise<{ moved: number; skipped: number }>>();
+type LegacyOutboundDeliveryMigrationResult = {
+  moved: number;
+  skipped: number;
+  remaining: number;
+};
+
+const activeLegacyMigrations = new Map<string, Promise<LegacyOutboundDeliveryMigrationResult>>();
 
 /** Migrates every unchanged pre-D4 pending row before canonical recovery scans. */
 export async function migrateLegacyPendingOutboundDeliveries(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
-}): Promise<{ moved: number; skipped: number }> {
+  hookRunner?: HookRunner;
+}): Promise<LegacyOutboundDeliveryMigrationResult> {
   const migrationKey = params.stateDir ?? "<default-state>";
   return await getOrCreatePromise(
     activeLegacyMigrations,
@@ -475,7 +487,8 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
-}): Promise<{ moved: number; skipped: number }> {
+  hookRunner?: HookRunner;
+}): Promise<LegacyOutboundDeliveryMigrationResult> {
   let moved = 0;
   let skipped = 0;
   const ownerId = randomUUID();
@@ -540,5 +553,13 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   if (moved > 0 || skipped > 0) {
     params.log.info(`Legacy delivery migration settled moved=${moved} skipped=${skipped}`);
   }
-  return { moved, skipped };
+  const remaining = countPendingDeliveryQueueEntries(
+    [
+      OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+      LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+      OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+    ],
+    params.stateDir,
+  );
+  return { moved, skipped, remaining };
 }

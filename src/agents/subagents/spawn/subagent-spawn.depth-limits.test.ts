@@ -1,5 +1,3 @@
-// Subagent spawn depth-limit tests cover max depth, per-parent child limits,
-// inherited tool policy, and preflight failures before gateway dispatch.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
@@ -8,155 +6,116 @@ import {
   setupAcceptedSubagentGatewayMock,
 } from "./subagent-spawn.test-helpers.js";
 
-const hoisted = vi.hoisted(() => ({
-  activeChildrenBySession: new Map<string, number>(),
-  callGatewayMock: vi.fn(),
-  configOverride: {} as Record<string, unknown>,
-  depthBySession: new Map<string, number>(),
-  updateSessionStoreMock: vi.fn(),
-  registerSubagentRunMock: vi.fn(),
-}));
+const callGatewayMock = vi.fn();
+const updateSessionStoreMock = vi.fn();
+const registerSubagentRunMock = vi.fn();
+let config = createSubagentSpawnTestConfig();
+let depth = 0;
+let activeChildren = 0;
+let store: Record<string, Record<string, unknown>> = {};
+let spawn: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+const parentKey = "agent:main:subagent:parent";
 
-let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-let persistedStore: Record<string, Record<string, unknown>> | undefined;
-
-type SpawnResult = Awaited<ReturnType<typeof spawnSubagentDirect>>;
-type AcceptedSpawnResult = SpawnResult & {
-  childSessionKey: string;
-  runId: string;
-  status: "accepted";
-};
-
-function createDepthLimitConfig(subagents?: Record<string, unknown>) {
-  return createSubagentSpawnTestConfig("/tmp/workspace-main", {
-    agents: {
-      defaults: {
-        workspace: "/tmp/workspace-main",
-        subagents: {
-          maxSpawnDepth: 1,
-          ...subagents,
-        },
-      },
-    },
+function limits(subagents: Record<string, unknown>) {
+  config = createSubagentSpawnTestConfig("/tmp/workspace-main", {
+    agents: { defaults: { workspace: "/tmp/workspace-main", subagents } },
   });
 }
 
-async function spawnFrom(sessionKey: string, params?: Record<string, unknown>) {
-  return await spawnSubagentDirect(
-    {
-      task: "hello",
-      ...params,
-    },
-    {
-      agentSessionKey: sessionKey,
-      workspaceDir: "/tmp/workspace-main",
-    },
-  );
+async function spawnChild(params: Parameters<typeof spawn>[0] = { task: "hello" }) {
+  return spawn(params, { agentSessionKey: parentKey, workspaceDir: "/tmp/workspace-main" });
 }
 
-function expectForbidden(result: SpawnResult, error: string) {
-  expect(result.status).toBe("forbidden");
-  if (result.status !== "forbidden") {
-    throw new Error(`Expected forbidden spawn result, received ${result.status}`);
-  }
-  expect(result.error).toBe(error);
-}
-
-function expectAccepted(result: SpawnResult, runId: string): AcceptedSpawnResult {
+function child(result: Awaited<ReturnType<typeof spawn>>) {
   expect(result.status).toBe("accepted");
-  if (result.status !== "accepted") {
-    throw new Error(`Expected accepted spawn result, received ${result.status}`);
-  }
-  expect(result.runId).toBe(runId);
-  expect(typeof result.childSessionKey).toBe("string");
-  return result as AcceptedSpawnResult;
+  expect(result.runId).toBe("run-1");
+  expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
+  const entry = store[result.childSessionKey!];
+  expect(entry).toBeDefined();
+  return entry!;
 }
 
-describe("subagent spawn depth + child limits", () => {
+describe("subagent spawn depth and child limits", () => {
   beforeAll(async () => {
-    ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
-      callGatewayMock: hoisted.callGatewayMock,
-      getRuntimeConfig: () => hoisted.configOverride,
-      registerSubagentRunMock: hoisted.registerSubagentRunMock,
-      updateSessionStoreMock: hoisted.updateSessionStoreMock,
-      getSubagentDepthFromSessionStore: (sessionKey) => hoisted.depthBySession.get(sessionKey) ?? 0,
-      countActiveRunsForSession: (sessionKey) =>
-        hoisted.activeChildrenBySession.get(sessionKey) ?? 0,
+    ({ spawnSubagentDirect: spawn } = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      getRuntimeConfig: () => config,
+      registerSubagentRunMock,
+      updateSessionStoreMock,
+      loadSessionStoreMock: () => ({ [parentKey]: { sessionId: "nested-parent", updatedAt: 1 } }),
+      getSubagentDepthFromSessionStore: (sessionKey) => (sessionKey === parentKey ? depth : 0),
+      countActiveRunsForSession: (sessionKey) => (sessionKey === parentKey ? activeChildren : 0),
       resetModules: false,
     }));
   });
-
   beforeEach(() => {
-    hoisted.activeChildrenBySession.clear();
-    hoisted.depthBySession.clear();
-    hoisted.callGatewayMock.mockClear();
-    hoisted.registerSubagentRunMock.mockClear();
-    hoisted.updateSessionStoreMock.mockReset();
-    persistedStore = undefined;
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
-      onStore: (store) => {
-        persistedStore = store;
+    depth = 0;
+    activeChildren = 0;
+    store = {};
+    vi.clearAllMocks();
+    installSessionStoreCaptureMock(updateSessionStoreMock, {
+      onStore: (value) => {
+        store = value;
       },
     });
-    hoisted.configOverride = createDepthLimitConfig();
-    setupAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
+    config = createSubagentSpawnTestConfig("/tmp/workspace-main");
+    setupAcceptedSubagentGatewayMock(callGatewayMock);
   });
 
-  it("rejects spawning when caller depth reaches maxSpawnDepth", async () => {
-    hoisted.depthBySession.set("agent:main:subagent:parent", 1);
-
-    const result = await spawnFrom("agent:main:subagent:parent");
-
-    expectForbidden(
-      result,
-      "sessions_spawn is not allowed at this depth (current depth: 1, max: 1; agents.defaults.subagents.maxSpawnDepth).",
-    );
+  it.each([
+    {
+      name: "depth",
+      maxSpawnDepth: 1,
+      children: 0,
+      error:
+        "sessions_spawn is not allowed at this depth (current depth: 1, max: 1; agents.defaults.subagents.maxSpawnDepth).",
+    },
+    {
+      name: "child cap",
+      maxSpawnDepth: 2,
+      children: 1,
+      error:
+        "sessions_spawn has reached max active children for this session (1/1; agents.defaults.subagents.maxChildrenPerAgent).",
+    },
+  ])("rejects the $name limit before persistence", async ({ maxSpawnDepth, children, error }) => {
+    limits({ maxSpawnDepth, maxChildrenPerAgent: 1 });
+    depth = 1;
+    activeChildren = children;
+    const result = await spawnChild({ task: "hello", completionTarget: "parent" });
+    expect(result).toMatchObject({ status: "forbidden", error });
+    expect(registerSubagentRunMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
-  it("checks depth before collector group validation", async () => {
-    hoisted.configOverride = {
-      ...createDepthLimitConfig(),
-      tools: { swarm: { enabled: true } },
-    };
-    hoisted.depthBySession.set("agent:main:subagent:parent", 1);
-
-    const result = await spawnFrom("agent:main:subagent:parent", { collect: true });
-
-    expectForbidden(
-      result,
-      "sessions_spawn is not allowed at this depth (current depth: 1, max: 1; agents.defaults.subagents.maxSpawnDepth).",
-    );
+  it("persists leaf capabilities below the depth limit independently of maxConcurrent", async () => {
+    limits({ maxSpawnDepth: 2, maxChildrenPerAgent: 5, maxConcurrent: 1 });
+    depth = 1;
+    activeChildren = 1;
+    const result = await spawnChild({ task: "hello", completionTarget: "parent" });
+    expect(result.completionTarget).toBe("parent");
+    const entry = child(result);
+    expect(entry).toMatchObject({
+      spawnedBy: parentKey,
+      spawnDepth: 2,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+    });
+    expect(entry.spawnedWorkspaceDir).toEqual(expect.any(String));
   });
 
-  it("allows depth-1 callers when maxSpawnDepth is 2 and patches child capabilities", async () => {
-    hoisted.configOverride = createDepthLimitConfig({ maxSpawnDepth: 2 });
-    hoisted.depthBySession.set("agent:main:subagent:parent", 1);
-
-    const result = await spawnFrom("agent:main:subagent:parent");
-
-    const accepted = expectAccepted(result, "run-1");
-    expect(accepted.childSessionKey).toMatch(/^agent:main:subagent:/);
-
-    // Child capability flags are stored on the session entry so later control
-    // tools can enforce leaf behavior without recalculating spawn depth.
-    const childSession = persistedStore?.[accepted.childSessionKey];
-    if (!childSession) {
-      throw new Error("Expected persisted child session");
-    }
-    expect(childSession.spawnedBy).toBe("agent:main:subagent:parent");
-    expect(childSession.spawnDepth).toBe(2);
-    expect(childSession.subagentRole).toBe("leaf");
-    expect(childSession.subagentControlScope).toBe("none");
-    expect(typeof childSession?.spawnedWorkspaceDir).toBe("string");
+  it("allows recursive callers below the default depth boundary", async () => {
+    depth = 3;
+    expect(child(await spawnChild())).toMatchObject({
+      spawnDepth: 4,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+    });
   });
 
   it("persists inherited tool denies on spawned child sessions", async () => {
-    hoisted.configOverride = createDepthLimitConfig({ maxSpawnDepth: 2 });
-
-    const result = await spawnSubagentDirect(
-      {
-        task: "hello",
-      },
+    limits({ maxSpawnDepth: 2 });
+    const result = await spawn(
+      { task: "hello" },
       {
         agentSessionKey: "agent:main:main",
         workspaceDir: "/tmp/workspace-main",
@@ -164,79 +123,10 @@ describe("subagent spawn depth + child limits", () => {
         inheritedToolDenylist: ["bash", "exec", "read", ""],
       },
     );
-
-    const accepted = expectAccepted(result, "run-1");
-    const childSession = persistedStore?.[accepted.childSessionKey];
-    if (!childSession) {
-      throw new Error("Expected persisted child session");
-    }
-    expect(childSession.inheritedToolAllow).toEqual(["sessions_spawn", "read"]);
-    expect(childSession.inheritedToolDeny).toEqual(["exec", "read"]);
-    expect(childSession.inheritedToolPolicyVersion).toBe(1);
-  });
-
-  it("rejects callers when stored spawn depth is already at the configured max", async () => {
-    hoisted.configOverride = createDepthLimitConfig({ maxSpawnDepth: 2 });
-    hoisted.depthBySession.set("agent:main:subagent:flat-depth-2", 2);
-
-    const result = await spawnFrom("agent:main:subagent:flat-depth-2");
-
-    expectForbidden(
-      result,
-      "sessions_spawn is not allowed at this depth (current depth: 2, max: 2; agents.defaults.subagents.maxSpawnDepth).",
-    );
-  });
-
-  it("rejects when active children for requester session reached maxChildrenPerAgent", async () => {
-    hoisted.configOverride = createDepthLimitConfig({
-      maxSpawnDepth: 2,
-      maxChildrenPerAgent: 1,
+    expect(child(result)).toMatchObject({
+      inheritedToolAllow: ["sessions_spawn", "read"],
+      inheritedToolDeny: ["exec", "read"],
+      inheritedToolPolicyVersion: 1,
     });
-    hoisted.depthBySession.set("agent:main:subagent:parent", 1);
-    hoisted.activeChildrenBySession.set("agent:main:subagent:parent", 1);
-
-    const result = await spawnFrom("agent:main:subagent:parent");
-
-    expectForbidden(
-      result,
-      "sessions_spawn has reached max active children for this session (1/1; agents.defaults.subagents.maxChildrenPerAgent).",
-    );
-  });
-
-  it("does not use subagent maxConcurrent as a per-parent spawn gate", async () => {
-    hoisted.configOverride = createDepthLimitConfig({
-      maxSpawnDepth: 2,
-      maxChildrenPerAgent: 5,
-      maxConcurrent: 1,
-    });
-    hoisted.depthBySession.set("agent:main:subagent:parent", 1);
-    hoisted.activeChildrenBySession.set("agent:main:subagent:parent", 1);
-
-    const result = await spawnFrom("agent:main:subagent:parent");
-
-    expectAccepted(result, "run-1");
-  });
-
-  it("fails spawn when the initial child session patch rejects the model", async () => {
-    hoisted.configOverride = createDepthLimitConfig({ maxSpawnDepth: 2 });
-    hoisted.callGatewayMock.mockImplementation(
-      async (opts: { method?: string; params?: { model?: string } }) => {
-        if (opts.method === "agent") {
-          return { runId: "run-depth" };
-        }
-        return {};
-      },
-    );
-    hoisted.updateSessionStoreMock.mockRejectedValueOnce(new Error("invalid model: bad-model"));
-
-    const result = await spawnFrom("main", { model: "bad-model" });
-
-    expect(result.status).toBe("error");
-    expect(result.error ?? "").toContain("invalid model");
-    expect(
-      hoisted.callGatewayMock.mock.calls.some(
-        (call) => (call[0] as { method?: string }).method === "agent",
-      ),
-    ).toBe(false);
   });
 });

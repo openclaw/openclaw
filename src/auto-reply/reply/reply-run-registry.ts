@@ -1,44 +1,34 @@
 export {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   ReplyRunAlreadyActiveError,
   ReplyRunFollowupAdmissionBlockedError,
   ReplyRunSuccessorAdmissionBlockedError,
 } from "./reply-run-registry.contracts.js";
 export type {
-  ReplyBackendHandle,
-  ReplyBackendMessageInjection,
   ReplyBackendQueueMessageOptions,
-  ReplyBackendQueueMessageResult,
   ReplyMessageInjectionAttempt,
-  ReplyMessageInjectionOutcome,
   ReplyMessageInjectionTarget,
   ReplyOperation,
-  ReplyOperationPhase,
-  ReplyToolAuthorityOverlay,
   ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
 export {
-  abortReplyMessageInjectionTarget,
   beginReplyMessageInjectionTarget,
-  recordAcceptedReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt,
   resolveReplyBackendQueueMessageMismatch,
 } from "./reply-run-registry.message-injection.js";
-export {
-  createReplyOperation,
-  expireStaleReplyOperation,
-  forceClearReplyOperation,
-} from "./reply-run-registry.operation.js";
+export { createReplyOperation } from "./reply-run-registry.operation.js";
 export {
   abortActiveReplyRuns,
+  captureGatewayReplyRunRestartAbort,
   abortReplyRunBySessionId,
   clearReplyRunForResetBySessionId,
   expireStaleReplyRunBySessionId,
   forceClearReplyRunBySessionId,
-  getActiveReplyRunCount,
+  isReplyOperationForSession,
   isReplyRunAbortableForCompaction,
   isReplyRunActiveForSessionId,
   isReplyRunEvidenceStaleBySessionId,
+  interruptReplyRunTarget,
   listActiveReplyRunSessionIds,
   listActiveReplyRunSessionKeys,
   markReplyOperationGlobalLaneWaitProgress,
@@ -46,7 +36,7 @@ export {
   resolveActiveReplyOperationForSessionId,
   resolveActiveReplyRunSessionId,
   resolveActiveReplyRunThreadId,
-  resolveReplyRunPhaseForSessionId,
+  resolveReplyOperationsForSession,
   supersedeReplyRunByRunId,
   waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
@@ -54,9 +44,12 @@ export {
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.registry.js";
 export {
+  forceClearReplyOperation,
+  hasCommittedReplyOperationOutcome,
+  hasReplyOperationExecutionStarted,
   isReplyRunAbortableForSignal,
-  isReplyRunEvidenceStale,
   isReplyRunSuccessorAdmissionBlocked,
+  markReplyOperationExecutionStarted,
   registerReplyOperationSuccessorBarrier,
   retainReplyOperationUntilComplete,
   runAfterReplyOperationClear,

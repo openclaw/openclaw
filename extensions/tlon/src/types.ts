@@ -1,33 +1,15 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
-// Tlon type declarations define plugin contracts.
+import {
+  createAccountListHelpers,
+  resolveChannelMediaMaxBytes,
+} from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ResolvedChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  hasLegacyFlatAllowPrivateNetworkAlias,
-  isPrivateNetworkOptInEnabled,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import type { z } from "zod";
+import type { TlonConfigSchema } from "./config-schema.js";
 
-type TlonAccountConfig = {
-  name?: string;
-  enabled?: boolean;
-  ship?: string;
-  url?: string;
-  code?: string;
-  network?: {
-    dangerouslyAllowPrivateNetwork?: boolean;
-  };
-  groupChannels?: string[];
-  dmAllowlist?: string[];
-  groupInviteAllowlist?: string[];
-  autoDiscoverChannels?: boolean;
-  showModelSignature?: boolean;
-  autoAcceptDmInvites?: boolean;
-  autoAcceptGroupInvites?: boolean;
-  defaultAuthorizedShips?: string[];
-  ownerShip?: string;
+type TlonAccountConfig = z.input<typeof TlonConfigSchema> & {
   implicitMentions?: Partial<ResolvedChannelImplicitMentions>;
-  accounts?: Record<string, TlonAccountConfig>;
 };
 
 export type TlonResolvedAccount = {
@@ -35,6 +17,8 @@ export type TlonResolvedAccount = {
   name: string | null;
   enabled: boolean;
   configured: boolean;
+  mediaMaxBytes?: number;
+  requireMentionInBotThreads?: boolean;
   ship: string | null;
   url: string | null;
   code: string | null;
@@ -67,16 +51,12 @@ const {
 
 export { listTlonAccountIds };
 
-function resolveMergedTlonAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): Record<string, unknown> & TlonAccountConfig {
+function resolveMergedTlonAccountConfig(cfg: OpenClawConfig, accountId: string): TlonAccountConfig {
   const channel = resolveTlonChannelConfig(cfg);
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    return (channel ?? {}) as Record<string, unknown> & TlonAccountConfig;
+    return channel ?? {};
   }
-  return resolveMergedNamedTlonAccountConfig(cfg, accountId) as Record<string, unknown> &
-    TlonAccountConfig;
+  return resolveMergedNamedTlonAccountConfig(cfg, accountId);
 }
 
 export function resolveTlonAccount(
@@ -86,68 +66,37 @@ export function resolveTlonAccount(
   const resolvedAccountId = normalizeAccountId(accountId);
   const base = resolveTlonChannelConfig(cfg);
 
-  if (!base) {
-    return {
-      accountId: resolvedAccountId,
-      name: null,
-      enabled: false,
-      configured: false,
-      ship: null,
-      url: null,
-      code: null,
-      dangerouslyAllowPrivateNetwork: null,
-      groupChannels: [],
-      dmAllowlist: [],
-      groupInviteAllowlist: [],
-      autoDiscoverChannels: null,
-      showModelSignature: null,
-      autoAcceptDmInvites: null,
-      autoAcceptGroupInvites: null,
-      defaultAuthorizedShips: [],
-      ownerShip: null,
-    };
-  }
-
   const merged = resolveMergedTlonAccountConfig(cfg, resolvedAccountId);
   const ship = merged.ship ?? null;
   const url = merged.url ?? null;
   const code = merged.code ?? null;
-  const dangerouslyAllowPrivateNetwork = isPrivateNetworkOptInEnabled(merged)
-    ? true
-    : typeof merged.network?.dangerouslyAllowPrivateNetwork === "boolean"
-      ? merged.network.dangerouslyAllowPrivateNetwork
-      : hasLegacyFlatAllowPrivateNetworkAlias(merged) &&
-          typeof merged.allowPrivateNetwork === "boolean"
-        ? merged.allowPrivateNetwork
-        : null;
-  const groupChannels = merged.groupChannels ?? [];
-  const dmAllowlist = merged.dmAllowlist ?? [];
-  const groupInviteAllowlist = merged.groupInviteAllowlist ?? [];
-  const autoDiscoverChannels = merged.autoDiscoverChannels ?? null;
-  const showModelSignature = merged.showModelSignature ?? null;
-  const autoAcceptDmInvites = merged.autoAcceptDmInvites ?? null;
-  const autoAcceptGroupInvites = merged.autoAcceptGroupInvites ?? null;
-  const ownerShip = merged.ownerShip ?? null;
-  const defaultAuthorizedShips = merged.defaultAuthorizedShips ?? [];
-  const configured = Boolean(ship && url && code);
-
   return {
     accountId: resolvedAccountId,
     name: merged.name ?? null,
-    enabled: merged.enabled !== false,
-    configured,
+    enabled: Boolean(base) && merged.enabled !== false,
+    configured: Boolean(ship && url && code),
+    ...(base
+      ? {
+          requireMentionInBotThreads: merged.requireMentionInBotThreads,
+          mediaMaxBytes: resolveChannelMediaMaxBytes({
+            cfg,
+            accountId: resolvedAccountId,
+            resolveChannelLimitMb: () => merged.mediaMaxMb,
+          }),
+        }
+      : {}),
     ship,
     url,
     code,
-    dangerouslyAllowPrivateNetwork,
-    groupChannels,
-    dmAllowlist,
-    groupInviteAllowlist,
-    autoDiscoverChannels,
-    showModelSignature,
-    autoAcceptDmInvites,
-    autoAcceptGroupInvites,
-    defaultAuthorizedShips,
-    ownerShip,
+    dangerouslyAllowPrivateNetwork: merged.network?.dangerouslyAllowPrivateNetwork ?? null,
+    groupChannels: merged.groupChannels ?? [],
+    dmAllowlist: merged.dmAllowlist ?? [],
+    groupInviteAllowlist: merged.groupInviteAllowlist ?? [],
+    autoDiscoverChannels: merged.autoDiscoverChannels ?? null,
+    showModelSignature: merged.showModelSignature ?? null,
+    autoAcceptDmInvites: merged.autoAcceptDmInvites ?? null,
+    autoAcceptGroupInvites: merged.autoAcceptGroupInvites ?? null,
+    defaultAuthorizedShips: merged.defaultAuthorizedShips ?? [],
+    ownerShip: merged.ownerShip ?? null,
   };
 }

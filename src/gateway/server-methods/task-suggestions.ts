@@ -1,192 +1,108 @@
-// Gateway methods for ephemeral model-proposed follow-up tasks.
 import path from "node:path";
 import {
   ErrorCodes,
+  GatewayErrorDetailCodes,
   errorShape,
-  formatValidationErrors,
+  type ErrorShape,
   type TaskSuggestion,
   type TaskSuggestionsAcceptParams,
-  type TaskSuggestionsAcceptResult,
   validateTaskSuggestionsAcceptParams,
   validateTaskSuggestionsCreateParams,
   validateTaskSuggestionsDismissParams,
   validateTaskSuggestionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveProjectCheckout } from "../../projects/project-checkout.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { buildDashboardSessionKey } from "../session-create-service.js";
+import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
+import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import {
+  authorizeSessionSharingTarget,
+  createSessionListEntryFilter,
+  resolveSessionSharingTarget,
+} from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
-  abandonTaskSuggestionAcceptance,
   beginTaskSuggestionAcceptance,
-  cancelTaskSuggestionAcceptance,
-  completeTaskSuggestionAcceptance,
   createTaskSuggestion,
   dismissTaskSuggestion,
+  getTaskSuggestion,
   listTaskSuggestions,
 } from "../task-suggestion-registry.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { listWorkerProfiles } from "./environments.js";
-import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
-import { sessionDeleteHandlers } from "./sessions-delete.js";
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
-
-function invalidParams(method: string, errors: Parameters<typeof formatValidationErrors>[0]) {
-  return errorShape(
-    ErrorCodes.INVALID_REQUEST,
-    `invalid ${method} params: ${formatValidationErrors(errors)}`,
-  );
-}
-
-type TaskSuggestionAcceptanceResult =
-  | { ok: true; result: TaskSuggestionsAcceptResult }
-  | { ok: false; error: NonNullable<Parameters<RespondFn>[2]> };
+import {
+  abandonSuggestedTaskAcceptance,
+  broadcastResolvedTaskSuggestion,
+  failSuggestedTaskSession,
+  finishSuggestedTaskAcceptance,
+  restoreSuggestedTaskClaim,
+  type TaskSuggestionAcceptanceResult,
+} from "./task-suggestion-acceptance.js";
+import type {
+  GatewayClient,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 type TaskSuggestionAcceptMode = NonNullable<TaskSuggestionsAcceptParams["mode"]>;
 
 const activeAcceptances = new Map<string, Promise<TaskSuggestionAcceptanceResult>>();
 
-function abandonSuggestedTaskAcceptance(
-  taskId: string,
-  options: GatewayRequestHandlerOptions,
-): void {
-  if (abandonTaskSuggestionAcceptance(taskId)) {
-    options.context.broadcast(
-      "task.suggestion",
-      { action: "resolved", taskId, resolution: "expired" },
-      { dropIfSlow: true },
-    );
+function authorizeSuggestedTaskSource(params: {
+  cfg: OpenClawConfig;
+  client: GatewayClient | null;
+  taskId: string;
+}): { ok: true; agentId: string } | { ok: false; error: ErrorShape } {
+  const suggestion = getTaskSuggestion(params.taskId);
+  const target = suggestion
+    ? resolveSessionSharingTarget({
+        cfg: params.cfg,
+        sessionKey: suggestion.sessionKey,
+        agentId: suggestion.agentId,
+      })
+    : null;
+  if (!target) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion was not found"),
+    };
   }
+  const error = authorizeSessionSharingTarget({ cfg: params.cfg, client: params.client, target });
+  return error ? { ok: false, error } : { ok: true, agentId: target.agentId };
 }
 
-async function rollbackSuggestedTaskSession(params: {
-  key: string;
-  agentId?: string;
-  options: GatewayRequestHandlerOptions;
-}): Promise<boolean> {
-  let deletionResponse: { ok: true; worktreePreserved: boolean } | { ok: false } | undefined;
+async function captureSuggestedTaskResponse(
+  method: string,
+  failureMessage: string,
+  run: (respond: RespondFn) => void | Promise<void>,
+): Promise<{ ok: true; payload: unknown } | { ok: false; error: ErrorShape }> {
+  let response: Parameters<RespondFn> | undefined;
   try {
-    const deleteSession = sessionDeleteHandlers["sessions.delete"];
-    if (!deleteSession) {
-      return false;
-    }
-    await deleteSession({
-      ...params.options,
-      params: {
-        key: params.key,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-      },
-      respond: (ok, payload) => {
-        if (
-          !ok ||
-          !payload ||
-          typeof payload !== "object" ||
-          typeof (payload as { deleted?: unknown }).deleted !== "boolean"
-        ) {
-          deletionResponse = { ok: false };
-          return;
-        }
-        deletionResponse = {
-          ok: true,
-          worktreePreserved:
-            (payload as { worktreePreserved?: unknown }).worktreePreserved !== undefined,
-        };
-      },
+    await run((...args) => {
+      response = args;
     });
-  } catch {
-    return false;
+  } catch (error) {
+    return { ok: false, error: errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)) };
   }
-  if (!deletionResponse?.ok || deletionResponse.worktreePreserved) {
-    return false;
-  }
-  try {
-    return !loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }).entry;
-  } catch {
-    return false;
-  }
-}
-
-async function failSuggestedTaskSession(params: {
-  taskId: string;
-  sessionKey: string;
-  agentId: string;
-  options: GatewayRequestHandlerOptions;
-  error: NonNullable<Parameters<RespondFn>[2]>;
-}): Promise<TaskSuggestionAcceptanceResult> {
-  const rolledBack = await rollbackSuggestedTaskSession({
-    key: params.sessionKey,
-    agentId: params.agentId,
-    options: params.options,
-  });
-  if (rolledBack) {
-    const restored = cancelTaskSuggestionAcceptance(params.taskId);
-    if (restored) {
-      params.options.context.broadcast(
-        "task.suggestion",
-        { action: "created", suggestion: restored },
-        { dropIfSlow: true },
-      );
-    }
-    return { ok: false, error: params.error };
-  }
-  abandonSuggestedTaskAcceptance(params.taskId, params.options);
-  return {
-    ok: false,
-    error: errorShape(
-      ErrorCodes.UNAVAILABLE,
-      `${params.error.message}; failed to roll back the partial suggested task session`,
-    ),
-  };
-}
-
-function finishSuggestedTaskAcceptance(params: {
-  taskId: string;
-  sessionKey: string;
-  options: GatewayRequestHandlerOptions;
-}): TaskSuggestionAcceptanceResult {
-  completeTaskSuggestionAcceptance(params.taskId, params.sessionKey);
-  params.options.context.broadcast(
-    "task.suggestion",
-    { action: "resolved", taskId: params.taskId, resolution: "accepted" },
-    { dropIfSlow: true },
-  );
-  return { ok: true, result: { taskId: params.taskId, key: params.sessionKey } };
-}
-
-function failSuggestedTaskDelivery(params: {
-  taskId: string;
-  options: GatewayRequestHandlerOptions;
-  error: NonNullable<Parameters<RespondFn>[2]>;
-}): TaskSuggestionAcceptanceResult {
-  // Session-mode delivery owns only the registry claim. Never roll back the
-  // operator-owned source session or its worktree when message delivery fails.
-  const restored = cancelTaskSuggestionAcceptance(params.taskId);
-  if (restored) {
-    params.options.context.broadcast(
-      "task.suggestion",
-      { action: "created", suggestion: restored },
-      { dropIfSlow: true },
-    );
-  }
-  return { ok: false, error: params.error };
-}
-
-function resolveSuggestionOwner(
-  suggestion: TaskSuggestion,
-  options: GatewayRequestHandlerOptions,
-): ReturnType<typeof resolveRequestedSessionAgentId> {
-  return resolveRequestedSessionAgentId(
-    options.context.getRuntimeConfig(),
-    suggestion.sessionKey,
-    suggestion.agentId,
-  );
+  return response?.[0]
+    ? { ok: true, payload: response[1] }
+    : {
+        ok: false,
+        error:
+          response?.[2] ??
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            response ? failureMessage : `${method} did not respond`,
+          ),
+      };
 }
 
 async function sendSuggestedTaskPrompt(params: {
@@ -196,43 +112,62 @@ async function sendSuggestedTaskPrompt(params: {
   sessionKey: string;
   agentId: string;
   sessionId?: string;
-  activeRunId?: string;
-}): Promise<Parameters<RespondFn> | undefined> {
-  let response: Parameters<RespondFn> | undefined;
+}): Promise<ErrorShape | undefined> {
   const chatParams = {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     message: params.suggestion.prompt,
-    ...(params.activeRunId
-      ? { queueMode: "steer" as const, expectedRunId: params.activeRunId }
-      : {}),
+    queueMode: "steer" as const,
     idempotencyKey: `task-suggestion:${params.taskId}`,
   };
-  await handleChatSend({
-    ...params.options,
-    req: { ...params.options.req, method: "chat.send", params: chatParams },
-    params: chatParams,
-    respond: (...args) => {
-      response = args;
-    },
-  });
-  return response;
+  const response = await captureSuggestedTaskResponse(
+    "chat.send",
+    "failed to deliver suggested task",
+    (respond) =>
+      handleChatSend({
+        ...params.options,
+        req: { ...params.options.req, method: "chat.send", params: chatParams },
+        params: chatParams,
+        respond,
+      }),
+  );
+  return response.ok ? undefined : response.error;
 }
 
 async function createSuggestedTaskSession(params: {
   taskId: string;
   suggestion: TaskSuggestion;
   options: GatewayRequestHandlerOptions;
+  agentId: string;
   mode: Exclude<TaskSuggestionAcceptMode, "session">;
   cloudProfileId?: string;
+  cwd?: string;
 }): Promise<TaskSuggestionAcceptanceResult> {
-  let sessionResponse: Parameters<RespondFn> | undefined;
-  const sourceOwner = resolveSuggestionOwner(params.suggestion, params.options);
-  if (!sourceOwner.ok) {
-    return { ok: false, error: sourceOwner.error };
+  const { agentId } = params;
+  const cwd = params.cwd ?? params.suggestion.cwd;
+  if (params.mode === "worktree") {
+    try {
+      // Validate before persisting deferred setup: otherwise acceptance succeeds
+      // and the first turn fails before the agent can help select a repository.
+      await resolveProjectCheckout(cwd);
+    } catch {
+      return restoreSuggestedTaskClaim({
+        taskId: params.taskId,
+        options: params.options,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Choose a repository with a commit to start this task in a new worktree. The task has not started.",
+          { details: { code: GatewayErrorDetailCodes.TASK_WORKTREE_SOURCE_REQUIRED, cwd } },
+        ),
+      });
+    }
   }
-  const agentId = normalizeAgentId(sourceOwner.agentId);
+  // Starting a follow-up authorizes the task, not a change of workspace.
+  const task =
+    params.mode === "local"
+      ? `Start by addressing this task in the current folder. If an isolated Git worktree is needed, explain why and ask the user before creating or switching to it.\n\n${params.suggestion.prompt}`
+      : params.suggestion.prompt;
   const sessionKey = buildDashboardSessionKey(agentId);
   const fail = (key: string, error: NonNullable<Parameters<RespondFn>[2]>) =>
     failSuggestedTaskSession({
@@ -242,38 +177,28 @@ async function createSuggestedTaskSession(params: {
       options: params.options,
       error,
     });
-  try {
-    await sessionCreateHandlers["sessions.create"]?.({
-      ...params.options,
-      params: {
-        key: sessionKey,
-        agentId,
-        parentSessionKey: params.suggestion.sessionKey,
-        label: params.suggestion.title,
-        ...(params.mode === "cloud" ? {} : { task: params.suggestion.prompt }),
-        ...(params.mode === "local" ? {} : { worktree: true }),
-        cwd: params.suggestion.cwd,
-      },
-      respond: (...args) => {
-        sessionResponse = args;
-      },
-    });
-  } catch (error) {
-    return await fail(sessionKey, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+  const sessionResponse = await captureSuggestedTaskResponse(
+    "sessions.create",
+    "failed to create suggested task",
+    (respond) =>
+      sessionCreateHandlers["sessions.create"]?.({
+        ...params.options,
+        params: {
+          key: sessionKey,
+          agentId,
+          parentSessionKey: params.suggestion.sessionKey,
+          label: params.suggestion.title,
+          ...(params.mode === "cloud" ? {} : { task }),
+          ...(params.mode === "local" ? {} : { worktree: true }),
+          cwd,
+        },
+        respond,
+      }),
+  );
+  if (!sessionResponse.ok) {
+    return await fail(sessionKey, sessionResponse.error);
   }
-  if (!sessionResponse) {
-    return await fail(
-      sessionKey,
-      errorShape(ErrorCodes.UNAVAILABLE, "sessions.create did not respond"),
-    );
-  }
-  const [ok, payload, sessionError] = sessionResponse;
-  if (!ok) {
-    return await fail(
-      sessionKey,
-      sessionError ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to create suggested task"),
-    );
-  }
+  const { payload } = sessionResponse;
   const key =
     payload && typeof payload === "object" && typeof (payload as { key?: unknown }).key === "string"
       ? (payload as { key: string }).key
@@ -285,71 +210,45 @@ async function createSuggestedTaskSession(params: {
     );
   }
   if (params.mode === "cloud") {
-    let dispatchResponse: Parameters<RespondFn> | undefined;
-    try {
-      await sessionDispatchHandlers["sessions.dispatch"]?.({
-        ...params.options,
-        params: { key, agentId, profileId: params.cloudProfileId },
-        respond: (...args) => {
-          dispatchResponse = args;
-        },
-      });
-    } catch (error) {
-      return await fail(key, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    const dispatchResponse = await captureSuggestedTaskResponse(
+      "sessions.dispatch",
+      "failed to dispatch suggested task",
+      (respond) =>
+        sessionDispatchHandlers["sessions.dispatch"]?.({
+          ...params.options,
+          params: { key, agentId, profileId: params.cloudProfileId },
+          respond,
+        }),
+    );
+    if (!dispatchResponse.ok) {
+      return await fail(key, dispatchResponse.error);
     }
-    if (!dispatchResponse?.[0]) {
-      return await fail(
-        key,
-        dispatchResponse?.[2] ??
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            dispatchResponse
-              ? "failed to dispatch suggested task"
-              : "sessions.dispatch did not respond",
-          ),
-      );
-    }
-    let sendResponse: Parameters<RespondFn> | undefined;
-    try {
-      sendResponse = await sendSuggestedTaskPrompt({
-        taskId: params.taskId,
-        suggestion: params.suggestion,
-        options: params.options,
-        sessionKey: key,
-        agentId,
-      });
-    } catch (error) {
-      return await fail(key, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-    }
-    if (!sendResponse?.[0]) {
-      return await fail(
-        key,
-        sendResponse?.[2] ??
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            sendResponse ? "failed to deliver suggested task" : "chat.send did not respond",
-          ),
-      );
-    }
-    return finishSuggestedTaskAcceptance({
+    const sendError = await sendSuggestedTaskPrompt({
       taskId: params.taskId,
-      sessionKey: key,
+      suggestion: params.suggestion,
       options: params.options,
+      sessionKey: key,
+      agentId,
     });
-  }
-  const result = payload as { runError?: unknown; runStarted?: unknown };
-  if (result.runStarted !== true) {
-    const runMessage =
-      result.runError &&
-      typeof result.runError === "object" &&
-      typeof (result.runError as { message?: unknown }).message === "string"
-        ? (result.runError as { message: string }).message
-        : "initial task did not start";
-    return await fail(key, errorShape(ErrorCodes.UNAVAILABLE, runMessage));
+    if (sendError) {
+      return await fail(key, sendError);
+    }
+  } else {
+    const result = payload as { runError?: unknown; runStarted?: unknown };
+    if (result.runStarted !== true) {
+      const runMessage =
+        result.runError &&
+        typeof result.runError === "object" &&
+        typeof (result.runError as { message?: unknown }).message === "string"
+          ? (result.runError as { message: string }).message
+          : "initial task did not start";
+      return await fail(key, errorShape(ErrorCodes.UNAVAILABLE, runMessage));
+    }
   }
   return finishSuggestedTaskAcceptance({
     taskId: params.taskId,
     sessionKey: key,
+    suggestion: params.suggestion,
     options: params.options,
   });
 }
@@ -358,14 +257,11 @@ async function deliverSuggestedTaskToSourceSession(params: {
   taskId: string;
   suggestion: TaskSuggestion;
   options: GatewayRequestHandlerOptions;
+  agentId: string;
 }): Promise<TaskSuggestionAcceptanceResult> {
-  const sourceOwner = resolveSuggestionOwner(params.suggestion, params.options);
-  if (!sourceOwner.ok) {
-    return { ok: false, error: sourceOwner.error };
-  }
-  const agentId = normalizeAgentId(sourceOwner.agentId);
+  const { agentId } = params;
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
-    failSuggestedTaskDelivery({ taskId: params.taskId, options: params.options, error });
+    restoreSuggestedTaskClaim({ taskId: params.taskId, options: params.options, error });
   let source: ReturnType<typeof loadGatewaySessionEntryReadOnly>;
   try {
     source = loadGatewaySessionEntryReadOnly(params.suggestion.sessionKey, { agentId });
@@ -376,7 +272,7 @@ async function deliverSuggestedTaskToSourceSession(params: {
     return fail(
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "source session no longer exists; start it in a worktree instead",
+        "source session no longer exists; start it in a new session instead",
       ),
     );
   }
@@ -384,266 +280,275 @@ async function deliverSuggestedTaskToSourceSession(params: {
   if (lifecycleError) {
     return fail(errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
   }
-  let activeRunState: ReturnType<typeof resolveVisibleActiveSessionRunState>;
-  try {
-    activeRunState = resolveVisibleActiveSessionRunState({
-      context: params.options.context,
-      requestedKey: params.suggestion.sessionKey,
-      canonicalKey: source.canonicalKey,
-      sessionId: source.entry.sessionId,
-      agentId,
-    });
-  } catch (error) {
-    return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-  }
-  if (activeRunState.active && activeRunState.runIds.length !== 1) {
-    const message =
-      activeRunState.runIds.length === 0
-        ? "active session run has no exact dispatch identity; refresh and retry"
-        : "session has multiple active runs; choose the target run before accepting the task suggestion";
-    return fail(
-      errorShape(ErrorCodes.INVALID_REQUEST, message, {
-        retryable: false,
-        details: {
-          code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS",
-          sessionKey: params.suggestion.sessionKey,
-        },
-      }),
-    );
-  }
-  let sendResponse: Parameters<RespondFn> | undefined;
-  try {
-    sendResponse = await sendSuggestedTaskPrompt({
-      taskId: params.taskId,
-      suggestion: params.suggestion,
-      options: params.options,
-      sessionKey: params.suggestion.sessionKey,
-      agentId,
-      sessionId: source.entry.sessionId,
-      activeRunId: activeRunState.runIds[0],
-    });
-  } catch (error) {
-    return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-  }
-  if (!sendResponse?.[0]) {
-    return fail(
-      sendResponse?.[2] ??
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          sendResponse ? "failed to deliver suggested task" : "chat.send did not respond",
-        ),
-    );
+  const sendError = await sendSuggestedTaskPrompt({
+    taskId: params.taskId,
+    suggestion: params.suggestion,
+    options: params.options,
+    sessionKey: params.suggestion.sessionKey,
+    agentId,
+    sessionId: source.entry.sessionId,
+  });
+  if (sendError) {
+    return fail(sendError);
   }
   return finishSuggestedTaskAcceptance({
     taskId: params.taskId,
     sessionKey: params.suggestion.sessionKey,
+    suggestion: params.suggestion,
     options: params.options,
   });
 }
 
 export const taskSuggestionsHandlers: GatewayRequestHandlers = {
-  "taskSuggestions.list": ({ params, respond, context }) => {
-    if (!validateTaskSuggestionsListParams(params)) {
+  "taskSuggestions.list": defineValidatedGatewayHandler(
+    "taskSuggestions.list",
+    validateTaskSuggestionsListParams,
+    ({ params, respond, context, client }) => {
+      const requestedSessionKey = params.sessionKey;
+      const sessionOwner = requestedSessionKey
+        ? resolveRequestedSessionAgentId(
+            context.getRuntimeConfig(),
+            requestedSessionKey,
+            params.agentId,
+          )
+        : undefined;
+      if (sessionOwner && !sessionOwner.ok) {
+        respond(false, undefined, sessionOwner.error);
+        return;
+      }
+      const cfg = context.getRuntimeConfig();
+      const visibilityFilter = hasOperatorBoundary(client, cfg)
+        ? createSessionListEntryFilter({ client, cfg })
+        : undefined;
       respond(
-        false,
+        true,
+        {
+          suggestions: listTaskSuggestions({
+            ...params,
+            ...(sessionOwner ? { agentId: sessionOwner.agentId } : {}),
+          }).filter((suggestion) => {
+            if (!visibilityFilter) {
+              return true;
+            }
+            const target = resolveSessionSharingTarget({
+              cfg,
+              sessionKey: suggestion.sessionKey,
+              agentId: suggestion.agentId,
+            });
+            return Boolean(target && visibilityFilter(target.storeKey, target.entry));
+          }),
+        },
         undefined,
-        invalidParams("taskSuggestions.list", validateTaskSuggestionsListParams.errors),
       );
-      return;
-    }
-    const requestedSessionKey = params.sessionKey;
-    const sessionOwner = requestedSessionKey
-      ? resolveRequestedSessionAgentId(
-          context.getRuntimeConfig(),
-          requestedSessionKey,
-          params.agentId,
-        )
-      : undefined;
-    if (sessionOwner && !sessionOwner.ok) {
-      respond(false, undefined, sessionOwner.error);
-      return;
-    }
-    respond(
-      true,
-      {
-        suggestions: listTaskSuggestions({
-          ...params,
-          ...(sessionOwner ? { agentId: sessionOwner.agentId } : {}),
-        }),
-      },
-      undefined,
-    );
-  },
-  "taskSuggestions.create": ({ params, respond, context }) => {
-    if (!validateTaskSuggestionsCreateParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("taskSuggestions.create", validateTaskSuggestionsCreateParams.errors),
-      );
-      return;
-    }
-    if (!path.isAbsolute(params.cwd)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be absolute"),
-      );
-      return;
-    }
-    if (!insideGitCheckout(params.cwd)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be inside a git checkout"),
-      );
-      return;
-    }
-    const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const sourceOwner = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      params.sessionKey,
-      requestedAgentId,
-    );
-    if (!sourceOwner.ok) {
-      respond(false, undefined, sourceOwner.error);
-      return;
-    }
-    const agentId = normalizeAgentId(sourceOwner.agentId);
-    const created = createTaskSuggestion({ ...params, agentId });
-    if (created.status === "full") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "task suggestion registry is busy", {
-          retryable: true,
-        }),
-      );
-      return;
-    }
-    const { suggestion } = created;
-    // The registry is ephemeral; live events keep open Control UI tabs in sync
-    // without turning suggestions into durable task state.
-    for (const taskId of created.evictedPendingTaskIds) {
-      context.broadcast(
-        "task.suggestion",
-        { action: "resolved", taskId, resolution: "expired" },
-        { dropIfSlow: true },
-      );
-    }
-    context.broadcast("task.suggestion", { action: "created", suggestion }, { dropIfSlow: true });
-    respond(true, { taskId: suggestion.id, suggestion }, undefined);
-  },
-  "taskSuggestions.accept": async (options) => {
-    const { params, respond } = options;
-    if (!validateTaskSuggestionsAcceptParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("taskSuggestions.accept", validateTaskSuggestionsAcceptParams.errors),
-      );
-      return;
-    }
-    const mode = params.mode ?? "worktree";
-    let cloudProfileId: string | undefined;
-    if (mode === "cloud") {
-      const profiles = listWorkerProfiles(options.context);
-      if (profiles.length === 0) {
+    },
+  ),
+  "taskSuggestions.create": defineValidatedGatewayHandler(
+    "taskSuggestions.create",
+    validateTaskSuggestionsCreateParams,
+    ({ params, respond, context }) => {
+      if (!path.isAbsolute(params.cwd)) {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "no cloud worker profiles configured"),
+          errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be absolute"),
         );
         return;
       }
-      cloudProfileId = params.cloudProfileId;
-      if (!cloudProfileId || !profiles.some((profile) => profile.id === cloudProfileId)) {
+      const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+      const sourceOwner = resolveRequestedSessionAgentId(
+        context.getRuntimeConfig(),
+        params.sessionKey,
+        requestedAgentId,
+      );
+      if (!sourceOwner.ok) {
+        respond(false, undefined, sourceOwner.error);
+        return;
+      }
+      const agentId = normalizeAgentId(sourceOwner.agentId);
+      const created = createTaskSuggestion({ ...params, agentId });
+      if (created.status === "full") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "task suggestion registry is busy", {
+            retryable: true,
+          }),
+        );
+        return;
+      }
+      const { suggestion } = created;
+      // The registry is ephemeral; live events keep open Control UI tabs in sync
+      // without turning suggestions into durable task state.
+      for (const evicted of created.evictedPendingSuggestions) {
+        broadcastResolvedTaskSuggestion(context, evicted, "expired");
+      }
+      context.broadcast("task.suggestion", { action: "created", suggestion }, { dropIfSlow: true });
+      respond(true, { taskId: suggestion.id, suggestion }, undefined);
+    },
+  ),
+  "taskSuggestions.accept": defineValidatedGatewayHandler(
+    "taskSuggestions.accept",
+    validateTaskSuggestionsAcceptParams,
+    async (options) => {
+      const { params, respond } = options;
+      // Shipped RPC clients omit mode for an explicit worktree choice. Bundled
+      // clients always send local; retain this wire contract for those callers.
+      const mode = params.mode ?? "worktree";
+      if (params.cwd !== undefined && (mode !== "worktree" || !path.isAbsolute(params.cwd))) {
         respond(
           false,
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            cloudProfileId
-              ? `unknown cloud worker profile: ${cloudProfileId}`
-              : "cloudProfileId is required for cloud mode",
+            "task suggestion cwd correction requires worktree mode and an absolute repository path",
           ),
         );
         return;
       }
-    }
-    const active = activeAcceptances.get(params.taskId);
-    if (active) {
-      const outcome = await active;
-      respond(
-        outcome.ok,
-        outcome.ok ? outcome.result : undefined,
-        outcome.ok ? undefined : outcome.error,
-      );
-      return;
-    }
-    const acceptance = beginTaskSuggestionAcceptance(params.taskId);
-    if (acceptance.status === "accepted") {
-      respond(true, { taskId: params.taskId, key: acceptance.sessionKey }, undefined);
-      return;
-    }
-    if (acceptance.status !== "claimed") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          acceptance.status === "accepting" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-          `task suggestion cannot be accepted: ${acceptance.status}`,
-        ),
-      );
-      return;
-    }
-    const pending = (
-      mode === "session"
-        ? deliverSuggestedTaskToSourceSession({
+      const config = options.context.getRuntimeConfig();
+      if (hasOperatorBoundary(options.client, config)) {
+        const authorization = authorizeSuggestedTaskSource({
+          cfg: config,
+          client: options.client,
+          taskId: params.taskId,
+        });
+        if (!authorization.ok) {
+          respond(false, undefined, authorization.error);
+          return;
+        }
+        if (mode !== "session") {
+          const creationError = authorizeGatewaySessionCreation({
+            cfg: config,
+            client: options.client,
+            agentId: authorization.agentId,
+          });
+          if (creationError) {
+            respond(false, undefined, creationError);
+            return;
+          }
+        }
+      }
+      let cloudProfileId: string | undefined;
+      if (mode === "cloud") {
+        const profiles = listWorkerProfiles(options.context);
+        if (profiles.length === 0) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "no cloud worker profiles configured"),
+          );
+          return;
+        }
+        cloudProfileId = params.cloudProfileId;
+        if (!cloudProfileId || !profiles.some((profile) => profile.id === cloudProfileId)) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              cloudProfileId
+                ? `unknown cloud worker profile: ${cloudProfileId}`
+                : "cloudProfileId is required for cloud mode",
+            ),
+          );
+          return;
+        }
+      }
+      const active = activeAcceptances.get(params.taskId);
+      if (active) {
+        const outcome = await active;
+        respond(
+          outcome.ok,
+          outcome.ok ? outcome.result : undefined,
+          outcome.ok ? undefined : outcome.error,
+        );
+        return;
+      }
+      const acceptance = beginTaskSuggestionAcceptance(params.taskId);
+      if (acceptance.status === "accepted") {
+        respond(true, { taskId: params.taskId, key: acceptance.sessionKey }, undefined);
+        return;
+      }
+      if (acceptance.status !== "claimed") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            acceptance.status === "accepting" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+            `task suggestion cannot be accepted: ${acceptance.status}`,
+          ),
+        );
+        return;
+      }
+      const pending = (async () => {
+        const sourceOwner = resolveRequestedSessionAgentId(
+          config,
+          acceptance.suggestion.sessionKey,
+          acceptance.suggestion.agentId,
+        );
+        if (!sourceOwner.ok) {
+          return restoreSuggestedTaskClaim({
             taskId: params.taskId,
-            suggestion: acceptance.suggestion,
             options,
-          })
-        : createSuggestedTaskSession({
-            taskId: params.taskId,
-            suggestion: acceptance.suggestion,
-            options,
-            mode,
-            ...(cloudProfileId ? { cloudProfileId } : {}),
-          })
-    ).catch((error: unknown) => {
-      abandonSuggestedTaskAcceptance(params.taskId, options);
-      throw error;
-    });
-    activeAcceptances.set(params.taskId, pending);
-    try {
-      const outcome = await pending;
-      respond(
-        outcome.ok,
-        outcome.ok ? outcome.result : undefined,
-        outcome.ok ? undefined : outcome.error,
-      );
-    } finally {
-      activeAcceptances.delete(params.taskId);
-    }
-  },
-  "taskSuggestions.dismiss": ({ params, respond, context }) => {
-    if (!validateTaskSuggestionsDismissParams(params)) {
-      respond(
-        false,
-        undefined,
-        invalidParams("taskSuggestions.dismiss", validateTaskSuggestionsDismissParams.errors),
-      );
-      return;
-    }
-    const dismissed = dismissTaskSuggestion(params.taskId);
-    if (dismissed) {
-      context.broadcast(
-        "task.suggestion",
-        { action: "resolved", taskId: params.taskId, resolution: "dismissed" },
-        { dropIfSlow: true },
-      );
-    }
-    respond(true, { taskId: params.taskId, dismissed }, undefined);
-  },
+            error: sourceOwner.error,
+          });
+        }
+        const agentId = normalizeAgentId(sourceOwner.agentId);
+        return mode === "session"
+          ? deliverSuggestedTaskToSourceSession({
+              taskId: params.taskId,
+              suggestion: acceptance.suggestion,
+              options,
+              agentId,
+            })
+          : createSuggestedTaskSession({
+              taskId: params.taskId,
+              suggestion: acceptance.suggestion,
+              options,
+              agentId,
+              mode,
+              cwd: params.cwd,
+              ...(cloudProfileId ? { cloudProfileId } : {}),
+            });
+      })().catch((error: unknown) => {
+        abandonSuggestedTaskAcceptance(params.taskId, options);
+        throw error;
+      });
+      activeAcceptances.set(params.taskId, pending);
+      try {
+        const outcome = await pending;
+        respond(
+          outcome.ok,
+          outcome.ok ? outcome.result : undefined,
+          outcome.ok ? undefined : outcome.error,
+        );
+      } finally {
+        activeAcceptances.delete(params.taskId);
+      }
+    },
+  ),
+  "taskSuggestions.dismiss": defineValidatedGatewayHandler(
+    "taskSuggestions.dismiss",
+    validateTaskSuggestionsDismissParams,
+    ({ params, respond, context, client }) => {
+      const config = context.getRuntimeConfig();
+      if (hasOperatorBoundary(client, config)) {
+        const authorization = authorizeSuggestedTaskSource({
+          cfg: config,
+          client,
+          taskId: params.taskId,
+        });
+        if (!authorization.ok) {
+          respond(true, { taskId: params.taskId, dismissed: false }, undefined);
+          return;
+        }
+      }
+      const suggestion = getTaskSuggestion(params.taskId);
+      const dismissed = dismissTaskSuggestion(params.taskId);
+      if (dismissed && suggestion) {
+        broadcastResolvedTaskSuggestion(context, suggestion, "dismissed");
+      }
+      respond(true, { taskId: params.taskId, dismissed }, undefined);
+    },
+  ),
 };

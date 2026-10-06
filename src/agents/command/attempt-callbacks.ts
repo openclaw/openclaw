@@ -1,27 +1,44 @@
-/**
- * Lifecycle callback state helpers for a single agent attempt.
- */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../runtime/index.js";
 
-/** Mutable lifecycle flags observed while a single agent attempt runs. */
 export type AgentAttemptLifecycleState = {
   currentTurnUserMessagePersisted: boolean;
   lifecycleError?: string;
+  lifecycleErrorObservation?: Record<string, unknown>;
   lifecycleFinishing: boolean;
   lifecycleEnded: boolean;
 };
 
-/** Event shape emitted by runtimes during an agent attempt. */
+export function resetAgentAttemptLifecycle(state: AgentAttemptLifecycleState): void {
+  state.lifecycleError = undefined;
+  state.lifecycleErrorObservation = undefined;
+  state.lifecycleFinishing = false;
+  state.lifecycleEnded = false;
+}
+
 type AgentAttemptLifecycleEvent = {
   stream: string;
   data?: Record<string, unknown>;
   sessionKey?: string;
 };
 
-/** Creates callbacks that update lifecycle flags for persistence decisions. */
-export function createAgentAttemptLifecycleCallbacks(state: AgentAttemptLifecycleState): {
+export function emitAgentAttemptRuntimeStart(
+  info: { phase: string },
+  onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>,
+): void {
+  // CLI preparation and child launch do not prove a native turn. Parsed
+  // assistant/tool activity does, even when the backend omits lifecycle events.
+  if (info.phase === "assistant_output_started" || info.phase === "tool_execution_started") {
+    void onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+  }
+}
+
+export function createAgentAttemptLifecycleCallbacks(
+  state: AgentAttemptLifecycleState,
+  onRuntimeTurnStarted?: () => void | Promise<void>,
+): {
   onUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
-  onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void;
+  onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>;
 } {
   return {
     onUserMessagePersisted: () => {
@@ -34,13 +51,12 @@ export function createAgentAttemptLifecycleCallbacks(state: AgentAttemptLifecycl
       if (evt.data.phase === "start") {
         // A same-candidate retry replaces deferred terminal state from the
         // preceding attempt; retaining it would abort a recovered run.
-        state.lifecycleError = undefined;
-        state.lifecycleFinishing = false;
-        state.lifecycleEnded = false;
-        return;
+        resetAgentAttemptLifecycle(state);
+        return onRuntimeTurnStarted?.();
       }
       if (typeof evt.data.error === "string" && evt.data.error.trim()) {
         state.lifecycleError = evt.data.error;
+        state.lifecycleErrorObservation = asOptionalRecord(evt.data.errorObservation);
       }
       // Finishing means output ended but transcript/session persistence may still
       // need to run; end/error means the runtime lifecycle is complete.

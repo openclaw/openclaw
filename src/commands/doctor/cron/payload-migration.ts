@@ -4,24 +4,19 @@ import {
   normalizeOptionalString,
   readStringValue as readString,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
+import {
+  hasCronShellToolAccess,
+  parseCronAgentTurnCommandPrompt,
+} from "../../../cron/agent-turn-command-prompt.js";
 import { toCanonicalOpenAIModelRef } from "../shared/codex-route-model-ref.js";
-import { migrateLegacyTaskSuggestionToolList } from "../shared/legacy-tool-name-migration.js";
+import {
+  IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
+  migrateLegacyToolNameList,
+  TASK_SUGGESTION_TOOL_NAME_MIGRATION,
+} from "../shared/legacy-tool-name-migration.js";
 
 type UnknownRecord = Record<string, unknown>;
 
-type LegacyAgentTurnCommandPayload = {
-  command: string;
-  cwd?: string;
-  timeoutSeconds?: number;
-};
-
-type UnresolvedAgentTurnShellToolPromptKind = "commandPromptWithoutShellAccess" | "shellToolPrompt";
-
-const LEGACY_AGENT_TURN_COMMAND_MARKER_RE = /\bCommand to run\s*:/iu;
-const LEGACY_AGENT_TURN_COMMAND_FIELD_RE = /^\s*-\s*(command|workdir|timeout)\s*:\s*(.*?)\s*$/iu;
-const SHELL_TOOL_NAMES = new Set(["bash", "command", "exec", "process", "shell", "sh"]);
-const SHELL_COMMAND_MESSAGE_RE =
-  /\b(?:bash|command|execute|exec|process|run|shell)\b[\s\S]{0,240}\b(?:python3?|node|bun|pnpm|npm|npx|yarn|sh|bash|sudo|cd|\.\/|\/[A-Za-z0-9._/-]+)\b/iu;
 const LEGACY_DELIVERY_HINT_FIELDS = [
   "deliver",
   "bestEffortDeliver",
@@ -33,21 +28,13 @@ const LEGACY_DELIVERY_HINT_FIELDS = [
 
 export function normalizePayloadKind(payload: UnknownRecord) {
   const raw = normalizeOptionalLowercaseString(payload.kind) ?? "";
-  if (raw === "agentturn") {
-    if (payload.kind !== "agentTurn") {
-      payload.kind = "agentTurn";
-      return true;
-    }
+  const kind =
+    raw === "agentturn" ? "agentTurn" : raw === "systemevent" ? "systemEvent" : undefined;
+  if (!kind || payload.kind === kind) {
     return false;
   }
-  if (raw === "systemevent") {
-    if (payload.kind !== "systemEvent") {
-      payload.kind = "systemEvent";
-      return true;
-    }
-    return false;
-  }
-  return false;
+  payload.kind = kind;
+  return true;
 }
 
 export function inferPayloadIfMissing(raw: UnknownRecord) {
@@ -58,12 +45,8 @@ export function inferPayloadIfMissing(raw: UnknownRecord) {
     raw.payload = { kind: "agentTurn", message };
     return true;
   }
-  if (text) {
-    raw.payload = { kind: "systemEvent", text };
-    return true;
-  }
-  if (command) {
-    raw.payload = { kind: "systemEvent", text: command };
+  if (text || command) {
+    raw.payload = { kind: "systemEvent", text: text || command };
     return true;
   }
   return false;
@@ -72,19 +55,16 @@ export function inferPayloadIfMissing(raw: UnknownRecord) {
 export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: UnknownRecord) {
   let mutated = false;
 
-  const copyTrimmedString = (field: "model" | "thinking") => {
-    const existing = normalizeOptionalString(payload[field]);
-    if (existing) {
-      return;
+  for (const field of ["model", "thinking"] as const) {
+    if (normalizeOptionalString(payload[field])) {
+      continue;
     }
     const value = normalizeOptionalString(raw[field]);
     if (value) {
       payload[field] = value;
       mutated = true;
     }
-  };
-  copyTrimmedString("model");
-  copyTrimmedString("thinking");
+  }
 
   if (
     typeof payload.timeoutSeconds !== "number" &&
@@ -95,28 +75,23 @@ export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: Unknown
     mutated = true;
   }
 
-  if (
-    typeof payload.allowUnsafeExternalContent !== "boolean" &&
-    typeof raw.allowUnsafeExternalContent === "boolean"
-  ) {
-    payload.allowUnsafeExternalContent = raw.allowUnsafeExternalContent;
-    mutated = true;
-  }
-
-  if (typeof payload.deliver !== "boolean" && typeof raw.deliver === "boolean") {
-    payload.deliver = raw.deliver;
-    mutated = true;
-  }
-  const channel = normalizeOptionalString(raw.channel);
-  if (typeof payload.channel !== "string" && channel) {
-    payload.channel = channel;
-    mutated = true;
-  }
-  const to = normalizeOptionalString(raw.to);
-  if (typeof payload.to !== "string" && to) {
-    payload.to = to;
-    mutated = true;
-  }
+  const copyBoolean = (field: "allowUnsafeExternalContent" | "deliver" | "bestEffortDeliver") => {
+    if (typeof payload[field] !== "boolean" && typeof raw[field] === "boolean") {
+      payload[field] = raw[field];
+      mutated = true;
+    }
+  };
+  const copyString = (field: "channel" | "to" | "provider") => {
+    const value = normalizeOptionalString(raw[field]);
+    if (typeof payload[field] !== "string" && value) {
+      payload[field] = value;
+      mutated = true;
+    }
+  };
+  copyBoolean("allowUnsafeExternalContent");
+  copyBoolean("deliver");
+  copyString("channel");
+  copyString("to");
   const rawThreadId = normalizeOptionalString(raw.threadId);
   if (
     !("threadId" in payload) &&
@@ -125,78 +100,38 @@ export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: Unknown
     payload.threadId = rawThreadId ?? raw.threadId;
     mutated = true;
   }
-  if (
-    typeof payload.bestEffortDeliver !== "boolean" &&
-    typeof raw.bestEffortDeliver === "boolean"
-  ) {
-    payload.bestEffortDeliver = raw.bestEffortDeliver;
-    mutated = true;
-  }
-  const provider = normalizeOptionalString(raw.provider);
-  if (typeof payload.provider !== "string" && provider) {
-    payload.provider = provider;
-    mutated = true;
-  }
+  copyBoolean("bestEffortDeliver");
+  copyString("provider");
 
   return mutated;
 }
 
 export function stripLegacyTopLevelFields(raw: UnknownRecord) {
-  if ("model" in raw) {
-    delete raw.model;
+  const removed = { payload: false, delivery: false };
+  for (const [kind, fields] of [
+    [
+      "payload",
+      [
+        "model",
+        "thinking",
+        "timeoutSeconds",
+        "allowUnsafeExternalContent",
+        "message",
+        "text",
+        "command",
+        "timeout",
+      ],
+    ],
+    ["delivery", LEGACY_DELIVERY_HINT_FIELDS],
+  ] as const) {
+    for (const field of fields) {
+      if (field in raw) {
+        delete raw[field];
+        removed[kind] = true;
+      }
+    }
   }
-  if ("thinking" in raw) {
-    delete raw.thinking;
-  }
-  if ("timeoutSeconds" in raw) {
-    delete raw.timeoutSeconds;
-  }
-  if ("allowUnsafeExternalContent" in raw) {
-    delete raw.allowUnsafeExternalContent;
-  }
-  if ("message" in raw) {
-    delete raw.message;
-  }
-  if ("text" in raw) {
-    delete raw.text;
-  }
-  if ("deliver" in raw) {
-    delete raw.deliver;
-  }
-  if ("channel" in raw) {
-    delete raw.channel;
-  }
-  if ("to" in raw) {
-    delete raw.to;
-  }
-  if ("threadId" in raw) {
-    delete raw.threadId;
-  }
-  if ("bestEffortDeliver" in raw) {
-    delete raw.bestEffortDeliver;
-  }
-  if ("provider" in raw) {
-    delete raw.provider;
-  }
-  if ("command" in raw) {
-    delete raw.command;
-  }
-  if ("timeout" in raw) {
-    delete raw.timeout;
-  }
-}
-
-function hasShellToolAccess(toolsAllow: unknown): boolean {
-  if (toolsAllow === undefined) {
-    return true;
-  }
-  if (!Array.isArray(toolsAllow)) {
-    return false;
-  }
-  return toolsAllow.some((tool) => {
-    const normalized = normalizeOptionalLowercaseString(tool);
-    return normalized === "*" || (normalized ? SHELL_TOOL_NAMES.has(normalized) : false);
-  });
+  return removed;
 }
 
 type LegacyOpenAICodexCronModelRoute = {
@@ -232,73 +167,10 @@ export function collectLegacyOpenAICodexCronModelRoutes(
   return [...routes.values()];
 }
 
-/** Canonical OpenAI refs whose legacy cron shape implied the Codex runtime. */
-function collectLegacyOpenAICodexCronModelRefs(payload: UnknownRecord): string[] {
-  return [
-    ...new Set(
-      collectLegacyOpenAICodexCronModelRoutes(payload).map((route) => route.canonicalModelRef),
-    ),
-  ];
-}
-
-function normalizeChannel(value: string): string {
-  return normalizeOptionalLowercaseString(value) ?? "";
-}
-
-function parsePositiveInteger(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!/^\d+$/u.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
 function readPositiveInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
-}
-
-function parseLegacyAgentTurnCommandMessage(message: string): LegacyAgentTurnCommandPayload | null {
-  if (!LEGACY_AGENT_TURN_COMMAND_MARKER_RE.test(message)) {
-    return null;
-  }
-
-  let command = "";
-  let cwd: string | undefined;
-  let timeoutSeconds: number | undefined;
-
-  for (const line of message.split(/\r?\n/u)) {
-    const match = LEGACY_AGENT_TURN_COMMAND_FIELD_RE.exec(line);
-    if (!match) {
-      continue;
-    }
-    const key = match[1]?.toLowerCase();
-    const value = match[2]?.trim() ?? "";
-    if (key === "command" && value && !command) {
-      command = value;
-    } else if (key === "workdir" && value && !cwd) {
-      cwd = value;
-    } else if (key === "timeout" && value && timeoutSeconds === undefined) {
-      timeoutSeconds = parsePositiveInteger(value);
-    }
-  }
-
-  if (!command) {
-    return null;
-  }
-
-  return {
-    command,
-    ...(cwd ? { cwd } : {}),
-    ...(timeoutSeconds ? { timeoutSeconds } : {}),
-  };
-}
-
-/** Return true when a cron payload contains legacy Codex-route model refs. */
-export function hasLegacyOpenAICodexCronModelRef(payload: UnknownRecord): boolean {
-  return collectLegacyOpenAICodexCronModelRefs(payload).length > 0;
 }
 
 function migrateLegacyOpenAICodexModelRefs(
@@ -334,7 +206,6 @@ function migrateLegacyOpenAICodexModelRefs(
   return mutated;
 }
 
-/** Normalize legacy cron payload channel/provider and model reference fields in place. */
 export function migrateLegacyCronPayload(
   payload: UnknownRecord,
   options: {
@@ -344,25 +215,20 @@ export function migrateLegacyCronPayload(
 ): boolean {
   let mutated = false;
 
-  if (migrateLegacyTaskSuggestionToolList(payload.toolsAllow)) {
+  if (migrateLegacyToolNameList(payload.toolsAllow, TASK_SUGGESTION_TOOL_NAME_MIGRATION)) {
+    mutated = true;
+  }
+  if (migrateLegacyToolNameList(payload.toolsAllow, IMAGE_INSPECTION_TOOL_NAME_MIGRATION)) {
     mutated = true;
   }
 
   const channelValue = readString(payload.channel);
-  const providerValue = readString(payload.provider);
-
   const nextChannel =
-    typeof channelValue === "string" && channelValue.trim().length > 0
-      ? normalizeChannel(channelValue)
-      : typeof providerValue === "string" && providerValue.trim().length > 0
-        ? normalizeChannel(providerValue)
-        : "";
-
-  if (nextChannel) {
-    if (channelValue !== nextChannel) {
-      payload.channel = nextChannel;
-      mutated = true;
-    }
+    normalizeOptionalLowercaseString(channelValue) ??
+    normalizeOptionalLowercaseString(payload.provider);
+  if (nextChannel && channelValue !== nextChannel) {
+    payload.channel = nextChannel;
+    mutated = true;
   }
 
   if ("provider" in payload) {
@@ -389,11 +255,11 @@ export function migrateLegacyAgentTurnCommandPayload(payload: UnknownRecord): bo
   if (typeof message !== "string") {
     return false;
   }
-  const parsed = parseLegacyAgentTurnCommandMessage(message);
+  const parsed = parseCronAgentTurnCommandPrompt(message);
   if (!parsed) {
     return false;
   }
-  if (!hasShellToolAccess(payload.toolsAllow)) {
+  if (!hasCronShellToolAccess(payload.toolsAllow)) {
     return false;
   }
 
@@ -419,25 +285,4 @@ export function migrateLegacyAgentTurnCommandPayload(payload: UnknownRecord): bo
   }
   Object.assign(payload, deliveryHints);
   return true;
-}
-
-export function classifyUnresolvedAgentTurnShellToolPrompt(
-  payload: UnknownRecord,
-): UnresolvedAgentTurnShellToolPromptKind | null {
-  if (payload.kind !== "agentTurn") {
-    return null;
-  }
-  const message = readString(payload.message);
-  if (typeof message !== "string") {
-    return null;
-  }
-  const parsed = parseLegacyAgentTurnCommandMessage(message);
-  const shellToolAccess = hasShellToolAccess(payload.toolsAllow);
-  if (parsed && !shellToolAccess) {
-    return "commandPromptWithoutShellAccess";
-  }
-  if (shellToolAccess && SHELL_COMMAND_MESSAGE_RE.test(message)) {
-    return "shellToolPrompt";
-  }
-  return null;
 }

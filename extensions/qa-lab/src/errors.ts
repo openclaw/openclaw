@@ -1,4 +1,3 @@
-// Qa Lab plugin module defines shared suite errors.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export function toQaError(value: unknown): Error {
@@ -11,6 +10,8 @@ type QaSuiteArtifactErrorCode =
   | "summary_missing"
   | "summary_read_failed"
   | "summary_parse_failed"
+  | "summary_not_completed"
+  | "summary_counts_invalid"
   | "summary_failure_count_missing"
   | "summary_blocking_count_missing";
 

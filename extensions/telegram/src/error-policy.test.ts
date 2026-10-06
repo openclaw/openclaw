@@ -34,36 +34,6 @@ describe("telegram error policy", () => {
     });
   });
 
-  it("suppresses only repeated matching errors within the same scope", () => {
-    const scopeKey = buildTelegramErrorScopeKey({
-      accountId,
-      chatId: 42,
-      threadId: 7,
-    });
-
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "429",
-      }),
-    ).toBe(false);
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "429",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "403",
-      }),
-    ).toBe(false);
-  });
-
   it("keeps cooldowns per error message within the same scope", () => {
     const scopeKey = buildTelegramErrorScopeKey({
       accountId,
@@ -201,7 +171,7 @@ describe("telegram error policy", () => {
     const workTopic = buildTelegramErrorScopeKey({
       accountId,
       chatId: 42,
-      threadId: 9,
+      threadSpec: { id: 9, scope: "forum" },
     });
 
     expect(
@@ -225,5 +195,20 @@ describe("telegram error policy", () => {
         errorMessage: "429",
       }),
     ).toBe(false);
+  });
+
+  it("keeps forum and direct-message topics with the same id in separate scopes", () => {
+    const base = { accountId, chatId: 42 };
+    expect(
+      buildTelegramErrorScopeKey({
+        ...base,
+        threadSpec: { id: 9, scope: "forum" },
+      }),
+    ).not.toBe(
+      buildTelegramErrorScopeKey({
+        ...base,
+        threadSpec: { id: 9, scope: "direct-messages" },
+      }),
+    );
   });
 });

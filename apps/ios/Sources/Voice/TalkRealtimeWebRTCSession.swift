@@ -30,6 +30,7 @@ final class TalkRealtimeTranscriptWriteQueue {
     private let retryDelaysNanoseconds: [UInt64]
     private var tail: Task<Void, Never>?
     private var generation = 0
+    private var firstFailure: Error?
 
     init(retryDelaysNanoseconds: [UInt64] = [100_000_000, 250_000_000]) {
         self.retryDelaysNanoseconds = retryDelaysNanoseconds
@@ -61,12 +62,12 @@ final class TalkRealtimeTranscriptWriteQueue {
                     }
                 }
             }
-            failureLog(
-                params.entryId,
-                finalError ?? NSError(
-                    domain: "TalkRealtimeTranscript",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Transcript persistence failed"]))
+            let failure = finalError ?? NSError(
+                domain: "TalkRealtimeTranscript",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Transcript persistence failed"])
+            self.firstFailure = self.firstFailure ?? failure
+            failureLog(params.entryId, failure)
         }
     }
 
@@ -74,7 +75,16 @@ final class TalkRealtimeTranscriptWriteQueue {
         while let tail = self.tail {
             let generation = self.generation
             await tail.value
-            if self.generation == generation { return }
+            if self.generation == generation {
+                return
+            }
+        }
+    }
+
+    func flushSuccessfully() async throws {
+        await self.flush()
+        if let firstFailure {
+            throw firstFailure
         }
     }
 }
@@ -122,11 +132,28 @@ final class TalkRealtimeTranscriptStore {
         await self.queuesByVoiceSession[voiceSessionId]?.flush()
     }
 
+    func flushSuccessfully(voiceSessionId: String) async throws {
+        try await self.queuesByVoiceSession[voiceSessionId]?.flushSuccessfully()
+    }
+
     func remove(_ voiceSessionIds: Set<String>) {
         for voiceSessionId in voiceSessionIds {
             self.lastEntryIdByVoiceSession.removeValue(forKey: voiceSessionId)
             self.queuesByVoiceSession.removeValue(forKey: voiceSessionId)
         }
+    }
+}
+
+/// Captured at creation, including the account and physical socket admission.
+struct TalkRealtimeVoiceSessionOwner: Equatable {
+    let gateway: GatewayNodeSession
+    let route: GatewayNodeSessionRoute
+    let sessionKey: String
+    let voiceSessionId: String
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.gateway === rhs.gateway && lhs.route == rhs.route &&
+            lhs.sessionKey == rhs.sessionKey && lhs.voiceSessionId == rhs.voiceSessionId
     }
 }
 
@@ -148,6 +175,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private static let assistantPlaybackDrainGraceSeconds = 1.8
 
     private let gateway: GatewayNodeSession
+    private let gatewayRoute: GatewayNodeSessionRoute?
     private let sessionKey: String
     private let transcriptStore: TalkRealtimeTranscriptStore
     private weak var delegate: TalkRealtimeWebRTCSessionDelegate?
@@ -156,11 +184,17 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private var factory: RTCPeerConnectionFactory?
     private var peerConnection: RTCPeerConnection?
     private var dataChannel: RTCDataChannel?
+    private var liveCaptionBuffer = TalkRealtimeLiveCaptionBuffer()
     private var session: TalkRealtimeClientSession?
     private var toolBuffers: [String: ToolBuffer] = [:]
     private var activeToolTasks: [String: Task<Void, Never>] = [:]
-    private var activeToolRunIds: [String: String] = [:]
+    private typealias ConsultRun = (id: String, target: OpenClawChatSessionTarget)
+    private var activeToolRuns: [String: ConsultRun] = [:]
     private var stopped = false
+    private var preserveRunsOnStop = false
+    private var peerReady = false
+    private var readinessWaiter: CheckedContinuation<Void, Error>?
+    private var readinessTimeout: Task<Void, Never>?
     private var timelineStartedAt = ProcessInfo.processInfo.systemUptime
     private var seenRealtimeEventTypes: Set<String> = []
     private var loggedFirstServerSpeech = false
@@ -177,7 +211,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private struct AgentWaitResponse: Decodable {
-        let runId: String?
         let status: String?
         let startedAt: Double?
         let error: String?
@@ -188,12 +221,14 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
     init(
         gateway: GatewayNodeSession,
+        gatewayRoute: GatewayNodeSessionRoute? = nil,
         sessionKey: String,
         voiceSessionId: String? = nil,
         transcriptStore: TalkRealtimeTranscriptStore,
         delegate: TalkRealtimeWebRTCSessionDelegate)
     {
         self.gateway = gateway
+        self.gatewayRoute = gatewayRoute
         self.sessionKey = sessionKey
         self.adoptedVoiceSessionId = voiceSessionId
         self.transcriptStore = transcriptStore
@@ -205,10 +240,18 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.adoptedVoiceSessionId
     }
 
+    var voiceSessionOwner: TalkRealtimeVoiceSessionOwner? {
+        guard let voiceSessionId, let gatewayRoute else { return nil }
+        return TalkRealtimeVoiceSessionOwner(
+            gateway: self.gateway, route: gatewayRoute, sessionKey: self.sessionKey, voiceSessionId: voiceSessionId)
+    }
+
     func start(
         provider: String?,
         model: String?,
         voice: String?,
+        supportsVoiceSelection: Bool,
+        voiceChangeID: String? = nil,
         prefetchedSession: TalkRealtimeClientSession? = nil) async throws
     {
         self.timelineStartedAt = ProcessInfo.processInfo.systemUptime
@@ -219,6 +262,8 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.assistantAudioFinishTask?.cancel()
         self.assistantAudioFinishTask = nil
         self.stopped = false
+        self.peerReady = false
+        self.liveCaptionBuffer.reset()
         self.trace(
             "start provider=\(provider ?? "default") model=\(model ?? "default") "
                 + "voice=\(voice ?? "default") sessionKey=\(self.sessionKey)")
@@ -231,7 +276,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     + "voice=\(prefetchedSession.voice ?? "unknown")")
             session = prefetchedSession
         } else {
-            session = try await self.createClientSession(provider: provider, model: model, voice: voice)
+            session = try await createClientSession(
+                provider: provider,
+                model: model,
+                voice: voice,
+                supportsVoiceSelection: supportsVoiceSelection,
+                voiceChangeID: voiceChangeID)
         }
         guard let returnedVoiceSessionId = session.voiceSessionId else {
             throw NSError(domain: "TalkRealtimeWebRTC", code: 11, userInfo: [
@@ -304,53 +354,19 @@ final class TalkRealtimeWebRTCSession: NSObject {
         try self.checkNotStopped()
         self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
         self.startAudioLevelPolling()
+        self.observeReadiness()
     }
 
-    /// WebRTC owns capture and playback in this transport, so the app never sees
-    /// PCM; peer-connection stats are the only real level source for the waveform.
-    private func startAudioLevelPolling() {
-        self.audioLevelPollTask?.cancel()
-        self.audioLevelPollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self, !self.stopped, let peer = self.peerConnection else { return }
-                let levels = await Self.audioLevels(peer: peer)
-                guard !Task.isCancelled, !self.stopped else { return }
-                self.delegate?.realtimeSession(
-                    self,
-                    didUpdateAudioLevels: levels.input.map { TalkAudioLevel.normalized(rms: $0) },
-                    output: levels.output.map { TalkAudioLevel.normalized(rms: $0) })
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-        }
-    }
-
-    private nonisolated static func audioLevels(
-        peer: RTCPeerConnection) async -> (input: Double?, output: Double?)
-    {
-        await withCheckedContinuation { continuation in
-            peer.statistics { report in
-                var input: Double?
-                var output: Double?
-                for stat in report.statistics.values {
-                    guard (stat.values["kind"] as? String) == "audio",
-                          let level = stat.values["audioLevel"] as? NSNumber
-                    else { continue }
-                    // Per the WebRTC stats spec audioLevel is linear 0...1:
-                    // media-source is the local mic, inbound-rtp the remote voice.
-                    if stat.type == "media-source" { input = level.doubleValue }
-                    if stat.type == "inbound-rtp" { output = level.doubleValue }
-                }
-                continuation.resume(returning: (input, output))
-            }
-        }
-    }
-
-    func stop() {
+    func stop(preserveRuns: Bool = false) {
         let shouldNotify = !self.stopped
         self.stopped = true
+        self.preserveRunsOnStop = self.preserveRunsOnStop || preserveRuns
+        self.peerReady = false
+        self.finishReadiness(error: CancellationError())
+        self.liveCaptionBuffer.reset()
         self.audioLevelPollTask?.cancel()
         self.audioLevelPollTask = nil
-        self.cancelActiveToolCalls()
+        self.cancelActiveToolCalls(preserveRuns: self.preserveRunsOnStop)
         self.toolBuffers.removeAll()
         self.dataChannel?.close()
         self.dataChannel = nil
@@ -394,55 +410,39 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
-    private func elapsedMs() -> Int {
-        max(0, Int((ProcessInfo.processInfo.systemUptime - self.timelineStartedAt) * 1000))
-    }
-
     private func trace(_ message: String) {
-        GatewayDiagnostics.log("talk.timeline realtime +\(self.elapsedMs())ms \(message)")
-        Self.logger.info("timeline +\(self.elapsedMs(), privacy: .public)ms \(message, privacy: .public)")
+        let elapsedMs = max(0, Int((ProcessInfo.processInfo.systemUptime - self.timelineStartedAt) * 1000))
+        GatewayDiagnostics.log("talk.timeline realtime +\(elapsedMs)ms \(message)")
     }
 
-    private func cancelActiveToolCalls() {
-        let runIds = Array(Set(activeToolRunIds.values))
+    private func cancelActiveToolCalls(preserveRuns: Bool = false) {
+        let runs = Array(activeToolRuns.values)
         for task in self.activeToolTasks.values {
             task.cancel()
         }
         self.activeToolTasks.removeAll()
-        self.activeToolRunIds.removeAll()
-        for runId in runIds {
-            Task { [gateway, sessionKey] in
-                let request = OpenClawChatGatewayRequests.abortRun(
-                    sessionKey: sessionKey,
-                    agentID: nil,
-                    runID: runId,
-                    requestTimeoutMs: 5000)
-                _ = try? await gateway.request(request)
-            }
+        self.activeToolRuns.removeAll()
+        for run in runs where !preserveRuns {
+            _ = Self.abortChatRun(gateway: self.gateway, run: run)
         }
     }
 
     private func recordFinalTranscript(role: TalkRealtimeTranscriptRole, text: String) {
         guard let voiceSessionId = self.voiceSessionId else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard let trimmed = text.trimmedNonEmpty else { return }
         self.transcriptStore.enqueue(
             sessionKey: self.sessionKey,
             voiceSessionId: voiceSessionId,
             role: role,
             text: trimmed,
             timestamp: Date().timeIntervalSince1970 * 1000,
-            persist: { [gateway] params in
-                let data = try JSONEncoder().encode(params)
-                guard let json = String(data: data, encoding: .utf8) else {
-                    throw NSError(domain: "TalkRealtimeTranscript", code: 2, userInfo: [
-                        NSLocalizedDescriptionKey: "Failed to encode transcript request",
-                    ])
-                }
+            persist: { [gateway, gatewayRoute] params in
+                let json = try String(bytes: JSONEncoder().encode(params), encoding: .utf8)!
                 _ = try await gateway.request(
                     method: "talk.client.transcript",
                     paramsJSON: json,
-                    timeoutSeconds: 5)
+                    timeoutSeconds: 5,
+                    ifCurrentRoute: gatewayRoute)
             },
             failureLog: { [weak self] entryId, error in
                 self?.reportTranscriptPersistenceFailure(entryId: entryId, error: error)
@@ -471,8 +471,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
     private func handleRealtimeEvent(_ event: TalkRealtimeServerEvent) {
         guard !self.stopped else { return }
-        if !self.seenRealtimeEventTypes.contains(event.type) {
-            self.seenRealtimeEventTypes.insert(event.type)
+        if self.seenRealtimeEventTypes.insert(event.type).inserted {
             self.trace("event first type=\(event.type)")
         }
         if self.handleRealtimeAudioStateEvent(event) {
@@ -482,6 +481,13 @@ final class TalkRealtimeWebRTCSession: NSObject {
             return
         }
         switch event.type {
+        case "session.delegation.created":
+            self.liveCaptionBuffer.reset()
+        case "session.closed":
+            if let failureStatus = event.sessionCloseFailureStatus {
+                self.delegate?.realtimeSession(self, didChangeStatus: failureStatus)
+            }
+            self.stop()
         case "response.function_call_arguments.delta":
             self.bufferToolDelta(event)
         case "response.output_item.added":
@@ -556,12 +562,9 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
-    private func toolBufferKey(for event: TalkRealtimeServerEvent) -> String? {
-        event.resolvedItemId ?? event.resolvedCallId
-    }
-
     private func bufferToolMetadata(_ event: TalkRealtimeServerEvent) {
-        guard Self.isSupportedToolName(event.resolvedName), let key = toolBufferKey(for: event) else { return }
+        guard Self.isSupportedToolName(event.resolvedName), let key = event.resolvedItemId ?? event.resolvedCallId
+        else { return }
         var buffer = self.toolBuffers[key] ?? ToolBuffer(name: "", callId: "", args: "")
         buffer.name = event.resolvedName ?? buffer.name
         buffer.callId = event.resolvedCallId ?? buffer.callId
@@ -572,7 +575,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private func bufferToolDelta(_ event: TalkRealtimeServerEvent) {
-        guard let key = toolBufferKey(for: event) else { return }
+        guard let key = event.resolvedItemId ?? event.resolvedCallId else { return }
         var buffer = self.toolBuffers[key] ?? ToolBuffer(
             name: event.resolvedName ?? "",
             callId: event.resolvedCallId ?? "",
@@ -584,19 +587,19 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private func handleToolDone(_ event: TalkRealtimeServerEvent) {
-        guard let key = toolBufferKey(for: event) else { return }
+        guard let key = event.resolvedItemId ?? event.resolvedCallId else { return }
         let buffered = self.toolBuffers[key]
         let name = buffered?.name.isEmpty == false ? buffered?.name : event.resolvedName
         let callId = buffered?.callId.isEmpty == false ? buffered?.callId : event.resolvedCallId
         let args = buffered?.args.isEmpty == false ? buffered?.args : event.resolvedArguments
-        guard Self.isSupportedToolName(name), let callId, !callId.isEmpty else { return }
-        guard args?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+        guard let name, Self.isSupportedToolName(name), let callId, !callId.isEmpty else { return }
+        guard let args, args.trimmedNonEmpty != nil else {
             self.bufferToolMetadata(event)
             return
         }
         guard self.activeToolTasks[callId] == nil else { return }
         self.toolBuffers.removeValue(forKey: key)
-        self.trace("tool call ready name=\(name ?? "unknown") callId=\(callId) argsBytes=\((args ?? "").utf8.count)")
+        self.trace("tool call ready name=\(name) callId=\(callId) argsBytes=\(args.utf8.count)")
         self.assistantAudioActive = false
         self.assistantAudioFinishTask?.cancel()
         self.assistantAudioFinishTask = nil
@@ -606,9 +609,9 @@ final class TalkRealtimeWebRTCSession: NSObject {
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             if name == Self.controlToolName {
-                await self.submitControlToolCall(callId: callId, argsJSON: args ?? "{}")
+                await self.submitControlToolCall(callId: callId, argsJSON: args)
             } else {
-                await self.submitConsultToolCall(callId: callId, argsJSON: args ?? "{}")
+                await self.submitConsultToolCall(callId: callId, argsJSON: args)
             }
         }
         self.activeToolTasks[callId] = task
@@ -628,13 +631,11 @@ final class TalkRealtimeWebRTCSession: NSObject {
         defer {
             statusTask.cancel()
             self.activeToolTasks[callId] = nil
-            self.activeToolRunIds[callId] = nil
+            self.activeToolRuns[callId] = nil
         }
         do {
             let args = try Self.decodeJSONObject(argsJSON)
             await self.flushTranscriptWrites()
-            try Task.checkCancellation()
-            try self.checkNotStopped()
             var params: [String: Any] = [
                 "sessionKey": sessionKey,
                 "callId": callId,
@@ -644,20 +645,19 @@ final class TalkRealtimeWebRTCSession: NSObject {
             if let voiceSessionId = self.voiceSessionId {
                 params["voiceSessionId"] = voiceSessionId
             }
-            let historySince = Date().timeIntervalSince1970
-            let data = try JSONSerialization.data(withJSONObject: params)
-            guard let json = String(data: data, encoding: .utf8) else {
-                throw NSError(domain: "TalkRealtimeWebRTC", code: 7, userInfo: [
-                    NSLocalizedDescriptionKey: "Failed to encode realtime tool call",
-                ])
-            }
+            let json = try String(bytes: JSONSerialization.data(withJSONObject: params), encoding: .utf8)!
             let stream = await gateway.subscribeServerEvents(bufferingNewest: 200)
+            try Task.checkCancellation()
+            try self.checkNotStopped()
             self.trace("tool call gateway request start callId=\(callId)")
             let requestStartedAt = ProcessInfo.processInfo.systemUptime
-            let res = try await gateway.request(
-                method: "talk.client.toolCall",
-                paramsJSON: json,
-                timeoutSeconds: Self.toolCallTimeoutSeconds)
+            // Retain the bounded acknowledgement after Stop so its exact run can be aborted.
+            let res = try await Task { [gateway] in
+                try await gateway.request(
+                    method: "talk.client.toolCall",
+                    paramsJSON: json,
+                    timeoutSeconds: Self.toolCallTimeoutSeconds)
+            }.value
             let response = try JSONDecoder().decode(TalkRealtimeToolCallResponse.self, from: res)
             let requestElapsed = Int((ProcessInfo.processInfo.systemUptime - requestStartedAt) * 1000)
             guard let runId = response.runId ?? response.idempotencyKey else {
@@ -666,27 +666,36 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 ])
             }
             self.trace("tool call gateway request done callId=\(callId) runId=\(runId) elapsedMs=\(requestElapsed)")
-            self.activeToolRunIds[callId] = runId
+            // v2026.8.1 Gateways returned only run ids; retain their original-key contract.
+            let run: ConsultRun = (runId, OpenClawChatSessionTarget(
+                sessionKey: response.agentSessionKey ?? self.sessionKey,
+                agentID: response.agentId))
             if Task.isCancelled || self.stopped {
-                await self.abortChatRun(runId: runId)
+                if !self.preserveRunsOnStop {
+                    await Self.abortChatRun(gateway: self.gateway, run: run).value
+                }
                 return
             }
+            self.activeToolRuns[callId] = run
             let result = try await waitForChatResult(
-                runId: runId,
+                run: run,
                 stream: stream,
-                since: historySince,
                 timeoutSeconds: Self.toolResultTimeoutSeconds)
-            if Task.isCancelled || self.stopped { return }
+            if Task.isCancelled || self.stopped {
+                return
+            }
             self.trace("tool call chat result ready callId=\(callId) runId=\(runId) chars=\(result.count)")
             self.submitToolResult(callId: callId, result: ["result": result])
         } catch is CancellationError {
             return
         } catch {
-            if Task.isCancelled || self.stopped { return }
             Self.logger.error("realtime tool call failed: \(error.localizedDescription, privacy: .public)")
             self.trace("tool call failed callId=\(callId) error=\(error.localizedDescription)")
-            if let runId = activeToolRunIds[callId] {
-                await self.abortChatRun(runId: runId)
+            if let run = activeToolRuns[callId] {
+                await Self.abortChatRun(gateway: self.gateway, run: run).value
+            }
+            if Task.isCancelled || self.stopped {
+                return
             }
             let confirmationInstruction = Self.voiceConfirmationInstruction(from: error)
             self.delegate?.realtimeSession(
@@ -712,12 +721,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         defer { self.activeToolTasks[callId] = nil }
         do {
             let params = try Self.controlParams(sessionKey: self.sessionKey, argsJSON: argsJSON)
-            let data = try JSONSerialization.data(withJSONObject: params)
-            guard let json = String(data: data, encoding: .utf8) else {
-                throw NSError(domain: "TalkRealtimeWebRTC", code: 19, userInfo: [
-                    NSLocalizedDescriptionKey: "Failed to encode realtime control call",
-                ])
-            }
+            let json = try String(bytes: JSONSerialization.data(withJSONObject: params), encoding: .utf8)!
             let res = try await gateway.request(
                 method: "talk.client.steer",
                 paramsJSON: json,
@@ -728,7 +732,9 @@ final class TalkRealtimeWebRTCSession: NSObject {
         } catch is CancellationError {
             return
         } catch {
-            if Task.isCancelled || self.stopped { return }
+            if Task.isCancelled || self.stopped {
+                return
+            }
             Self.logger.error("realtime control tool failed: \(error.localizedDescription, privacy: .public)")
             self.trace("control tool failed callId=\(callId) error=\(error.localizedDescription)")
             self.submitToolResult(callId: callId, result: [
@@ -744,10 +750,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private static func controlParams(sessionKey: String, argsJSON: String) throws -> [String: Any] {
         let args = try Self.decodeJSONObject(argsJSON)
         let record = args as? [String: Any] ?? [:]
-        let text = Self.nonEmptyString(record["text"])
-            ?? Self.nonEmptyString(record["message"])
-            ?? Self.nonEmptyString(record["request"])
-            ?? Self.nonEmptyString(record["query"])
+        let text = (record["text"] as? String)?.trimmedNonEmpty
+            ?? (record["message"] as? String)?.trimmedNonEmpty
+            ?? (record["request"] as? String)?.trimmedNonEmpty
+            ?? (record["query"] as? String)?.trimmedNonEmpty
         guard let text else {
             throw NSError(domain: "TalkRealtimeWebRTC", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "OpenClaw control tool call missing text",
@@ -757,16 +763,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
             "sessionKey": sessionKey,
             "text": text,
         ]
-        if let mode = Self.nonEmptyString(record["mode"]) {
+        if let mode = (record["mode"] as? String)?.trimmedNonEmpty {
             params["mode"] = mode
         }
         return params
-    }
-
-    private static func nonEmptyString(_ value: Any?) -> String? {
-        guard let raw = value as? String else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     static func voiceConfirmationInstruction(from error: Error) -> String? {
@@ -779,8 +779,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         for message in messages {
             guard let markerRange = message.range(of: marker) else { continue }
             let suffix = message[markerRange.upperBound...]
-            guard let confirmationId = suffix.split(whereSeparator: { $0.isWhitespace }).first,
-                  !confirmationId.isEmpty
+            guard let confirmationId = suffix.split(whereSeparator: { $0.isWhitespace }).first
             else { continue }
             return [
                 "\(marker)\(confirmationId) The requested action was not executed.",
@@ -795,16 +794,19 @@ final class TalkRealtimeWebRTCSession: NSObject {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               let record = object as? [String: Any]
         else { return nil }
-        return Self.nonEmptyString(record["message"])
+        return (record["message"] as? String)?.trimmedNonEmpty
     }
 
-    private func abortChatRun(runId: String) async {
-        let request = OpenClawChatGatewayRequests.abortRun(
-            sessionKey: self.sessionKey,
-            agentID: nil,
-            runID: runId,
-            requestTimeoutMs: 5000)
-        _ = try? await self.gateway.request(request)
+    private static func abortChatRun(gateway: GatewayNodeSession, run: ConsultRun) -> Task<Void, Never> {
+        // Cleanup must dispatch even when the consult task that awaits it was cancelled.
+        Task {
+            let request = OpenClawChatGatewayRequests.abortRun(
+                sessionKey: run.target.sessionKey,
+                agentID: run.target.agentID,
+                runID: run.id,
+                requestTimeoutMs: 5000)
+            _ = try? await gateway.request(request)
+        }
     }
 
     private static func decodeJSONObject(_ json: String) throws -> Any {
@@ -815,14 +817,14 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private func waitForChatResult(
-        runId: String,
+        run: ConsultRun,
         stream: AsyncStream<EventFrame>,
-        since: Double,
         timeoutSeconds: Int = 120) async throws -> String
     {
-        let currentSessionKey = self.sessionKey
+        let runId = run.id
+        let target = run.target
         return try await withThrowingTaskGroup(of: String.self) { group in
-            group.addTask { [runId, currentSessionKey] in
+            group.addTask { [runId, target] in
                 for await evt in stream {
                     guard evt.event == "chat", let payload = evt.payload else { continue }
                     guard let chatEvent = try? GatewayPayloadDecoding.decode(
@@ -833,7 +835,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     }
                     guard chatEvent.runId == runId else { continue }
                     if let eventSessionKey = chatEvent.sessionKey,
-                       !Self.matchesSessionKey(eventSessionKey, currentSessionKey)
+                       !OpenClawChatSessionKey.matchesIncludingDefaultMainAlias(eventSessionKey, target.sessionKey)
+                    {
+                        continue
+                    }
+                    if let eventAgentId = chatEvent.agentId, let agentId = target.agentID,
+                       eventAgentId != agentId
                     {
                         continue
                     }
@@ -858,12 +865,11 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     NSLocalizedDescriptionKey: "OpenClaw realtime tool event stream ended",
                 ])
             }
-            group.addTask { [gateway, sessionKey] in
+            group.addTask { [gateway, target] in
                 try await Self.waitForAgentResult(
                     gateway: gateway,
-                    sessionKey: sessionKey,
+                    target: target,
                     runId: runId,
-                    since: since,
                     timeoutSeconds: timeoutSeconds)
             }
             group.addTask {
@@ -882,24 +888,17 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
-    private nonisolated static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
-        let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if incoming == current { return true }
-        return (incoming == "agent:main:main" && current == "main") ||
-            (incoming == "main" && current == "agent:main:main")
-    }
-
     private static func waitForAgentResult(
         gateway: GatewayNodeSession,
-        sessionKey: String,
+        target: OpenClawChatSessionTarget,
         runId: String,
-        since: Double,
         timeoutSeconds: Int) async throws -> String
     {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
         var sawProviderStart = false
+        var inputRunIDs: [String]? = [runId]
         while Date() < deadline {
+            try Task.checkCancellation()
             let remaining = max(1, Int(ceil(deadline.timeIntervalSinceNow)))
             let waitSeconds = min(Self.agentWaitSliceSeconds, remaining)
             let wait = try await Self.agentWait(
@@ -920,9 +919,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
             case "ok":
                 if let text = try await Self.waitForAssistantTextFromHistory(
                     gateway: gateway,
-                    sessionKey: sessionKey,
-                    since: since,
-                    timeoutSeconds: Self.historyFallbackTimeoutSeconds)
+                    target: target,
+                    runID: runId,
+                    inputRunIDs: &inputRunIDs,
+                    deadline: min(
+                        deadline,
+                        Date().addingTimeInterval(TimeInterval(Self.historyFallbackTimeoutSeconds))))
                 {
                     return text
                 }
@@ -934,8 +936,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 throw NSError(domain: "TalkRealtimeWebRTC", code: 15, userInfo: [
                     NSLocalizedDescriptionKey: wait.stopReason ?? "OpenClaw realtime tool call aborted",
                 ])
-            case "timeout":
-                break
             default:
                 break
             }
@@ -962,46 +962,38 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
     private static func waitForAssistantTextFromHistory(
         gateway: GatewayNodeSession,
-        sessionKey: String,
-        since: Double,
-        timeoutSeconds: Int) async throws -> String?
+        target: OpenClawChatSessionTarget,
+        runID: String,
+        inputRunIDs: inout [String]?,
+        deadline: Date) async throws -> String?
     {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
         while Date() < deadline {
-            if let text = try await Self.latestAssistantTextFromHistory(
-                gateway: gateway,
-                sessionKey: sessionKey,
-                since: since)
-            {
-                return text
+            try Task.checkCancellation()
+            let request = OpenClawChatGatewayRequests.history(
+                sessionKey: target.sessionKey,
+                agentID: target.agentID,
+                inputRunIDs: inputRunIDs)
+            do {
+                let response = try await gateway.request(request)
+                let history = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: response)
+                if let text = OpenClawChatHistoryPresentation.replyText(
+                    from: history.messages ?? [],
+                    runID: runID,
+                    inputConsumptions: history.inputConsumptions)
+                {
+                    return text
+                }
+            } catch {
+                if inputRunIDs != nil, IOSGatewayChatTransport.isUnsupportedHistoryInputRunIDsError(error) {
+                    // Keep the old-Gateway wire downgrade for this run, never guessed timestamp ownership.
+                    inputRunIDs = nil
+                    continue
+                }
+                throw error
             }
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try await Task.sleep(nanoseconds: 300_000_000)
         }
         return nil
-    }
-
-    private static func latestAssistantTextFromHistory(
-        gateway: GatewayNodeSession,
-        sessionKey: String,
-        since: Double) async throws -> String?
-    {
-        let request = OpenClawChatGatewayRequests.history(sessionKey: sessionKey, agentID: nil)
-        let response = try await gateway.request(request)
-        let history = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: response)
-        let messages = history.messages ?? []
-        let decoded: [OpenClawChatMessage] = messages.compactMap { item in
-            guard let data = try? JSONEncoder().encode(item) else { return nil }
-            return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
-        }
-        let assistant = decoded.last { message in
-            guard message.role == "assistant" else { return false }
-            guard let timestamp = message.timestamp else { return false }
-            return TalkHistoryTimestamp.isAfter(timestamp, sinceSeconds: since)
-        }
-        guard let assistant else { return nil }
-        let text = assistant.content.compactMap(\.text).joined(separator: "\n")
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func submitToolResult(callId: String, result: [String: String]) {
@@ -1018,18 +1010,16 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.sendRealtimeEvent(["type": "response.create"])
     }
 
-    private static func encodeJSONString(_ value: Any) -> String? {
-        guard JSONSerialization.isValidJSONObject(value) else { return nil }
+    private static func encodeJSONString(_ value: [String: String]) -> String? {
         guard let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
-        return String(data: data, encoding: .utf8)
+        return String(bytes: data, encoding: .utf8)
     }
 
     private func sendRealtimeEvent(_ event: [String: Any]) {
         guard
             let channel = dataChannel,
             channel.readyState == .open,
-            let json = Self.encodeJSONString(event),
-            let data = json.data(using: .utf8)
+            let data = try? JSONSerialization.data(withJSONObject: event)
         else { return }
         channel.sendData(RTCDataBuffer(data: data, isBinary: false))
         if let type = event["type"] as? String {
@@ -1065,10 +1055,104 @@ final class TalkRealtimeWebRTCSession: NSObject {
 }
 
 extension TalkRealtimeWebRTCSession {
+    func waitUntilReady() async throws {
+        try self.checkNotStopped()
+        if self.peerReady {
+            return
+        }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guard !self.stopped, !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                self.readinessWaiter = continuation
+                self.readinessTimeout = Task { @MainActor [weak self] in
+                    do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                    self?.finishReadiness(error: NSError(
+                        domain: "TalkRealtimeWebRTC",
+                        code: 21,
+                        userInfo: [NSLocalizedDescriptionKey: "Realtime audio did not become ready"]))
+                }
+                self.observeReadiness()
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.finishReadiness(error: CancellationError()) }
+        }
+    }
+
+    private func observeReadiness() {
+        guard !self.stopped, let peer = peerConnection,
+              peer.iceConnectionState == .connected || peer.iceConnectionState == .completed,
+              dataChannel?.readyState == .open
+        else { return }
+        self.peerReady = true
+        self.finishReadiness()
+    }
+
+    private func finishReadiness(error: Error? = nil) {
+        self.readinessTimeout?.cancel()
+        self.readinessTimeout = nil
+        let waiter = self.readinessWaiter
+        self.readinessWaiter = nil
+        if let error {
+            waiter?.resume(throwing: error)
+        } else {
+            waiter?.resume()
+        }
+    }
+
+    /// WebRTC owns capture and playback in this transport, so the app never sees
+    /// PCM; peer-connection stats are the only real level source for the waveform.
+    private func startAudioLevelPolling() {
+        self.audioLevelPollTask?.cancel()
+        self.audioLevelPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, !self.stopped, let peer = self.peerConnection else { return }
+                let levels = await Self.audioLevels(peer: peer)
+                guard !Task.isCancelled, !self.stopped else { return }
+                self.delegate?.realtimeSession(
+                    self,
+                    didUpdateAudioLevels: levels.input.map { TalkAudioLevel.normalized(rms: $0) },
+                    output: levels.output.map { TalkAudioLevel.normalized(rms: $0) })
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+    }
+
+    private nonisolated static func audioLevels(
+        peer: RTCPeerConnection) async -> (input: Double?, output: Double?)
+    {
+        await withCheckedContinuation { continuation in
+            peer.statistics { report in
+                var input: Double?
+                var output: Double?
+                for stat in report.statistics.values {
+                    guard (stat.values["kind"] as? String) == "audio",
+                          let level = stat.values["audioLevel"] as? NSNumber
+                    else { continue }
+                    // Per the WebRTC stats spec audioLevel is linear 0...1:
+                    // media-source is the local mic, inbound-rtp the remote voice.
+                    if stat.type == "media-source" {
+                        input = level.doubleValue
+                    }
+                    if stat.type == "inbound-rtp" {
+                        output = level.doubleValue
+                    }
+                }
+                continuation.resume(returning: (input, output))
+            }
+        }
+    }
+}
+
+extension TalkRealtimeWebRTCSession {
     private func createClientSession(
         provider: String?,
         model: String?,
-        voice: String?) async throws -> TalkRealtimeClientSession
+        voice: String?,
+        supportsVoiceSelection: Bool,
+        voiceChangeID: String?) async throws -> TalkRealtimeClientSession
     {
         self.trace("gateway talk.client.create start")
         let startedAt = ProcessInfo.processInfo.systemUptime
@@ -1078,10 +1162,15 @@ extension TalkRealtimeWebRTCSession {
             provider: provider,
             model: model,
             voice: voice,
-            capabilities: ["voice-transcript"])
+            voiceChangeId: voiceChangeID,
+            capabilities: supportsVoiceSelection ? ["voice-transcript", "voice-selection"] : ["voice-transcript"])
         let data = try JSONEncoder().encode(params)
         let json = String(data: data, encoding: .utf8)
-        let res = try await gateway.request(method: "talk.client.create", paramsJSON: json, timeoutSeconds: 12)
+        let res = try await gateway.request(
+            method: "talk.client.create",
+            paramsJSON: json,
+            timeoutSeconds: 12,
+            ifCurrentRoute: self.gatewayRoute)
         let session = try JSONDecoder().decode(TalkRealtimeClientSession.self, from: res)
         let elapsed = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
         self.trace(
@@ -1183,6 +1272,17 @@ extension TalkRealtimeWebRTCSession {
 
 extension TalkRealtimeWebRTCSession {
     private func handleRealtimeTranscriptEvent(_ event: TalkRealtimeServerEvent) -> Bool {
+        if let entry = self.liveCaptionBuffer.append(event) {
+            // The Gateway sideband persists public Live transcripts before it closes their owner.
+            switch entry.role {
+            case .user:
+                self.delegate?.realtimeSession(self, didReceiveUserTranscript: entry.text)
+            case .assistant:
+                self.markFirstAssistantSignal(event)
+                self.delegate?.realtimeSession(self, didReceiveAssistantTranscript: entry.text)
+            }
+            return true
+        }
         switch event.type {
         case "input_transcript.added":
             if let text = event.item?.text, !text.isEmpty {
@@ -1276,6 +1376,7 @@ extension TalkRealtimeWebRTCSession: RTCPeerConnectionDelegate {
             guard !self.stopped else { return }
             switch newState {
             case .connected, .completed:
+                self.observeReadiness()
                 if !self.assistantAudioActive {
                     self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
                 }
@@ -1307,6 +1408,7 @@ extension TalkRealtimeWebRTCSession: RTCDataChannelDelegate {
             guard !self.stopped else { return }
             switch dataChannel.readyState {
             case .open:
+                self.observeReadiness()
                 if !self.assistantAudioActive {
                     self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
                 }

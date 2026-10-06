@@ -1,15 +1,12 @@
 /**
  * Compiles and matches lightweight glob patterns used by agent policies.
  */
+import { escapeRegExp } from "../shared/regexp.js";
+
 type CompiledGlobPattern =
   | { kind: "all" }
   | { kind: "exact"; value: string }
   | { kind: "regex"; value: RegExp };
-
-function escapeRegex(value: string) {
-  // Standard "escape string for regex literal" pattern.
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function compileGlobPattern(params: {
   raw: string;
@@ -27,7 +24,7 @@ function compileGlobPattern(params: {
   }
   return {
     kind: "regex",
-    value: new RegExp(`^${escapeRegex(normalized).replaceAll("\\*", ".*")}$`),
+    value: new RegExp(`^${escapeRegExp(normalized).replaceAll("\\*", ".*")}$`),
   };
 }
 
@@ -56,4 +53,14 @@ export function matchesAnyGlobPattern(value: string, patterns: CompiledGlobPatte
     }
   }
   return false;
+}
+
+/** Conservative discovery hint; concrete values still need the full glob matcher. */
+export function mayMatchGlobWithPrefix(pattern: string, prefix: string): boolean {
+  const wildcard = pattern.indexOf("*");
+  if (wildcard < 0) {
+    return false;
+  }
+  const literalHead = pattern.slice(0, wildcard);
+  return prefix.startsWith(literalHead) || literalHead.startsWith(prefix);
 }

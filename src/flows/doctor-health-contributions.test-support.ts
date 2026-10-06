@@ -1,44 +1,79 @@
-import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
+import { vi } from "vitest";
+import type { maybeRepairGatewayServiceConfig } from "../commands/doctor-gateway-services.js";
+import type { DoctorPrompter } from "../commands/doctor-prompter.js";
+import type { OpenClawConfig, OpenClawConfigInput } from "../config/config.js";
+import type {
+  DoctorHealthContribution,
+  DoctorHealthFlowContext,
+} from "./doctor-health-contribution-types.js";
 import "./doctor-health-contributions.js";
-import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheck } from "./health-checks.js";
-import type { FlowContribution } from "./types.js";
-
-type DoctorContributionHealthCheck =
-  | (Omit<HealthCheck, "id" | "kind" | "source"> & {
-      readonly id?: string;
-      readonly kind?: "core";
-      readonly source?: string;
-    })
-  | (Omit<RunnableHealthCheck, "id" | "kind" | "source"> & {
-      readonly id?: string;
-      readonly kind?: "core";
-      readonly source?: string;
-    });
-
-type DoctorHealthContribution = FlowContribution & {
-  kind: "core";
-  surface: "health";
-  healthChecks: readonly HealthCheckInput[];
-  healthCheckIds: readonly string[];
-  run: (ctx: DoctorHealthFlowContext) => Promise<void>;
-};
+import type { runDoctorLintChecks } from "./doctor-lint-flow.js";
 
 type DoctorHealthContributionTestApi = {
-  createDoctorHealthContribution(params: {
-    id: string;
-    label: string;
-    healthCheckIds?: readonly string[];
-    healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
-    hint?: string;
-    run?: (ctx: DoctorHealthFlowContext) => Promise<void>;
-  }): DoctorHealthContribution;
   resolveDoctorHealthContributions(): DoctorHealthContribution[];
   runDoctorHealthContributionList(
     ctx: DoctorHealthFlowContext,
     contributions: readonly DoctorHealthContribution[],
   ): Promise<void>;
 };
+
+type DoctorHealthFlowContextFixture = Partial<Omit<DoctorHealthFlowContext, "configResult">> & {
+  configResult?: Partial<DoctorHealthFlowContext["configResult"]>;
+};
+
+type DoctorLintContext = Parameters<typeof runDoctorLintChecks>[0];
+
+export function createDoctorConfigFixture(input: OpenClawConfigInput): OpenClawConfig {
+  return input as OpenClawConfig;
+}
+
+export function createDoctorLintContext(
+  fixture: Pick<DoctorLintContext, "cfg"> & Partial<Omit<DoctorLintContext, "cfg">>,
+): DoctorLintContext {
+  return fixture as DoctorLintContext;
+}
+
+export function createDoctorPrompterFixture(shouldRepair = false): DoctorPrompter {
+  return {
+    confirm: vi.fn(async () => shouldRepair),
+    confirmAutoFix: vi.fn(async () => shouldRepair),
+    confirmAggressiveAutoFix: vi.fn(async () => shouldRepair),
+    confirmRuntimeRepair: vi.fn(async () => shouldRepair),
+    select: vi.fn(async (_params, fallback) => fallback),
+    shouldRepair,
+    shouldForce: false,
+    repairMode: {
+      shouldRepair,
+      shouldForce: false,
+      nonInteractive: true,
+      canPrompt: false,
+      updateInProgress: false,
+    },
+  };
+}
+
+export function createDoctorHealthFlowContext(
+  overrides: DoctorHealthFlowContextFixture = {},
+): DoctorHealthFlowContext {
+  const { configResult, ...contextOverrides } = overrides;
+  const cfg = overrides.cfg ?? {};
+  const configPath = overrides.configPath ?? "/tmp/openclaw.json";
+  return {
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    options: {},
+    prompter: createDoctorPrompterFixture(),
+    configResult: {
+      confirmedConfigSource: { path: configPath, hash: "planning-revision" },
+      ...configResult,
+      cfg: configResult?.cfg ?? cfg,
+    },
+    cfg,
+    cfgForPersistence: cfg,
+    sourceConfigValid: true,
+    configPath,
+    ...contextOverrides,
+  };
+}
 
 function getTestApi(): DoctorHealthContributionTestApi {
   const api = (globalThis as Record<PropertyKey, unknown>)[
@@ -50,12 +85,6 @@ function getTestApi(): DoctorHealthContributionTestApi {
   return api as DoctorHealthContributionTestApi;
 }
 
-export function createDoctorHealthContribution(
-  params: Parameters<DoctorHealthContributionTestApi["createDoctorHealthContribution"]>[0],
-): DoctorHealthContribution {
-  return getTestApi().createDoctorHealthContribution(params);
-}
-
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return getTestApi().resolveDoctorHealthContributions();
 }
@@ -65,4 +94,17 @@ export async function runDoctorHealthContributionList(
   contributions: readonly DoctorHealthContribution[],
 ): Promise<void> {
   await getTestApi().runDoctorHealthContributionList(ctx, contributions);
+}
+
+/** Keep the token candidate and service-repair writer on the same persistence path. */
+export function createGatewayWriterFixture(token: string) {
+  const config: OpenClawConfig = { gateway: { auth: { mode: "token", token } } };
+  const repair: typeof maybeRepairGatewayServiceConfig = async (
+    _cfg,
+    _mode,
+    _runtime,
+    _prompter,
+    options,
+  ) => options.writeConfig(config);
+  return { config, repair };
 }

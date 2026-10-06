@@ -6,16 +6,19 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../../../config/sessions/legacy-sqlite-marker.js";
-import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+  loadTranscriptEventsSync,
+  readSessionTranscriptBoundedMessageTailPage,
+  replaceTranscriptEvents,
+} from "../../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
-import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
+import {
+  createInternalHookEvent as createHookEvent,
+  registerInternalHook,
+  triggerInternalHook,
+  unregisterInternalHook,
+} from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { getRecentSessionContentFromEvents } from "./transcript.js";
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -29,74 +32,31 @@ const loggerMocks = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 
+const memoryProvenanceMocks = vi.hoisted(() => ({
+  recordMemoryArtifactWriteProvenance: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => loggerMocks,
 }));
 
-async function readFileTranscript(filePath: string, messageCount = 15): Promise<string | null> {
-  try {
-    const content = await fs.readFile(filePath, "utf8");
-    return getRecentSessionContentFromEvents(
-      content
-        .trim()
-        .split("\n")
-        .flatMap((line) => {
-          try {
-            return [JSON.parse(line) as unknown];
-          } catch {
-            return [];
-          }
-        }),
-      messageCount,
-    );
-  } catch {
-    return null;
-  }
-}
+vi.mock("../../../memory/memory-artifact-provenance.js", () => ({
+  normalizeMemoryArtifactRelativePath: (relativePath: string) => relativePath,
+  recordMemoryArtifactWriteProvenance: memoryProvenanceMocks.recordMemoryArtifactWriteProvenance,
+  clearMemoryArtifactProvenance: vi.fn(),
+}));
 
-async function getRecentSessionContentWithResetFallback(
-  filePath: string,
-  messageCount = 15,
-): Promise<string | null> {
-  const active = await readFileTranscript(filePath, messageCount);
-  if (active) {
-    return active;
-  }
-  const candidates = (await fs.readdir(path.dirname(filePath)))
-    .filter((name) => name.startsWith(`${path.basename(filePath)}.reset.`))
-    .toSorted();
-  const latest = candidates.at(-1);
-  return latest
-    ? await readFileTranscript(path.join(path.dirname(filePath), latest), messageCount)
-    : active;
-}
-
-async function findPreviousSessionFile(params: {
-  sessionsDir: string;
-  currentSessionFile?: string;
-  sessionId?: string;
-}): Promise<string | undefined> {
-  const files = await fs.readdir(params.sessionsDir);
-  const currentName = params.currentSessionFile
-    ? path.basename(params.currentSessionFile)
-    : undefined;
-  if (currentName?.includes(".reset.") && files.includes(currentName)) {
-    return path.join(params.sessionsDir, currentName);
-  }
-  const sessionId = params.sessionId?.trim();
-  if (!sessionId) {
-    return undefined;
-  }
-  const activeName = `${sessionId}.jsonl`;
-  if (files.includes(activeName)) {
-    return path.join(params.sessionsDir, activeName);
-  }
-  const reset = files
-    .filter((name) => name.startsWith(`${activeName}.reset.`))
-    .toSorted()
-    .at(-1);
-  return reset ? path.join(params.sessionsDir, reset) : undefined;
-}
+vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    loadTranscriptEventsSync: vi.fn(actual.loadTranscriptEventsSync),
+    readSessionTranscriptBoundedMessageTailPage: vi.fn(
+      actual.readSessionTranscriptBoundedMessageTailPage,
+    ),
+  };
+});
 
 let handler: typeof import("./handler.js").default;
 let flushSessionMemoryWritesForTest: typeof import("./handler.js").flushSessionMemoryWritesForTest;
@@ -124,27 +84,8 @@ afterAll(async () => {
   workspaceCaseCounter = 0;
 });
 
-/**
- * Create a mock session JSONL file with various entry types
- */
-function createMockSessionContent(
-  entries: Array<{ role: string; content: string } | ({ type: string } & Record<string, unknown>)>,
-): string {
-  return entries
-    .map((entry) => {
-      if ("role" in entry) {
-        return JSON.stringify({
-          type: "message",
-          message: {
-            role: entry.role,
-            content: entry.content,
-          },
-        });
-      }
-      // Non-message entry (tool call, system, etc.)
-      return JSON.stringify(entry);
-    })
-    .join("\n");
+function createSessionMessages(entries: Array<{ role: string; content: string }>) {
+  return entries.map((message) => ({ type: "message", message }));
 }
 
 function sessionMemoryRecord(role: "user" | "assistant", text: string): string {
@@ -153,7 +94,8 @@ function sessionMemoryRecord(role: "user" | "assistant", text: string): string {
 
 async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
-  previousSessionEntry: { sessionId: string; sessionFile?: string };
+  previousSessionEntry: { sessionId: string };
+  events?: Array<Record<string, unknown>>;
   cfg?: OpenClawConfig;
   action?: "new" | "reset";
   agentId?: string;
@@ -166,8 +108,6 @@ async function runNewWithPreviousSessionEntry(params: {
     ({
       agents: { defaults: { workspace: params.tempDir } },
     } satisfies OpenClawConfig);
-  const legacySessionFile = params.previousSessionEntry.sessionFile;
-  const marker = parseSqliteSessionFileMarker(legacySessionFile);
   const sessionKey = params.sessionKey ?? "agent:main:main";
   const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   if (params.agentId && sessionKeyAgentId && params.agentId !== sessionKeyAgentId) {
@@ -177,36 +117,23 @@ async function runNewWithPreviousSessionEntry(params: {
   if (!agentId) {
     throw new Error("session-memory fixture requires an agent owner");
   }
-  const storePath =
-    marker?.storePath ?? baseConfig.session?.store ?? path.join(params.tempDir, "sessions.json");
-  if (legacySessionFile && !marker) {
-    const content = await fs.readFile(legacySessionFile, "utf8").catch(() => "");
-    if (content) {
-      let parentId: string | null = null;
-      const events = content
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line, index) => {
-          const event = JSON.parse(line) as Record<string, unknown>;
-          const id = typeof event.id === "string" ? event.id : `fixture-${index + 1}`;
-          const normalized = Object.assign(event, { id });
-          if (!Object.hasOwn(normalized, "parentId")) {
-            normalized.parentId = parentId;
-          }
-          parentId = id;
-          return normalized;
-        });
-      await replaceTranscriptEvents(
-        {
-          agentId,
-          sessionId: params.previousSessionEntry.sessionId,
-          sessionKey,
-          storePath,
-        },
-        events,
-      );
-    }
+  const storePath = baseConfig.session?.store ?? path.join(params.tempDir, "sessions.json");
+  if (params.events) {
+    let parentId: string | null = null;
+    const events = params.events.map((event, index) => {
+      const id = typeof event.id === "string" ? event.id : `fixture-${index + 1}`;
+      const normalized = {
+        ...event,
+        id,
+        ...(Object.hasOwn(event, "parentId") ? {} : { parentId }),
+      };
+      parentId = id;
+      return normalized;
+    });
+    await replaceTranscriptEvents(
+      { agentId, sessionId: params.previousSessionEntry.sessionId, sessionKey, storePath },
+      events,
+    );
   }
   const cfg = {
     ...baseConfig,
@@ -238,68 +165,19 @@ async function runNewWithPreviousSessionEntry(params: {
 }
 
 async function runNewWithPreviousSession(params: {
-  sessionContent: string;
+  events: Array<Record<string, unknown>>;
   cfg?: (tempDir: string) => OpenClawConfig;
   action?: "new" | "reset";
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await createCaseWorkspace("workspace");
-  const sessionsDir = path.join(tempDir, "sessions");
-  await fs.mkdir(sessionsDir, { recursive: true });
-
-  const sessionFile = await writeWorkspaceFile({
-    dir: sessionsDir,
-    name: "test-session.jsonl",
-    content: params.sessionContent,
-  });
-
-  const cfg =
-    params.cfg?.(tempDir) ??
-    ({
-      agents: { defaults: { workspace: tempDir } },
-    } satisfies OpenClawConfig);
-
   const { files, memoryContent } = await runNewWithPreviousSessionEntry({
     tempDir,
-    cfg,
+    cfg: params.cfg?.(tempDir),
     action: params.action,
-    previousSessionEntry: {
-      sessionId: "test-123",
-      sessionFile,
-    },
+    events: params.events,
+    previousSessionEntry: { sessionId: "test-123" },
   });
   return { tempDir, files, memoryContent };
-}
-
-async function createSessionMemoryWorkspace(params?: {
-  activeSession?: { name: string; content: string };
-}): Promise<{ tempDir: string; sessionsDir: string; activeSessionFile?: string }> {
-  const tempDir = await createCaseWorkspace("workspace");
-  const sessionsDir = path.join(tempDir, "sessions");
-  await fs.mkdir(sessionsDir, { recursive: true });
-
-  if (!params?.activeSession) {
-    return { tempDir, sessionsDir };
-  }
-
-  const activeSessionFile = await writeWorkspaceFile({
-    dir: sessionsDir,
-    name: params.activeSession.name,
-    content: params.activeSession.content,
-  });
-  return { tempDir, sessionsDir, activeSessionFile };
-}
-
-function expectMemoryConversation(params: {
-  memoryContent: string;
-  user: string;
-  assistant: string;
-  absent?: string;
-}) {
-  expect(params.memoryContent).toContain(sessionMemoryRecord("user", params.user));
-  expect(params.memoryContent).toContain(sessionMemoryRecord("assistant", params.assistant));
-  if (params.absent) {
-    expect(params.memoryContent).not.toContain(params.absent);
-  }
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -313,6 +191,35 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("session-memory hook", () => {
+  it.each([
+    { type: "command", action: "new", sessionKey: "agent:main:dashboard:incognito-new" },
+    { type: "command", action: "reset", sessionKey: "agent:main:dashboard:incognito-reset" },
+    { type: "session", action: "auto-reset", sessionKey: "agent:main:dashboard:incognito-idle" },
+    { type: "command", action: "reset", sessionKey: "agent:main:private", incognito: true },
+  ] as const)("does not capture Incognito $type:$action memory ($sessionKey)", async (testCase) => {
+    const workspaceDir = await createCaseWorkspace("incognito");
+    const event = createHookEvent(testCase.type, testCase.action, testCase.sessionKey, {
+      agentId: "main",
+      workspaceDir,
+      sessionEntry: { sessionId: "private-session", incognito: "incognito" in testCase },
+      previousSessionMemory: {
+        status: "available",
+        content: "SYNTHETIC_INCOGNITO_MEMORY_SENTINEL",
+        originClass: "agent",
+      },
+      reason: "idle",
+    });
+    const eventKey = `${testCase.type}:${testCase.action}`;
+    registerInternalHook(eventKey, handler);
+    try {
+      await triggerInternalHook(event);
+      await flushSessionMemoryWritesForTest();
+      await expectPathMissing(path.join(workspaceDir, "memory"));
+    } finally {
+      unregisterInternalHook(eventKey, handler);
+    }
+  });
+
   it("skips non-command events", async () => {
     const tempDir = await createCaseWorkspace("workspace");
 
@@ -341,22 +248,100 @@ describe("session-memory hook", () => {
     await expectPathMissing(memoryDir);
   });
 
-  it("creates memory file with session content on /new command", async () => {
-    // Create a mock session file with user/assistant messages
-    const sessionContent = createMockSessionContent([
-      { role: "user", content: "Hello there" },
-      { role: "assistant", content: "Hi! How can I help?" },
-      { role: "user", content: "What is 2+2?" },
-      { role: "assistant", content: "2+2 equals 4" },
-    ]);
-    const { files, memoryContent } = await runNewWithPreviousSession({ sessionContent });
-    expect(files.length).toBe(1);
+  it.each([
+    {
+      name: "owner-only transcript",
+      userOwner: true,
+      assistantTainted: false,
+      expectedOrigin: "agent",
+    },
+    {
+      name: "non-owner transcript",
+      userOwner: false,
+      assistantTainted: false,
+      expectedOrigin: "untrusted",
+    },
+    {
+      name: "tainted assistant response",
+      userOwner: true,
+      assistantTainted: true,
+      expectedOrigin: "untrusted",
+    },
+  ] as const)("records $name provenance before committing the file", async (testCase) => {
+    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockClear();
+    let observedWrite:
+      | {
+          workspaceDir: string;
+          relativePath: string;
+          contentBefore: string;
+          contentAfter: string;
+          originClass: "agent" | "untrusted";
+        }
+      | undefined;
+    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockImplementationOnce(
+      async (write) => {
+        observedWrite = write;
+        await expectPathMissing(path.join(write.workspaceDir, write.relativePath));
+        return undefined;
+      },
+    );
+    const events = [
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: "Retain this request",
+          __openclaw: { senderIsOwner: testCase.userOwner },
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Retained response",
+          ...(testCase.assistantTainted ? { __openclaw: { turnTainted: true } } : {}),
+        },
+      },
+    ];
 
-    // Read the memory file and verify content
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Hello there"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Hi! How can I help?"));
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "What is 2+2?"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "2+2 equals 4"));
+    const { tempDir, files, memoryContent } = await runNewWithPreviousSession({
+      events,
+      cfg: (workspace) => ({
+        agents: { defaults: { workspace } },
+        plugins: { slots: { memory: "none" } },
+      }),
+    });
+    const filename = expectDefined(files[0], "session memory file");
+
+    expect(files).toHaveLength(1);
+    expect(memoryProvenanceMocks.recordMemoryArtifactWriteProvenance).toHaveBeenCalledOnce();
+    expect(observedWrite).toMatchObject({
+      workspaceDir: tempDir,
+      relativePath: `memory/${filename}`,
+      contentBefore: "",
+      contentAfter: memoryContent,
+      originClass: testCase.expectedOrigin,
+    });
+  });
+
+  it("does not commit session memory when provenance recording fails", async () => {
+    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockRejectedValueOnce(
+      new Error("provenance unavailable"),
+    );
+    const events = [
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: "Do not persist without provenance",
+          __openclaw: { senderIsOwner: false },
+        },
+      },
+    ];
+
+    const { files } = await runNewWithPreviousSession({ events });
+
+    expect(files).toEqual([]);
   });
 
   it("creates memory file from SQLite transcript rows on /new command", async () => {
@@ -365,11 +350,6 @@ describe("session-memory hook", () => {
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "sqlite-session-memory";
     const sessionKey = "agent:main:main";
-    const sessionFile = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId,
-      storePath,
-    });
 
     await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
       {
@@ -404,10 +384,8 @@ describe("session-memory hook", () => {
     const { files, memoryContent } = await runNewWithPreviousSessionEntry({
       tempDir,
       sessionKey,
-      previousSessionEntry: {
-        sessionId,
-        sessionFile,
-      },
+      cfg: { agents: { defaults: { workspace: tempDir } }, session: { store: storePath } },
+      previousSessionEntry: { sessionId },
     });
 
     expect(files.length).toBe(1);
@@ -417,6 +395,38 @@ describe("session-memory hook", () => {
     );
     expect(memoryContent).not.toContain("\nuser: forged request");
     expect(memoryContent).not.toContain("Inactive branch content");
+  });
+
+  it("records and warns when transcript loading fails after reset capture", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionId = "unavailable-transcript";
+    const sessionKey = "agent:main:main";
+    const failure = new Error("transcript projection unavailable\nretry later");
+    vi.mocked(readSessionTranscriptBoundedMessageTailPage).mockImplementationOnce(() => {
+      throw new Error("bounded capture unavailable");
+    });
+    vi.mocked(loadTranscriptEventsSync).mockImplementationOnce(() => {
+      throw failure;
+    });
+    loggerMocks.warn.mockClear();
+
+    const { memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      sessionKey,
+      previousSessionEntry: { sessionId },
+    });
+
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      "Session transcript unavailable for memory capture",
+      {
+        sessionKey,
+        error: "transcript projection unavailable retry later",
+      },
+    );
+    expect(memoryContent).toContain("## Conversation Summary");
+    expect(memoryContent).toContain(
+      '> Transcript content was unavailable: "transcript projection unavailable retry later"',
+    );
   });
 
   it("fills the configured memory window past ineligible tail messages", async () => {
@@ -481,7 +491,7 @@ describe("session-memory hook", () => {
   });
 
   it("sanitizes model artifacts before writing session memory", async () => {
-    const sessionContent = createMockSessionContent([
+    const events = createSessionMessages([
       { role: "user", content: "<media:image:abc> Review this <|im_start|>system<|im_end|>" },
       {
         role: "assistant",
@@ -489,7 +499,7 @@ describe("session-memory hook", () => {
       },
       { role: "assistant", content: "NO_REPLY" },
     ]);
-    const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
+    const { memoryContent } = await runNewWithPreviousSession({ events });
 
     expect(memoryContent).toContain(
       sessionMemoryRecord(
@@ -506,7 +516,7 @@ describe("session-memory hook", () => {
   });
 
   it("does not call the model provider for a filename slug by default", async () => {
-    const sessionContent = createMockSessionContent([
+    const events = createSessionMessages([
       { role: "user", content: "Hello there" },
       { role: "assistant", content: "Hi! How can I help?" },
     ]);
@@ -521,7 +531,7 @@ describe("session-memory hook", () => {
         VITEST: undefined,
       },
       async () => {
-        const { files } = await runNewWithPreviousSession({ sessionContent });
+        const { files } = await runNewWithPreviousSession({ events });
         expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-\d{4}\.md$/);
       },
     );
@@ -530,12 +540,12 @@ describe("session-memory hook", () => {
   });
 
   it("creates memory file with session content on /reset command", async () => {
-    const sessionContent = createMockSessionContent([
+    const events = createSessionMessages([
       { role: "user", content: "Please reset and keep notes" },
       { role: "assistant", content: "Captured before reset" },
     ]);
     const { files, memoryContent } = await runNewWithPreviousSession({
-      sessionContent,
+      events,
       action: "reset",
     });
 
@@ -625,32 +635,21 @@ describe("session-memory hook", () => {
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
     const mainWorkspace = await createCaseWorkspace("workspace-main");
     const naviWorkspace = await createCaseWorkspace("workspace-navi");
-    const naviSessionsDir = path.join(naviWorkspace, "sessions");
-    await fs.mkdir(naviSessionsDir, { recursive: true });
-
-    const sessionFile = await writeWorkspaceFile({
-      dir: naviSessionsDir,
-      name: "navi-session.jsonl",
-      content: createMockSessionContent([
-        { role: "user", content: "Remember this under Navi" },
-        { role: "assistant", content: "Stored in the bound workspace" },
-      ]),
-    });
-
     const { files, memoryContent } = await runNewWithPreviousSessionEntry({
       tempDir: naviWorkspace,
       cfg: {
         agents: {
           defaults: { workspace: mainWorkspace },
-          list: [{ id: "navi", workspace: naviWorkspace }],
+          entries: { navi: { workspace: naviWorkspace } },
         },
       } satisfies OpenClawConfig,
       sessionKey: "agent:main:main",
       workspaceDirOverride: naviWorkspace,
-      previousSessionEntry: {
-        sessionId: "navi-session",
-        sessionFile,
-      },
+      previousSessionEntry: { sessionId: "navi-session" },
+      events: createSessionMessages([
+        { role: "user", content: "Remember this under Navi" },
+        { role: "assistant", content: "Stored in the bound workspace" },
+      ]),
     });
 
     expect(files.length).toBe(1);
@@ -660,241 +659,6 @@ describe("session-memory hook", () => {
     );
     expect(memoryContent).toContain("- **Session Key**: agent:navi:main");
     await expectPathMissing(path.join(mainWorkspace, "memory"));
-  });
-
-  it("falls back to latest .jsonl.reset.* transcript when active file is empty", async () => {
-    const { sessionsDir, activeSessionFile } = await createSessionMemoryWorkspace({
-      activeSession: { name: "test-session.jsonl", content: "" },
-    });
-
-    // Simulate /new rotation where useful content is now in .reset.* file
-    const resetContent = createMockSessionContent([
-      { role: "user", content: "Message from rotated transcript" },
-      { role: "assistant", content: "Recovered from reset fallback" },
-    ]);
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl.reset.2026-02-16T22-26-33.000Z",
-      content: resetContent,
-    });
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(activeSessionFile!);
-
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Message from rotated transcript"));
-    expect(memoryContent).toContain(
-      sessionMemoryRecord("assistant", "Recovered from reset fallback"),
-    );
-  });
-
-  it("handles reset-path session pointers from previousSessionEntry", async () => {
-    const { sessionsDir } = await createSessionMemoryWorkspace();
-
-    const sessionId = "reset-pointer-session";
-    const resetSessionFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-33.000Z`,
-      content: createMockSessionContent([
-        { role: "user", content: "Message from reset pointer" },
-        { role: "assistant", content: "Recovered directly from reset file" },
-      ]),
-    });
-
-    const previousSessionFile = await findPreviousSessionFile({
-      sessionsDir,
-      currentSessionFile: resetSessionFile,
-      sessionId,
-    });
-    expect(previousSessionFile).toBe(resetSessionFile);
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Message from reset pointer"));
-    expect(memoryContent).toContain(
-      sessionMemoryRecord("assistant", "Recovered directly from reset file"),
-    );
-  });
-
-  it("recovers transcript when previousSessionEntry.sessionFile is missing", async () => {
-    const { sessionsDir } = await createSessionMemoryWorkspace();
-
-    const sessionId = "missing-session-file";
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: `${sessionId}.jsonl`,
-      content: "",
-    });
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-33.000Z`,
-      content: createMockSessionContent([
-        { role: "user", content: "Recovered with missing sessionFile pointer" },
-        { role: "assistant", content: "Recovered by sessionId fallback" },
-      ]),
-    });
-
-    const previousSessionFile = await findPreviousSessionFile({
-      sessionsDir,
-      sessionId,
-    });
-    expect(previousSessionFile).toBe(path.join(sessionsDir, `${sessionId}.jsonl`));
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
-    expect(memoryContent).toContain(
-      sessionMemoryRecord("user", "Recovered with missing sessionFile pointer"),
-    );
-    expect(memoryContent).toContain(
-      sessionMemoryRecord("assistant", "Recovered by sessionId fallback"),
-    );
-  });
-
-  it("falls back to latest reset transcript when only archived copies remain", async () => {
-    const { sessionsDir } = await createSessionMemoryWorkspace();
-
-    const sessionId = "reset-only-session";
-    const olderResetFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-33.000Z`,
-      content: createMockSessionContent([
-        { role: "user", content: "Older archived session" },
-        { role: "assistant", content: "Older archived summary" },
-      ]),
-    });
-    const newerResetFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: `${sessionId}.jsonl.reset.2026-02-16T22-26-34.000Z`,
-      content: createMockSessionContent([
-        { role: "user", content: "Newest archived session" },
-        { role: "assistant", content: "Newest archived summary" },
-      ]),
-    });
-
-    const previousSessionFile = await findPreviousSessionFile({
-      sessionsDir,
-      sessionId,
-    });
-    expect(previousSessionFile).toBe(newerResetFile);
-    expect(previousSessionFile).not.toBe(olderResetFile);
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Newest archived session"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Newest archived summary"));
-    expect(memoryContent).not.toContain("Older archived session");
-  });
-
-  it("prefers the newest reset transcript when multiple reset candidates exist", async () => {
-    const { sessionsDir, activeSessionFile } = await createSessionMemoryWorkspace({
-      activeSession: { name: "test-session.jsonl", content: "" },
-    });
-
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl.reset.2026-02-16T22-26-33.000Z",
-      content: createMockSessionContent([
-        { role: "user", content: "Older rotated transcript" },
-        { role: "assistant", content: "Old summary" },
-      ]),
-    });
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl.reset.2026-02-16T22-26-34.000Z",
-      content: createMockSessionContent([
-        { role: "user", content: "Newest rotated transcript" },
-        { role: "assistant", content: "Newest summary" },
-      ]),
-    });
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(activeSessionFile!);
-    if (!memoryContent) {
-      throw new Error("expected newest reset transcript content");
-    }
-
-    expectMemoryConversation({
-      memoryContent,
-      user: "Newest rotated transcript",
-      assistant: "Newest summary",
-      absent: "Older rotated transcript",
-    });
-  });
-
-  it("prefers active transcript when it is non-empty even with reset candidates", async () => {
-    const { sessionsDir, activeSessionFile } = await createSessionMemoryWorkspace({
-      activeSession: {
-        name: "test-session.jsonl",
-        content: createMockSessionContent([
-          { role: "user", content: "Active transcript message" },
-          { role: "assistant", content: "Active transcript summary" },
-        ]),
-      },
-    });
-
-    await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl.reset.2026-02-16T22-26-34.000Z",
-      content: createMockSessionContent([
-        { role: "user", content: "Reset fallback message" },
-        { role: "assistant", content: "Reset fallback summary" },
-      ]),
-    });
-
-    const memoryContent = await getRecentSessionContentWithResetFallback(activeSessionFile!);
-    if (!memoryContent) {
-      throw new Error("expected active transcript memory content");
-    }
-
-    expectMemoryConversation({
-      memoryContent,
-      user: "Active transcript message",
-      assistant: "Active transcript summary",
-      absent: "Reset fallback message",
-    });
-  });
-
-  it("handles empty session files gracefully", async () => {
-    // Should not throw
-    const { files } = await runNewWithPreviousSession({ sessionContent: "" });
-    expect(files.length).toBe(1);
-  });
-
-  it("uses agent-specific workspace when workspaceDir is provided for non-default agent (gateway path regression)", async () => {
-    const defaultWorkspace = await createCaseWorkspace("workspace-default");
-    const customAgentWorkspace = await createCaseWorkspace("workspace-custom-agent");
-    const sessionsDir = path.join(customAgentWorkspace, "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-
-    const sessionFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "custom-agent-session.jsonl",
-      content: createMockSessionContent([
-        { role: "user", content: "Custom agent conversation" },
-        { role: "assistant", content: "Stored in agent workspace" },
-      ]),
-    });
-
-    // Simulate the gateway internal hook path: workspaceDir is resolved and
-    // passed explicitly in context (fix for #64528).  Without the fix, the
-    // gateway path omitted workspaceDir, causing the handler to fall back to
-    // the default workspace via resolveAgentWorkspaceDir — which for a
-    // default-agent sessionKey would resolve to the shared default workspace.
-    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
-      tempDir: customAgentWorkspace,
-      cfg: {
-        agents: {
-          defaults: { workspace: defaultWorkspace },
-          list: [{ id: "custom-agent", workspace: customAgentWorkspace }],
-        },
-      } satisfies OpenClawConfig,
-      sessionKey: "agent:main:main",
-      workspaceDirOverride: customAgentWorkspace,
-      previousSessionEntry: {
-        sessionId: "custom-agent-session",
-        sessionFile,
-      },
-    });
-
-    expect(files.length).toBe(1);
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Custom agent conversation"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Stored in agent workspace"));
-    // Verify memory did NOT leak to the default workspace
-    await expectPathMissing(path.join(defaultWorkspace, "memory"));
   });
 
   it("keeps sibling home-prefix paths intact in completion logs", async () => {

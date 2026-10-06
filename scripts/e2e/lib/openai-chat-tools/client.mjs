@@ -1,4 +1,5 @@
 // Gateway client for OpenAI chat tools E2E scenarios.
+import { readBoundedResponseBytes } from "../../../lib/bounded-response.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 
 const portText = process.env.PORT;
@@ -12,81 +13,6 @@ if (!portText || !token) {
   throw new Error("missing PORT/OPENCLAW_GATEWAY_TOKEN");
 }
 const port = readTcpPortEnv("PORT", portText);
-if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-  throw new Error(`invalid OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: ${timeoutSeconds}`);
-}
-if (!Number.isFinite(maxBodyBytes) || maxBodyBytes <= 0) {
-  throw new Error(`invalid OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: ${maxBodyBytes}`);
-}
-
-function cancelReaderSoon(reader) {
-  void Promise.resolve()
-    .then(() => reader.cancel())
-    .catch(() => undefined);
-}
-
-async function readResponseChunk(reader, timeoutPromise, markCanceled) {
-  const readPromise = reader.read();
-  if (!timeoutPromise) {
-    return await readPromise;
-  }
-
-  let waitingForRead = true;
-  const timeoutReadPromise = timeoutPromise.catch((error) => {
-    if (waitingForRead) {
-      markCanceled();
-      cancelReaderSoon(reader);
-    }
-    throw error;
-  });
-
-  try {
-    return await Promise.race([readPromise, timeoutReadPromise]);
-  } finally {
-    waitingForRead = false;
-  }
-}
-
-async function readBoundedResponseText(response, byteLimit, timeoutPromise) {
-  const contentLength = response.headers?.get?.("content-length");
-  if (contentLength && /^\d+$/u.test(contentLength)) {
-    const parsedContentLength = Number(contentLength);
-    if (!Number.isSafeInteger(parsedContentLength) || parsedContentLength > byteLimit) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new Error(`chat completions response body exceeded ${byteLimit} bytes`);
-    }
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return "";
-  }
-  const chunks = [];
-  let totalBytes = 0;
-  let canceled = false;
-  try {
-    for (;;) {
-      const { done, value } = await readResponseChunk(reader, timeoutPromise, () => {
-        canceled = true;
-      });
-      if (done) {
-        break;
-      }
-      totalBytes += value.byteLength;
-      if (totalBytes > byteLimit) {
-        canceled = true;
-        await reader.cancel();
-        throw new Error(`chat completions response body exceeded ${byteLimit} bytes`);
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    if (!canceled) {
-      reader.releaseLock();
-    }
-  }
-  return Buffer.concat(chunks, totalBytes).toString("utf8");
-}
 
 const controller = new AbortController();
 const timeoutError = new Error(`chat completions request timed out after ${timeoutSeconds}s`);
@@ -144,7 +70,9 @@ try {
     }),
     timeoutPromise,
   ]);
-  text = await readBoundedResponseText(response, maxBodyBytes, timeoutPromise);
+  text = (
+    await readBoundedResponseBytes(response, "chat completions", maxBodyBytes, { timeoutPromise })
+  ).toString("utf8");
 } finally {
   clearTimeout(timeout);
 }

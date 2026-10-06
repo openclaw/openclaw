@@ -7,7 +7,8 @@ import type {
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
+import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
   path: string;
@@ -18,7 +19,13 @@ type MemoryIndexEntry = {
   content?: string;
 };
 
-class IntervalSyncHarness extends MemoryManagerSyncOps {
+class IntervalSyncHarness extends MemorySyncTestHarness {
+  protected readonly createProvider = (): never => {
+    throw new Error("Interval harness does not acquire embedding providers");
+  };
+  protected releaseProvider(): never {
+    throw new Error("Interval harness does not own embedding providers");
+  }
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-memory-interval-test";
@@ -30,11 +37,10 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
     pollIntervalMs: 0,
     timeoutMs: 0,
   };
-  protected readonly vector = { enabled: false, available: false };
   protected readonly cache = { enabled: false };
   protected providerUnavailableReason?: string;
   protected providerLifecycle = { mode: "active" as const, providerId: "test" };
-  protected db = {} as DatabaseSync;
+  protected publishedDatabase = new MemoryIndexDatabase({} as DatabaseSync);
 
   constructor(params: { intervalMinutes?: number; batchTimeoutMinutes?: number }) {
     super();
@@ -60,7 +66,7 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
     }
   }
 
-  batchConfig(): ReturnType<MemoryManagerSyncOps["resolveBatchConfig"]> {
+  batchConfig(): ReturnType<MemorySyncTestHarness["resolveBatchConfig"]> {
     return this.resolveBatchConfig();
   }
 
@@ -82,18 +88,13 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
     return 1;
   }
 
-  protected pruneEmbeddingCacheIfNeeded(): void {}
+  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
 
   protected resetProviderInitializationForRetry(): void {}
 
   protected assertRequiredProviderAvailable(): void {}
 
-  protected async indexFile(
-    _entry: MemoryIndexEntry,
-    _options: { source: MemorySource; content?: string },
-  ): Promise<{ status: "committed" }> {
-    return { status: "committed" };
-  }
+  protected async indexFile(_entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {}
 }
 
 describe("MemoryManagerSyncOps interval sync", () => {

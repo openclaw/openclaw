@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 gh_with_retry() {
@@ -35,6 +39,15 @@ gh_with_retry() {
   return "$status"
 }
 
+select_exact_merge_prs() {
+  jq -c \
+    --arg repo "$GITHUB_REPOSITORY" \
+    --arg sha "$candidate_sha" \
+    '[.[] |
+      select(.state == "MERGED" and .baseRepository.nameWithOwner == $repo and
+        .mergeCommit.oid == $sha)]'
+}
+
 candidate_root="${CANDIDATE_ROOT:?}"
 candidate_git_dir="${CANDIDATE_GIT_DIR:-}"
 remote_git_dir="${candidate_git_dir:-.}"
@@ -63,11 +76,14 @@ if [[ "$normalized_context_ref" =~ ^release/([0-9]{4}\.[0-9]+\.[0-9]+)$ ]]; then
     echo "Telegram candidate version ${candidate_version} does not belong to release ${release_version}." >&2
     exit 1
   fi
-elif [[ "$normalized_context_ref" =~ ^extended-stable/([0-9]{4}\.[0-9]+\.33)$ ]]; then
+elif [[ "$normalized_context_ref" =~ ^extended-stable/([0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
   context_version="${BASH_REMATCH[1]}"
+  context_line="${context_version%.33}"
   candidate_version="$(jq -er '.version' "${candidate_root}/package.json")"
-  if [[ "$candidate_version" != "$context_version" ]]; then
-    echo "Telegram candidate version ${candidate_version} does not match context ${normalized_context_ref}." >&2
+  if [[ ! "$candidate_version" =~ ^([0-9]{4}\.([1-9]|1[0-2]))\.([1-9][0-9]*)$ ]] ||
+     [[ "${BASH_REMATCH[1]}" != "$context_line" ]] ||
+     (( 10#${BASH_REMATCH[3]} < 33 )); then
+    echo "Telegram candidate version ${candidate_version} does not belong to context ${normalized_context_ref}; expected a final ${context_line}.PATCH version with PATCH >= 33." >&2
     exit 1
   fi
   context_release_branch="$normalized_context_ref"
@@ -87,7 +103,7 @@ candidate_metadata_json="$(
   # GraphQL expands these variables server-side, not in the shell.
   # shellcheck disable=SC2016
   gh_with_retry api graphql \
-    -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}} associatedPullRequests(first:100){nodes{state headRefOid headRepository{nameWithOwner} baseRefName baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}}}}' \
+    -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid messageHeadline signature{isValid state signer{login}} associatedPullRequests(first:100){nodes{state headRefOid headRepository{nameWithOwner} baseRefName baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}}}}' \
     -f owner="$repository_owner" \
     -f name="$repository_name" \
     -f oid="$candidate_sha"
@@ -113,70 +129,49 @@ compare_status="$(
 )"
 trusted_reason=""
 trusted_release_branch=""
-if [[ -n "$context_release_branch" ]]; then
-  branch_sha="$(
-    git -C "$remote_git_dir" ls-remote --exit-code --refs origin \
-      "refs/heads/${context_release_branch}" |
-      awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }' ||
-      true
-  )"
-  if [[ "$branch_sha" == "$candidate_sha" ]]; then
-    trusted_reason="release-branch-head"
-    trusted_release_branch="$context_release_branch"
+release_ref="${context_release_branch:-$context_release_tag}"
+relationship=exact
+if [[ -n "$release_ref" ]]; then
+  if [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
+    relationship=ancestor
   fi
-elif [[ -n "$context_release_tag" ]]; then
-  tag_refs="$(
-    git -C "$remote_git_dir" ls-remote --exit-code origin \
-      "refs/tags/${context_release_tag}" "refs/tags/${context_release_tag}^{}"
-  )"
-  awk -v sha="$candidate_sha" '$1 == sha { found = 1 } END { exit(found ? 0 : 1) }' \
-    <<<"$tag_refs"
-  trusted_reason="release-tag"
 elif [[ "$compare_status" == "ahead" || "$compare_status" == "identical" ]]; then
   trusted_reason="main-ancestor"
 else
-  normalized_ref="${TARGET_REF#refs/heads/}"
-  if [[ "$normalized_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
-    branch_sha="$(
-      git -C "$remote_git_dir" ls-remote --exit-code --refs origin \
-        "refs/heads/${normalized_ref}" |
-        awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }'
-    )"
-    [[ "$branch_sha" == "$candidate_sha" ]]
-    trusted_reason="release-branch-head"
-    trusted_release_branch="$normalized_ref"
-  elif [[ "$TARGET_REF" =~ ^refs/tags/v ]] || [[ "$TARGET_REF" =~ ^v ]]; then
-    normalized_tag="${TARGET_REF#refs/tags/}"
-    tag_refs="$(
-      git -C "$remote_git_dir" ls-remote --exit-code origin \
-        "refs/tags/${normalized_tag}" "refs/tags/${normalized_tag}^{}"
-    )"
-    awk -v sha="$candidate_sha" '$1 == sha { found = 1 } END { exit(found ? 0 : 1) }' \
-      <<<"$tag_refs"
-    trusted_reason="release-tag"
-  elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
-    matching_release_branches="$(
+  release_ref="${TARGET_REF#refs/heads/}"
+  release_ref="${release_ref#refs/tags/}"
+  if [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
+    release_ref="$(
       gh_with_retry api --paginate \
         "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/branches-where-head" \
         --jq '.[].name' |
         awk '$0 ~ /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/ ||
-             $0 ~ /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/ { print }'
+             $0 ~ /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/ { refs[++n] = $0 }
+             END { if (n == 1) print refs[1] }'
     )"
-    if [[ "$(wc -l <<<"$matching_release_branches" | tr -d ' ')" == "1" &&
-          -n "$matching_release_branches" ]]; then
-      trusted_reason="release-branch-head"
-      trusted_release_branch="$matching_release_branches"
-    else
-      matching_release_tags="$(
+    if [[ -z "$release_ref" ]]; then
+      release_ref="$(
         git -C "$remote_git_dir" ls-remote origin 'refs/tags/v*' |
           awk -v sha="$candidate_sha" '$1 == sha { sub(/\^\{\}$/, "", $2); print $2 }' |
-          sort -u
+          sort -u | head -n 1
       )"
-      if [[ -n "$matching_release_tags" ]]; then
-        trusted_reason="release-tag"
-      fi
+      release_ref="${release_ref#refs/tags/}"
     fi
   fi
+fi
+
+fetch_ref=""
+if [[ "$release_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
+  fetch_ref="refs/heads/${release_ref}"
+  reason=release-branch
+elif [[ "$release_ref" == v* ]]; then
+  fetch_ref="refs/tags/${release_ref}"
+  reason=release-tag
+fi
+if [[ -n "$fetch_ref" ]] && bash "${GITHUB_WORKSPACE}/scripts/release-context-contains.sh" \
+  "https://github.com/${GITHUB_REPOSITORY}.git" "$fetch_ref" "$candidate_sha" "$relationship" 2>/dev/null; then
+  trusted_reason="$reason"
+  trusted_release_branch="$release_ref"
 fi
 
 if [[ -z "$trusted_reason" && -n "$frozen_release_branch_pattern" &&
@@ -224,19 +219,36 @@ if [[ "$trusted_reason" != "main-ancestor" ]]; then
   fi
   permission_actor="$signer"
   if [[ "$signature_status" == "missing" || "$signer" == "web-flow" ]]; then
-    if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then
-      echo "Unsigned or GitHub web-flow candidates require an exact release branch head." >&2
+    if [[ "$trusted_reason" != "release-branch" || -z "$trusted_release_branch" ]]; then
+      echo "Unsigned or GitHub web-flow candidates require canonical release branch provenance." >&2
       exit 1
     fi
     matching_merge_prs="$(
-      jq -c \
-        --arg repo "$GITHUB_REPOSITORY" \
-        --arg sha "$candidate_sha" \
-        '[.data.repository.object.associatedPullRequests.nodes[] |
-          select(.state == "MERGED" and .baseRepository.nameWithOwner == $repo and
-            .mergeCommit.oid == $sha)]' \
-        <<<"$candidate_metadata_json"
+      jq -c '.data.repository.object.associatedPullRequests.nodes' <<<"$candidate_metadata_json" |
+        select_exact_merge_prs
     )"
+    if [[ "$(jq 'length' <<<"$matching_merge_prs")" == "0" ]]; then
+      # GitHub can omit a squash merge from its commit-to-PR association index.
+      # The subject supplies only a lookup hint: the direct PR record must still
+      # satisfy the exact merge/repository checks below and live actor permission.
+      candidate_subject="$(jq -r '.data.repository.object.messageHeadline // ""' <<<"$candidate_metadata_json")"
+      merge_pr_hint_pattern='\(#([1-9][0-9]*)\)$'
+      if [[ "$candidate_subject" =~ $merge_pr_hint_pattern ]]; then
+        merge_pr_number="${BASH_REMATCH[1]}"
+        direct_pr_json="$(
+          # shellcheck disable=SC2016
+          gh_with_retry api graphql \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){state baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}' \
+            -f owner="$repository_owner" \
+            -f name="$repository_name" \
+            -F number="$merge_pr_number"
+        )"
+        matching_merge_prs="$(
+          jq -c '[.data.repository.pullRequest | select(. != null)]' <<<"$direct_pr_json" |
+            select_exact_merge_prs
+        )"
+      fi
+    fi
     if [[ "$(jq 'length' <<<"$matching_merge_prs")" != "1" ]]; then
       echo "Unsigned or GitHub web-flow candidate ${candidate_sha} requires one exact merged same-repository PR." >&2
       exit 1

@@ -1,7 +1,7 @@
-// Telegram plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithTimeout, runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -11,7 +11,6 @@ import {
   resolveTelegramTransport,
   type TelegramTransport,
 } from "./fetch.js";
-import { makeProxyFetch } from "./proxy.js";
 
 export type TelegramProbe = BaseProbeResult & {
   status?: number | null;
@@ -49,10 +48,6 @@ const MAX_PROBE_TRANSPORT_CACHE_SIZE = 64;
 // 4 MiB guards against a misbehaving or hostile API endpoint streaming an oversized payload.
 const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
-export function resetTelegramProbeFetcherCacheForTests(): void {
-  probeTransportCache.clear();
-}
-
 function resolveProbeOptions(
   proxyOrOptions?: string | TelegramProbeOptions,
 ): TelegramProbeOptions | undefined {
@@ -63,10 +58,6 @@ function resolveProbeOptions(
     return { proxyUrl: proxyOrOptions };
   }
   return proxyOrOptions;
-}
-
-function shouldUseProbeTransportCache(): boolean {
-  return !process.env.VITEST && process.env.NODE_ENV !== "test";
 }
 
 function buildProbeTransportCacheKey(token: string, options?: TelegramProbeOptions): string {
@@ -98,13 +89,10 @@ function setCachedProbeTransport(
 }
 
 function resolveProbeTransport(token: string, options?: TelegramProbeOptions): TelegramTransport {
-  const cacheEnabled = shouldUseProbeTransportCache();
-  const cacheKey = cacheEnabled ? buildProbeTransportCacheKey(token, options) : null;
-  if (cacheKey) {
-    const cached = probeTransportCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
+  const cacheKey = buildProbeTransportCacheKey(token, options);
+  const cached = probeTransportCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
   const proxyUrl = options?.proxyUrl?.trim();
@@ -113,10 +101,7 @@ function resolveProbeTransport(token: string, options?: TelegramProbeOptions): T
     network: options?.network,
   });
 
-  if (cacheKey) {
-    return setCachedProbeTransport(cacheKey, transport);
-  }
-  return transport;
+  return setCachedProbeTransport(cacheKey, transport);
 }
 
 function normalizeBoolean(value: unknown): boolean | null {
@@ -147,9 +132,9 @@ export async function probeTelegram(
       const options = resolveProbeOptions(proxyOrOptions);
       const abortSignal = options?.abortSignal;
       const includeWebhookInfo = options?.includeWebhookInfo !== false;
+      const apiBase = resolveTelegramApiBase(options?.apiRoot);
       const transport = resolveProbeTransport(token, options);
       const fetcher = transport.fetch;
-      const apiBase = resolveTelegramApiBase(options?.apiRoot);
       const base = `${apiBase}/bot${token}`;
       const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
       const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());

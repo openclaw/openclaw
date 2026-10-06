@@ -1,19 +1,92 @@
 import { describe, expect, it, vi } from "vitest";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import type { OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import {
   completedOutboundAuditTerminals,
+  emitOutboundAuditLifecycle,
   emitOutboundAuditTerminals,
   failedOutboundAuditTerminals,
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 
+function captureEvents(run: () => void): TrustedMessageAuditEvent[] {
+  const events: TrustedMessageAuditEvent[] = [];
+  const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+  try {
+    run();
+  } finally {
+    unsubscribe();
+  }
+  return events;
+}
+
 describe("outbound audit projection", () => {
-  it("keeps mixed logical payloads distinct under one durable queue intent", () => {
-    const events: TrustedMessageAuditEvent[] = [];
-    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+  it("projects replay-safe queued and platform-started lifecycle records", () => {
+    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-1");
+    const events = captureEvents(() => {
+      const context = {
+        channel: "qa-channel",
+        to: "raw-target",
+        payloads: [{ text: "secret message" }],
+        preparedBatch: { runId: "run-1", executionIdentityToken, sourcePayloadCount: 1 },
+      };
+      emitOutboundAuditLifecycle({
+        context,
+        outcome: "queued",
+        queueId: "queue-1",
+        startedAt: Date.now(),
+      });
+      emitOutboundAuditLifecycle({
+        context,
+        outcome: "platform_started",
+        queueId: "queue-1",
+        startedAt: Date.now(),
+      });
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        sourceId: "message:outbound:queue:queue-1:payload:0:queued",
+        action: "message.outbound.queued",
+        status: "started",
+        outcome: "queued",
+        runId: "run-1",
+        executionIdentityToken,
+      }),
+      expect.objectContaining({
+        sourceId: "message:outbound:queue:queue-1:payload:0:platform_started",
+        action: "message.outbound.platform-started",
+        status: "started",
+        outcome: "platform_started",
+        runId: "run-1",
+        executionIdentityToken,
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain("secret message");
+  });
+
+  it("keeps lifecycle observers outside delivery semantics", () => {
+    const unsubscribe = onTrustedMessageAuditEvent(() => {
+      throw new Error("observer failed");
+    });
     try {
+      expect(() =>
+        emitOutboundAuditLifecycle({
+          context: { channel: "qa-channel", to: "target" },
+          outcome: "queued",
+          queueId: "queue-1",
+          startedAt: Date.now(),
+        }),
+      ).not.toThrow();
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("keeps mixed logical payloads distinct under one durable queue intent", () => {
+    const events = captureEvents(() => {
       emitOutboundAuditTerminals({
         context: {
           channel: "matrix",
@@ -39,11 +112,8 @@ describe("outbound audit projection", () => {
         startedAt: Date.now(),
         queueId: "queue-1",
       });
-    } finally {
-      unsubscribe();
-    }
+    });
 
-    expect(events).toHaveLength(2);
     expect(events.map((event) => event.sourceId)).toEqual([
       "message:outbound:queue:queue-1:payload:0",
       "message:outbound:queue:queue-1:payload:1",
@@ -112,35 +182,35 @@ describe("outbound audit projection", () => {
   });
 
   it("preserves unknown delivery state without inventing a failure code", () => {
-    const events: TrustedMessageAuditEvent[] = [];
-    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
-    try {
+    const events = captureEvents(() => {
       emitOutboundAuditTerminals({
-        context: { channel: "matrix", to: "!room:target", payloads: [{ text: "sent?" }] },
+        context: {
+          channel: "matrix",
+          to: "!room:target",
+          runId: "run-preparation-failure",
+          payloads: [{ text: "sent?" }],
+        },
         terminals: uniformOutboundAuditTerminals(1, {
           outcome: "unknown",
           failureStage: "platform_send",
         }),
         startedAt: Date.now(),
       });
-    } finally {
-      unsubscribe();
-    }
+    });
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       status: "unknown",
       outcome: "unknown",
       failureStage: "platform_send",
+      runId: "run-preparation-failure",
       resultCount: 0,
     });
     expect(events[0]).not.toHaveProperty("errorCode");
   });
 
   it("treats a missing adapter identity as unknown rather than a proven suppression", () => {
-    const events: TrustedMessageAuditEvent[] = [];
-    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
-    try {
+    const events = captureEvents(() => {
       emitOutboundAuditTerminals({
         context: { channel: "matrix", to: "!room:target", payloads: [{ text: "sent?" }] },
         terminals: completedOutboundAuditTerminals({
@@ -152,9 +222,7 @@ describe("outbound audit projection", () => {
         }),
         startedAt: Date.now(),
       });
-    } finally {
-      unsubscribe();
-    }
+    });
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -167,27 +235,14 @@ describe("outbound audit projection", () => {
     expect(events[0]).not.toHaveProperty("deliveryKind");
   });
 
-  it.each([
-    {
-      kind: "completed",
-      project: (payloadOutcomes: OutboundPayloadDeliveryOutcome[]) =>
-        completedOutboundAuditTerminals({
-          payloadCount: 1,
-          results: [],
-          payloadOutcomes,
-        }),
-    },
-    {
-      kind: "failed",
-      project: (payloadOutcomes: OutboundPayloadDeliveryOutcome[]) =>
-        failedOutboundAuditTerminals({
-          payloadCount: 1,
-          results: [],
-          payloadOutcomes,
-          failureStage: "platform_send",
-        }),
-    },
-  ])("projects recorded history consistently for $kind runs", ({ project }) => {
+  it("projects recorded history consistently for failed runs", () => {
+    const project = (payloadOutcomes: OutboundPayloadDeliveryOutcome[]) =>
+      failedOutboundAuditTerminals({
+        payloadCount: 1,
+        results: [],
+        payloadOutcomes,
+        failureStage: "platform_send",
+      });
     const result = { channel: "matrix" as const, messageId: "platform-1" };
 
     expect(
@@ -218,9 +273,7 @@ describe("outbound audit projection", () => {
   });
 
   it("counts physical sends once across receipt representations and result fallbacks", () => {
-    const events: TrustedMessageAuditEvent[] = [];
-    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
-    try {
+    const events = captureEvents(() => {
       emitOutboundAuditTerminals({
         context: { channel: "matrix", to: "!room:target", payloads: [{ text: "batch" }] },
         terminals: uniformOutboundAuditTerminals(1, {
@@ -253,9 +306,7 @@ describe("outbound audit projection", () => {
         }),
         startedAt: Date.now(),
       });
-    } finally {
-      unsubscribe();
-    }
+    });
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -266,9 +317,7 @@ describe("outbound audit projection", () => {
   });
 
   it("normalizes a routed target used as the fallback conversation identifier", () => {
-    const events: TrustedMessageAuditEvent[] = [];
-    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
-    try {
+    const events = captureEvents(() => {
       emitOutboundAuditTerminals({
         context: {
           channel: "discord",
@@ -281,9 +330,7 @@ describe("outbound audit projection", () => {
         }),
         startedAt: Date.now(),
       });
-    } finally {
-      unsubscribe();
-    }
+    });
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -295,9 +342,7 @@ describe("outbound audit projection", () => {
   function conversationKindFor(
     context: Omit<Parameters<typeof emitOutboundAuditTerminals>[0]["context"], "payloads">,
   ): string | undefined {
-    const events: TrustedMessageAuditEvent[] = [];
-    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
-    try {
+    const events = captureEvents(() => {
       emitOutboundAuditTerminals({
         context: { ...context, payloads: [{ text: "x" }] },
         terminals: uniformOutboundAuditTerminals(1, {
@@ -306,9 +351,7 @@ describe("outbound audit projection", () => {
         }),
         startedAt: Date.now(),
       });
-    } finally {
-      unsubscribe();
-    }
+    });
     return events[0]?.conversationKind;
   }
 

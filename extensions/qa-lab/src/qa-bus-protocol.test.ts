@@ -3,20 +3,36 @@ import {
   sanitizeQaBusToolCalls as sanitizeCanonicalQaBusToolCalls,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { describe, expect, it } from "vitest";
-import { parseQaTarget, sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
+import {
+  buildQaConversationTarget,
+  parseQaTarget,
+  sanitizeQaBusToolCalls,
+} from "./qa-bus-protocol.js";
 
 describe("QA Lab package bus protocol", () => {
+  it.each(["direct", "group", "channel"] as const)(
+    "builds the canonical base target for %s conversations",
+    (chatType) => {
+      const conversationId = "Case/Room";
+      expect(buildQaConversationTarget({ chatType, conversationId })).toBe(
+        `${chatType === "direct" ? "dm" : chatType}:${conversationId}`,
+      );
+    },
+  );
+
   it.each([
     "bare-id",
     "channel:CaseSensitive",
     "group:team-room",
     "dm:user-1",
     "thread:Room/Topic",
+    "thread:/v1/group/Room%2FOne/Topic%2FTwo",
+    "thread:/v1/dm/Alice/Topic",
   ])("matches the canonical target parser for %s", (target) => {
     expect(parseQaTarget(target)).toEqual(parseCanonicalQaTarget(target));
   });
 
-  it.each(["", "CHANNEL:CaseSensitive", "thread:Room/", "dm:"])(
+  it.each(["", "CHANNEL:CaseSensitive", "thread:Room/", "thread:/v1/group/Room/%GG", "dm:"])(
     "matches canonical target errors for %j",
     (target) => {
       expect(() => parseQaTarget(target)).toThrow();

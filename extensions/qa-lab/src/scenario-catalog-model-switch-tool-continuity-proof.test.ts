@@ -32,6 +32,7 @@ async function runToolContinuity(
     alternateReplyText?: string;
     alternateOutboundText?: string;
     alternateDelivery?: { status: string; resultCount: number } | null;
+    alternateResponseModel?: string;
     unrelatedPrimaryOutboundText?: string;
     unrelatedLaterOutboundText?: string;
   },
@@ -44,6 +45,7 @@ async function runToolContinuity(
       const runId = `run-${call}`;
       const provider = prompt.provider ?? "openai";
       const model = prompt.model ?? "primary-model";
+      const responseModel = call === 2 ? (params?.alternateResponseModel ?? model) : model;
       const replyText =
         call === 1
           ? "the QA scenario pack verifies source and docs"
@@ -87,9 +89,9 @@ async function runToolContinuity(
             sessionId: "session-tools",
             turnId: `turn-${call}`,
             requested: { provider, model },
-            effective: { provider, model, responseModel: model },
+            effective: { provider, model, responseModel },
             successfulToolNames: call === 1 ? (params?.primaryTools ?? ["read"]) : alternateTools,
-            rerouted: false,
+            rerouted: responseModel !== model,
             terminalDisposition: "visible",
           },
         },
@@ -155,14 +157,22 @@ describe("model-switch tool continuity terminal evidence", () => {
     });
   });
 
-  it("rejects a bare successful Code Mode exec without logical read evidence", async () => {
-    await expect(runToolContinuity(["exec"])).rejects.toThrow(
-      "alternate-model run did not return exact owned successful read evidence",
-    );
+  it("accepts a response-model reroute recorded by the alternate terminal receipt", async () => {
+    const { result } = await runToolContinuity(["read"], {
+      alternateResponseModel: "alternate-model-served",
+    });
+
+    expect(result.status).toBe("pass");
+    expect(result.modelSwitchEvidence).toMatchObject({
+      alternate: {
+        effective: { model: "alternate-model", responseModel: "alternate-model-served" },
+        rerouted: true,
+      },
+    });
   });
 
-  it("does not let a successful prior-run read satisfy the alternate run", async () => {
-    await expect(runToolContinuity([])).rejects.toThrow(
+  it("rejects a bare successful Code Mode exec without logical read evidence", async () => {
+    await expect(runToolContinuity(["exec"])).rejects.toThrow(
       "alternate-model run did not return exact owned successful read evidence",
     );
   });

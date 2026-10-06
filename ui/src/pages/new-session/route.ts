@@ -6,7 +6,9 @@ import type { ApplicationContext } from "../../app/context.ts";
 export const page = definePage({
   ...routePageSpec("new-session"),
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
-  loader: async (context: ApplicationContext, { location }) =>
-    (await import("./route-loader.ts")).load(context, location.search),
-  component: () => import("./new-session-page.ts"),
+  // A rollback must resolve its retained draft before cached route data can render.
+  staleReloadMode: "blocking",
+  loader: async (context: ApplicationContext, { location, cause }) =>
+    (await import("./route-loader.ts")).load(context, location.search, cause),
+  component: () => import("./new-session-page-entry.ts"),
 });

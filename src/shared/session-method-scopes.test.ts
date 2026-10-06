@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveSessionMethodScope } from "./session-method-scopes-base.js";
 import { resolveDynamicSessionMutationRequiredScope } from "./session-method-scopes.js";
 
 describe("resolveDynamicSessionMutationRequiredScope", () => {
@@ -34,19 +35,51 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     ).toBe("operator.write");
   });
 
+  it.each(["read-only", "guarded", "workspace"])(
+    "keeps sessions.create permission mode %s write-scoped",
+    (permissionMode) => {
+      expect(
+        resolveDynamicSessionMutationRequiredScope("sessions.create", { permissionMode }),
+      ).toBe("operator.write");
+    },
+  );
+
+  it("requires admin to create a full-access session", () => {
+    expect(
+      resolveDynamicSessionMutationRequiredScope("sessions.create", { permissionMode: "full" }),
+    ).toBe("operator.admin");
+  });
+
   it.each([
     { name: "model set", patch: { model: "openai/gpt-5.6-luna" } },
     { name: "model reset", patch: { model: null } },
+    { name: "thinking set", patch: { thinkingLevel: "high" } },
+    { name: "thinking off", patch: { thinkingLevel: "off" } },
+    { name: "thinking reset", patch: { thinkingLevel: null } },
+    { name: "fast on", patch: { fastMode: true } },
+    { name: "fast off", patch: { fastMode: false } },
+    { name: "fast auto", patch: { fastMode: "auto" } },
+    { name: "fast reset", patch: { fastMode: null } },
+    {
+      name: "combined model and effort",
+      patch: { model: "openai/gpt-test-a", thinkingLevel: "high", fastMode: true },
+    },
     { name: "icon set", patch: { icon: "🦞" } },
     { name: "icon reset", patch: { icon: null } },
+    { name: "automatic device name", patch: { autoLabel: "OpenClaw App · Pixel" } },
+    { name: "automatic device name reset", patch: { autoLabel: null } },
     {
       name: "safe mixed patch",
       patch: { label: "Renamed", archived: true, model: "openai/gpt-5.6-luna" },
     },
     {
       name: "CAS envelope",
-      patch: { expectedSessionId: "session-1", expectedLifecycleRevision: "revision-1" },
+      patch: {
+        expectedSessionId: "session-1",
+        expectedLifecycleRevision: "revision-1",
+      },
     },
+    { name: "automatic read envelope", patch: { expectedMarkedUnreadAt: 10 } },
   ])("keeps $name write-scoped", ({ patch }) => {
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patch", {
@@ -57,12 +90,58 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     ).toBe("operator.write");
   });
 
+  it.each(["read-only", "guarded", "workspace"])(
+    "keeps sessions.patch permission mode %s write-scoped",
+    (permissionMode) => {
+      expect(
+        resolveDynamicSessionMutationRequiredScope("sessions.patch", {
+          key: "agent:main:thread",
+          permissionMode,
+        }),
+      ).toBe("operator.write");
+    },
+  );
+
+  it("requires admin to patch a session to full access", () => {
+    expect(
+      resolveDynamicSessionMutationRequiredScope("sessions.patch", {
+        key: "agent:main:thread",
+        permissionMode: "full",
+      }),
+    ).toBe("operator.admin");
+    expect(
+      resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
+        targets: [{ key: "agent:main:thread" }],
+        patch: { permissionMode: "full" },
+      }),
+    ).toBe("operator.admin");
+  });
+
   it.each([
-    { thinkingLevel: "high" },
-    { fastMode: true },
+    { pinned: true },
+    { archived: true },
+    { snoozedUntil: 1_800_000_000_000 },
+    { snoozedUntil: null },
+  ])("allows session-scoped visibility mutations for single and batch patch %j", (patch) => {
+    const target = { key: "agent:main:thread", expectedSessionId: "session-1" };
+    for (const [method, params] of [
+      ["sessions.patch", { ...target, ...patch }],
+      ["sessions.patchMany", { targets: [target], patch }],
+    ] as const) {
+      expect(resolveSessionMethodScope(method, params)).toBe("operator.sessions.write");
+      expect(resolveDynamicSessionMutationRequiredScope(method, params)).toBe("operator.write");
+    }
+  });
+
+  it.each([
+    { contextWindow: "extended" },
+    { toolOverrides: {} },
+    { sandboxMode: "off" },
+    { sandboxMode: null },
     { verboseLevel: "full" },
     { reasoningLevel: "high" },
-    { model: "openai/gpt-5.6-luna", thinkingLevel: "high" },
+    { thinkingLevel: "high", verboseLevel: "full" },
+    { fastMode: true, permissionMode: "full" },
     { model: null, futureField: true },
   ])("keeps privileged or unknown patch fields admin-scoped %#", (patch) => {
     expect(
@@ -74,6 +153,14 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
   });
 
   it("scopes sessions.patchMany from the shared patch only", () => {
+    for (const sandboxMode of ["off", null]) {
+      expect(
+        resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
+          targets: [{ key: "agent:main:thread", expectedSandboxMode: null }],
+          patch: { sandboxMode },
+        }),
+      ).toBe("operator.admin");
+    }
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
         targets: [
@@ -90,19 +177,21 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
           archived: true,
           unread: false,
           model: "openai/gpt-5.6-luna",
+          thinkingLevel: "high",
+          fastMode: "auto",
         },
       }),
     ).toBe("operator.write");
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
         targets: [{ key: "agent:main:thread" }],
-        patch: { model: null },
+        patch: { model: null, thinkingLevel: null, fastMode: null },
       }),
     ).toBe("operator.write");
     for (const patch of [
       { statusNote: "Working" },
-      { thinkingLevel: "high" },
-      { model: "openai/gpt-5.6-luna", fastMode: true },
+      { thinkingLevel: "high", contextWindow: "extended" },
+      { model: "openai/gpt-test-a", fastMode: true, toolOverrides: {} },
       { futureField: true },
     ]) {
       expect(
@@ -124,21 +213,88 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
         key: "agent:main:archived",
         deleteTranscript: true,
         archivedOnly: true,
+        expectedSessionId: "session-1",
       }),
     ).toBe("operator.write");
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.delete", {
-        key: "agent:main:active",
-        deleteTranscript: true,
-      }),
-    ).toBe("operator.admin");
-    expect(
-      resolveDynamicSessionMutationRequiredScope("sessions.delete", {
+    for (const params of [
+      undefined,
+      null,
+      [],
+      { key: "agent:main:active", deleteTranscript: true },
+      { key: "agent:main:archived", archivedOnly: "yes" },
+      {
         key: "agent:main:archived",
         archivedOnly: true,
+        expectedSessionId: "session-1",
         emitLifecycleHooks: false,
-      }),
-    ).toBe("operator.admin");
+      },
+      {
+        key: "agent:main:archived",
+        archivedOnly: true,
+        expectedSessionId: "session-1",
+        futureField: true,
+      },
+    ]) {
+      expect(resolveDynamicSessionMutationRequiredScope("sessions.delete", params)).toBe(
+        "operator.admin",
+      );
+    }
+  });
+
+  it.each([
+    [{ key: "agent:main:thread", profileId: "development" }, "operator.admin"],
+    [{ key: "agent:main:thread", profileId: "   " }, "operator.admin"],
+    [{ key: "agent:main:thread", deviceId: "device-1" }, "operator.write"],
+    [{ key: "agent:main:thread", autoDevice: true }, "operator.write"],
+    [
+      { key: "agent:main:thread", profileId: "development", deviceId: "device-1" },
+      "operator.write",
+    ],
+  ] as const)("classifies dispatch target %j as %s", (params, expected) => {
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.dispatch", params)).toBe(expected);
+  });
+
+  const moveExpected = {
+    generation: 1,
+    environmentId: "environment-1",
+    ownerEpoch: 1,
+  };
+  it.each([
+    [
+      { key: "agent:main:thread", expected: moveExpected, target: { kind: "gateway" } },
+      "operator.write",
+    ],
+    [
+      {
+        key: "agent:main:thread",
+        expected: moveExpected,
+        target: { kind: "gateway" },
+        abandonSource: true,
+      },
+      "operator.write",
+    ],
+    [
+      {
+        key: "agent:main:thread",
+        expected: moveExpected,
+        target: { kind: "device", deviceId: "device-1" },
+      },
+      "operator.write",
+    ],
+    [
+      {
+        key: "agent:main:thread",
+        expected: moveExpected,
+        target: { kind: "profile", profileId: "development" },
+      },
+      "operator.admin",
+    ],
+    [
+      { key: "agent:main:thread", target: { kind: "profile", profileId: "development" } },
+      "operator.write",
+    ],
+  ] as const)("classifies move target %j as %s", (params, expected) => {
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.move", params)).toBe(expected);
   });
 
   it("does not duplicate static method policy from the core descriptor table", () => {

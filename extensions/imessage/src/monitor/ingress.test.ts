@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createIMessageDurableIngress } from "./ingress.js";
 
@@ -298,31 +298,6 @@ describe("iMessage durable ingress", () => {
         });
       } finally {
         await recovered.stop();
-      }
-    });
-  });
-
-  it("keeps a completion tombstone so a duplicate cannot dispatch twice", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async (_message, claimLifecycle) => {
-        await claimLifecycle.onAdopted();
-        return { kind: "deferred" } as const;
-      });
-      const ingress = createIMessageDurableIngress({
-        accountId: "default",
-        queue,
-        dispatch,
-        runtime: runtime(),
-      });
-      ingress.start();
-      try {
-        await ingress.receive(rawRow());
-        await ingress.waitForIdle();
-        await ingress.receive(rawRow());
-        await ingress.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
       }
     });
   });

@@ -113,7 +113,7 @@ class MainViewModelTest {
   }
 
   @Test
-  fun pairNewGatewayStopsStickyNodeServiceWithoutClearingSavedGateways() {
+  fun returnToGatewaySetupStopsStickyNodeServiceWithoutClearingSavedGateways() {
     val (viewModel, prefs) = createViewModel()
     val gateway =
       GatewayRegistryEntry(
@@ -125,8 +125,10 @@ class MainViewModelTest {
       )
     prefs.gatewayRegistry.upsert(gateway)
 
-    viewModel.pairNewGateway()
+    viewModel.openGatewayAddition()
+    viewModel.returnToGatewaySetup()
 
+    assertEquals(null, viewModel.gatewayAdditionRequest.value)
     assertNodeServiceStopRequested()
     assertEquals(listOf(gateway), prefs.gatewayRegistry.entries.value)
   }
@@ -431,10 +433,10 @@ class MainViewModelTest {
 
   private fun assertNodeServiceStopRequested() {
     val app = RuntimeEnvironment.getApplication()
-    val intent: Intent? = shadowOf(app).nextStartedService
+    val intent: Intent? = shadowOf(app).nextStoppedService
     assertNotNull(intent)
     assertEquals(NodeForegroundService::class.java.name, intent?.component?.className)
-    assertEquals("ai.openclaw.app.action.STOP", intent?.action)
+    assertNull(shadowOf(app).nextStartedService)
   }
 
   private fun assertNodeServiceResumeRequested() {

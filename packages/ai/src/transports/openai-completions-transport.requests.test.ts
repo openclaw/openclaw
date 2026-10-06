@@ -3,30 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
-import { buildOpenAISdkClientOptions } from "./openai-transport-params.js";
 
 const COLD_RUNNER_HTTP_TEST_TIMEOUT_MS = 300_000;
 
 describe("openai completions transport requests", () => {
-  it("passes provider request timeouts to the completions SDK client", () => {
-    const requestTimeoutMs = 900_000;
-    const model = {
-      id: "gpt-5.4-mini",
-      name: "GPT-5.4 Mini",
-      api: "openai-completions",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200_000,
-      maxTokens: 8_192,
-      requestTimeoutMs,
-    } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
-
-    expect(buildOpenAISdkClientOptions(model).timeout).toBe(requestTimeoutMs);
-  });
-
   it.each([
     {
       api: "openai-completions" as const,
@@ -34,7 +14,7 @@ describe("openai completions transport requests", () => {
       createStream: createOpenAICompletionsTransportStreamFn,
     },
   ])(
-    "honors turn timeout and zero retries over real $api HTTP",
+    "honors turn timeout and pinned SDK retries over real $api HTTP",
     async (transport) => {
       const capturedTimeouts: Array<string | undefined> = [];
       const server = createServer((request, response) => {
@@ -80,7 +60,7 @@ describe("openai completions transport requests", () => {
             messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
             tools: [],
           },
-          { apiKey: "test-key", timeoutMs: 1_234, maxRetries: 0 },
+          { apiKey: "test-key", timeoutMs: 1_234 },
         );
 
         const eventTypes: string[] = [];

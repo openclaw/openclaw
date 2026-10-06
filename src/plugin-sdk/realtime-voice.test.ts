@@ -1,10 +1,58 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   createRealtimeVoiceAudioQueue,
   normalizeRealtimeVoiceResponseOutcome,
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  realtimeVoiceAudioDurationMs,
   RealtimeVoiceSessionLifecycle,
+  toOpenAICompatibleRealtimeAudioFormat,
+  type RealtimeVoiceBrowserSessionCreateRequest,
+  type RealtimeVoiceGatewayControl,
   type RealtimeVoiceSessionConnection,
 } from "./realtime-voice.js";
+
+describe("RealtimeVoiceBrowserSessionCreateRequest", () => {
+  it("requires command binding only for negotiated Gateway control", () => {
+    type Base = { providerConfig: Record<string, unknown> };
+    type Claim = { clientControl: { owner: "gateway" } };
+    type Legacy = Base & { gatewayControl: Pick<RealtimeVoiceGatewayControl, "bindBridge"> };
+    type Controlled = Base &
+      Claim & {
+        gatewayControl: RealtimeVoiceGatewayControl &
+          Required<Pick<RealtimeVoiceGatewayControl, "bindControl">>;
+      };
+
+    expectTypeOf<Base>().toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
+    expectTypeOf<Legacy>().toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
+    expectTypeOf<Controlled>().toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
+    expectTypeOf<Base & Claim>().not.toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
+    expectTypeOf<Legacy & Claim>().not.toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
+  });
+});
+
+describe("realtimeVoiceAudioDurationMs", () => {
+  it.each([
+    ["PCM16 24 kHz mono", REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, 48_000, 1_000],
+    [
+      "one G.711 μ-law sample without rounding",
+      REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+      1,
+      0.125,
+    ],
+  ] as const)("calculates %s", (_name, format, byteLength, durationMs) => {
+    expect(realtimeVoiceAudioDurationMs(format, byteLength)).toBe(durationMs);
+  });
+});
+
+describe("toOpenAICompatibleRealtimeAudioFormat", () => {
+  it.each([
+    ["G.711 μ-law", REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ, { type: "audio/pcmu" }],
+    ["PCM16", REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, { type: "audio/pcm", rate: 24000 }],
+  ] as const)("maps %s", (_name, format, expected) => {
+    expect(toOpenAICompatibleRealtimeAudioFormat(format)).toEqual(expected);
+  });
+});
 
 function connectLifecycle(
   lifecycle: RealtimeVoiceSessionLifecycle,
@@ -226,14 +274,35 @@ describe("RealtimeVoiceSessionLifecycle", () => {
     view.fill(0);
     expect(lifecycle.enqueuePendingAudio(Buffer.alloc(512 * 1024, 0x02))).toBe(true);
     expect(lifecycle.enqueuePendingAudio(Buffer.from([0x03]))).toBe(false);
-    expect(lifecycle.drainPendingAudio()).toEqual([
-      Buffer.alloc(512 * 1024, 0x01),
-      Buffer.alloc(512 * 1024, 0x02),
-    ]);
+    const pending = lifecycle.drainPendingAudio();
+    expect(pending).toHaveLength(2);
+    expect(pending[0]?.equals(Buffer.alloc(512 * 1024, 0x01)), "first copied chunk").toBe(true);
+    expect(pending[1]?.equals(Buffer.alloc(512 * 1024, 0x02)), "second copied chunk").toBe(true);
 
     lifecycle.enqueuePendingAudio(Buffer.from([0x04]));
     lifecycle.cancel();
     expect(lifecycle.drainPendingAudio()).toEqual([]);
+  });
+
+  it("keeps the freshest queued speech and warns once per overflow episode", () => {
+    const onPendingAudioOverflow = vi.fn();
+    const lifecycle = new RealtimeVoiceSessionLifecycle("Test", {
+      pendingAudioOverflowPolicy: "drop-oldest",
+      onPendingAudioOverflow,
+    });
+
+    for (let index = 0; index < 322; index += 1) {
+      expect(lifecycle.enqueuePendingAudio(Buffer.from([index % 256]))).toBe(true);
+    }
+    expect(onPendingAudioOverflow).toHaveBeenCalledOnce();
+    expect(lifecycle.drainPendingAudio()).toEqual(
+      Array.from({ length: 320 }, (_, index) => Buffer.from([(index + 2) % 256])),
+    );
+
+    for (let index = 0; index < 321; index += 1) {
+      lifecycle.enqueuePendingAudio(Buffer.from([index % 256]));
+    }
+    expect(onPendingAudioOverflow).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -313,9 +382,12 @@ describe("createRealtimeVoiceAudioQueue", () => {
     expect(queue.enqueue(first)).toBe(true);
     expect(queue.enqueue(second)).toBe(true);
     expect(queue.enqueue(Buffer.from([0x03]))).toBe(false);
-    expect(queue.dequeue()).toEqual(first);
+    expect(queue.dequeue()?.equals(first), "dequeued first chunk").toBe(true);
     expect(queue.enqueue(Buffer.from([0x03]))).toBe(true);
-    expect(queue.drain()).toEqual([second, Buffer.from([0x03])]);
+    const drained = queue.drain();
+    expect(drained).toHaveLength(2);
+    expect(drained[0]?.equals(second), "remaining second chunk").toBe(true);
+    expect(drained[1]).toEqual(Buffer.from([0x03]));
   });
 
   it("drops the oldest audio and resets accounting on clear", () => {

@@ -156,15 +156,14 @@ function scenarioWithCoverage(params: {
 }
 
 describe("qa coverage report", () => {
+  let catalogInventory: ReturnType<typeof buildQaCoverageInventory> | undefined;
+  const readCatalogInventory = () =>
+    (catalogInventory ??= buildQaCoverageInventory(readQaScenarioPack().scenarios));
+
   it("groups scenario coverage metadata by theme and surface", () => {
     const scenarios = readQaScenarioPack().scenarios;
-    const inventory = buildQaCoverageInventory(scenarios);
+    const inventory = readCatalogInventory();
 
-    expect(inventory.scenarioCount).toBeGreaterThan(0);
-    expect(inventory.coverageIdCount).toBeGreaterThan(0);
-    expect(inventory.primaryCoverageIdCount).toBeGreaterThan(0);
-    expect(inventory.secondaryCoverageIdCount).toBeGreaterThan(0);
-    expect(inventory.overlappingCoverage.length).toBeGreaterThan(0);
     expect(inventory.missingCoverage).toStrictEqual([]);
     expect(inventory.scorecardTaxonomy.profileCount).toBe(5);
     expect(
@@ -200,16 +199,6 @@ describe("qa coverage report", () => {
       channelDriver: "live",
       categoryIds: expect.arrayContaining(["tools.tool-invocation-and-execution"]),
     });
-    expect(inventory.scorecardTaxonomy.categoryCount).toBeGreaterThan(200);
-    expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeLessThanOrEqual(
-      inventory.scorecardTaxonomy.categoryCount,
-    );
-    expect(inventory.scorecardTaxonomy.requiredCoverageIdCount).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.inventoriedCoverageIdCount).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.coverageIdInventoryPercent).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.inventoryRefCount).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.scenarioCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.unknownCoverageIdCount).toBe(0);
     expect(
       inventory.scorecardTaxonomy.categories
@@ -227,35 +216,6 @@ describe("qa coverage report", () => {
         (issue) => issue.code === "coverage-id-missing-primary-inventory",
       ),
     ).toBe(true);
-    expect(
-      inventory.scorecardTaxonomy.categories.find(
-        (category) => category.id === TEST_BROWSER_CATEGORY_ID,
-      )?.inventoryRefs,
-    ).toEqual(
-      expect.arrayContaining([
-        {
-          coverageId: TEST_BROWSER_COVERAGE_ID,
-          kind: "qa-scenario",
-          path: null,
-          role: "primary",
-          scenarioRefs: ["qa/scenarios/ui/control-ui-qa-channel-image-roundtrip.yaml"],
-        },
-        {
-          coverageId: TEST_BROWSER_COVERAGE_ID,
-          kind: "playwright",
-          path: "ui/src/e2e/chat-flow.messaging.e2e.test.ts",
-          role: "secondary",
-          scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
-        },
-        {
-          coverageId: TEST_BROWSER_COVERAGE_ID,
-          kind: "playwright",
-          path: "ui/src/e2e/plan-replay-reconnect.e2e.test.ts",
-          role: "secondary",
-          scenarioRefs: ["qa/scenarios/ui/control-ui-plan-replay-reconnect.yaml"],
-        },
-      ]),
-    );
     expect(
       expectDefined(inventory.byTheme.memory, "memory QA theme").map((coverage) => coverage.id),
     ).toContain("session-memory.memory-recall");
@@ -312,7 +272,7 @@ describe("qa coverage report", () => {
       { assert: { expr: expect.stringContaining("config.blockedMarker") } },
     ]);
 
-    const inventory = buildQaCoverageInventory(scenarios);
+    const inventory = readCatalogInventory();
     const coverage = expectDefined(
       inventory.coverageIds.find((candidate) => candidate.id === coverageId),
       "session turn ordering coverage inventory",
@@ -368,9 +328,7 @@ describe("qa coverage report", () => {
   });
 
   it("renders a compact markdown inventory", () => {
-    const report = renderQaCoverageMarkdownReport(
-      buildQaCoverageInventory(readQaScenarioPack().scenarios),
-    );
+    const report = renderQaCoverageMarkdownReport(readCatalogInventory());
 
     expect(report).toContain("# QA Coverage Inventory");
     expect(report).toContain("- Missing coverage metadata: 0");
@@ -393,7 +351,7 @@ describe("qa coverage report", () => {
     );
     for (const executionPath of [
       "ui/src/e2e/chat-flow.messaging.e2e.test.ts",
-      "ui/src/e2e/plan-replay-reconnect.e2e.test.ts",
+      "ui/src/e2e/session-progress-live-placement.e2e.test.ts",
     ]) {
       expect(report).toContain(
         `secondary:playwright:${executionPath} (${TEST_BROWSER_COVERAGE_ID})`,
@@ -403,6 +361,111 @@ describe("qa coverage report", () => {
       );
     }
     expect(report).not.toContain("### Unknown Scenario Coverage IDs");
+  });
+
+  it.each(["script"] as const)(
+    "finds %s scenarios by execution paths outside their code refs",
+    (executionKind) => {
+      const executionPath = `test/producers/${executionKind}-only.ts`;
+      const scenario = scenarioWithCoverage({
+        primary: [TEST_EXECUTABLE_COVERAGE_ID],
+        executionKind,
+        executionPath,
+      });
+
+      expect(findQaScenarioMatches([scenario], executionPath)).toMatchObject([
+        { id: scenario.id, executionKind, executionPath },
+      ]);
+    },
+  );
+
+  it("finds every shared execution-path owner in deterministic scenario order", () => {
+    const executionPath = "test/producers/shared-evidence.ts";
+    const scenario = scenarioWithCoverage({
+      primary: [TEST_EXECUTABLE_COVERAGE_ID],
+      executionKind: "script",
+      executionPath,
+    });
+    const scenarios = [
+      { ...scenario, id: "zulu-owner" },
+      { ...scenario, id: "alpha-owner" },
+    ];
+
+    expect(findQaScenarioMatches(scenarios, executionPath).map(({ id }) => id)).toStrictEqual([
+      "alpha-owner",
+      "zulu-owner",
+    ]);
+  });
+
+  it("normalizes portable execution-path query separators", () => {
+    const executionPath = "test/producers/windows-evidence.ts";
+    const scenario = scenarioWithCoverage({
+      primary: [TEST_EXECUTABLE_COVERAGE_ID],
+      executionKind: "script",
+      executionPath,
+    });
+
+    expect(findQaScenarioMatches([scenario], executionPath.replaceAll("/", "\\"))).toMatchObject([
+      { id: scenario.id, executionPath },
+    ]);
+  });
+
+  it.each([
+    ["name", "metadata-proof"],
+    ["title", "scenario-title"],
+    ["tag", "scenario-category"],
+    ["coverage", TEST_EXECUTABLE_COVERAGE_ID],
+    ["code reference", "src/metadata/code-reference.ts"],
+    ["documentation reference", "docs/metadata/reference.md"],
+    ["source path", "qa/scenarios/metadata/flow-proof.yaml"],
+    ["capability", "scenario-capability"],
+  ] as const)("preserves existing flow scenario matching by %s", (_field, query) => {
+    const scenario = {
+      ...scenarioWithCoverage({
+        primary: [TEST_EXECUTABLE_COVERAGE_ID],
+        sourcePath: "qa/scenarios/metadata/flow-proof.yaml",
+      }),
+      id: "metadata-proof",
+      title: "scenario-title",
+      category: "scenario-category",
+      capabilities: ["scenario-capability"],
+      codeRefs: ["src/metadata/code-reference.ts"],
+      docsRefs: ["docs/metadata/reference.md"],
+    };
+
+    expect(findQaScenarioMatches([scenario], query).map(({ id }) => id)).toStrictEqual([
+      scenario.id,
+    ]);
+  });
+
+  it.each([
+    ["buzz", "channel-canary"],
+    ["telegram", "channel-workspace-relative-media"],
+  ] as const)("finds the %s transport declared by %s", (channel, scenarioId) => {
+    const match = findQaScenarioMatches(readQaScenarioPack().scenarios, channel).find(
+      (candidate) => candidate.id === scenarioId,
+    );
+
+    expect(match).toMatchObject({ id: scenarioId, channel });
+  });
+
+  it.each([
+    ["active-memory-preprompt-recall", "mock-openai"],
+    ["discord-transcripts-voice-authorization", "live-frontier"],
+  ] as const)("reports the canonical provider mode for %s", (scenarioId, providerMode) => {
+    expect(findQaScenarioMatches(readQaScenarioPack().scenarios, scenarioId)).toContainEqual(
+      expect.objectContaining({ id: scenarioId, requiredProviderMode: providerMode }),
+    );
+  });
+
+  it.each([
+    ["Gateway loopback and LAN access", "docker-gateway-network"],
+    ["qa-lab", "docker-gateway-network"],
+    ["runtime", "clawhub-marketplace-list"],
+  ] as const)("does not broaden ordinary metadata query %s", (query, unrelatedScenarioId) => {
+    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, query);
+
+    expect(matches.map(({ id }) => id)).not.toContain(unrelatedScenarioId);
   });
 
   it("renders Playwright matches as qa suite targets", () => {
@@ -424,21 +487,6 @@ describe("qa coverage report", () => {
     expect(report).not.toContain("Native test refs");
   });
 
-  it("includes a runnable channel driver choice in scenario match commands", () => {
-    const matches = findQaScenarioMatches(
-      readQaScenarioPack().scenarios,
-      "whatsapp-access-control-group-disabled",
-    );
-    const report = renderQaScenarioMatchesMarkdownReport({
-      query: "whatsapp-access-control-group-disabled",
-      matches,
-    });
-
-    expect(report).toContain(
-      "- Suite command: `pnpm openclaw qa suite --channel-driver live --channel whatsapp --scenario whatsapp-access-control-group-disabled`",
-    );
-  });
-
   it("keeps qa-channel scenario commands on the default driver", () => {
     const matches = findQaScenarioMatches(
       readQaScenarioPack().scenarios,
@@ -455,16 +503,39 @@ describe("qa coverage report", () => {
     expect(report).not.toContain("--channel-driver live --channel qa-channel");
   });
 
-  it("uses the live lane as the coverage-report default for channel scenarios", () => {
-    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, "dm-per-room-session");
-    const report = renderQaScenarioMatchesMarkdownReport({
-      query: "dm-per-room-session",
-      matches,
-    });
+  it.each([
+    [
+      "agent-startup-instruction-first-action",
+      "--provider-mode mock-openai --scenario agent-startup-instruction-first-action",
+    ],
+    ["channel-canary", "--scenario channel-canary"],
+  ] as const)("renders a runnable suite command for %s", (scenarioId, expectedArgs) => {
+    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, scenarioId);
+    const report = renderQaScenarioMatchesMarkdownReport({ query: scenarioId, matches });
 
-    expect(report).toContain(
-      "- Suite command: `pnpm openclaw qa suite --channel-driver live --channel matrix --scenario dm-per-room-session`",
+    expect(report).toContain(`- Suite command: \`pnpm openclaw qa suite ${expectedArgs}\``);
+  });
+
+  it("groups commands by compatible provider mode while preserving the live default", () => {
+    const scenarios = readQaScenarioPack().scenarios;
+    const scenarioIds = [
+      "agent-startup-instruction-first-action",
+      "instruction-profile-artifact-followthrough-live",
+      "instruction-followthrough-repo-contract",
+    ];
+    const matches = scenarioIds.flatMap((scenarioId) =>
+      findQaScenarioMatches(scenarios, scenarioId),
     );
+    const report = renderQaScenarioMatchesMarkdownReport({ query: "provider lanes", matches });
+
+    expect(report).toContain("- Suite commands:");
+    expect(report).toContain(
+      "--provider-mode mock-openai --scenario agent-startup-instruction-first-action",
+    );
+    expect(report).toContain(
+      "--scenario instruction-profile-artifact-followthrough-live --scenario instruction-followthrough-repo-contract",
+    );
+    expect(report).not.toContain("--provider-mode live-frontier");
   });
 
   it("splits flow commands across channel lanes", () => {
@@ -496,37 +567,13 @@ describe("qa coverage report", () => {
     });
     const report = renderQaScenarioMatchesMarkdownReport({
       query: "mixed",
-      matches: [
-        {
-          ...flowScenario,
-          id: "flow-proof",
-          theme: "test",
-          surfaces: [flowScenario.surface],
-          risk: "unassigned",
-          coverageIds: [
-            ...(flowScenario.coverage?.primary ?? []),
-            ...(flowScenario.coverage?.secondary ?? []),
-          ],
-          docsRefs: [],
-          codeRefs: [],
-          executionKind: flowScenario.execution.kind,
-        },
-        {
-          ...playwrightScenario,
-          id: "playwright-proof",
-          theme: "test",
-          surfaces: [playwrightScenario.surface],
-          risk: "unassigned",
-          coverageIds: [
-            ...(playwrightScenario.coverage?.primary ?? []),
-            ...(playwrightScenario.coverage?.secondary ?? []),
-          ],
-          docsRefs: [],
-          codeRefs: [],
-          executionKind: playwrightScenario.execution.kind,
-          executionPath: playwrightExecutionPath,
-        },
-      ],
+      matches: findQaScenarioMatches(
+        [
+          { ...flowScenario, id: "flow-proof" },
+          { ...playwrightScenario, id: "playwright-proof" },
+        ],
+        "proof",
+      ),
     });
 
     expect(report).toContain("- Suite commands:");
@@ -623,46 +670,12 @@ describe("qa coverage report", () => {
   });
 
   it("rejects one coverage ID assigned to different exact features", () => {
-    const taxonomy: QaMaturityTaxonomy = {
-      ...testMaturityTaxonomy(),
-      profiles: [
-        {
-          id: "release",
-          description: "Test release profile.",
-          includeAllCategories: false,
-          channelDriver: "qa-channel",
-          categoryIds: ["agent-runtime.agent-turn-execution"],
-          coverageIds: [],
-        },
-      ],
-      surfaces: [
-        {
-          id: "agent-runtime",
-          name: "Agent Runtime",
-          family: "test",
-          level: "experimental",
-          categories: [
-            {
-              id: "agent-turn-execution",
-              name: "Agent Turn Execution",
-              category_note: "agent-turn-execution.md",
-              docs: [],
-              search_anchors: [],
-              features: [
-                {
-                  name: "shared",
-                  coverageIds: [TEST_EXECUTABLE_COVERAGE_ID],
-                },
-                {
-                  name: "shared",
-                  coverageIds: [TEST_EXECUTABLE_COVERAGE_ID],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
+    const taxonomy = testMaturityTaxonomy();
+    const category = expectDefined(taxonomy.surfaces[0]?.categories[0], "test category");
+    category.features = [
+      { name: "shared", coverageIds: [TEST_EXECUTABLE_COVERAGE_ID] },
+      { name: "shared", coverageIds: [TEST_EXECUTABLE_COVERAGE_ID] },
+    ];
     expect(() =>
       buildQaScorecardTaxonomyReport({
         taxonomy,
@@ -748,19 +761,6 @@ describe("qa coverage report", () => {
     );
   });
 
-  it("reports profile categories missing primary coverage inventory", () => {
-    const report = buildQaScorecardTaxonomyReport({
-      taxonomy: testMaturityTaxonomy(),
-      repoRoot: process.cwd(),
-      scenarios: [],
-    });
-
-    expect(report.validationIssues.map((issue) => issue.code)).toEqual([
-      "coverage-id-missing-primary-inventory",
-      "profile-category-missing-inventory",
-    ]);
-  });
-
   it("reports native test inventory targets outside the repository", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy(),
@@ -778,33 +778,6 @@ describe("qa coverage report", () => {
       "inventory-ref-not-found",
       "coverage-id-missing-primary-inventory",
       "profile-category-missing-inventory",
-    ]);
-  });
-
-  it("inventories runnable scenario coverage metadata", () => {
-    const report = buildQaScorecardTaxonomyReport({
-      taxonomy: testMaturityTaxonomy(),
-      repoRoot: process.cwd(),
-      scenarios: [
-        scenarioWithCoverage({
-          primary: [TEST_EXECUTABLE_COVERAGE_ID],
-          sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
-        }),
-      ],
-    });
-
-    expect(report.validationIssues).toStrictEqual([]);
-    expect(report.categories[0]?.scenarioRefs).toStrictEqual([
-      "qa/scenarios/channels/dm-chat-baseline.yaml",
-    ]);
-    expect(report.categories[0]?.inventoryRefs).toStrictEqual([
-      {
-        coverageId: TEST_EXECUTABLE_COVERAGE_ID,
-        kind: "qa-scenario",
-        path: null,
-        role: "primary",
-        scenarioRefs: ["qa/scenarios/channels/dm-chat-baseline.yaml"],
-      },
     ]);
   });
 

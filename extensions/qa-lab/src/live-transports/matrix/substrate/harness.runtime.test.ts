@@ -1,28 +1,15 @@
 // Qa Lab Matrix tests cover harness behavior.
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   MATRIX_QA_CLEANUP_TIMEOUT_MS,
-  MATRIX_QA_SERVICE,
-  buildVersionsUrl,
   isMatrixVersionsReachable,
   waitForReachableMatrixBaseUrl,
   writeMatrixQaHarnessFiles,
 } from "./harness.runtime-internals.js";
 import { startMatrixQaHarness } from "./harness.runtime.js";
 import type { MatrixQaRecordingProxy } from "./recording-proxy.js";
-
-const testing = {
-  MATRIX_QA_CLEANUP_TIMEOUT_MS,
-  MATRIX_QA_SERVICE,
-  buildVersionsUrl,
-  isMatrixVersionsReachable,
-  waitForReachableMatrixBaseUrl,
-  writeMatrixQaHarnessFiles,
-};
 
 type MatrixQaHarnessDeps = Parameters<typeof startMatrixQaHarness>[1];
 type MatrixQaHarnessResult = Awaited<ReturnType<typeof startMatrixQaHarness>>;
@@ -32,9 +19,7 @@ async function withStartedMatrixHarness(
   verify: (params: { outputDir: string; result: MatrixQaHarnessResult }) => Promise<void> | void,
   options?: { dynamicPort?: boolean },
 ) {
-  const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
-
-  try {
+  await withTempDir("matrix-qa-harness-", async (outputDir) => {
     const startRecordingProxyImpl =
       deps?.startRecordingProxyImpl ??
       (async ({ targetBaseUrl }: { targetBaseUrl: string }) =>
@@ -56,9 +41,7 @@ async function withStartedMatrixHarness(
       { ...deps, startRecordingProxyImpl },
     );
     await verify({ outputDir, result });
-  } finally {
-    await rm(outputDir, { recursive: true, force: true });
-  }
+  });
 }
 
 function createContainerNetworkRunCommand(calls?: string[]) {
@@ -78,22 +61,34 @@ function createContainerNetworkRunCommand(calls?: string[]) {
   };
 }
 
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
+function createStalledVersionsFetch(healthyBaseUrl?: string) {
+  const probeSignals: AbortSignal[] = [];
+  const fetchImpl = vi.fn(async (input: string, init?: Pick<RequestInit, "signal">) => {
+    if (healthyBaseUrl && input.startsWith(healthyBaseUrl)) {
+      return { ok: true };
     }
-  }
-  return count;
+    return await new Promise<never>((_resolve, reject) => {
+      const probeSignal = init?.signal ?? undefined;
+      if (!probeSignal) {
+        reject(new Error("versions probe signal missing"));
+        return;
+      }
+      probeSignals.push(probeSignal);
+      const rejectAborted = () => reject(new Error("versions probe aborted"));
+      if (probeSignal.aborted) {
+        rejectAborted();
+        return;
+      }
+      probeSignal.addEventListener("abort", rejectAborted, { once: true });
+    });
+  });
+  return { fetchImpl, probeSignals };
 }
 
 describe("matrix harness runtime", () => {
   it("writes a pinned Tuwunel compose file", async () => {
-    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
-
-    try {
-      const result = await testing.writeMatrixQaHarnessFiles({
+    await withTempDir("matrix-qa-harness-", async (outputDir) => {
+      const result = await writeMatrixQaHarnessFiles({
         outputDir,
         homeserverPort: 28008,
         registrationToken: "secret-token",
@@ -102,7 +97,7 @@ describe("matrix harness runtime", () => {
 
       const compose = await readFile(result.composeFile, "utf8");
       expect(compose).toContain(
-        "image: ghcr.io/matrix-construct/tuwunel:v1.8.2@sha256:6f950bb139411a7964781e986321e395e045e4a6a52240a4dda9d23d04075f78",
+        "image: ghcr.io/matrix-construct/tuwunel:v1.8.3@sha256:699fa9971c174e01c884abad8d1a3cfb2fe518e1a71f1fa16ea9dedf11873d74",
       );
       expect(compose).toContain('      - "127.0.0.1:28008:8008"');
       expect(compose).toContain('TUWUNEL_ALLOW_ENCRYPTION: "true"');
@@ -110,9 +105,7 @@ describe("matrix harness runtime", () => {
       expect(compose).toContain('TUWUNEL_REGISTRATION_TOKEN: "secret-token"');
       expect(compose).toContain('TUWUNEL_SERVER_NAME: "matrix-qa.test"');
       expect(result.registrationToken).toBe("secret-token");
-    } finally {
-      await rm(outputDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("starts the harness, waits for versions, and exposes a stop command", async () => {
@@ -304,9 +297,9 @@ describe("matrix harness runtime", () => {
     const cancel = vi.fn(async () => {});
     const fetchImpl = vi.fn(async () => ({ ok: true, body: { cancel } }));
 
-    await expect(
-      testing.isMatrixVersionsReachable("http://127.0.0.1:28008/", fetchImpl),
-    ).resolves.toBe(true);
+    await expect(isMatrixVersionsReachable("http://127.0.0.1:28008/", fetchImpl)).resolves.toBe(
+      true,
+    );
 
     expect(fetchImpl).toHaveBeenCalledWith("http://127.0.0.1:28008/_matrix/client/versions", {
       signal: expect.any(AbortSignal),
@@ -315,28 +308,14 @@ describe("matrix harness runtime", () => {
   });
 
   it("bounds a stalled versions probe by the remaining discovery deadline", async () => {
-    let probeSignal: AbortSignal | undefined;
-    const fetchImpl = vi.fn(
-      async (_input: string, init?: Pick<RequestInit, "signal">) =>
-        await new Promise<never>((_resolve, reject) => {
-          probeSignal = init?.signal ?? undefined;
-          if (!probeSignal) {
-            reject(new Error("versions probe signal missing"));
-            return;
-          }
-          const rejectAborted = () => reject(new Error("versions probe aborted"));
-          if (probeSignal.aborted) {
-            rejectAborted();
-            return;
-          }
-          probeSignal.addEventListener("abort", rejectAborted, { once: true });
-        }),
-    );
-    const sleepImpl = vi.fn(async () => {});
-    const startedAt = Date.now();
-
-    await expect(
-      testing.waitForReachableMatrixBaseUrl({
+    vi.useFakeTimers();
+    const requestTimeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(requestTimeout.signal);
+    try {
+      const { fetchImpl, probeSignals } = createStalledVersionsFetch();
+      const sleepImpl = vi.fn(async () => {});
+      const startedAt = Date.now();
+      const waiting = waitForReachableMatrixBaseUrl({
         composeFile: "/tmp/docker-compose.matrix-qa.yml",
         containerBaseUrl: null,
         fetchImpl,
@@ -344,38 +323,59 @@ describe("matrix harness runtime", () => {
         sleepImpl,
         timeoutMs: 25,
         pollMs: 1_000,
-      }),
-    ).rejects.toThrow("did not become healthy");
+      });
+      const rejection = expect(waiting).rejects.toThrow("did not become healthy");
 
-    expect(Date.now() - startedAt).toBeLessThan(500);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(probeSignal?.aborted).toBe(true);
-    expect(sleepImpl).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(25);
+      await rejection;
+
+      expect(Date.now() - startedAt).toBe(25);
+      expect(probeSignals).toHaveLength(1);
+      expect(probeSignals[0]?.aborted).toBe(true);
+      expect(sleepImpl).not.toHaveBeenCalled();
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-poll when the request timeout wins at the discovery deadline", async () => {
+    vi.useFakeTimers();
+    const requestTimeout = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(requestTimeout.signal);
+    try {
+      const { fetchImpl } = createStalledVersionsFetch();
+      const startedAt = Date.now();
+      const sleepImpl = vi.fn(async (ms: number) => {
+        vi.setSystemTime(Date.now() + ms);
+      });
+      const waiting = waitForReachableMatrixBaseUrl({
+        composeFile: "/tmp/docker-compose.matrix-qa.yml",
+        containerBaseUrl: null,
+        fetchImpl,
+        hostBaseUrl: "http://127.0.0.1:28008/",
+        sleepImpl,
+        timeoutMs: 25,
+        pollMs: 1_000,
+      });
+
+      vi.setSystemTime(startedAt + 24);
+      requestTimeout.abort(new DOMException("request timed out", "TimeoutError"));
+      await expect(waiting).rejects.toThrow("did not become healthy");
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(sleepImpl).not.toHaveBeenCalled();
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("probes the container fallback when the host versions probe stalls", async () => {
-    let hostProbeSignal: AbortSignal | undefined;
-    const fetchImpl = vi.fn(async (input: string, init?: Pick<RequestInit, "signal">) => {
-      if (input.startsWith("http://172.18.0.10:8008/")) {
-        return { ok: true };
-      }
-      return await new Promise<never>((_resolve, reject) => {
-        hostProbeSignal = init?.signal ?? undefined;
-        if (!hostProbeSignal) {
-          reject(new Error("versions probe signal missing"));
-          return;
-        }
-        const rejectAborted = () => reject(new Error("versions probe aborted"));
-        if (hostProbeSignal.aborted) {
-          rejectAborted();
-          return;
-        }
-        hostProbeSignal.addEventListener("abort", rejectAborted, { once: true });
-      });
-    });
+    const { fetchImpl, probeSignals } = createStalledVersionsFetch("http://172.18.0.10:8008/");
 
     await expect(
-      testing.waitForReachableMatrixBaseUrl({
+      waitForReachableMatrixBaseUrl({
         composeFile: "/tmp/docker-compose.matrix-qa.yml",
         containerBaseUrl: "http://172.18.0.10:8008/",
         fetchImpl,
@@ -386,32 +386,15 @@ describe("matrix harness runtime", () => {
     ).resolves.toBe("http://172.18.0.10:8008/");
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(hostProbeSignal?.aborted).toBe(true);
+    expect(probeSignals).toHaveLength(1);
+    expect(probeSignals[0]?.aborted).toBe(true);
   });
 
   it("returns the host without waiting for a stalled container versions probe", async () => {
-    let containerProbeSignal: AbortSignal | undefined;
-    const fetchImpl = vi.fn(async (input: string, init?: Pick<RequestInit, "signal">) => {
-      if (input.startsWith("http://127.0.0.1:28008/")) {
-        return { ok: true };
-      }
-      return await new Promise<never>((_resolve, reject) => {
-        containerProbeSignal = init?.signal ?? undefined;
-        if (!containerProbeSignal) {
-          reject(new Error("versions probe signal missing"));
-          return;
-        }
-        const rejectAborted = () => reject(new Error("versions probe aborted"));
-        if (containerProbeSignal.aborted) {
-          rejectAborted();
-          return;
-        }
-        containerProbeSignal.addEventListener("abort", rejectAborted, { once: true });
-      });
-    });
+    const { fetchImpl, probeSignals } = createStalledVersionsFetch("http://127.0.0.1:28008/");
 
     await expect(
-      testing.waitForReachableMatrixBaseUrl({
+      waitForReachableMatrixBaseUrl({
         composeFile: "/tmp/docker-compose.matrix-qa.yml",
         containerBaseUrl: "http://172.18.0.10:8008/",
         fetchImpl,
@@ -422,7 +405,8 @@ describe("matrix harness runtime", () => {
     ).resolves.toBe("http://127.0.0.1:28008/");
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(containerProbeSignal?.aborted).toBe(true);
+    expect(probeSignals).toHaveLength(1);
+    expect(probeSignals[0]?.aborted).toBe(true);
   });
 
   it("falls back to the container IP when the host port is unreachable", async () => {
@@ -459,7 +443,7 @@ describe("matrix harness runtime", () => {
           return {
             ok:
               input === "http://127.0.0.1:28008/_matrix/client/versions" &&
-              countMatching(fetchCalls, (url) => url === input) > 1,
+              fetchCalls.filter((url) => url === input).length > 1,
           };
         }),
         sleepImpl: vi.fn(async () => {}),
@@ -487,7 +471,7 @@ describe("matrix harness runtime", () => {
           return {
             ok:
               input === "http://172.18.0.10:8008/_matrix/client/versions" &&
-              countMatching(fetchCalls, (url) => url === input) > 1,
+              fetchCalls.filter((url) => url === input).length > 1,
           };
         }),
         sleepImpl: vi.fn(async () => {}),

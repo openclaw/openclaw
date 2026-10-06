@@ -9,6 +9,7 @@ export function registerDaemonCli(program: Command) {
   const daemon = program
     .command("daemon")
     .description("Manage the Gateway service (launchd/systemd/schtasks)")
+    .option("--json", "Output JSON", false)
     .addHelpText(
       "after",
       () =>
@@ -16,6 +17,6 @@ export function registerDaemonCli(program: Command) {
     );
 
   addGatewayServiceCommands(daemon, {
-    statusDescription: "Show service install status + probe connectivity/capability",
+    statusDescription: "Show service install status + check connectivity/capability",
   });
 }

@@ -1,0 +1,444 @@
+import assert from "node:assert/strict";
+import path from "node:path";
+import type { Worker } from "node:worker_threads";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
+import {
+  applySessionEntryLifecycleMutation,
+  appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  loadTranscriptEventsSync,
+  patchSessionEntryCore,
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+  withTranscriptWriteLock,
+} from "./session-accessor.js";
+import { readSessionTranscriptMessageEventPage } from "./session-accessor.sqlite-active-events.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  startSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
+} from "./session-transcript-reconcile.js";
+import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
+
+vi.mock("node:worker_threads", async () =>
+  (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
+);
+
+const observer = useReconcileWorkerObserver();
+const archiveMaterializationHook = vi.hoisted(() => ({
+  afterMaterialize: undefined as (() => void) | undefined,
+}));
+
+// Close the cached handle after the real archive worker yields back to its caller.
+vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
+  return {
+    ...actual,
+    materializeSessionStateDeletePlans: async (
+      ...args: Parameters<typeof actual.materializeSessionStateDeletePlans>
+    ) => {
+      const result = await actual.materializeSessionStateDeletePlans(...args);
+      archiveMaterializationHook.afterMaterialize?.();
+      return result;
+    },
+  };
+});
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("SQLite session handle lifecycle", () => {
+  let scope: { sessionId: string; sessionKey: string; storePath: string };
+  let databasePath: string;
+
+  beforeEach(async () => {
+    scope = {
+      sessionId: "handle-session",
+      sessionKey: "agent:main:handle-session",
+      storePath: path.join(tempDirs.make("openclaw-session-handle-"), "sessions.json"),
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path!;
+  });
+
+  afterEach(async () => {
+    archiveMaterializationHook.afterMaterialize = undefined;
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+  });
+
+  it("releases a transcript read after JSON parsing fails mid-stream", async () => {
+    const events = [
+      { type: "message", id: "first", message: { role: "user", content: "first" } },
+      { type: "message", id: "second", message: { role: "assistant", content: "second" } },
+      { type: "message", id: "third", message: { role: "user", content: "third" } },
+    ];
+    await replaceTranscriptEvents(scope, events);
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const row = database.db
+      .prepare(
+        "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT 1 OFFSET ?",
+      )
+      .get(scope.sessionId, 1) as { seq: number; event_json: string };
+    const update = database.db.prepare(
+      "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = ?",
+    );
+    update.run("{malformed", scope.sessionId, row.seq);
+
+    expect(() => loadTranscriptEventsSync(scope)).toThrow(SyntaxError);
+    expect(database.db.isTransaction).toBe(false);
+    // A leaked iterator can retain a read lock even after the transaction rolls back.
+    expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+      busy: 0,
+    });
+
+    update.run(row.event_json, scope.sessionId, row.seq);
+    expect(loadTranscriptEventsSync(scope)).toEqual(events);
+    await appendTranscriptMessage(scope, {
+      message: { role: "assistant", content: "after failure" },
+    });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      ...events,
+      expect.objectContaining({ message: expect.objectContaining({ content: "after failure" }) }),
+    ]);
+  });
+
+  it("reads complete mirror facts across key batches without per-message selections", async () => {
+    const messages = Array.from({ length: 901 }, (_, index) => ({
+      eventId: "event-" + index,
+      parentId: index === 0 ? null : "event-" + (index - 1),
+      message: { role: "user", content: "body " + index, idempotencyKey: "mirror-" + index },
+    }));
+    await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const generation = database.db
+      .prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
+      .get(scope.sessionId)?.generation;
+
+    await withTranscriptWriteLock(scope, async (transcript) => {
+      const count = messages.length;
+      const keys = messages.map(({ message }) => message.idempotencyKey);
+      const counter = trackSqliteStatementExecutions(database.db, ["reads"], (query) =>
+        query.startsWith("select ") ? "reads" : null,
+      );
+      try {
+        const facts = await transcript.readMessageFacts({ idempotencyKeys: keys });
+        expect([...facts.existingIdempotencyKeys]).toEqual(keys);
+        expect([...facts.messagesByIdempotencyKey]).toEqual(
+          messages.map(({ message }) => [message.idempotencyKey, message]),
+        );
+        expect([...facts.anchorsByIdempotencyKey]).toEqual(
+          messages.map(({ eventId, parentId, message }, index) => [
+            message.idempotencyKey,
+            {
+              agentId: "main",
+              sessionId: scope.sessionId,
+              sessionKey: scope.sessionKey,
+              storePath: database.path,
+              generation,
+              entryId: eventId,
+              rawSeq: index + 1,
+              effectiveParentId: parentId,
+              activeMessagePosition: index,
+              idempotencyKey: message.idempotencyKey,
+            },
+          ]),
+        );
+        expect([...facts.anchorsByIdempotencyKey.values()].every(Object.isFrozen)).toBe(true);
+        expect.soft(counter.counts.reads, "selected " + count).toBeLessThanOrEqual(12);
+        expect.soft(counter.rowCounts.reads, "selected " + count).toBeLessThanOrEqual(count + 10);
+      } finally {
+        counter.restore();
+      }
+    });
+  });
+  it.each([
+    ["dirty projection", "UPDATE session_transcript_index_state SET needs_rebuild = 1"],
+    ["missing projection", "DELETE FROM session_transcript_index_state"],
+    ["behind projection", "UPDATE session_transcript_index_state SET indexed_seq = -1"],
+    [
+      "unclassified projection",
+      "UPDATE session_transcript_active_events SET context_eligible = NULL",
+    ],
+    ["historical message", "DELETE FROM session_transcript_active_events"],
+    ["missing generation", "DELETE FROM transcript_rewrite_watermarks"],
+  ])("retains mirror messages without certifying anchors for %s", async (_name, mutation) => {
+    const message = { role: "user", content: "retained", idempotencyKey: "mirror-state" };
+    const appended = await appendTranscriptMessage(scope, { message });
+    expect(appended?.anchor?.activeMessagePosition).toBe(0);
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+
+    await withTranscriptWriteLock(scope, async (transcript) => {
+      database.db.exec(mutation);
+      const facts = await transcript.readMessageFacts({
+        idempotencyKeys: [message.idempotencyKey],
+      });
+      expect([...facts.existingIdempotencyKeys]).toEqual([message.idempotencyKey]);
+      expect([...facts.messagesByIdempotencyKey]).toEqual([[message.idempotencyKey, message]]);
+      expect([...facts.anchorsByIdempotencyKey]).toEqual([]);
+    });
+  });
+  it.each(["events", "message facts"])(
+    "reads %s after a locked callback loses its handle",
+    async (kind) => {
+      const message = { role: "user", content: "retained", idempotencyKey: "handle-message" };
+      await appendTranscriptMessage(scope, { message });
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+
+      await withTranscriptWriteLock(scope, async (transcript) => {
+        const before = await transcript.readEvents();
+        closeCachedOpenClawAgentDatabase(database, { eviction: true });
+        expect(database.db.isOpen).toBe(false);
+        if (kind === "events") {
+          await expect(transcript.readEvents()).resolves.toEqual(before);
+        } else {
+          const facts = await transcript.readMessageFacts({
+            idempotencyKeys: [message.idempotencyKey],
+          });
+          expect(facts.messagesByIdempotencyKey.get(message.idempotencyKey)).toMatchObject(message);
+        }
+      });
+    },
+  );
+
+  it("commits a turn after its async predicate loses the cached handle", async () => {
+    const planningDatabase = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "user", content: "append after close" },
+          shouldAppend: async () => {
+            // The callback owns writer admission; evict only its cached host handle.
+            closeCachedOpenClawAgentDatabase(planningDatabase);
+            expect(planningDatabase.db.isOpen).toBe(false);
+            return true;
+          },
+        },
+      ],
+      updateMode: "none",
+    });
+
+    expect(result.appendedCount).toBe(1);
+    await expect(loadTranscriptEvents(scope)).resolves.toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "append after close" }),
+      }),
+    );
+  });
+
+  it("does not run automatic maintenance on a replacement database handle", async () => {
+    const staleDashboardScope = {
+      ...scope,
+      sessionId: "stale-dashboard",
+      sessionKey: "agent:main:dashboard:stale",
+    };
+    replaceSessionEntrySync(staleDashboardScope, {
+      sessionId: staleDashboardScope.sessionId,
+      updatedAt: 1,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const writerStarted = createDeferred();
+    const writerRelease = createDeferred();
+    const blockedWrite = patchSessionEntryCore(
+      scope,
+      async () => {
+        writerStarted.resolve();
+        await writerRelease.promise;
+        return { label: "replacement handle write" };
+      },
+      { skipMaintenance: true },
+    );
+    await writerStarted.promise;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const drains = [...SQLITE_SESSION_WRITER_QUEUES.values()].flatMap((queue) =>
+      queue.drainPromise ? [queue.drainPromise] : [],
+    );
+    expect(drains).not.toHaveLength(0);
+
+    closeCachedOpenClawAgentDatabase(database, { eviction: true });
+    expect(database.db.isOpen).toBe(false);
+    const replacement = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    writerRelease.resolve();
+    await Promise.all([blockedWrite, ...drains]);
+
+    expect(replacement.db.isOpen).toBe(true);
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
+    expect(loadSessionEntry(staleDashboardScope)?.archivedAt).toBeUndefined();
+  });
+
+  it.each(["cache eviction", "database retirement"] as const)(
+    "retains lifecycle builder authority across %s only while its owner remains live",
+    async (closure) => {
+      const planningDatabase = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+      const operation = applySessionEntryLifecycleMutation({
+        storePath: scope.storePath,
+        skipMaintenance: true,
+        upserts: [
+          {
+            sessionKey: scope.sessionKey,
+            buildEntry: async ({ currentEntry }) => {
+              if (closure === "database retirement") {
+                expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+              } else {
+                closeCachedOpenClawAgentDatabase(planningDatabase, { eviction: true });
+                expect(planningDatabase.db.isOpen).toBe(false);
+              }
+              return { ...currentEntry!, label: "built after close" };
+            },
+          },
+        ],
+      });
+      if (closure === "database retirement") {
+        await expect(operation).rejects.toThrow("Agent database execution admission is closed");
+        await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+        expect(loadSessionEntry(scope)?.label).toBeUndefined();
+      } else {
+        await expect(operation).resolves.toMatchObject({ afterCount: 1 });
+        expect(loadSessionEntry(scope)).toMatchObject({ label: "built after close" });
+      }
+    },
+  );
+
+  it("revalidates label ownership after the planning handle closes", async () => {
+    const planningDatabase = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    await applySessionEntryCanonicalReplacements({
+      storePath: scope.storePath,
+      sessionKeys: [scope.sessionKey],
+      includeLabelOwners: "Renamed",
+      update: async ([snapshot]) => {
+        closeCachedOpenClawAgentDatabase(planningDatabase);
+        expect(planningDatabase.db.isOpen).toBe(false);
+        return {
+          result: undefined,
+          replacements: [
+            {
+              entry: { ...snapshot!.entry, label: "Renamed" },
+              sessionKey: scope.sessionKey,
+              previousSessionKeys: [],
+            },
+          ],
+        };
+      },
+    });
+    expect(loadSessionEntry(scope)?.label).toBe("Renamed");
+  });
+
+  it("waits for projection repair after its polling handle closes", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "target", message: { role: "user", content: "target" } }],
+      touchSessionEntry: false,
+    });
+    const databaseOptions = { agentId: "main", path: databasePath };
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+    startSessionTranscriptIndexReconcile(databaseOptions);
+    try {
+      const ready = waitForSessionTranscriptProjection(scope);
+      closeCachedOpenClawAgentDatabase(database);
+      expect(database.db.isOpen).toBe(false);
+      await ready;
+      expect(
+        readSessionTranscriptMessageEventPage(scope, { maxMessages: 0, offset: 0 }).totalMessages,
+      ).toBe(1);
+    } finally {
+      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+    }
+  });
+
+  it("cancels a projection wait while its worker is stalled", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "target", message: { role: "user", content: "target" } }],
+      touchSessionEntry: false,
+    });
+    const databaseOptions = { agentId: "main", path: databasePath };
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+    let stalledWorker: Worker | undefined;
+    const workerStarted = createDeferred();
+    observer.beforeCreate = (filename, options) =>
+      stalledWorker
+        ? { filename, options }
+        : { filename: "setInterval(() => {}, 1_000)", options: { eval: true } };
+    observer.onTask = ({ worker }) => {
+      stalledWorker ??= worker;
+      workerStarted.resolve();
+    };
+    startSessionTranscriptIndexReconcile(databaseOptions);
+    const controller = new AbortController();
+    const abortReason = new Error("cancel stalled projection wait");
+
+    try {
+      const ready = waitForSessionTranscriptProjection(scope, controller.signal).then(
+        () => ({ kind: "resolved" as const }),
+        (error: unknown) => ({ kind: "rejected" as const, error }),
+      );
+      await workerStarted.promise;
+      controller.abort(abortReason);
+      const outcome = await Promise.race([
+        ready,
+        new Promise<{ kind: "still-waiting" }>((resolve) => {
+          setTimeout(() => resolve({ kind: "still-waiting" }), 250);
+        }),
+      ]);
+      assert(outcome.kind === "rejected", "Projection wait must reject after cancellation");
+      // Status reads keep the reason; native timer cancellation wraps it.
+      if (outcome.error !== abortReason) {
+        assert(outcome.error instanceof Error);
+        expect(outcome.error.name).toBe("AbortError");
+        expect(outcome.error.cause).toBe(abortReason);
+      }
+    } finally {
+      await stalledWorker?.terminate();
+      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+    }
+  });
+
+  it("completes a disk-budget sweep after its handle closes during archive materialization", async () => {
+    const { sessionKey, sessionId, storePath } = scope;
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
+      { type: "session", id: sessionId, content: "retained history" },
+    ]);
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      { sessionId: "current-session", updatedAt: 2 },
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const closeHandle = vi.fn(() => {
+      expect(database.db.isOpen).toBe(true);
+      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      expect(database.db.isOpen).toBe(false);
+    });
+    archiveMaterializationHook.afterMaterialize = closeHandle;
+
+    await expect(
+      enforceSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "enforce",
+        maintenance: { maxDiskBytes: 1, highWaterBytes: 0 },
+      }),
+    ).resolves.toMatchObject({ removedEntries: 1, removedFiles: 1 });
+
+    expect(closeHandle).toHaveBeenCalledOnce();
+    expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("current-session");
+    await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual([]);
+  });
+});

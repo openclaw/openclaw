@@ -1,8 +1,8 @@
-// Discord plugin module implements rest errors behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier, redactSensitiveFieldValue } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseDiscordRetryAfterBodySeconds } from "../retry-after.js";
 
 const DISCORD_UNKNOWN_VOICE_STATE = 10065;
@@ -145,26 +145,16 @@ function redactDiscordErrorBody(
 }
 
 export function readDiscordCode(body: unknown): number | undefined {
-  const value =
-    body && typeof body === "object" && "code" in body
-      ? (body as { code?: unknown }).code
-      : undefined;
-  return parseStrictNonNegativeInteger(value);
+  return parseStrictNonNegativeInteger(asOptionalObjectRecord(body)?.code);
 }
 
 export function readDiscordMessage(body: unknown, fallback: string): string {
-  const value =
-    body && typeof body === "object" && "message" in body
-      ? (body as { message?: unknown }).message
-      : undefined;
+  const value = asOptionalObjectRecord(body)?.message;
   return typeof value === "string" && value.trim() ? value : fallback;
 }
 
 export function isUnknownDiscordVoiceStateError(err: unknown): boolean {
-  const discordCode =
-    err && typeof err === "object" && "discordCode" in err
-      ? parseStrictNonNegativeInteger(err.discordCode)
-      : undefined;
+  const discordCode = parseStrictNonNegativeInteger(asOptionalObjectRecord(err)?.discordCode);
   return (
     discordCode === DISCORD_UNKNOWN_VOICE_STATE ||
     /unknown voice state/i.test(formatErrorMessage(err))
@@ -172,12 +162,8 @@ export function isUnknownDiscordVoiceStateError(err: unknown): boolean {
 }
 
 export function readRetryAfter(body: unknown, response: Response, fallbackSeconds = 0): number {
-  const bodyValue =
-    body && typeof body === "object" && "retry_after" in body
-      ? (body as { retry_after?: unknown }).retry_after
-      : undefined;
   return (
-    parseDiscordRetryAfterBodySeconds(bodyValue) ??
+    parseDiscordRetryAfterBodySeconds(asOptionalObjectRecord(body)?.retry_after) ??
     parseRetryAfterHeaderSeconds(response.headers.get("Retry-After")) ??
     fallbackSeconds
   );

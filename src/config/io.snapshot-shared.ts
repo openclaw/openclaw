@@ -1,6 +1,10 @@
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
+import { setDeferredPluginMigrationConfigFacts } from "./deferred-plugin-migration-config.js";
 import { observeConfigSnapshot } from "./io.observe.js";
-import type { NormalizedConfigIoDeps, ReadConfigFileSnapshotInternalResult } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
+import type { ReadConfigFileSnapshotInternalResult } from "./io.types.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "./materialize.js";
+import { setConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
 
 export function createConfigFileSnapshot(params: {
@@ -12,6 +16,7 @@ export function createConfigFileSnapshot(params: {
   exists: boolean;
   raw: string | null;
   parsed: unknown;
+  authoredConfig?: OpenClawConfig;
   sourceConfigBeforeMigrations?: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   valid: boolean;
@@ -21,9 +26,20 @@ export function createConfigFileSnapshot(params: {
   issues: ConfigFileSnapshot["issues"];
   warnings: ConfigFileSnapshot["warnings"];
   legacyIssues: LegacyConfigIssue[];
+  resolutionFacts?: ConfigResolutionFacts;
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
 }): ConfigFileSnapshot {
+  const sourceConfigBeforeMigrations = params.sourceConfigBeforeMigrations
+    ? asResolvedSourceConfig(params.sourceConfigBeforeMigrations)
+    : undefined;
   const sourceConfig = asResolvedSourceConfig(params.sourceConfig);
+  setDeferredPluginMigrationConfigFacts(sourceConfig, params.deferredPluginMigrations);
   const runtimeConfig = asRuntimeConfig(params.runtimeConfig);
+  if (params.resolutionFacts !== undefined) {
+    setConfigResolutionFacts(sourceConfigBeforeMigrations, params.resolutionFacts);
+    setConfigResolutionFacts(sourceConfig, params.resolutionFacts);
+    setConfigResolutionFacts(runtimeConfig, params.resolutionFacts);
+  }
   return {
     path: params.path,
     includedPaths: [...(params.includedPaths ?? [])],
@@ -45,11 +61,8 @@ export function createConfigFileSnapshot(params: {
     exists: params.exists,
     raw: params.raw,
     parsed: params.parsed,
-    ...(params.sourceConfigBeforeMigrations
-      ? {
-          sourceConfigBeforeMigrations: asResolvedSourceConfig(params.sourceConfigBeforeMigrations),
-        }
-      : {}),
+    ...(params.authoredConfig ? { authoredConfig: params.authoredConfig } : {}),
+    ...(sourceConfigBeforeMigrations ? { sourceConfigBeforeMigrations } : {}),
     sourceConfig,
     resolved: sourceConfig,
     valid: params.valid,

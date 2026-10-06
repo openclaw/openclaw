@@ -1,5 +1,3 @@
-// Gateway HTTP request helpers.
-// Resolves OpenAI-compatible agent/model/session headers and re-exports auth helpers.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import {
@@ -30,30 +28,32 @@ import {
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { getHeader } from "./http-auth-utils.js";
+import { getHeader, type AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { authorizeResolvedSessionMutation, isResolvedIncognitoSession } from "./session-sharing.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
 export {
+  authorizeControlUiReadRequestOrReply,
+  authorizeControlUiSessionOwnerReadRequestOrReply,
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
-  authorizeScopedUserProfileAvatarHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
-  resolveHttpBrowserOriginPolicy,
-  resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
-  setControlUiPluginAuthCookieForRequest,
   type AuthorizedGatewayHttpRequest,
 } from "./http-auth-utils.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
 /** Default OpenAI-compatible model alias that targets the default OpenClaw agent. */
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
+const AGENT_MODEL_PATTERN = /^(?:openclaw[:/]|agent:)(?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i;
 
 class UnknownGatewayAgentError extends Error {
   constructor(readonly agentId: string) {
@@ -84,14 +84,16 @@ export function isAgentSelectionRequiredError(err: unknown): err is AgentSelecti
   return err instanceof AgentSelectionRequiredError;
 }
 
-export function isInvalidGatewayModelError(err: unknown): err is InvalidGatewayModelError {
-  return err instanceof InvalidGatewayModelError;
+export function isGatewayAgentRequestError(err: unknown): err is Error {
+  return (
+    isAgentSelectionRequiredError(err) ||
+    err instanceof InvalidGatewayModelError ||
+    isUnknownGatewayAgentError(err)
+  );
 }
 
-export function isGatewaySessionKeyOverrideError(
-  err: unknown,
-): err is GatewaySessionKeyOverrideError {
-  return err instanceof GatewaySessionKeyOverrideError;
+export function isGatewayRequestContextError(err: unknown): err is Error {
+  return isGatewayAgentRequestError(err) || err instanceof GatewaySessionKeyOverrideError;
 }
 
 function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
@@ -128,10 +130,7 @@ export function resolveAgentIdFromModel(
     return resolveDefaultAgentId(cfg);
   }
 
-  const m =
-    raw.match(/^openclaw[:/](?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i) ??
-    raw.match(/^agent:(?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i);
-  const agentId = m?.groups?.agentId;
+  const agentId = raw.match(AGENT_MODEL_PATTERN)?.groups?.agentId;
   if (!agentId) {
     return undefined;
   }
@@ -148,10 +147,7 @@ export function isOpenClawAgentModelId(model: string | undefined): boolean {
   if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
     return true;
   }
-  return (
-    /^openclaw[:/][a-z0-9][a-z0-9_-]{0,63}$/i.test(raw) ||
-    /^agent:[a-z0-9][a-z0-9_-]{0,63}$/i.test(raw)
-  );
+  return AGENT_MODEL_PATTERN.test(raw);
 }
 
 /** Validates and resolves the `x-openclaw-model` override for OpenAI-compatible requests. */
@@ -182,7 +178,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
     ...(workspaceDir ? { workspaceDir } : {}),
   });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins,
+    manifestPlugins: manifestMetadataSnapshot,
   };
   const parsed = parseModelRef(raw, defaultProvider, {
     allowManifestNormalization: true,
@@ -195,7 +191,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
 
   // Overrides must pass the same visibility policy as model picker surfaces;
   // otherwise API clients could target hidden plugin/provider models by header.
-  const catalog = await loadGatewayModelCatalog();
+  const catalog = await loadGatewayModelCatalog({ agentId: params.agentId });
   const policy = createModelVisibilityPolicy({
     cfg,
     catalog,
@@ -206,7 +202,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
     ...modelManifestContext,
   });
   const normalized = modelKey(parsed.provider, parsed.model);
-  if (!policy.allowsKey(normalized)) {
+  if (!policy.allows(parsed)) {
     return {
       errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
     };
@@ -290,8 +286,6 @@ export function resolveGatewayRequestContext(params: {
   model: string | undefined;
   user?: string | undefined;
   sessionPrefix: string;
-  defaultMessageChannel: string;
-  useMessageChannelHeader?: boolean;
 }): { agentId: string; sessionKey: string; messageChannel: string } {
   const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
   const sessionKey = resolveSessionKey({
@@ -301,10 +295,40 @@ export function resolveGatewayRequestContext(params: {
     prefix: params.sessionPrefix,
   });
 
-  const messageChannel = params.useMessageChannelHeader
-    ? (normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ??
-      params.defaultMessageChannel)
-    : params.defaultMessageChannel;
+  const messageChannel =
+    normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ?? "webchat";
 
   return { agentId, sessionKey, messageChannel };
+}
+
+export function authorizeOpenAiCompatibleHttpSession(params: {
+  agentId: string;
+  sessionKey: string;
+  requestAuth: AuthorizedGatewayHttpRequest;
+  senderIsOwner: boolean;
+}): { allowed: true } | { allowed: false; message: string } {
+  const cfg = getRuntimeConfig();
+  const authenticatedUserProfile = params.requestAuth.authenticatedUserProfile;
+  const authorizationError = authorizeResolvedSessionMutation({
+    cfg,
+    client: createSyntheticPluginRuntimeClient({
+      ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+      operatorRoleActor: params.requestAuth.operatorRoleActor,
+      operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
+      scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
+    }),
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (authorizationError) {
+    return { allowed: false, message: authorizationError.message };
+  }
+  if (
+    !params.senderIsOwner &&
+    !authenticatedUserProfile &&
+    isResolvedIncognitoSession({ cfg, sessionKey: params.sessionKey, agentId: params.agentId })
+  ) {
+    return { allowed: false, message: `missing scope: ${ADMIN_SCOPE}` };
+  }
+  return { allowed: true };
 }

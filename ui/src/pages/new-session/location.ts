@@ -4,15 +4,17 @@ export type NewSessionRouteData = {
   /** The agent the URL asked for, which only a navigation can change. */
   requestedAgentId: string;
   catalogId: string;
+  /** An explicit model for this unsent draft, separate from saved preferences. */
+  requestedModel?: string;
   group?: string;
   groupStatus?: "resolved" | "missing" | "unavailable";
   groupCwd?: string;
   groupWorktree?: boolean;
   groupCatalogGeneration?: number;
   groupDefaultsStatus?: import("../../lib/sessions/session-capability.ts").SessionGroupDefaultsStatus;
-  model: string;
   catalogLabel: string;
   startTerminal: boolean;
+  terminalHosts?: Array<{ hostId: string; label: string }>;
 };
 
 export type NewSessionTarget =

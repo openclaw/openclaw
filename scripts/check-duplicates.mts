@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { resolveRepoToolBinPath } from "./lib/local-heavy-check-runtime.mts";
+import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -8,6 +8,7 @@ const jscpdBin = resolveRepoToolBinPath("jscpd", { cwd: repoRoot });
 
 const targets = [
   ".github/actions",
+  ".github/codeql/openclaw-boundary/tests",
   "src",
   "extensions",
   "examples",
@@ -21,6 +22,17 @@ const targets = [
   "test",
   "skills",
   "config",
+  "cli-root-options.mjs",
+  "docker-entrypoint.mjs",
+  "gateway-run-argv.mjs",
+  "gateway-shutdown-budget.mjs",
+  "node-compile-cache.mjs",
+  "node-host-launcher.mjs",
+  "node-runtime-update.mjs",
+  "node-runtime-recovery.mjs",
+  "node-runtime-env.mjs",
+  "node-sqlite.mjs",
+  "node-version.mjs",
   "openclaw.mjs",
   "tsdown.ai.config.ts",
   "tsdown.config.ts",
@@ -44,23 +56,9 @@ const generatedIgnores = [
   "vendor/**",
 ];
 
-const testIgnores = [
-  "**/*.test.ts",
-  "**/*.test.tsx",
-  "**/*.test.js",
-  "**/*.test.mjs",
-  "**/*.test.cjs",
-  "**/*.e2e.test.ts",
-  "**/*.e2e.test.tsx",
-  "**/*.e2e.test.js",
-  "**/*.e2e.test.mjs",
-  "**/*.e2e.test.cjs",
-  "**/*.live.test.ts",
-  "**/*.live.test.tsx",
-  "**/*.live.test.js",
-  "**/*.live.test.mjs",
-  "**/*.live.test.cjs",
-];
+const testIgnores = ["test", "e2e.test", "live.test"].flatMap((suffix) =>
+  [...sourceExtensions].map((extension) => `**/*.${suffix}${extension}`),
+);
 
 const commonArgs = [
   "--format",
@@ -145,24 +143,12 @@ const scans = [
     pattern: testPattern,
     ignore: generatedIgnores,
   },
-  {
-    name: "src-mixed",
-    targets: ["src"],
+  ...["src", "extensions", "test"].map((target) => ({
+    name: `${target}-mixed`,
+    targets: [target],
     pattern: sourcePattern,
     ignore: generatedIgnores,
-  },
-  {
-    name: "extensions-mixed",
-    targets: ["extensions"],
-    pattern: sourcePattern,
-    ignore: generatedIgnores,
-  },
-  {
-    name: "test-mixed",
-    targets: ["test"],
-    pattern: sourcePattern,
-    ignore: generatedIgnores,
-  },
+  })),
 ];
 
 let failed = !assertTargetCoverage();

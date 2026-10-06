@@ -1,6 +1,5 @@
 // Session checkout diff for operator clients, filtered against the exact
 // working-tree state captured when the logical session started.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -8,17 +7,31 @@ import {
   type SessionsDiffParams,
   type SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { applySessionDiffBaseline, loadCheckoutDiff } from "../../sessions/session-diff.js";
+import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
+import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
+import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
+import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export { parseNameStatusZ, parseNumstatZ, splitPatchByFile } from "../../sessions/session-diff.js";
-
-export async function loadSessionDiff(params: SessionsDiffParams): Promise<SessionsDiffResult> {
+export async function loadSessionDiff(
+  params: SessionsDiffParams,
+  context?: GatewayRequestContext,
+): Promise<SessionsDiffResult> {
+  let worktreeCount = 0;
+  let returnedFileCount = 0;
+  using timing =
+    context &&
+    startSlowRequestDiagnostics<"resolve" | "git" | "response">(
+      context.logGateway,
+      "slow session checkout diff",
+      "sessions.diff",
+      "resolve",
+      () => ({ worktreeCount, returnedFileCount, scope: params.scope ?? "all" }),
+    );
   const empty = (
     unavailableReason?: NonNullable<SessionsDiffResult["unavailableReason"]>,
   ): SessionsDiffResult => ({
@@ -28,53 +41,57 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
     deletions: 0,
     ...(unavailableReason ? { unavailableReason } : {}),
   });
-  const {
-    cfg,
-    agentId: loadedAgentId,
-    entry,
-    storePath,
-    canonicalKey,
-  } = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, {
+    agentId: params.agentId,
+    projection: ["sessionDiffBaseline"],
+  });
+  const { cfg, agentId, entry, storePath } = loaded;
   // Same session scoping as sessions.files.*: an unknown session must not fall
   // back to some agent workspace and surface another checkout's diff.
   if (!entry?.sessionId || !storePath) {
     return empty("unknown_session");
   }
-  const agentId = normalizeAgentId(
-    loadedAgentId ??
-      parseAgentSessionKey(canonicalKey)?.agentId ??
-      params.agentId ??
-      parseAgentSessionKey(params.sessionKey)?.agentId,
-  );
-  // spawnedCwd first, matching pushed Control UI session PR state: the diff must
-  // describe the same checkout whose branch the PR chips report.
-  const cwd =
-    normalizeOptionalString(entry.spawnedCwd) ??
-    normalizeOptionalString(entry.spawnedWorkspaceDir) ??
-    normalizeOptionalString(resolveAgentWorkspaceDir(cfg, agentId));
-  if (!cwd) {
-    return empty("unknown_session");
+  const repository = await resolveRepositoryWorkspaceAccess(loaded, context);
+  if (repository) {
+    if (repository.kind === "stored") {
+      return await loadRepositoryArtifactDiff(repository, params);
+    }
+    if (!repository.repository.baseCommit) {
+      throw new Error("The cloud repository is still preparing its base revision.");
+    }
+    const result = await repository.inspect("diff", {
+      scope: params.scope ?? "all",
+      commit: params.commit,
+      baseCommit: repository.repository.baseCommit,
+    });
+    // Remote paths are not Gateway-local checkout or native editor destinations.
+    delete result.root;
+    return result;
   }
+  const { diffCwd: cwd, checkoutPending } = resolveSessionWorkspaceRoots(cfg, agentId, entry);
+  if (!cwd) {
+    return empty(checkoutPending ? undefined : "unknown_session");
+  }
+  worktreeCount = 1;
+  timing?.mark("git");
+  const input = { cwd, sessionKey: params.sessionKey };
+  let result: SessionsDiffResult;
   if (params.scope === "commit") {
     if (!params.commit) {
       throw new TypeError("commit scope requires a commit");
     }
-    return await loadCheckoutDiff({
-      commit: params.commit,
-      cwd,
-      scope: "commit",
-      sessionKey: params.sessionKey,
+    result = await loadCheckoutDiff({ ...input, commit: params.commit, scope: "commit" });
+  } else {
+    result = await loadCheckoutDiff({
+      ...input,
+      scope: params.scope ?? "all",
+      baseline: entry.sessionDiffBaseline,
+      sessionId: entry.sessionId,
     });
   }
-  return await applySessionDiffBaseline({
-    baseline: entry.sessionDiffBaseline,
-    diff: await loadCheckoutDiff({
-      cwd,
-      scope: params.scope ?? "all",
-      sessionKey: params.sessionKey,
-    }),
-    sessionId: entry.sessionId,
-  });
+  returnedFileCount = result.files.length;
+  timing?.mark("response");
+  return result;
 }
 
 export const sessionsDiffHandlers: GatewayRequestHandlers = {
@@ -105,10 +122,13 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
     }
     respond(
       true,
-      await loadSessionDiff({
-        ...params,
-        ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
-      }),
+      await loadSessionDiff(
+        {
+          ...params,
+          ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
+        },
+        context,
+      ),
     );
   },
 };

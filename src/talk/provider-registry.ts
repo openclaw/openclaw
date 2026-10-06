@@ -1,46 +1,28 @@
-// Talk provider registry stores realtime voice provider factories.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolvePluginCapabilityProvider,
   resolvePluginCapabilityProviders,
 } from "../plugins/capability-provider-runtime.js";
 import {
-  buildCapabilityProviderMaps,
-  normalizeCapabilityProviderId,
+  buildCapabilityProviderIndex,
+  normalizeCapabilityProviderId as normalizeRealtimeVoiceProviderId,
 } from "../plugins/provider-registry-shared.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceProviderId } from "./provider-types.js";
 
 /**
- * Normalizes realtime voice provider ids so direct ids and aliases compare through one registry key.
+ * Lists canonical realtime voice providers, discovering additional candidates through manifest policy.
  */
-export function normalizeRealtimeVoiceProviderId(
-  providerId: string | undefined,
-): RealtimeVoiceProviderId | undefined {
-  return normalizeCapabilityProviderId(providerId);
-}
-
-// Realtime voice providers are regular plugin capability providers; Talk keeps this small
-// wrapper so gateway and SDK callers do not need to know the manifest capability key.
-function resolveRealtimeVoiceProviderEntries(cfg?: OpenClawConfig): RealtimeVoiceProviderPlugin[] {
-  return resolvePluginCapabilityProviders({
+export function listRealtimeVoiceProviders(
+  cfg?: OpenClawConfig,
+  additionalProviderIds?: readonly string[],
+): RealtimeVoiceProviderPlugin[] {
+  const providers = resolvePluginCapabilityProviders({
     key: "realtimeVoiceProviders",
     cfg,
+    additionalProviderIds,
   });
-}
-
-function buildProviderMaps(cfg?: OpenClawConfig): {
-  canonical: Map<string, RealtimeVoiceProviderPlugin>;
-  aliases: Map<string, RealtimeVoiceProviderPlugin>;
-} {
-  return buildCapabilityProviderMaps(resolveRealtimeVoiceProviderEntries(cfg));
-}
-
-/**
- * Lists canonical realtime voice provider plugins in registry order.
- */
-export function listRealtimeVoiceProviders(cfg?: OpenClawConfig): RealtimeVoiceProviderPlugin[] {
-  return [...buildProviderMaps(cfg).canonical.values()];
+  return [...buildCapabilityProviderIndex(providers, "canonical").values()];
 }
 
 /**

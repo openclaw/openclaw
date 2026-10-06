@@ -45,6 +45,8 @@ export function diffInstalledPluginIndexInvalidationReasons(
     if (
       previousPlugin.rootDir !== currentPlugin.rootDir ||
       previousPlugin.manifestPath !== currentPlugin.manifestPath ||
+      previousPlugin.source !== currentPlugin.source ||
+      previousPlugin.setupSource !== currentPlugin.setupSource ||
       resolveInstalledPluginIndexInstallOwner(previousPlugin) !==
         resolveInstalledPluginIndexInstallOwner(currentPlugin) ||
       isInstalledPluginIndexInstallOwnerAmbiguous(previousPlugin) !==
@@ -78,12 +80,8 @@ export function diffInstalledPluginIndexInvalidationReasons(
       reasons.add("stale-package");
     }
   }
-  for (const pluginId of currentByPluginId.keys()) {
-    if (!previousByPluginId.has(pluginId)) {
-      const currentPlugin = currentByPluginId.get(pluginId);
-      if (currentPlugin?.enabled === false) {
-        continue;
-      }
+  for (const [pluginId, plugin] of currentByPluginId) {
+    if (!previousByPluginId.has(pluginId) && plugin.enabled) {
       reasons.add("source-changed");
     }
   }

@@ -1,5 +1,6 @@
 // Gateway secret-input path helpers.
 // Lists config locations that may contain plaintext values or SecretRefs.
+import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Canonical Gateway config paths whose values may be plaintext or secret refs. */
@@ -41,33 +42,20 @@ export function readGatewaySecretInputValue(
   return config.gateway?.remote?.password;
 }
 
-/** Replace one Gateway secret input with its resolved plaintext value on a cloned config. */
+/** Replace one Gateway secret input and consume its pending authored provenance atomically. */
 export function assignResolvedGatewaySecretInput(params: {
   config: OpenClawConfig;
   path: SupportedGatewaySecretInputPath;
   value: string | undefined;
 }): void {
   const { config, path, value } = params;
-  if (path === "gateway.auth.token") {
-    if (config.gateway?.auth) {
-      config.gateway.auth.token = value;
-    }
-    return;
-  }
-  if (path === "gateway.auth.password") {
-    if (config.gateway?.auth) {
-      config.gateway.auth.password = value;
-    }
-    return;
-  }
-  if (path === "gateway.remote.token") {
-    if (config.gateway?.remote) {
-      config.gateway.remote.token = value;
-    }
-    return;
-  }
-  if (config.gateway?.remote) {
-    config.gateway.remote.password = value;
+  const target =
+    path === "gateway.auth.token" || path === "gateway.auth.password"
+      ? config.gateway?.auth
+      : config.gateway?.remote;
+  if (target) {
+    target[isTokenGatewaySecretInputPath(path) ? "token" : "password"] = value;
+    copyConfigResolutionFactsExcept(config, config, [path]);
   }
 }
 

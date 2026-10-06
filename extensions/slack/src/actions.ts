@@ -1,16 +1,26 @@
-// Slack plugin module implements actions behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
-import { resolveSlackAccount } from "./accounts.js";
+import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
+import type { SlackActionClientOpts } from "./action-context.js";
+import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
+import { createSlackLookupClient, createSlackWriteClient, getSlackWriteClient } from "./client.js";
+import {
+  openSlackConversationWithClient,
+  parseSlackConversationOpenInput,
+} from "./conversation-open.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
 import { normalizeSlackOutboundText } from "./format.js";
@@ -31,13 +41,7 @@ import { resolveSlackBotToken } from "./token.js";
 import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
 import type { SlackAttachment } from "./types.js";
 
-export type SlackActionClientOpts = {
-  cfg?: OpenClawConfig;
-  accountId?: string;
-  token?: string;
-  teamId?: string;
-  client?: WebClient;
-};
+export type { SlackActionClientOpts } from "./action-context.js";
 
 export type SlackMessageSummary = {
   ts?: string;
@@ -114,39 +118,39 @@ const SLACK_EMOJI_SKIN_TONE_BY_MODIFIER = new Map([
 // Unicode glyph. Models keep passing the glyph because the `emoji` param
 // reads as "an emoji"; map the common ones so the reaction is not silently
 // dropped. Unknown glyphs still pass through unchanged (no regression).
-const SLACK_EMOJI_SHORTNAME_BY_GLYPH: Record<string, string> = {
-  "✅": "white_check_mark",
-  "❌": "x",
-  "👍": "thumbsup",
-  "👎": "thumbsdown",
-  "🎉": "tada",
-  "❤": "heart",
-  "😄": "smile",
-  "😂": "joy",
-  "🚀": "rocket",
-  "👀": "eyes",
-  "🙏": "pray",
-  "🔥": "fire",
-  "💯": "100",
-  "⚠": "warning",
-  "➕": "heavy_plus_sign",
-  "➖": "heavy_minus_sign",
-  "🤔": "thinking_face",
-  "👨‍💻": "male-technologist",
-  "👨💻": "male-technologist",
-  "👩‍💻": "female-technologist",
-  "⚡": "zap",
-  "🌐": "globe_with_meridians",
-  "😱": "scream",
-  "🥱": "yawning_face",
-  "😨": "fearful",
-  "⏳": "hourglass_flowing_sand",
-  "✍": "writing_hand",
-  "🗜": "compression",
-  "🧠": "brain",
-  "🛠": "hammer_and_wrench",
-  "💻": "computer",
-};
+const SLACK_EMOJI_SHORTNAME_BY_GLYPH = new Map([
+  ["✅", "white_check_mark"],
+  ["❌", "x"],
+  ["👍", "thumbsup"],
+  ["👎", "thumbsdown"],
+  ["🎉", "tada"],
+  ["❤", "heart"],
+  ["😄", "smile"],
+  ["😂", "joy"],
+  ["🚀", "rocket"],
+  ["👀", "eyes"],
+  ["🙏", "pray"],
+  ["🔥", "fire"],
+  ["💯", "100"],
+  ["⚠", "warning"],
+  ["➕", "heavy_plus_sign"],
+  ["➖", "heavy_minus_sign"],
+  ["🤔", "thinking_face"],
+  ["👨‍💻", "male-technologist"],
+  ["👨💻", "male-technologist"],
+  ["👩‍💻", "female-technologist"],
+  ["⚡", "zap"],
+  ["🌐", "globe_with_meridians"],
+  ["😱", "scream"],
+  ["🥱", "yawning_face"],
+  ["😨", "fearful"],
+  ["⏳", "hourglass_flowing_sand"],
+  ["✍", "writing_hand"],
+  ["🗜", "compression"],
+  ["🧠", "brain"],
+  ["🛠", "hammer_and_wrench"],
+  ["💻", "computer"],
+]);
 
 function normalizeSlackEmojiName(raw: string): string {
   const trimmed = raw.trim();
@@ -158,7 +162,7 @@ function normalizeSlackEmojiName(raw: string): string {
   const glyphKey = withoutColons
     .replace(SLACK_EMOJI_SKIN_TONE_MODIFIER_RE, "")
     .replace(SLACK_EMOJI_VARIATION_SELECTOR_RE, "");
-  const shortname = SLACK_EMOJI_SHORTNAME_BY_GLYPH[glyphKey];
+  const shortname = SLACK_EMOJI_SHORTNAME_BY_GLYPH.get(glyphKey);
   const skinTone = modifier ? SLACK_EMOJI_SKIN_TONE_BY_MODIFIER.get(modifier) : undefined;
   if (!shortname || !skinTone) {
     return shortname ?? withoutColons;
@@ -188,12 +192,9 @@ function normalizeSlackReadTimestamp(
   if (SLACK_TIMESTAMP_RE.test(trimmed)) {
     return trimmed;
   }
-  if (!ISO_8601_TIMESTAMP_SCHEMA.safeParse(trimmed).success) {
-    throw new Error(
-      `Invalid Slack read ${field} timestamp "${trimmed}": expected a Slack timestamp or ISO-8601 date string`,
-    );
-  }
-  const parsed = Date.parse(trimmed);
+  const parsed = ISO_8601_TIMESTAMP_SCHEMA.safeParse(trimmed).success
+    ? Date.parse(trimmed)
+    : Number.NaN;
   if (!Number.isFinite(parsed)) {
     throw new Error(
       `Invalid Slack read ${field} timestamp "${trimmed}": expected a Slack timestamp or ISO-8601 date string`,
@@ -202,19 +203,8 @@ function normalizeSlackReadTimestamp(
   return formatEpochSeconds(parsed);
 }
 
-function hasSlackPlatformError(err: unknown, code: string): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const data = (err as { data?: unknown }).data;
-  if (!data || typeof data !== "object") {
-    return false;
-  }
-  return (data as { error?: unknown }).error === code;
-}
-
 async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
-  if (opts.client) {
+  if (opts.client && !opts.assertDirectAdapterHandoff) {
     return opts.client;
   }
   const accountId = opts.cfg
@@ -226,9 +216,16 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
   assertSlackDetachedTargetAllowed(accountId, opts.teamId);
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   if (mode === "write") {
+    if (opts.assertDirectAdapterHandoff) {
+      return createSlackWriteClient(
+        token,
+        { teamId: opts.teamId },
+        opts.assertDirectAdapterHandoff,
+      );
+    }
     return getSlackWriteClient(token, { teamId: opts.teamId });
   }
-  return createSlackLookupClient(token, { teamId: opts.teamId });
+  return createSlackLookupClient(token, { teamId: opts.teamId }, opts.assertDirectAdapterHandoff);
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -239,47 +236,30 @@ async function resolveBotUserId(client: WebClient) {
   return auth.user_id;
 }
 
-export async function reactSlackMessage(
-  channelId: string,
-  messageId: string,
-  emoji: string,
-  opts: SlackActionClientOpts = {},
-) {
-  const client = await getClient(opts, "write");
-  try {
-    await client.reactions.add({
-      channel: channelId,
-      timestamp: messageId,
-      name: normalizeSlackEmojiName(emoji),
-    });
-  } catch (err) {
-    if (hasSlackPlatformError(err, "already_reacted")) {
-      return;
+function createSlackReactionUpdater(method: "add" | "remove", unchangedError: string) {
+  return async (
+    channelId: string,
+    messageId: string,
+    emoji: string,
+    opts: SlackActionClientOpts = {},
+  ) => {
+    const client = await getClient(opts, "write");
+    try {
+      await client.reactions[method]({
+        channel: channelId,
+        timestamp: messageId,
+        name: normalizeSlackEmojiName(emoji),
+      });
+    } catch (err) {
+      if (asOptionalObjectRecord(asOptionalObjectRecord(err)?.data)?.error !== unchangedError) {
+        throw err;
+      }
     }
-    throw err;
-  }
+  };
 }
 
-export async function removeSlackReaction(
-  channelId: string,
-  messageId: string,
-  emoji: string,
-  opts: SlackActionClientOpts = {},
-) {
-  const client = await getClient(opts, "write");
-  try {
-    await client.reactions.remove({
-      channel: channelId,
-      timestamp: messageId,
-      name: normalizeSlackEmojiName(emoji),
-    });
-  } catch (err) {
-    if (hasSlackPlatformError(err, "no_reaction")) {
-      return;
-    }
-    throw err;
-  }
-}
+export const reactSlackMessage = createSlackReactionUpdater("add", "already_reacted");
+export const removeSlackReaction = createSlackReactionUpdater("remove", "no_reaction");
 
 export async function removeOwnSlackReactions(
   channelId: string,
@@ -304,12 +284,7 @@ export async function removeOwnSlackReactions(
     return [];
   }
   await Promise.all(
-    Array.from(toRemove, (name) =>
-      removeSlackReaction(channelId, messageId, name, {
-        ...opts,
-        client,
-      }),
-    ),
+    Array.from(toRemove, (name) => removeSlackReaction(channelId, messageId, name, { client })),
   );
   return Array.from(toRemove);
 }
@@ -325,8 +300,7 @@ export async function listSlackReactions(
     timestamp: messageId,
     full: true,
   });
-  const message = result.message as SlackMessageSummary | undefined;
-  return message?.reactions ?? [];
+  return result.message?.reactions ?? [];
 }
 
 export async function sendSlackMessage(
@@ -353,6 +327,10 @@ export async function sendSlackMessage(
     textIsSlackPlainText?: boolean;
   },
 ) {
+  const onDeliveryResult = Object.getOwnPropertyDescriptor(
+    opts,
+    SLACK_PRIVATE_ACTION_DELIVERY_RESULT,
+  )?.value;
   return await sendMessageSlack(to, content, {
     accountId: opts.accountId,
     cfg: opts.cfg,
@@ -363,6 +341,7 @@ export async function sendSlackMessage(
     mediaLocalRoots: opts.mediaLocalRoots,
     mediaReadFile: opts.mediaReadFile,
     client: opts.client,
+    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
     threadTs: opts.threadTs,
     replyBroadcast: opts.replyBroadcast,
     ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
@@ -373,6 +352,7 @@ export async function sendSlackMessage(
       : {}),
     ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
     ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
+    ...(typeof onDeliveryResult === "function" ? { onDeliveryResult } : {}),
     blocks: opts.blocks,
   });
 }
@@ -383,7 +363,11 @@ export async function editSlackMessage(
   content: string,
   opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
 ) {
-  await editSlackRenderedMessage(channelId, messageId, normalizeSlackOutboundText(content), opts);
+  const accountId =
+    opts.accountId ?? (opts.cfg ? resolveDefaultSlackAccountId(opts.cfg) : undefined);
+  const tableMode = resolveMarkdownTableMode({ cfg: opts.cfg, channel: "slack", accountId });
+  const text = normalizeSlackOutboundText(content, { tableMode });
+  await editSlackRenderedMessage(channelId, messageId, text, opts);
 }
 
 // Finalized previews already contain Slack mrkdwn; a second Markdown render changes its meaning.
@@ -419,7 +403,7 @@ export async function editSlackRenderedMessage(
   try {
     await client.chat.update(update);
   } catch (error) {
-    if (!hasSlackNativeDataBlock(blocks) || !isSlackInvalidBlocksError(error)) {
+    if (!hasNativeData || !isSlackInvalidBlocksError(error)) {
       throw error;
     }
     logVerbose("slack edit: native data block rejected, retrying with text fallback");
@@ -478,13 +462,10 @@ export async function deleteSlackMessage(
   });
 }
 
-export async function resolveSlackConversationName(
-  channelId: string,
-  opts: SlackActionClientOpts = {},
-): Promise<string | undefined> {
-  const client = await getClient(opts, "read");
-  const info = await client.conversations.info({ channel: channelId });
-  return info.channel?.name?.trim() || undefined;
+export async function openSlackConversation(userIds: unknown, opts: SlackActionClientOpts = {}) {
+  const input = parseSlackConversationOpenInput(userIds, opts.teamId);
+  const client = await getClient({ ...opts, teamId: input.teamId }, "write");
+  return await openSlackConversationWithClient(client, input);
 }
 
 export async function readSlackMessages(
@@ -511,43 +492,29 @@ export async function readSlackMessages(
       };
   const client = await getClient(opts);
 
-  // Use conversations.replies for thread messages, conversations.history for channel messages.
-  if (opts.threadId) {
-    // Slack pages thread roots before replies; exclude the root before its limit consumes the page.
-    const oldest = exactMessageId
-      ? exactMessageId
-      : exactBounds.oldest && Number(exactBounds.oldest) > Number(opts.threadId)
-        ? exactBounds.oldest
-        : opts.threadId;
-    const result = await client.conversations.replies({
-      channel: channelId,
-      ts: opts.threadId,
-      limit: readLimit,
-      ...exactBounds,
-      oldest,
-    });
-    const messages = ((result.messages ?? []) as SlackMessageSummary[])
-      .filter((message) => {
-        if (exactMessageId) {
-          return message.ts === exactMessageId;
-        }
-        // conversations.replies includes the parent message; drop it for replies-only reads.
-        return message.ts !== opts.threadId;
-      })
-      .map(renderSlackReadMessageText);
-    return {
-      messages,
-      hasMore: exactMessageId ? false : Boolean(result.has_more),
-    };
-  }
-
-  const result = await client.conversations.history({
+  const query = {
     channel: channelId,
     limit: readLimit,
     ...exactBounds,
-  });
+  };
+  const result = opts.threadId
+    ? await client.conversations.replies({
+        ...query,
+        ts: opts.threadId,
+        // Exclude the root before it consumes the replies-only page limit.
+        oldest: exactMessageId
+          ? exactMessageId
+          : exactBounds.oldest && Number(exactBounds.oldest) > Number(opts.threadId)
+            ? exactBounds.oldest
+            : opts.threadId,
+      })
+    : await client.conversations.history(query);
   const messages = ((result.messages ?? []) as SlackMessageSummary[])
-    .filter((message) => !exactMessageId || message.ts === exactMessageId)
+    .filter((message) =>
+      exactMessageId
+        ? message.ts === exactMessageId
+        : !opts.threadId || message.ts !== opts.threadId,
+    )
     .map(renderSlackReadMessageText);
   return {
     messages,
@@ -604,82 +571,9 @@ type SlackFileInfoSummary = {
   shares?: unknown;
 };
 
-type SlackFileThreadShare = {
-  channelId: string;
-  ts?: string;
-  threadTs?: string;
-};
-
-function collectSlackDirectShareChannelIds(file: SlackFileInfoSummary): Set<string> {
-  const ids = new Set<string>();
-  for (const group of [file.channels, file.groups, file.ims]) {
-    if (!Array.isArray(group)) {
-      continue;
-    }
-    for (const entry of group) {
-      if (typeof entry !== "string") {
-        continue;
-      }
-      const normalized = normalizeOptionalString(entry);
-      if (normalized) {
-        ids.add(normalized);
-      }
-    }
-  }
-  return ids;
-}
-
-function collectSlackShareMaps(file: SlackFileInfoSummary): Array<Record<string, unknown>> {
-  if (!file.shares || typeof file.shares !== "object" || Array.isArray(file.shares)) {
-    return [];
-  }
-  const shares = file.shares as Record<string, unknown>;
-  return [shares.public, shares.private].filter(
-    (value): value is Record<string, unknown> =>
-      Boolean(value) && typeof value === "object" && !Array.isArray(value),
-  );
-}
-
-function collectSlackSharedChannelIds(file: SlackFileInfoSummary): Set<string> {
-  const ids = new Set<string>();
-  for (const shareMap of collectSlackShareMaps(file)) {
-    for (const channelId of Object.keys(shareMap)) {
-      const normalized = normalizeOptionalString(channelId);
-      if (normalized) {
-        ids.add(normalized);
-      }
-    }
-  }
-  return ids;
-}
-
-function collectSlackThreadShares(
-  file: SlackFileInfoSummary,
-  channelId: string,
-): SlackFileThreadShare[] {
-  const matches: SlackFileThreadShare[] = [];
-  for (const shareMap of collectSlackShareMaps(file)) {
-    const rawEntries = shareMap[channelId];
-    if (!Array.isArray(rawEntries)) {
-      continue;
-    }
-    for (const rawEntry of rawEntries) {
-      if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
-        continue;
-      }
-      const entry = rawEntry as Record<string, unknown>;
-      const ts = typeof entry.ts === "string" ? normalizeOptionalString(entry.ts) : undefined;
-      const threadTs =
-        typeof entry.thread_ts === "string" ? normalizeOptionalString(entry.thread_ts) : undefined;
-      matches.push({ channelId, ts, threadTs });
-    }
-  }
-  return matches;
-}
-
-function hasSlackScopeMismatch(params: {
+function hasSlackScopeProof(params: {
   file: SlackFileInfoSummary;
-  channelId?: string;
+  channelId: string;
   threadId?: string;
 }): boolean {
   const channelId = normalizeOptionalString(params.channelId);
@@ -687,27 +581,36 @@ function hasSlackScopeMismatch(params: {
     return false;
   }
   const threadId = normalizeOptionalString(params.threadId);
-
-  const directIds = collectSlackDirectShareChannelIds(params.file);
-  const sharedIds = collectSlackSharedChannelIds(params.file);
-  const hasChannelEvidence = directIds.size > 0 || sharedIds.size > 0;
-  const inChannel = directIds.has(channelId) || sharedIds.has(channelId);
-  if (hasChannelEvidence && !inChannel) {
+  const { file } = params;
+  if (
+    !threadId &&
+    [file.channels, file.groups, file.ims].some(
+      (group) =>
+        Array.isArray(group) && group.some((entry) => normalizeOptionalString(entry) === channelId),
+    )
+  ) {
     return true;
   }
-
-  if (!threadId) {
+  if (!isRecord(file.shares)) {
     return false;
   }
-  const threadShares = collectSlackThreadShares(params.file, channelId);
-  if (threadShares.length === 0) {
-    return false;
-  }
-  const threadEvidence = threadShares.filter((entry) => entry.threadTs || entry.ts);
-  if (threadEvidence.length === 0) {
-    return false;
-  }
-  return !threadEvidence.some((entry) => entry.threadTs === threadId || entry.ts === threadId);
+  return [file.shares.public, file.shares.private].some(
+    (shareMap) =>
+      isRecord(shareMap) &&
+      Object.entries(shareMap).some(
+        ([sharedChannelId, entries]) =>
+          normalizeOptionalString(sharedChannelId) === channelId &&
+          Array.isArray(entries) &&
+          entries.some((entry) => {
+            if (!isRecord(entry)) {
+              return false;
+            }
+            const ts = normalizeOptionalString(entry.ts);
+            const threadTs = normalizeOptionalString(entry.thread_ts);
+            return threadId ? ts === threadId || threadTs === threadId : Boolean(ts || threadTs);
+          }),
+      ),
+  );
 }
 
 /**
@@ -717,10 +620,12 @@ function hasSlackScopeMismatch(params: {
  */
 export async function downloadSlackFile(
   fileId: string,
-  opts: SlackActionClientOpts & { maxBytes: number; channelId?: string; threadId?: string },
+  opts: SlackActionClientOpts & { maxBytes: number; channelId: string; threadId?: string },
 ): Promise<SlackMediaResult | null> {
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   const client = await getClient(opts);
+  const isFileAllowed = (file: SlackFileInfoSummary) =>
+    hasSlackScopeProof({ file, channelId: opts.channelId, threadId: opts.threadId });
 
   // Fetch fresh file metadata (includes a current url_private_download).
   const info = await client.files.info({ file: fileId });
@@ -729,7 +634,7 @@ export async function downloadSlackFile(
   if (!file?.url_private_download && !file?.url_private) {
     return null;
   }
-  if (hasSlackScopeMismatch({ file, channelId: opts.channelId, threadId: opts.threadId })) {
+  if (!isFileAllowed(file)) {
     return null;
   }
 
@@ -744,6 +649,7 @@ export async function downloadSlackFile(
       },
     ],
     client,
+    isRefreshedFileAllowed: isFileAllowed,
     token,
     maxBytes: opts.maxBytes,
   });

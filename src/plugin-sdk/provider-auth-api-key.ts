@@ -5,27 +5,22 @@ export type { OpenClawConfig } from "../config/config.js";
 export type { SecretInput } from "../config/types.secrets.js";
 
 export {
-  upsertAuthProfile,
-  upsertAuthProfileWithLock,
-  upsertAuthProfileWithLockOrThrow,
-} from "../agents/auth-profiles/profiles.js";
+  upsertAuthProfileWithLockCompat as upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrowCompat as upsertAuthProfileWithLockOrThrow,
+} from "./provider-auth-write-compat.js";
 export {
-  formatApiKeyPreview,
   normalizeApiKeyInput,
   validateApiKeyInput,
   ensureApiKeyFromOptionEnvOrPrompt,
-  normalizeSecretInputModeInput,
-  promptSecretRefForSetup,
-  resolveSecretInputModeForEnvSelection,
 } from "../plugins/provider-auth-input.js";
 export {
   applyAuthProfileConfig,
   buildApiKeyCredential,
   upsertApiKeyProfile,
-  type ApiKeyStorageOptions,
 } from "../plugins/provider-auth-helpers.js";
-export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 export {
-  normalizeOptionalSecretInput,
-  normalizeSecretInput,
-} from "../utils/normalize-secret-input.js";
+  captureProviderApiKey,
+  createProviderApiKeyAuthMethod,
+  persistProviderApiKey,
+} from "../plugins/provider-api-key-auth.js";
+export { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";

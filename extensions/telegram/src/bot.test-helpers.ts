@@ -1,3 +1,20 @@
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+
+export function createReplyPhotoMessage(text: string) {
+  return {
+    chat: { id: 7, type: "private" },
+    text,
+    date: 1_736_380_800,
+    reply_to_message: {
+      chat: { id: 7, type: "private", first_name: "Ada" },
+      date: 1_736_380_700,
+      message_id: 9001,
+      photo: [{ file_id: "reply-photo-1" }],
+      from: { first_name: "Ada" },
+    },
+  };
+}
+
 export type TelegramTestContext = Record<string, unknown>;
 export type TelegramTestMiddleware = (
   ctx: TelegramTestContext,
@@ -12,6 +29,24 @@ type ChannelInboundModule = typeof import("openclaw/plugin-sdk/channel-inbound")
 type ChannelInboundRunParams = Parameters<ChannelInboundModule["runChannelInboundEvent"]>[0];
 type BufferedReplyDispatcher =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
+
+export function makeTelegramKeyedStoreTestMock<Value>(
+  overrides: Partial<PluginStateKeyedStore<Value>> = {},
+): PluginStateKeyedStore<Value> {
+  const unexpectedCall = async (operation: string): Promise<never> => {
+    throw new Error(`unexpected Telegram keyed-store ${operation} call`);
+  };
+  return {
+    register: () => unexpectedCall("register"),
+    registerIfAbsent: () => unexpectedCall("registerIfAbsent"),
+    lookup: () => unexpectedCall("lookup"),
+    consume: () => unexpectedCall("consume"),
+    delete: () => unexpectedCall("delete"),
+    entries: () => unexpectedCall("entries"),
+    clear: () => unexpectedCall("clear"),
+    ...overrides,
+  };
+}
 
 export async function runTelegramChannelInboundEventWithHarness(
   actual: ChannelInboundModule,
@@ -42,6 +77,8 @@ export async function runTelegramChannelInboundEventWithHarness(
                   plan.delivery.deliverWithProviderMessageSending(payload, {
                     ...info,
                     onPlatformSendDispatch: info.onPlatformSendDispatch ?? (async () => undefined),
+                    assertPlatformSendAuthorized:
+                      info.assertPlatformSendAuthorized ?? (() => undefined),
                   }),
                 onError: plan.delivery.onError,
               },
@@ -87,24 +124,6 @@ export function createTelegramCallbackContext(params: {
     callbackQuery,
     me: { username: "openclaw_bot" },
     getFile: async () => ({ download: async () => new Uint8Array() }),
-  };
-}
-
-export function createTelegramReactionContext(params: {
-  updateId: number;
-  reaction?: Record<string, unknown>;
-}): TelegramTestContext {
-  return {
-    update: { update_id: params.updateId },
-    messageReaction: {
-      chat: { id: 1234, type: "private" },
-      message_id: 42,
-      user: { id: 9, first_name: "Ada" },
-      date: 1_736_380_800,
-      old_reaction: [],
-      new_reaction: [{ type: "emoji", emoji: "👍" }],
-      ...params.reaction,
-    },
   };
 }
 

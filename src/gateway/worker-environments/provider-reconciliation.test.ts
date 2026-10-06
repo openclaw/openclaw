@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
@@ -10,13 +11,14 @@ describe("worker environment service", () => {
 
   it("adopts a matching milestone-1 row that predates worker credentials", async () => {
     const environmentId = "worker-milestone-one";
-    support.seedReady(environmentId);
+    await support.seedReady(environmentId);
     support.testState.stateDb.db
       .prepare("DELETE FROM worker_environment_credentials WHERE environment_id = ?")
       .run(environmentId);
     support.testState.stateDb.db
       .prepare("UPDATE worker_environments SET owner_epoch = 0 WHERE environment_id = ?")
       .run(environmentId);
+    await support.reopenWorkerEnvironmentStore();
     const workerService = support.createService(
       support.createProvider({
         inspect: async () => {
@@ -43,7 +45,7 @@ describe("worker environment service", () => {
   });
 
   it("inspects a persisted lease with its profile snapshot after profile removal", async () => {
-    support.seedBootstrapping("worker-crash");
+    await support.seedBootstrapping("worker-crash");
     support.testState.config.cloudWorkers!.profiles = {};
     const inspected: WorkerLifecycleLease[] = [];
     const provider = support.createProvider({
@@ -67,9 +69,188 @@ describe("worker environment service", () => {
     expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(1);
   });
 
+  it("destroys a persisted SSH lease after its provider becomes worker-turn-only", async () => {
+    const environmentId = "worker-stale-ssh-transport";
+    await support.seedBootstrapping(environmentId);
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const destroy = vi.fn(async () => {});
+    const workerService = support.createService(
+      support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
+        inspect,
+        destroy,
+      }),
+    );
+
+    await workerService.reconcileOnce();
+
+    expect(inspect).not.toHaveBeenCalled();
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId: `lease:${environmentId}`,
+      profile: { region: "test" },
+    });
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      lastError: "worker-turn providers must return a node lease",
+    });
+  });
+
+  it.each([
+    ["SSH", { leaseId: "lease-direct-only-ssh", ssh: support.SSH_ENDPOINT }],
+    ["node", { leaseId: "lease-direct-only-node", node: { deviceId: "device-direct-only-node" } }],
+  ] as const)(
+    "P1: preserves a direct-only %s lease after profile removal and reconciliation",
+    async (_transport, lease) => {
+      const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
+      const destroy = vi.fn(async () => {});
+      const workerService = support.createService(
+        support.createProvider({
+          supportedExecutionModes: undefined,
+          provision: async () => lease,
+          inspect,
+          destroy,
+        }),
+        { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
+      );
+      const environment = await workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: `request-${lease.leaseId}`,
+      });
+      support.testState.config.cloudWorkers!.profiles = {};
+
+      await workerService.reconcileOnce();
+
+      expect(environment.profileSnapshot).not.toHaveProperty("executionMode");
+      expect(inspect).toHaveBeenCalledWith({ leaseId: lease.leaseId, profile: { region: "test" } });
+      expect(destroy).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "ready",
+        leaseId: lease.leaseId,
+      });
+    },
+  );
+
+  it("P1: destroys a persisted SSH lease when provider capabilities and its profile are removed", async () => {
+    const leaseId = "lease-unadvertised-persisted-ssh";
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const destroy = vi.fn(async () => {});
+    const provider = support.createProvider({
+      supportedExecutionModes: ["remote-exec"],
+      provision: async () => ({ leaseId, ssh: support.SSH_ENDPOINT }),
+      inspect,
+      destroy,
+    });
+    const workerService = support.createService(provider);
+    const environment = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-unadvertised-persisted-ssh",
+      executionMode: "remote-exec",
+    });
+    provider.supportedExecutionModes = undefined;
+    support.testState.config.cloudWorkers!.profiles = {};
+
+    await workerService.reconcileOnce();
+
+    expect(inspect).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+    expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      lastError: expect.stringContaining("remote-exec"),
+    });
+  });
+
+  it.each([
+    { name: "all placement capabilities", supportedExecutionModes: undefined },
+    { name: "its exact remote-exec capability", supportedExecutionModes: ["worker-turn"] as const },
+  ])(
+    "destroys a persisted node lease when its provider loses $name",
+    async ({ supportedExecutionModes }) => {
+      const leaseId = "lease-unadvertised-persisted-node";
+      const deviceId = "device-unadvertised-persisted-node";
+      const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
+      const destroy = vi.fn(async () => {});
+      const provider = support.createProvider({
+        supportedExecutionModes: ["worker-turn", "remote-exec"],
+        provisionBeforeInstallation: true,
+        provision: async () => ({ leaseId, node: { deviceId } }),
+        inspect,
+        destroy,
+      });
+      const workerService = support.createService(provider, {
+        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+      });
+      const environment = await workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-unadvertised-persisted-node",
+        executionMode: "remote-exec",
+      });
+      provider.supportedExecutionModes = supportedExecutionModes;
+      support.getDevelopmentProfile().settings = { region: "edited" };
+
+      await workerService.reconcileOnce();
+
+      expect(inspect).not.toHaveBeenCalled();
+      expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "failed",
+        leaseId: null,
+        nodeDeviceId: null,
+        lastError: expect.stringMatching(/node|remote-exec/u),
+      });
+    },
+  );
+
+  it.each([
+    ["remote-exec-only", ["remote-exec"]],
+    ["dual-mode", ["worker-turn", "remote-exec"]],
+  ] as const)(
+    "preserves a persisted node lease after restarting with a %s provider",
+    async (_label, supportedExecutionModes) => {
+      const leaseId = "lease-persisted-multimode-node";
+      const deviceId = "device-persisted-multimode-node";
+      const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
+      const destroy = vi.fn(async () => {});
+      const initial = support.createService(
+        support.createProvider({
+          supportedExecutionModes: ["worker-turn", "remote-exec"],
+          provisionBeforeInstallation: true,
+          provision: async () => ({ leaseId, node: { deviceId } }),
+          inspect,
+          destroy,
+        }),
+        { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
+      );
+      const environment = await initial.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-persisted-multimode-node",
+        executionMode: "remote-exec",
+      });
+      await initial.stop();
+
+      const restarted = support.createService(
+        support.createProvider({ supportedExecutionModes, inspect, destroy }),
+      );
+      await restarted.reconcileOnce();
+
+      expect(inspect).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+      expect(destroy).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "ready",
+        leaseId,
+        nodeDeviceId: deviceId,
+        sshEndpoint: null,
+      });
+    },
+  );
+
   it("reconciles one exact environment without sweeping its siblings", async () => {
-    support.seedReady("worker-target");
-    support.seedReady("worker-sibling");
+    await support.seedReady("worker-target");
+    await support.seedReady("worker-sibling");
     const inspected: string[] = [];
     const workerService = support.createService(
       support.createProvider({
@@ -87,7 +268,7 @@ describe("worker environment service", () => {
 
   it("targeted reconciliation revokes a disappeared worker credential", async () => {
     const environmentId = "worker-revoked";
-    support.seedReady(environmentId);
+    await support.seedReady(environmentId);
     const workerService = support.createService(
       support.createProvider({ inspect: async () => ({ status: "unknown" }) }),
     );
@@ -98,26 +279,18 @@ describe("worker environment service", () => {
 
     await workerService.reconcileEnvironment(environmentId);
 
-    expect(support.testState.store.get(environmentId)?.state).toBe("orphaned");
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      destroyRequestedAtMs: support.testState.nowMs,
+      lastError: "Worker provider no longer recognizes the lease",
+    });
     expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
   });
 
-  it("skips an active lease whose durable receipt matches the lifecycle bundle", async () => {
-    support.seedReady("worker-current");
-
-    await support.createService(support.createProvider()).reconcileOnce();
-
-    expect(support.testState.store.get("worker-current")).toMatchObject({
-      state: "ready",
-      bootstrapReceipt: support.BOOTSTRAP_RECEIPT,
-    });
-    expect(support.testState.prepareInstallation).toHaveBeenCalledWith("bundle");
-    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
-  });
-
   it("re-enters bootstrapping when the durable receipt has a stale bundle hash", async () => {
-    const bootstrapping = support.seedBootstrapping("worker-stale");
-    support.testState.store.transition({
+    const bootstrapping = await support.seedBootstrapping("worker-stale");
+    await support.testState.store.transition({
       environmentId: bootstrapping.environmentId,
       from: "bootstrapping",
       to: "ready",
@@ -136,44 +309,9 @@ describe("worker environment service", () => {
     expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(1);
   });
 
-  it("tears down an attached worker whose admitted bundle is stale", async () => {
-    const environmentId = "worker-attached-stale";
-    support.seedBootstrapping(environmentId);
-    const ready = support.testState.store.transition({
-      environmentId,
-      from: "bootstrapping",
-      to: "ready",
-      patch: support.readyPatch(environmentId, {
-        ...support.BOOTSTRAP_RECEIPT,
-        bundleHash: "b".repeat(64),
-      }),
-    });
-    support.testState.store.transition({
-      environmentId,
-      from: ready.state,
-      to: "attached",
-      patch: support.attachedPatch(environmentId, "session-1"),
-    });
-    const destroy = vi.fn(async () => {});
-
-    await support.createService(support.createProvider({ destroy })).reconcileOnce();
-
-    expect(destroy).toHaveBeenCalledOnce();
-    expect(destroy).toHaveBeenCalledWith({
-      leaseId: `lease:${environmentId}`,
-      profile: { region: "test" },
-    });
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "destroyed",
-      leaseId: `lease:${environmentId}`,
-      attachedSessionIds: [],
-      lastError: null,
-    });
-  });
-
   it("does not resolve npm while an admitted receipt matches the local bundle", async () => {
     const environmentId = "worker-current-npm";
-    support.seedReady(environmentId, "npm");
+    await support.seedReady(environmentId, "npm");
     support.testState.prepareInstallation = vi.fn(async (install) => {
       if (install === "bundle") {
         return support.BUNDLE_ARTIFACT;
@@ -187,6 +325,7 @@ describe("worker environment service", () => {
 
     expect(support.testState.prepareInstallation).toHaveBeenCalledTimes(1);
     expect(support.testState.prepareInstallation).toHaveBeenCalledWith("bundle");
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
     expect(support.testState.store.get(environmentId)).toMatchObject({
       state: "ready",
@@ -198,10 +337,10 @@ describe("worker environment service", () => {
 
   it("keeps an admitted lease retryable when local bundle identity is unavailable", async () => {
     const environmentId = "worker-current-bundle-unavailable";
-    support.seedReady(environmentId, "npm");
+    await support.seedReady(environmentId, "npm");
     const attachedId = "worker-attached-bundle-unavailable";
-    support.seedReady(attachedId);
-    support.testState.store.transition({
+    await support.seedReady(attachedId);
+    await support.testState.store.transition({
       environmentId: attachedId,
       from: "ready",
       to: "attached",
@@ -210,6 +349,7 @@ describe("worker environment service", () => {
     support.testState.stateDb.db
       .prepare("DELETE FROM worker_environment_credentials WHERE environment_id = ?")
       .run(attachedId);
+    await support.reopenWorkerEnvironmentStore();
     support.testState.prepareInstallation = vi.fn(async () => {
       throw new Error("local bundle identity is unavailable");
     });
@@ -239,9 +379,9 @@ describe("worker environment service", () => {
     "tears down a persisted %s lease when mismatched npm preparation fails",
     async (state) => {
       const environmentId = `worker-prepare-${state}`;
-      const bootstrapping = support.seedBootstrapping(environmentId, "npm");
+      const bootstrapping = await support.seedBootstrapping(environmentId, "npm");
       if (state !== "bootstrapping") {
-        const ready = support.testState.store.transition({
+        const ready = await support.testState.store.transition({
           environmentId,
           from: bootstrapping.state,
           to: "ready",
@@ -251,7 +391,11 @@ describe("worker environment service", () => {
           }),
         });
         if (state === "idle") {
-          support.testState.store.transition({ environmentId, from: ready.state, to: "idle" });
+          await support.testState.store.transition({
+            environmentId,
+            from: ready.state,
+            to: "idle",
+          });
         }
       }
       support.testState.prepareInstallation = vi.fn(async (install) => {
@@ -297,8 +441,8 @@ describe("worker environment service", () => {
 
   it("retries indeterminate teardown after a reconcile preparation failure and restart", async () => {
     const environmentId = "worker-prepare-teardown-retry";
-    const bootstrapping = support.seedBootstrapping(environmentId, "npm");
-    support.testState.store.transition({
+    const bootstrapping = await support.seedBootstrapping(environmentId, "npm");
+    await support.testState.store.transition({
       environmentId,
       from: bootstrapping.state,
       to: "ready",
@@ -353,7 +497,9 @@ describe("worker environment service", () => {
       },
     });
 
-    const result = await support.createService(provider).create("development", "request-npm");
+    const result = await support
+      .createService(provider)
+      .createWithRequest({ profileId: "development", idempotencyKey: "request-npm" });
 
     expect(result).toMatchObject({
       state: "ready",
@@ -369,20 +515,20 @@ describe("worker environment service", () => {
     });
   });
 
-  it("orphans unknown active leases and adopts unknown expected teardown", async () => {
-    support.seedReady("worker-unknown");
-    support.seedReady("worker-transient");
-    support.seedReady("worker-destroyed-unknown");
-    support.testState.store.requestDestroy({
+  it("fences unknown leases before stop and retries their durable teardown", async () => {
+    const originalOwner = await support.seedReady("worker-unknown");
+    await support.seedReady("worker-transient");
+    await support.seedReady("worker-destroyed-unknown");
+    await support.testState.store.requestDestroy({
       environmentId: "worker-destroyed-unknown",
       state: "ready",
     });
-    support.testState.store.transition({
+    await support.testState.store.transition({
       environmentId: "worker-destroyed-unknown",
       from: "ready",
       to: "draining",
     });
-    support.testState.store.transition({
+    await support.testState.store.transition({
       environmentId: "worker-destroyed-unknown",
       from: "draining",
       to: "destroying",
@@ -415,7 +561,15 @@ describe("worker environment service", () => {
 
     await workerService.reconcileOnce();
 
-    expect(support.testState.store.get("worker-unknown")?.state).toBe("draining");
+    expect(support.testState.store.get("worker-unknown")).toMatchObject({
+      state: "ready",
+      ownerEpoch: originalOwner.ownerEpoch,
+      leaseId: originalOwner.leaseId,
+      attachedSessionIds: originalOwner.attachedSessionIds,
+      destroyRequestedAtMs: support.testState.nowMs,
+      teardownTerminalState: "failed",
+      lastError: "Worker provider no longer recognizes the lease",
+    });
     expect(support.testState.store.get("worker-destroyed-unknown")?.state).toBe("destroying");
     expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
     expect(support.testState.store.get("worker-transient")).toMatchObject({
@@ -424,14 +578,18 @@ describe("worker environment service", () => {
     });
     await workerService.reconcileOnce();
     expect(tunnelManager.stop).toHaveBeenCalledTimes(4);
-    expect(support.testState.store.get("worker-unknown")?.state).toBe("orphaned");
+    expect(support.testState.store.get("worker-unknown")).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      lastError: "Worker provider no longer recognizes the lease",
+    });
     expect(support.testState.store.get("worker-destroyed-unknown")).toMatchObject({
       state: "destroyed",
     });
   });
 
   it("keeps a dormant paired-device lease in its nonterminal holding state", async () => {
-    support.seedReady("worker-dormant");
+    await support.seedReady("worker-dormant");
     const destroy = vi.fn(async () => {});
     const tunnelManager = {
       start: vi.fn(),
@@ -459,7 +617,7 @@ describe("worker environment service", () => {
     { status: "dormant", sharedHost: true },
     { status: "unknown", sharedHost: true },
   ])("retains retryable state for malformed inspection result %#", async (inspection) => {
-    support.seedReady("worker-malformed");
+    await support.seedReady("worker-malformed");
     const provider = support.createProvider({ inspect: async () => inspection as never });
 
     await support.createService(provider).reconcileOnce();
@@ -471,16 +629,16 @@ describe("worker environment service", () => {
   });
 
   it("records provider-proven teardown without local intent as a failure", async () => {
-    support.seedReady("worker-destroyed-ready");
-    support.seedReady("worker-destroyed-attached");
-    support.testState.store.transition({
+    await support.seedReady("worker-destroyed-ready");
+    await support.seedReady("worker-destroyed-attached");
+    await support.testState.store.transition({
       environmentId: "worker-destroyed-attached",
       from: "ready",
       to: "attached",
       patch: support.attachedPatch("worker-destroyed-attached", "session-1"),
     });
-    support.seedReady("worker-destroyed-draining");
-    support.testState.store.transition({
+    await support.seedReady("worker-destroyed-draining");
+    await support.testState.store.transition({
       environmentId: "worker-destroyed-draining",
       from: "ready",
       to: "draining",
@@ -509,20 +667,20 @@ describe("worker environment service", () => {
   });
 
   it("adopts a provider-proven bootstrap teardown as failed after restart", async () => {
-    const bootstrapping = support.seedBootstrapping("worker-bootstrap-teardown-crash");
-    const requested = support.testState.store.requestDestroy({
+    const bootstrapping = await support.seedBootstrapping("worker-bootstrap-teardown-crash");
+    const requested = await support.testState.store.requestDestroy({
       environmentId: bootstrapping.environmentId,
       state: bootstrapping.state,
       terminalState: "failed",
       lastError: "remote bootstrap failed",
     });
-    const draining = support.testState.store.transition({
+    const draining = await support.testState.store.transition({
       environmentId: requested.environmentId,
       from: requested.state,
       to: "draining",
       patch: { lastError: requested.lastError },
     });
-    support.testState.store.transition({
+    await support.testState.store.transition({
       environmentId: draining.environmentId,
       from: draining.state,
       to: "destroying",
@@ -556,7 +714,7 @@ describe("worker environment service", () => {
   });
 
   it("keeps a failed destroy retryable and makes completed destroy idempotent", async () => {
-    support.seedReady("worker-destroy");
+    await support.seedReady("worker-destroy");
     support.testState.config.cloudWorkers!.profiles = {};
     let fail = true;
     const destroyed: WorkerLifecycleLease[] = [];
@@ -588,60 +746,124 @@ describe("worker environment service", () => {
     ]);
   });
 
-  it("adopts an unpersisted provision result before destroying", async () => {
-    const intent = support.testState.store.createIntent({
-      environmentId: "worker-pending-destroy",
-      providerId: "fake",
-      profileId: "development",
-      profileSnapshot: { settings: { region: "test" } },
-      provisionOperationId: "provision:pending-destroy",
-    });
-    support.testState.store.transition({
-      environmentId: intent.environmentId,
-      from: "requested",
-      to: "provisioning",
-    });
-    const destroyed: WorkerLifecycleLease[] = [];
-    const provider = support.createProvider({
-      provision: async () => {
-        expect(
-          support.testState.store.get(intent.environmentId)?.destroyRequestedAtMs,
-        ).not.toBeNull();
-        return { leaseId: "lease-1", ssh: support.SSH_ENDPOINT };
-      },
-      destroy: async (lease) => void destroyed.push(lease),
-    });
+  it.each(["destroy", "reconcile"] as const)(
+    "%s preserves the exact attached owner until remote stop is confirmed across restart",
+    async (operation) => {
+      const environmentId = "worker-retained-teardown";
+      await support.seedReady(environmentId);
+      const attached = await support.testState.store.transition({
+        environmentId,
+        from: "ready",
+        to: "attached",
+        patch: support.attachedPatch(environmentId, "session-retained"),
+      });
+      let disconnected = true;
+      const stop = vi.fn(async (id: string, epoch?: number) => {
+        expect(support.testState.store.get(id)).toMatchObject({
+          state: "attached",
+          attachedSessionIds: ["session-retained"],
+          ownerEpoch: attached.ownerEpoch,
+          destroyRequestedAtMs: expect.any(Number),
+        });
+        expect(epoch).toBe(attached.ownerEpoch);
+        if (disconnected) {
+          throw new Error("node disconnected before stop confirmation");
+        }
+      });
+      const tunnelManager = {
+        stop,
+        stopAll: vi.fn(async () => {}),
+      } as unknown as WorkerTunnelManager;
+      const destroy = vi.fn(async () => {});
+      const provider = support.createProvider({ destroy });
+      const first = support.createService(provider, { tunnelManager });
+      if (operation === "destroy") {
+        await expect(first.destroy(environmentId)).rejects.toThrow("node disconnected");
+      } else {
+        await support.testState.store.requestDestroy({ environmentId, state: "attached" });
+        await first.reconcileOnce();
+      }
+      expect(support.testState.store.get(environmentId)).toMatchObject({
+        state: "attached",
+        ownerEpoch: attached.ownerEpoch,
+        attachedSessionIds: ["session-retained"],
+      });
+      expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+      expect(destroy).not.toHaveBeenCalled();
 
-    const result = await support.createService(provider).destroy(intent.environmentId);
+      await first.stop();
+      disconnected = false;
+      const restarted = support.createService(provider, { tunnelManager });
+      await restarted.reconcileOnce();
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(support.testState.store.get(environmentId)).toMatchObject({ state: "destroyed" });
+    },
+  );
 
-    expect(result.state).toBe("destroyed");
-    expect(destroyed).toEqual([{ leaseId: "lease-1", profile: { region: "test" } }]);
+  it("does not let an awaited old-owner stop retire a replacement attachment", async () => {
+    const environmentId = "worker-replaced-during-stop";
+    await support.seedReady(environmentId);
+    const attached = await support.testState.store.transition({
+      environmentId,
+      from: "ready",
+      to: "attached",
+      patch: support.attachedPatch(environmentId, "session-old"),
+    });
+    const stopReturned = createDeferred();
+    const stop = vi.fn(async () => await stopReturned.promise);
+    const tunnelManager = {
+      stop,
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const service = support.createService(
+      support.createProvider({ inspect: async () => ({ status: "active", sharedHost: true }) }),
+      { tunnelManager },
+    );
+    const reconciling = service.reconcileOnce();
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledWith(environmentId, attached.ownerEpoch));
+    await support.testState.store.transition({ environmentId, from: "attached", to: "idle" });
+    const replacement = await support.testState.store.transition({
+      environmentId,
+      from: "idle",
+      to: "attached",
+      patch: support.attachedPatch(environmentId, "session-new"),
+    });
+    stopReturned.resolve();
+    await reconciling;
+
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "attached",
+      ownerEpoch: replacement.ownerEpoch,
+      attachedSessionIds: ["session-new"],
+    });
+    expect(support.testState.store.getCredential(environmentId)?.sessionId).toBe("session-new");
   });
 
-  it("retains teardown intent across an indeterminate provision failure", async () => {
+  it("retains teardown intent across an indeterminate allocation resolution", async () => {
     support.testState.prepareInstallation = vi.fn(async () => {
       throw new Error("bundle preparation must not block teardown adoption");
     });
-    const intent = support.testState.store.createIntent({
+    const intent = await support.testState.store.createIntent({
       environmentId: "worker-pending-destroy-retry",
       providerId: "fake",
       profileId: "development",
       profileSnapshot: { settings: { region: "test" } },
       provisionOperationId: "provision:pending-destroy-retry",
     });
-    support.testState.store.transition({
+    await support.testState.store.transition({
       environmentId: intent.environmentId,
       from: "requested",
       to: "provisioning",
     });
-    let provisionFails = true;
+    let resolutionFails = true;
     const destroyed: WorkerLifecycleLease[] = [];
     const provider = support.createProvider({
-      provision: async () => {
-        if (provisionFails) {
-          throw new Error("provision outcome unknown");
+      resolveAllocation: async () => {
+        if (resolutionFails) {
+          throw new Error("allocation identity unavailable");
         }
-        return { leaseId: "lease-retried", ssh: support.SSH_ENDPOINT };
+        return { leaseId: "lease-retried", sharedHost: false };
       },
       destroy: async (lease) => void destroyed.push(lease),
     });
@@ -662,7 +884,7 @@ describe("worker environment service", () => {
       destroyRequestedAtMs: expect.any(Number),
     });
 
-    provisionFails = false;
+    resolutionFails = false;
     await workerService.reconcileOnce();
     expect(support.testState.store.get(intent.environmentId)?.state).toBe("destroyed");
     expect(destroyed).toEqual([{ leaseId: "lease-retried", profile: { region: "test" } }]);

@@ -1,8 +1,9 @@
-// Control UI Chat page owns slash command metadata loading.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { t } from "../../i18n/index.ts";
+import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   buildFallbackSlashCommands,
@@ -12,6 +13,7 @@ import {
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentIdForSession,
@@ -26,11 +28,14 @@ import {
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
-import { clearChatHistory } from "./chat-history.ts";
+import { clearChatHistory } from "./chat-history-actions.ts";
+import { setChatError } from "./chat-history-state.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
+import type { ChatExportResult } from "./export.ts";
+import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
-import { scheduleChatScroll } from "./scroll.ts";
+import { scheduleChatScroll, type ChatScrollHost } from "./scroll.ts";
 
 let refreshSeq = 0;
 const REMOTE_SLASH_COMMAND_CACHE_TTL_MS = 60_000;
@@ -45,16 +50,6 @@ const remoteSlashCommandCache = new WeakMap<
   GatewayBrowserClient,
   Map<string, RemoteSlashCommandCacheEntry>
 >();
-
-export type ChatCommandResetOptions = {
-  previousDraft?: string;
-  restoreDraft?: boolean;
-  target?: ChatCommandTarget;
-};
-
-type ChatCommandSendOptions = ChatCommandResetOptions & {
-  sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
-};
 
 type ChatCommandDispatchResult = "completed" | "failed" | "uncertain" | "cancelled" | "deferred";
 
@@ -74,18 +69,11 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     sessionsResultAgentId?: string | null;
     createChatSession?: () => Promise<boolean>;
     confirmConversationReset?: () => Promise<boolean>;
-    exportCurrentChat?: () => Promise<void> | void;
+    exportCurrentChat?: () => Promise<ChatExportResult> | ChatExportResult;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
-  } & UiSessionDefaultsHost;
-
-function setChatCommandError(
-  host: { lastError?: string | null; chatError?: string | null },
-  error: string | null,
-) {
-  host.lastError = error;
-  host.chatError = error;
-}
+  } & UiSessionDefaultsHost &
+  ChatScrollHost;
 
 function currentSessionAccessSnapshot(
   host: ChatCommandHost,
@@ -104,11 +92,21 @@ export function requireChatSessionAction(
   const access = readChatSessionActionAccess(
     currentSessionAccessSnapshot(host),
     Boolean(host.chatRunId),
+    {
+      session: host.sessionsResult?.sessions.find((row) =>
+        visibleSessionMatches(
+          host,
+          row.key,
+          row.agentId ?? host.sessionsResultAgentId ?? undefined,
+        ),
+      ),
+      sessionAbortable: host.chatRunSessionAbortable === true,
+    },
   )[action];
   if (access.allowed) {
     return true;
   }
-  setChatCommandError(host, access.reason);
+  setChatError(host, access.reason);
   return false;
 }
 
@@ -168,74 +166,53 @@ export function readChatResetTargetAccess(
   return access.allowed ? { allowed: true } : access;
 }
 
-function requireChatResetTarget(host: ChatCommandHost, target: ChatCommandTarget): boolean {
-  const access = readChatResetTargetAccess(host, target);
-  if (access.allowed) {
-    return true;
-  }
-  setChatCommandError(host, access.reason);
-  return false;
-}
-
 function failStaleChatCommand(host: ChatCommandHost): ChatCommandDispatchResult {
-  setChatCommandError(host, "The Gateway connection changed. Retry the command.");
+  setChatError(host, "The Gateway connection changed. Retry the command.");
   return "failed";
 }
 
-function remoteSlashCommandCacheKey(agentId: string | undefined): string {
-  return agentId ?? "";
-}
-
-function getRemoteSlashCommandCache(
-  client: GatewayBrowserClient,
-): Map<string, RemoteSlashCommandCacheEntry> {
-  let cache = remoteSlashCommandCache.get(client);
-  if (!cache) {
-    cache = new Map();
-    remoteSlashCommandCache.set(client, cache);
-  }
-  return cache;
-}
-
-function storeRemoteSlashCommands(
-  client: GatewayBrowserClient,
-  agentId: string | undefined,
-  commands: SlashCommandDef[],
-) {
-  getRemoteSlashCommandCache(client).set(remoteSlashCommandCacheKey(agentId), {
-    commands,
-    expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
-  });
+function remoteSlashCommandCacheKey(agentId: string | undefined, sessionKey?: string): string {
+  return JSON.stringify([agentId ?? null, sessionKey ?? null]);
 }
 
 async function requestRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
-  fallback: SlashCommandDef[] | undefined,
-): Promise<SlashCommandDef[]> {
+  sessionKey?: string,
+): Promise<SlashCommandDef[] | undefined> {
   try {
     const result = await client.request<CommandsListResult>("commands.list", {
       ...(agentId ? { agentId } : {}),
+      ...(sessionKey ? { sessionKey } : {}),
       includeArgs: true,
       scope: "text",
     });
     if (!Array.isArray(result?.commands)) {
-      return buildFallbackSlashCommands();
+      return undefined;
     }
-    const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
-    storeRemoteSlashCommands(client, agentId, commands);
-    return commands;
+    return buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
   } catch {
-    return fallback ?? buildFallbackSlashCommands();
+    return undefined;
   }
 }
 
 function loadRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
+  sessionKey?: string,
 ): Promise<SlashCommandDef[]> {
-  const cache = getRemoteSlashCommandCache(client);
-  const key = remoteSlashCommandCacheKey(agentId);
+  const metadata = peekChatMetadata(client, { agentId, sessionKey });
+  // Store-held metadata carries app-level invalidation on config changes and logical reconnects,
+  // so no TTL applies here. The cache below owns only commands.list-derived entries.
+  if (Array.isArray(metadata?.commands)) {
+    return Promise.resolve(buildSlashCommandsFromEntries(getRemoteCommandEntries(metadata)));
+  }
+  let cache = remoteSlashCommandCache.get(client);
+  if (!cache) {
+    cache = new Map();
+    remoteSlashCommandCache.set(client, cache);
+  }
+  const key = remoteSlashCommandCacheKey(agentId, sessionKey);
   const cached = cache.get(key);
   const now = Date.now();
   if (cached?.commands && cached.expiresAt > now) {
@@ -244,33 +221,45 @@ function loadRemoteSlashCommands(
   if (cached?.inFlight) {
     return cached.inFlight;
   }
-  const inFlight = requestRemoteSlashCommands(client, agentId, cached?.commands).finally(() => {
-    const latest = cache.get(key);
-    if (latest?.inFlight === inFlight) {
-      delete latest.inFlight;
-    }
-  });
-  cache.set(key, {
-    ...(cached?.commands ? { commands: cached.commands } : {}),
+  const entry: RemoteSlashCommandCacheEntry = {
+    commands: cached?.commands,
     expiresAt: cached?.expiresAt ?? 0,
-    inFlight,
-  });
+  };
+  const inFlight = requestRemoteSlashCommands(client, agentId, sessionKey)
+    .then((commands) => {
+      if (commands && cache.get(key) === entry) {
+        entry.commands = commands;
+        entry.expiresAt = Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS;
+      }
+      return commands ?? cached?.commands ?? buildFallbackSlashCommands();
+    })
+    .finally(() => {
+      if (cache.get(key) === entry) {
+        delete entry.inFlight;
+      }
+    });
+  entry.inFlight = inFlight;
+  cache.set(key, entry);
   return inFlight;
 }
 
-export function applyRemoteSlashCommandsResult(params: {
-  client: GatewayBrowserClient | null;
-  agentId?: string | null;
-  result: CommandsListResult | null | undefined;
-}): boolean {
-  if (!Array.isArray(params.result?.commands)) {
+export function invalidateSessionSlashCommands(
+  client: GatewayBrowserClient,
+  scope: { agentId: string; sessionKey: string },
+): void {
+  refreshSeq += 1;
+  remoteSlashCommandCache
+    .get(client)
+    ?.delete(remoteSlashCommandCacheKey(scope.agentId, scope.sessionKey));
+}
+
+export function applyRemoteSlashCommandsResult(
+  result: CommandsListResult | null | undefined,
+): boolean {
+  if (!Array.isArray(result?.commands)) {
     return false;
   }
-  const agentId = params.agentId?.trim();
-  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(params.result));
-  if (params.client) {
-    storeRemoteSlashCommands(params.client, agentId, commands);
-  }
+  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
   refreshSeq += 1;
   replaceSlashCommands(commands);
   return true;
@@ -279,22 +268,18 @@ export function applyRemoteSlashCommandsResult(params: {
 export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;
+  sessionKey?: string;
   shouldApply?: () => boolean;
 }): Promise<void> {
   const seq = ++refreshSeq;
   const agentId = params.agentId?.trim();
-  if (!params.client) {
-    if (seq !== refreshSeq || params.shouldApply?.() === false) {
-      return;
-    }
-    replaceSlashCommands(buildFallbackSlashCommands());
-    return;
-  }
-  const commands = await loadRemoteSlashCommands(params.client, agentId);
+  const commands = params.client
+    ? await loadRemoteSlashCommands(params.client, agentId, params.sessionKey)
+    : undefined;
   if (seq !== refreshSeq || params.shouldApply?.() === false) {
     return;
   }
-  replaceSlashCommands(commands);
+  replaceSlashCommands(commands ?? buildFallbackSlashCommands());
 }
 
 export function shouldQueueLocalSlashCommand(name: string): boolean {
@@ -331,7 +316,6 @@ export async function dispatchChatSlashCommand(
   host: ChatCommandHost,
   name: string,
   args: string,
-  opts: ChatCommandSendOptions,
 ): Promise<ChatCommandDispatchResult> {
   switch (name) {
     case "stop":
@@ -342,29 +326,10 @@ export async function dispatchChatSlashCommand(
       return "completed";
     case "new":
       if (!host.createChatSession) {
-        setChatCommandError(host, "New Chat is unavailable.");
+        setChatError(host, "New Chat is unavailable.");
         return "failed";
       }
       return (await host.createChatSession()) ? "completed" : "cancelled";
-    case "reset": {
-      const target = captureChatCommandTarget(host);
-      if (!target || !requireChatResetTarget(host, target)) {
-        return "failed";
-      }
-      const confirmation = await confirmConversationResetForCurrentSession(host);
-      if (confirmation !== "confirmed") {
-        return confirmation;
-      }
-      if (!requireChatResetTarget(host, target)) {
-        return "failed";
-      }
-      await opts.sendResetMessage(args ? `/reset ${args}` : "/reset", {
-        previousDraft: opts.previousDraft,
-        restoreDraft: opts.restoreDraft,
-        target,
-      });
-      return "completed";
-    }
     case "clear": {
       if (!requireChatSessionAction(host, "reset")) {
         return "failed";
@@ -383,7 +348,7 @@ export async function dispatchChatSlashCommand(
       if (!requireChatSessionAction(host, "reset")) {
         return "failed";
       }
-      return await clearChatHistory(host);
+      return clearChatHistory(host);
     }
     case "compact":
       if (!requireChatSessionAction(host, "compact")) {
@@ -391,17 +356,25 @@ export async function dispatchChatSlashCommand(
       }
       break;
     case "export-session":
-      await host.exportCurrentChat?.();
+      if (args.trim()) {
+        setChatError(host, t("chat.commandResults.exportPathUnsupported"));
+        return "failed";
+      }
+      setChatError(host, null);
+      if ((await host.exportCurrentChat?.()) === "empty") {
+        injectCommandResult(host, t("chat.commandResults.emptyExport"));
+        scheduleChatScroll(host, false, false, { contentChanged: true });
+      }
       return "completed";
   }
 
   if (!host.client || !host.connected) {
-    setChatCommandError(host, "Gateway not connected");
+    setChatError(host, "Gateway not connected");
     injectCommandResult(
       host,
       `Cannot run \`/${name}\`: Control UI is not connected to the Gateway.`,
     );
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
+    scheduleChatScroll(host, false, false, {
       contentChanged: true,
     });
     return "failed";
@@ -420,24 +393,17 @@ export async function dispatchChatSlashCommand(
       readSessionAccessSnapshot: () => currentSessionAccessSnapshot(host),
       isCurrent: targetIsCurrent,
       chatModelCatalog: host.chatModelCatalog,
-      sessionsResult: host.sessionsResult,
-      sessionsResultAgentId: host.sessionsResultAgentId,
       defaultAgentId: resolveUiDefaultAgentId(host),
       agentId: target.agentId,
       ownsModelOverride: () => isChatCommandModelCacheOwnerCurrent(host, target),
     });
   } catch (err) {
     if (targetIsCurrent()) {
-      setChatCommandError(host, String(err));
+      setChatError(host, formatUiError(err));
       injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
-      scheduleChatScroll(
-        host as unknown as Parameters<typeof scheduleChatScroll>[0],
-        false,
-        false,
-        {
-          contentChanged: true,
-        },
-      );
+      scheduleChatScroll(host, false, false, {
+        contentChanged: true,
+      });
     }
     return "failed";
   }
@@ -447,15 +413,10 @@ export async function dispatchChatSlashCommand(
   }
   if (result.failed) {
     if (targetIsCurrent()) {
-      setChatCommandError(host, result.content || `Command /${name} failed.`);
-      scheduleChatScroll(
-        host as unknown as Parameters<typeof scheduleChatScroll>[0],
-        false,
-        false,
-        {
-          contentChanged: Boolean(result.content),
-        },
-      );
+      setChatError(host, result.content || `Command /${name} failed.`);
+      scheduleChatScroll(host, false, false, {
+        contentChanged: Boolean(result.content),
+      });
     }
     return "failed";
   }
@@ -471,15 +432,12 @@ export async function dispatchChatSlashCommand(
       host,
       `/${name} ${args}`.trim(),
       host.chatRunId,
-      undefined,
-      resolveCurrentUserIdentity(host.hello, host.client?.instanceId) ?? undefined,
+      resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser) ?? undefined,
     );
   }
 
-  if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
-    if (targetIsCurrent()) {
-      await host.refreshCurrentSessionTools?.();
-    }
+  if (result.modelChanged && targetIsCurrent()) {
+    await host.refreshCurrentSessionTools?.();
   }
 
   if (result.action === "refresh" && targetIsCurrent()) {
@@ -487,7 +445,7 @@ export async function dispatchChatSlashCommand(
   }
 
   if (targetIsCurrent()) {
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
+    scheduleChatScroll(host, false, false, {
       contentChanged: Boolean(result.content),
     });
   }
@@ -495,12 +453,12 @@ export async function dispatchChatSlashCommand(
 }
 
 function injectCommandResult(host: ChatCommandHost, content: string) {
-  host.chatMessages = [
+  publishChatSessionProjectionMessages(host, [
     ...host.chatMessages,
     {
       role: "system",
       content,
       timestamp: Date.now(),
     },
-  ];
+  ]);
 }

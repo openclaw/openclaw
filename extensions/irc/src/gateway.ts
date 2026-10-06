@@ -1,13 +1,11 @@
-// Irc plugin module implements gateway behavior.
-import { runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-outbound";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createAccountStatusSink,
+  runPassiveAccountLifecycle,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import type { ResolvedIrcAccount } from "./accounts.js";
-import { createAccountStatusSink } from "./channel-api.js";
-import type { RuntimeEnv } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
-
-const loadIrcChannelRuntime = createLazyRuntimeModule(() => import("./channel-runtime.js"));
 
 export async function startIrcGatewayAccount(ctx: {
   cfg: CoreConfig;
@@ -33,7 +31,7 @@ export async function startIrcGatewayAccount(ctx: {
   ctx.log?.info?.(
     `[${account.accountId}] starting IRC provider (${account.host}:${account.port}${account.tls ? " tls" : ""})`,
   );
-  const { monitorIrcProvider } = await loadIrcChannelRuntime();
+  const { monitorIrcProvider } = await import("./channel-runtime.js");
   await runPassiveAccountLifecycle({
     abortSignal: ctx.abortSignal,
     start: async () =>

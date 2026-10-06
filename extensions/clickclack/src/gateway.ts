@@ -1,7 +1,3 @@
-/**
- * Gateway loop for polling ClickClack backlog events, opening the realtime
- * websocket, and dispatching user messages into OpenClaw.
- */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
@@ -65,6 +61,7 @@ function parseSocketEvent(data: RawData): ClickClackEvent | null {
 }
 
 async function processEvent(params: {
+  abortSignal: AbortSignal;
   account: ResolvedClickClackAccount;
   config: CoreConfig;
   client: ReturnType<typeof createClickClackClient>;
@@ -76,7 +73,7 @@ async function processEvent(params: {
   if (params.event.type !== "message.created" && params.event.type !== "thread.reply_created") {
     return;
   }
-  if (payloadString(params.event, "author_id") === params.botUserId) {
+  if (params.abortSignal.aborted || payloadString(params.event, "author_id") === params.botUserId) {
     return;
   }
   const correlationId = eventCorrelationId(params.event);
@@ -97,7 +94,7 @@ async function processEvent(params: {
     );
     return;
   }
-  if (message.author_id === params.botUserId) {
+  if (params.abortSignal.aborted || message.author_id === params.botUserId) {
     return;
   }
   const access = await resolveClickClackInboundAccess({
@@ -105,6 +102,10 @@ async function processEvent(params: {
     config: params.config,
     message,
   });
+  // Account shutdown can race either awaited lookup; retired generations must never start a turn.
+  if (params.abortSignal.aborted) {
+    return;
+  }
   if (!access.shouldDispatch) {
     params.log?.info(
       `[${params.account.accountId}] skipped ClickClack message before agent dispatch: ` +
@@ -181,6 +182,7 @@ export async function startClickClackGatewayAccount(
   };
   const processIncomingEvent = (event: ClickClackEvent) =>
     processEvent({
+      abortSignal: ctx.abortSignal,
       account,
       config: ctx.cfg,
       client,
@@ -191,7 +193,12 @@ export async function startClickClackGatewayAccount(
       log: ctx.log,
     });
   if (account.commandMenu) {
-    await syncClickClackCommandMenu({ cfg: ctx.cfg, client, log: ctx.log });
+    await syncClickClackCommandMenu({
+      cfg: ctx.cfg,
+      client,
+      log: ctx.log,
+      accountId: account.accountId,
+    });
   }
   ctx.setStatus({
     accountId: account.accountId,
@@ -290,6 +297,9 @@ export async function startClickClackGatewayAccount(
           // Preserve server event order and commit each cursor only after its
           // handler succeeds, so reconnect backlog can retry a failed event.
           messageQueue = messageQueue.then(async () => {
+            if (ctx.abortSignal.aborted) {
+              return;
+            }
             const event = parseSocketEvent(data);
             if (!event) {
               ctx.log?.warn?.(

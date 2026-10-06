@@ -1,14 +1,7 @@
-// Base session-key helper keeps outbound-only delivery aligned with route
-// resolution session-scope rules.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
 
-/**
- * Builds the canonical outbound base-session key for a resolved route peer.
- *
- * Mirrors the routing layer's session-scope rules so outbound-only sends and
- * inbound route resolution keep the same `dmScope` and identity-link behavior.
- */
+/** Outbound-only sends use the routing owner's session scopes and identity links. */
 export function buildOutboundBaseSessionKey(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -23,6 +16,7 @@ export function buildOutboundBaseSessionKey(params: {
     accountId: params.accountId,
     peer: params.peer,
     dmScope: params.cfg.session?.dmScope ?? "main",
+    groupScope: params.cfg.session?.groupScope ?? "per-group",
     identityLinks: params.cfg.session?.identityLinks,
   });
 }

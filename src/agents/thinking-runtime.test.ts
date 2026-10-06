@@ -9,6 +9,7 @@ import { restoreRegisteredAgentHarnesses } from "./harness/registry.test-support
 import type { AgentHarness } from "./harness/types.js";
 import {
   hasResolvedThinkingCatalogEntry,
+  needsThinkHydration,
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
 } from "./thinking-runtime.js";
@@ -35,6 +36,31 @@ describe("hasResolvedThinkingCatalogEntry", () => {
       }),
     ).toBe(true);
   });
+
+  it.each([
+    { nativeRuntime: undefined, agentRuntime: undefined, resolved: true, hydrate: undefined },
+    { nativeRuntime: "native-test", agentRuntime: undefined, resolved: true, hydrate: undefined },
+    { nativeRuntime: undefined, agentRuntime: "openclaw", resolved: true, hydrate: false },
+    { nativeRuntime: "openclaw", agentRuntime: "openclaw", resolved: true, hydrate: false },
+    { nativeRuntime: "native-test", agentRuntime: "openclaw", resolved: false, hydrate: true },
+    { nativeRuntime: "native-test", agentRuntime: "native-test", resolved: true, hydrate: true },
+  ])(
+    "keeps observed=$nativeRuntime capabilities scoped to selected=$agentRuntime",
+    ({ nativeRuntime, agentRuntime, resolved, hydrate }) => {
+      const catalog = [{ provider: "fixture", id: "model", reasoning: true, nativeRuntime }];
+      expect(
+        hasResolvedThinkingCatalogEntry({
+          catalog,
+          provider: "fixture",
+          model: "model",
+          agentRuntime,
+        }),
+      ).toBe(resolved);
+      if (agentRuntime !== undefined) {
+        expect(needsThinkHydration(catalog, "fixture", "model", agentRuntime)).toBe(hydrate);
+      }
+    },
+  );
 });
 
 function openAIConfig(runtime: string): OpenClawConfig {
@@ -63,6 +89,56 @@ describe("resolveEffectiveAgentRuntime", () => {
   afterAll(() => {
     restoreRegisteredAgentHarnesses(registeredHarnesses);
   });
+
+  it.each([false, true])(
+    "retains prepared owner request parameters through implicit and registered support (explicit=%s)",
+    (explicit) => {
+      const supports = vi.fn<AgentHarness["supports"]>(({ modelProvider }) =>
+        modelProvider?.requestTransportOverrides === "present"
+          ? { supported: false, fallbackRuntime: "openclaw" }
+          : { supported: true },
+      );
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports,
+        runAttempt: async () => {
+          throw new Error("projection must not execute");
+        },
+      });
+      const cfg: OpenClawConfig = {
+        session: { store: "/synthetic/shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            sessionStore: { agentId: "ops" },
+            ...(explicit
+              ? { models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } } } }
+              : {}),
+          },
+          entries: { main: { params: { temperature: 0.2 } }, ops: {} },
+        },
+      };
+      expect(
+        resolveEffectiveAgentRuntime({
+          cfg,
+          provider: "openai",
+          modelId: "gpt-5.6-luna",
+          sessionKey: "global",
+          agentScope: { kind: "prepared", agentId: "main" },
+        }),
+      ).toBe("openclaw");
+      if (explicit) {
+        expect(supports).toHaveBeenCalledWith(
+          expect.objectContaining({
+            modelProvider: expect.objectContaining({ requestTransportOverrides: "present" }),
+          }),
+        );
+      } else {
+        expect(supports).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("keeps cold-start official OpenAI Luna on implicit Codex policy", () => {
     expect(
@@ -148,17 +224,29 @@ describe("resolveEffectiveAgentRuntime", () => {
     expect(supports).not.toHaveBeenCalled();
   });
 
-  it("prefers explicit session overrides", () => {
-    const cfg = openAIConfig("openclaw");
-    expect(
-      resolveEffectiveAgentRuntime({
-        cfg,
-        provider: "openai",
-        modelId: "gpt-5.6-luna",
-        sessionEntry: { agentRuntimeOverride: "codex", agentHarnessId: "openclaw" },
-      }),
-    ).toBe("codex");
-  });
+  it.each([false, true])(
+    "projects explicit session overrides with declared fallback=%s",
+    (fallback) => {
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports: () =>
+          fallback ? { supported: false, fallbackRuntime: "openclaw" } : { supported: true },
+        runAttempt: async () => {
+          throw new Error("projection must not execute");
+        },
+      });
+      const cfg = openAIConfig("openclaw");
+      expect(
+        resolveEffectiveAgentRuntime({
+          cfg,
+          provider: "openai",
+          modelId: "gpt-5.6-luna",
+          sessionEntry: { agentRuntimeOverride: "codex", agentHarnessId: "openclaw" },
+        }),
+      ).toBe(fallback ? "openclaw" : "codex");
+    },
+  );
 
   it("ignores legacy harness ids when choosing a runtime", () => {
     const cfg = openAIConfig("openclaw");
@@ -205,7 +293,7 @@ describe("resolveEffectiveAgentRuntime", () => {
     ).toBe("medium");
   });
 
-  it("clamps an unsupported candidate level without changing the requested value", () => {
+  it("preserves logical Ultra across candidate fallback", () => {
     const requested = "ultra" as const;
 
     expect(
@@ -215,7 +303,7 @@ describe("resolveEffectiveAgentRuntime", () => {
         modelId: "demo-model",
         level: requested,
       }),
-    ).toBe("high");
+    ).toBe("ultra");
     expect(requested).toBe("ultra");
   });
 
@@ -239,7 +327,7 @@ describe("resolveEffectiveAgentRuntime", () => {
         modelId: "gpt-5.6-luna",
         level: requested,
       }),
-    ).toBe("max");
+    ).toBe("ultra");
     expect(
       resolveCandidateThinkingLevel({
         cfg,

@@ -1,131 +1,31 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import {
-  createAlwaysConfiguredPluginConfig,
   createGatewayActionPlugin,
   createPollForwardingPlugin,
   messageActionRunnerMocks as mocks,
   resetMessageActionRunnerMocks,
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
+  useActionHubPluginFixture,
+  readMockCallArg,
+  readRecordField,
+  expectRecordFields,
+  createEnabledMessageActionConfig,
 } from "./message-action-runner.test-helpers.js";
-
-const requireLabeledRecord = createRequireRecord("record", "expected-label");
-
-function readMockCallArg(
-  mock: { mock: { calls: unknown[][] } },
-  label: string,
-  callIndex = 0,
-  argIndex = 0,
-): Record<string, unknown> {
-  const mockCall = mock.mock.calls[callIndex];
-  const value = mockCall?.[argIndex];
-  return requireLabeledRecord(value, label);
-}
-
-function readRecordField(record: Record<string, unknown>, key: string, label: string) {
-  const value = record[key];
-  return requireLabeledRecord(value, label);
-}
-
-function expectRecordFields(
-  record: Record<string, unknown>,
-  expected: Record<string, unknown>,
-  label: string,
-) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(value);
-  }
-}
 
 describe("runMessageAction plugin dispatch", () => {
   beforeEach(() => {
     resetMessageActionRunnerMocks();
   });
   describe("alias-based plugin action dispatch", () => {
-    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        params,
-      }),
-    );
-
-    const actionHubPlugin: ChannelPlugin = {
-      id: "actionhub",
-      meta: {
-        id: "actionhub",
-        label: "Action Hub",
-        selectionLabel: "Action Hub",
-        docsPath: "/channels/actionhub",
-        blurb: "Action Hub action dispatch test plugin.",
-      },
-      capabilities: { chatTypes: ["direct", "channel"] },
-      config: createAlwaysConfiguredPluginConfig(),
-      messaging: {
-        targetPrefixes: ["actionhub", "actionhub-alias"],
-        normalizeTarget: (raw) => raw.replace(/^actionhub-alias:/i, "actionhub:"),
-        targetResolver: {
-          looksLikeId: () => true,
-        },
-      },
-      actions: {
-        describeMessageTool: () => ({
-          actions: [
-            "pin",
-            "unpin",
-            "list-pins",
-            "member-info",
-            "channel-info",
-            "edit",
-            "thread-create",
-            "thread-reply",
-          ],
-        }),
-        messageActionTargetAliases: {
-          edit: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          pin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          unpin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-        },
-        supportsAction: ({ action }) =>
-          action === "pin" ||
-          action === "unpin" ||
-          action === "list-pins" ||
-          action === "member-info" ||
-          action === "channel-info" ||
-          action === "edit" ||
-          action === "thread-create" ||
-          action === "thread-reply",
-        handleAction,
-      },
-    };
-
-    beforeEach(() => {
-      setTestPlugin(actionHubPlugin, "actionhub");
-      handleAction.mockClear();
-    });
-
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-      vi.unstubAllEnvs();
-    });
+    useActionHubPluginFixture();
     it("routes gateway-executed plugin actions through gateway RPC instead of local dispatch", async () => {
       const handleActionEntry = vi.fn(async () =>
         jsonResult({
@@ -155,13 +55,7 @@ describe("runMessageAction plugin dispatch", () => {
 
       const resolveAgentRuntimeIdentityToken = vi.fn(async () => "agent-runtime-token");
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "react",
         params: {
           channel: "gatewaychat",
@@ -251,13 +145,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "react",
         params: {
           channel: "gatewaychat",
@@ -308,13 +196,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "react",
         params: {
           channel: "gatewaychat",
@@ -384,13 +266,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "react",
         params: {
           channel: "gatewaychat",
@@ -444,13 +320,7 @@ describe("runMessageAction plugin dispatch", () => {
       const resolveAgentRuntimeIdentityToken = vi.fn(async () => "test-token-placeholder");
 
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "send",
         conversationReadOrigin: "direct-operator",
         sourceReplyDeliveryMode: "message_tool_only",
@@ -459,6 +329,12 @@ describe("runMessageAction plugin dispatch", () => {
           channel: "gatewaychat",
           target: "user-123",
           message: "hello from cli",
+        },
+        toolContext: {
+          currentChannelProvider: "gatewaychat",
+          currentMessagingTarget: "user-123",
+          currentMessageId: "source-message-1",
+          replyToMode: "first",
         },
         gateway: {
           resolveAgentRuntimeIdentityToken,
@@ -481,6 +357,11 @@ describe("runMessageAction plugin dispatch", () => {
           action: "send",
           conversationReadOrigin: "direct-operator",
           idempotencyKey: "idem-gateway-action",
+          reply: {
+            replyToId: "source-message-1",
+            source: "implicit",
+            mode: "first",
+          },
         },
         "gateway call params",
       );
@@ -544,13 +425,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "send",
         params: {
           channel: "gatewaychat",
@@ -567,13 +442,13 @@ describe("runMessageAction plugin dispatch", () => {
 
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+      const context = readRecordField(executeCall, "ctx", "execute send context");
       expectRecordFields(
-        readRecordField(executeCall, "ctx", "execute send context"),
+        readRecordField(context, "input", "message action input"),
         {
-          forceCoreDelivery: true,
           requireQueuePersistence: true,
         },
-        "execute send context",
+        "message action input",
       );
       expectRecordFields(result, { handledBy: "core" }, "result");
     });

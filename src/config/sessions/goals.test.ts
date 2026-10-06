@@ -70,7 +70,7 @@ describe("session goals", () => {
     const goal = await createSessionGoal({
       storePath: fixture.storePath(),
       sessionKey,
-      objective: "land the PR",
+      objective: "  land the PR \n",
       tokenBudget: 50,
       now: 10,
     });
@@ -289,6 +289,18 @@ describe("session goals", () => {
 
     expect(completed.status).toBe("complete");
     expect(completed.lastStatusNote).toBe("done");
+    const repeated = await updateSessionGoalStatus({
+      storePath: fixture.storePath(),
+      sessionKey,
+      status: "complete",
+      note: "verified",
+      now: 30,
+    });
+    expect(repeated.completedAt).toBe(completed.completedAt);
+    expect(repeated.lastStatusNote).toBe("verified");
+    expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.completedAt).toBe(
+      completed.completedAt,
+    );
     await expect(
       updateSessionGoalStatus({
         storePath: fixture.storePath(),
@@ -396,7 +408,7 @@ describe("session goals", () => {
     const updated = await updateSessionGoalObjective({
       storePath: fixture.storePath(),
       sessionKey,
-      objective: "ship the fix and update docs",
+      objective: "\tship the fix and update docs \n",
       now: 20,
     });
 

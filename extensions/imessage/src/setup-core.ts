@@ -4,12 +4,6 @@ import {
   defineChannelSetupContract,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
-// Imessage plugin module implements setup core behavior.
-import type {
-  ChannelSetupAdapter,
-  ChannelSetupWizard,
-  ChannelSetupWizardTextInput,
-} from "openclaw/plugin-sdk/setup-runtime";
 import {
   createCliPathTextInput,
   createDelegatedSetupWizardProxy,
@@ -19,6 +13,9 @@ import {
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
   createSetupTranslator,
+  type ChannelSetupAdapter,
+  type ChannelSetupWizard,
+  type ChannelSetupWizardTextInput,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
@@ -154,17 +151,14 @@ export const imessageDmPolicy = createChannelDmPolicy({
   promptAllowFrom: promptIMessageAllowFrom,
 });
 
-function resolveIMessageCliPath(params: { cfg: OpenClawConfig; accountId: string }) {
-  return resolveIMessageAccount(params).config.cliPath ?? "imsg";
-}
-
 export function createIMessageCliPathTextInput(
   shouldPrompt: NonNullable<ChannelSetupWizardTextInput["shouldPrompt"]>,
 ): ChannelSetupWizardTextInput {
   return createCliPathTextInput({
     inputKey: "cliPath",
     message: "imsg CLI path",
-    resolvePath: ({ cfg, accountId }) => resolveIMessageCliPath({ cfg, accountId }),
+    resolvePath: ({ cfg, accountId }) =>
+      resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
     shouldPrompt,
     helpTitle: "iMessage",
     helpLines: [
@@ -222,13 +216,17 @@ export const imessageSetupContract = defineChannelSetupContract({
   legacyAdapter: imessageSetupAdapter,
 });
 
-export const imessageSetupStatusBase = {
+const imessageSetupStatusLabels = {
   configuredLabel: t("wizard.channels.statusConfigured"),
   unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
   configuredHint: t("wizard.imessage.imsgFound"),
   unconfiguredHint: t("wizard.imessage.imsgMissing"),
   configuredScore: 1,
   unconfiguredScore: 0,
+};
+
+export const imessageSetupStatusBase = {
+  ...imessageSetupStatusLabels,
   resolveConfigured: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
     resolveIMessageAccount({ cfg, accountId }).configured,
 };
@@ -237,14 +235,7 @@ export function createIMessageSetupWizardProxy(loadWizard: () => Promise<Channel
   return createDelegatedSetupWizardProxy({
     channel,
     loadWizard,
-    status: {
-      configuredLabel: imessageSetupStatusBase.configuredLabel,
-      unconfiguredLabel: imessageSetupStatusBase.unconfiguredLabel,
-      configuredHint: imessageSetupStatusBase.configuredHint,
-      unconfiguredHint: imessageSetupStatusBase.unconfiguredHint,
-      configuredScore: imessageSetupStatusBase.configuredScore,
-      unconfiguredScore: imessageSetupStatusBase.unconfiguredScore,
-    },
+    status: imessageSetupStatusLabels,
     delegatePrepare: true,
     credentials: [],
     textInputs: [

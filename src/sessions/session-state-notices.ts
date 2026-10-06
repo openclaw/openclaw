@@ -1,13 +1,10 @@
 /** Stale-state notice text, coalescing keys, and watcher eligibility. */
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
-
-function encodeNoticeTarget(sessionKey: string): string {
-  return Buffer.from(sessionKey, "utf8").toString("hex");
-}
+const SESSION_STATE_WAKE_COALESCE_MS = 20_000;
 
 export function decodeSessionStateNoticeContextKey(contextKey: string): string | undefined {
   if (!contextKey.startsWith(SESSION_STATE_CONTEXT_PREFIX)) {
@@ -17,7 +14,7 @@ export function decodeSessionStateNoticeContextKey(contextKey: string): string |
   if (!encoded || encoded.length % 2 !== 0 || !/^[0-9a-f]+$/.test(encoded)) {
     return undefined;
   }
-  // encodeNoticeTarget always writes the hex of a valid UTF-8 session key, so a
+  // The notice writer always encodes a valid UTF-8 session key, so a
   // payload that fails strict UTF-8 decoding is corrupt: fail closed instead of
   // letting U+FFFD collisions acknowledge an unrelated watcher cursor.
   try {
@@ -36,46 +33,32 @@ function sessionStateNoticeText(targetSessionKey: string, lastSeenSequence: numb
   return `Session "${targetSessionKey}" changed (other actor). Reconcile before acting: session_status sessionKey "${targetSessionKey}" changesSince ${lastSeenSequence}.`;
 }
 
-function shouldWakeWatcher(watcherSessionKey: string): boolean {
-  return !isSubagentSessionKey(watcherSessionKey);
-}
-
-// Bare keys (session.scope="global") are store-local per agent, but cursors, the
-// system-event queue, and heartbeat wakes are keyed by session key alone. A notice
-// for one agent's child could be drained and acknowledged by another agent's global
-// turn — a cross-A2A metadata leak plus a lost notification. Until watcher identity
-// is agent-scoped end-to-end, such watchers get durable events and changesSince but
-// no notices.
-export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
-  return parseAgentSessionKey(watcherSessionKey) != null;
-}
-
 export function enqueueSessionStateNotice(params: {
   watcherSessionKey: string;
+  watcherStorePath?: string | null;
   targetSessionKey: string;
   lastSeenSequence: number;
   queueOnly?: boolean;
 }): void {
   enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
     sessionKey: params.watcherSessionKey,
-    contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,
+    sessionStorePath: params.watcherStorePath ?? null,
+    contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${Buffer.from(params.targetSessionKey, "utf8").toString("hex")}`,
     ...(params.queueOnly ? { replace: true } : {}),
   });
   // Group activity is ambient context. Coalesce it for the next main turn instead
   // of waking the personal agent once per inbound group message.
-  if (params.queueOnly) {
+  if (params.queueOnly || isSubagentSessionKey(params.watcherSessionKey)) {
     return;
   }
-  if (!shouldWakeWatcher(params.watcherSessionKey)) {
-    return;
-  }
-  // intent "immediate": event-intent wakes defer on heartbeat dueness, which would
-  // delay stale-state notices by up to the whole heartbeat interval. Task/cron
-  // wake-now paths use the same class; the flood guard remains the backstop.
+  // Collapse bursts of watched-session changes into one main-session wake. Notices
+  // are already queued and deduped, so none are lost; 20 seconds bounds added latency.
   requestHeartbeat({
     source: "session-state",
     intent: "immediate",
     reason: `session-state:${params.targetSessionKey}`,
     sessionKey: params.watcherSessionKey,
+    sessionStorePath: params.watcherStorePath ?? null,
+    coalesceMs: SESSION_STATE_WAKE_COALESCE_MS,
   });
 }

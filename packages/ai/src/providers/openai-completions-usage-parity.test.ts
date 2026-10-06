@@ -22,17 +22,28 @@ const context = {
   messages: [{ role: "user", content: "Explain the billing", timestamp: 1 }],
 } satisfies Context;
 
+const tieredCost = {
+  ...model.cost,
+  tieredPricing: [
+    { ...model.cost, range: [0, 101] as [number, number] },
+    { input: 3, output: 6, cacheRead: 1, cacheWrite: 2, range: [101] as [number] },
+  ],
+};
+
 type UsageScenario = {
   name: string;
+  package?: boolean;
   usage: Record<string, unknown>;
   expectedUsage: Record<string, unknown>;
   expectedCost?: number;
+  cost?: typeof model.cost | typeof tieredCost;
   inChoice?: boolean;
 };
 
 const scenarios: UsageScenario[] = [
   {
     name: "documented reasoning tokens and cache buckets",
+    package: true,
     usage: {
       prompt_tokens: 100,
       completion_tokens: 20,
@@ -46,10 +57,78 @@ const scenarios: UsageScenario[] = [
       cacheRead: 25,
       cacheWrite: 10,
       reasoningTokens: 7,
+      contextUsage: { state: "available", promptTokens: 100, totalTokens: 120 },
       totalTokens: 120,
     },
     expectedCost: 0.00011625,
   },
+  {
+    name: "compatible nested cache-creation tokens",
+    usage: {
+      prompt_tokens: 100,
+      completion_tokens: 20,
+      total_tokens: 120,
+      prompt_tokens_details: { cached_tokens: 25, cache_creation_input_tokens: 10 },
+    },
+    expectedUsage: { input: 65, output: 20, cacheRead: 25, cacheWrite: 10, totalTokens: 120 },
+    expectedCost: 0.00011625,
+  },
+  ...[
+    { name: "below tier boundary", prompt: 100, cached: 0, written: 0, cost: 0.00014 },
+    { name: "at tier boundary", prompt: 101, cached: 0, written: 0, cost: 0.000423 },
+    {
+      name: "cached input crossing tier boundary",
+      prompt: 101,
+      cached: 76,
+      written: 0,
+      cost: 0.000271,
+    },
+    { name: "fully cached tier", prompt: 101, cached: 101, written: 0, cost: 0.000221 },
+    {
+      name: "cache writes crossing tier boundary",
+      prompt: 101,
+      cached: 25,
+      written: 51,
+      cost: 0.000322,
+    },
+  ].map(({ name, prompt, cached, written, cost }) => ({
+    name,
+    cost: tieredCost,
+    usage: {
+      prompt_tokens: prompt,
+      completion_tokens: 20,
+      total_tokens: prompt + 20,
+      prompt_tokens_details: { cached_tokens: cached, cache_write_tokens: written },
+    },
+    expectedUsage: {
+      input: prompt - cached - written,
+      output: 20,
+      cacheRead: cached,
+      cacheWrite: written,
+      totalTokens: prompt + 20,
+    },
+    expectedCost: cost,
+  })),
+  ...[0, 0.0009].map((billedCost) => ({
+    name: `provider-billed ${billedCost} overrides tier estimate`,
+    cost: tieredCost,
+    usage: {
+      prompt_tokens: 101,
+      completion_tokens: 20,
+      total_tokens: 121,
+      prompt_tokens_details: { cached_tokens: 76 },
+      cost: billedCost,
+    },
+    expectedUsage: {
+      input: 25,
+      output: 20,
+      cacheRead: 76,
+      cacheWrite: 0,
+      totalTokens: 121,
+      cost: { total: billedCost, totalOrigin: "provider-billed" },
+    },
+    expectedCost: billedCost,
+  })),
   {
     name: "explicit zero reasoning tokens",
     usage: {
@@ -72,25 +151,6 @@ const scenarios: UsageScenario[] = [
     expectedCost: 0.00012125,
   },
   {
-    name: "authoritative provider-billed zero cost",
-    usage: {
-      prompt_tokens: 100,
-      completion_tokens: 20,
-      total_tokens: 120,
-      prompt_tokens_details: { cached_tokens: 25, cache_write_tokens: 10 },
-      cost: 0,
-    },
-    expectedUsage: {
-      input: 65,
-      output: 20,
-      cacheRead: 25,
-      cacheWrite: 10,
-      totalTokens: 120,
-      cost: { total: 0, totalOrigin: "provider-billed" },
-    },
-    expectedCost: 0,
-  },
-  {
     name: "invalid provider cost and cached-token overflow",
     usage: {
       prompt_tokens: 2,
@@ -99,11 +159,19 @@ const scenarios: UsageScenario[] = [
       prompt_tokens_details: { cached_tokens: 4 },
       cost: -1,
     },
-    expectedUsage: { input: 0, output: 5, cacheRead: 4, cacheWrite: 0, totalTokens: 9 },
+    expectedUsage: {
+      input: 0,
+      output: 5,
+      cacheRead: 4,
+      cacheWrite: 0,
+      contextUsage: { state: "unavailable" },
+      totalTokens: 9,
+    },
     expectedCost: 0.000011,
   },
   {
     name: "provider-compatible usage nested in a choice",
+    package: true,
     usage: {
       prompt_tokens: 20,
       completion_tokens: 10,
@@ -143,8 +211,10 @@ function installUsageChunk(scenario: UsageScenario): void {
 
 const createManagedStream = createOpenAICompletionsTransportStreamFn();
 
-function createManagedFixtureStream(): AssistantMessageEventStreamLike {
-  const stream = createManagedStream(model, context, {
+function createManagedFixtureStream(
+  requestModel: Model<"openai-completions">,
+): AssistantMessageEventStreamLike {
+  const stream = createManagedStream(requestModel, context, {
     apiKey: "fixture-token",
     reasoning: "medium",
   });
@@ -168,17 +238,19 @@ describe.each([
   {
     name: "package",
     preservesReasoningTokens: false,
-    createStream: () =>
-      streamOpenAICompletions(model, context, {
+    createStream: (requestModel: Model<"openai-completions">) =>
+      streamOpenAICompletions(requestModel, context, {
         apiKey: "fixture-token",
         reasoningEffort: "medium",
       }),
   },
   { name: "managed", preservesReasoningTokens: true, createStream: createManagedFixtureStream },
-])("$name Chat Completions usage", ({ createStream, preservesReasoningTokens }) => {
-  it.each(scenarios)("preserves $name", async (scenario) => {
+])("$name Chat Completions usage", ({ name, createStream, preservesReasoningTokens }) => {
+  const ownerScenarios =
+    name === "package" ? scenarios.filter((scenario) => scenario.package) : scenarios;
+  it.each(ownerScenarios)("preserves $name", async (scenario) => {
     installUsageChunk(scenario);
-    const result = await createStream().result();
+    const result = await createStream({ ...model, cost: scenario.cost ?? model.cost }).result();
     const expectedUsage = { ...scenario.expectedUsage };
     if (!preservesReasoningTokens) {
       delete expectedUsage.reasoningTokens;

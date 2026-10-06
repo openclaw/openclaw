@@ -1,23 +1,33 @@
-use std::path::PathBuf;
-use std::process::Command;
-
 fn main() {
-    stage_canvas_a2ui();
     link_macos_swift_runtime();
-    // Command metadata generates capability permissions independently of the
-    // target's invoke handler, so keep the Linux-only command permission known.
+    prepare_runtime_manifest();
+    // Cargo builds do not require Node; this is the same literal include used by
+    // scripts/lib/standalone-installers.mjs, with no candidate code execution.
+    let installer = include_str!("../../../scripts/install-cli.sh").replace(
+        r#"source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}./install-policy.sh""#,
+        include_str!("../../../scripts/install-policy.sh").trim_end(),
+    );
+    std::fs::create_dir_all("target/installers").expect("installer output directory");
+    std::fs::write("target/installers/install-cli.sh", installer).expect("standalone installer");
     const COMMANDS: &[&str] = &[
         "bootstrap",
         "build_info",
-        "canvas_a2ui_action",
         "check_for_updates",
+        "close_connection_settings",
         "connect_discovered_gateway",
+        "connect_remote_gateway",
         "discover_gateways",
+        "gateway_request",
+        "gateway_profile_request",
         "gateway_action",
         "install_cli",
+        "native_browser_request",
+        "native_device_settings_request",
         "open_release_page",
         "relaunch",
         "updater_ready",
+        "window_chrome_drag",
+        "window_chrome_request",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()
@@ -26,47 +36,23 @@ fn main() {
     .expect("Tauri build configuration should be valid");
 }
 
-fn stage_canvas_a2ui() {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let output_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo must set OUT_DIR"))
-        .join("canvas-a2ui");
-    for input in [
-        "package.json",
-        "pnpm-lock.yaml",
-        "scripts/bundle-a2ui.mts",
-        "scripts/sync-native-a2ui.mts",
-        "extensions/canvas/package.json",
-        "extensions/canvas/scripts/bundle-a2ui.mjs",
-        "extensions/canvas/src/host/a2ui/index.html",
-        "extensions/canvas/src/host/a2ui-app",
-    ] {
-        println!("cargo:rerun-if-changed={}", repo_root.join(input).display());
+fn prepare_runtime_manifest() {
+    // The Tauri hooks fetch verified Linux resources. Plain Cargo tests stay offline and
+    // compile a sentinel that makes local installation fail with an actionable error.
+    let directory = std::path::Path::new("target/desktop-runtime");
+    std::fs::create_dir_all(directory).expect("runtime resource directory");
+    let manifest = directory.join("manifest.json");
+    if !manifest.exists() {
+        std::fs::write(&manifest, "{}\n").expect("unstaged runtime sentinel");
     }
-
-    let status = Command::new("node")
-        .args([
-            "--import",
-            "tsx",
-            "scripts/sync-native-a2ui.mts",
-            "--write",
-            "--output",
-        ])
-        .arg(&output_dir)
-        .current_dir(&repo_root)
-        .status()
-        .expect("Canvas A2UI staging requires Node.js; run pnpm install from the repository root");
-    assert!(
-        status.success(),
-        "Canvas A2UI resource staging failed; run pnpm install from the repository root"
-    );
-    println!(
-        "cargo:rustc-env=OPENCLAW_CANVAS_A2UI_INDEX_HTML={}",
-        output_dir.join("index.html").display()
-    );
-    println!(
-        "cargo:rustc-env=OPENCLAW_CANVAS_A2UI_BUNDLE_JS={}",
-        output_dir.join("a2ui.bundle.js").display()
-    );
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output"));
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+        std::fs::write(output.join("desktop-runtime.json"), "{}\n")
+            .expect("non-Linux runtime sentinel");
+        return;
+    }
+    std::fs::copy(manifest, output.join("desktop-runtime.json")).expect("compile runtime identity");
 }
 
 /// tauri-plugin-notifications links a Swift static library into us, but nothing

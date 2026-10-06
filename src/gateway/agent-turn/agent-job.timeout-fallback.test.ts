@@ -15,15 +15,11 @@ const NON_HARD_TIMEOUTS = [
 
 let runSequence = 0;
 
-async function resolveOuterTimeoutRace(
-  data: Readonly<Record<string, unknown>>,
-  options?: { ignoreCachedSnapshot?: boolean },
-) {
+async function resolveOuterTimeoutRace(data: Readonly<Record<string, unknown>>) {
   const runId = `run-timeout-fallback-${runSequence++}`;
   const waitPromise = waitForAgentJob({
     runId,
     timeoutMs: 5_000,
-    ignoreCachedSnapshot: options?.ignoreCachedSnapshot,
   });
 
   emitAgentEvent({
@@ -193,6 +189,173 @@ describe("waitForAgentJob timeout fallback", () => {
     });
   });
 
+  it("publishes a later lifecycle failure after an aborted end at retry grace", async () => {
+    const runId = `run-timeout-fallback-aborted-end-${runSequence++}`;
+    let terminalOutcome: Awaited<ReturnType<typeof waitForAgentJob>> | undefined;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 }).then((outcome) => {
+      terminalOutcome = outcome;
+      return outcome;
+    });
+
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 1_100, aborted: true },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "error", startedAt: 1_000, endedAt: 1_200, error: "final error" },
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(terminalOutcome).toMatchObject({
+      status: "error",
+      endedAt: 1_200,
+      error: "final error",
+    });
+    await expect(waitPromise).resolves.toMatchObject({ status: "error", endedAt: 1_200 });
+  });
+
+  it.each([1, 2])(
+    "keeps an active waiter open across %i expired retryable failure grace periods",
+    async (failureCount) => {
+      const runId = `run-timeout-fallback-late-recovery-${runSequence++}`;
+      let settled = false;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 60_000 }).then((outcome) => {
+        settled = true;
+        return outcome;
+      });
+
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
+      for (let attempt = 0; attempt < failureCount; attempt += 1) {
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: {
+            phase: "error",
+            startedAt: 1_000,
+            endedAt: 1_100 + attempt,
+            error: `Retryable provider failure ${attempt + 1}`,
+          },
+        });
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(settled).toBe(false);
+      }
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_000, endedAt: 40_000 },
+      });
+
+      await expect(waitPromise).resolves.toMatchObject({ status: "ok", endedAt: 40_000 });
+      await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+        status: "ok",
+        endedAt: 40_000,
+      });
+    },
+  );
+
+  it("returns an expired retryable failure only at the active waiter's own deadline", async () => {
+    const runId = `run-timeout-fallback-expired-wait-${runSequence++}`;
+    let settled = false;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 }).then((outcome) => {
+      settled = true;
+      return outcome;
+    });
+
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "error", endedAt: 1_100, error: "Retryable provider failure" },
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "error",
+      endedAt: 1_100,
+      error: "Retryable provider failure",
+    });
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+      error: "Retryable provider failure",
+    });
+  });
+
+  it("keeps a waiter admitted after retry grace open for the same authoritative outcome", async () => {
+    const runId = `run-timeout-fallback-late-waiter-${runSequence++}`;
+    const firstWait = waitForAgentJob({ runId, timeoutMs: 60_000 });
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "error", endedAt: 1_100, error: "Retryable provider failure" },
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    let laterWaitSettled = false;
+    const laterWait = waitForAgentJob({ runId, timeoutMs: 30_000 }).then((outcome) => {
+      laterWaitSettled = true;
+      return outcome;
+    });
+    await Promise.resolve();
+    expect(laterWaitSettled).toBe(false);
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 20_000 },
+    });
+    await expect(Promise.all([firstWait, laterWait])).resolves.toEqual([
+      expect.objectContaining({ status: "ok" }),
+      expect.objectContaining({ status: "ok" }),
+    ]);
+  });
+
+  it("keeps a second waiter alive when the first expires after retry grace", async () => {
+    const runId = `run-timeout-fallback-two-waiters-${runSequence++}`;
+    const earlyWait = waitForAgentJob({ runId, timeoutMs: 20_000 });
+    const lateWait = waitForAgentJob({ runId, timeoutMs: 60_000 });
+    emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "error", endedAt: 1_100, error: "Retryable provider failure" },
+    });
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(earlyWait).resolves.toMatchObject({ status: "error" });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 25_000 },
+    });
+    await expect(lateWait).resolves.toMatchObject({ status: "ok", endedAt: 25_000 });
+  });
+
+  it.each(["blocked", "abandoned"] as const)(
+    "does not keep a %s lifecycle failure pending beyond the terminal grace",
+    async (livenessState) => {
+      const runId = `run-timeout-fallback-definitive-${livenessState}-${runSequence++}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 60_000 });
+
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", endedAt: 1_100, livenessState },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(waitPromise).resolves.toMatchObject({ status: "error", livenessState });
+    },
+  );
+
   it.each([
     { label: "failure", metadata: {} },
     {
@@ -320,7 +483,6 @@ describe("waitForAgentJob timeout fallback", () => {
     const waitPromise = waitForAgentJob({
       runId,
       timeoutMs: 1_000,
-      ignoreCachedSnapshot: true,
     });
     emitAgentEvent({
       runId,
@@ -507,7 +669,6 @@ describe("waitForAgentJob timeout fallback", () => {
     const freshWaitPromise = waitForAgentJob({
       runId,
       timeoutMs: 5_000,
-      ignoreCachedSnapshot: true,
     });
     emitAgentEvent({
       runId,
@@ -566,7 +727,7 @@ describe("waitForAgentJob timeout fallback", () => {
     });
   });
 
-  it("ignores a hard timeout that predates a fresh wait", async () => {
+  it("forwards a pending hard timeout that predates a wait", async () => {
     const runId = `run-timeout-fallback-${runSequence++}`;
     emitAgentEvent({
       runId,
@@ -588,17 +749,10 @@ describe("waitForAgentJob timeout fallback", () => {
     const waitPromise = waitForAgentJob({
       runId,
       timeoutMs: 5_000,
-      ignoreCachedSnapshot: true,
     });
     await vi.advanceTimersByTimeAsync(6_000);
 
-    await expect(waitPromise).resolves.toBeNull();
-  });
-
-  it("lets a fresh wait consume a hard timeout it observes", async () => {
-    await expect(
-      resolveOuterTimeoutRace({ timeoutPhase: "provider" }, { ignoreCachedSnapshot: true }),
-    ).resolves.toMatchObject({
+    await expect(waitPromise).resolves.toMatchObject({
       status: "timeout",
       timeoutPhase: "provider",
       endedAt: 1_100,

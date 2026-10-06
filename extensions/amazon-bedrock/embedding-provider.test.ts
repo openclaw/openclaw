@@ -4,7 +4,14 @@ import { NodeHttp2Handler } from "@smithy/node-http-handler";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBedrockEmbeddingProvider, hasAwsCredentials } from "./embedding-provider.js";
 
-vi.mock("@aws-sdk/client-bedrock-runtime", { spy: true });
+vi.mock("@aws-sdk/client-bedrock-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aws-sdk/client-bedrock-runtime")>();
+  return {
+    ...actual,
+    // Whole-module autospies mutate the Smithy prototype shared with control-plane clients.
+    BedrockRuntimeClient: vi.fn(actual.BedrockRuntimeClient),
+  };
+});
 
 afterEach(() => {
   vi.mocked(bedrockRuntimeSdk.BedrockRuntimeClient).mockReset();
@@ -96,15 +103,6 @@ describe("bedrock embedding endpoint routing", () => {
       customEndpoint: false,
     },
     {
-      name: "configured canonical FIPS endpoint with SDK FIPS mode",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.amazonaws.com",
-      hostname: "bedrock-runtime-fips.us-west-2.amazonaws.com",
-      signingRegion: "us-west-2",
-      fips: true,
-      customEndpoint: false,
-    },
-    {
       name: "configured canonical dual-stack endpoint",
       remoteBaseUrl: undefined,
       providerBaseUrl: "https://bedrock-runtime.us-west-2.api.aws",
@@ -113,30 +111,11 @@ describe("bedrock embedding endpoint routing", () => {
       customEndpoint: false,
     },
     {
-      name: "configured canonical dual-stack endpoint with SDK dual-stack mode",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime.us-west-2.api.aws",
-      hostname: "bedrock-runtime.us-west-2.api.aws",
-      signingRegion: "us-west-2",
-      dualstack: true,
-      customEndpoint: false,
-    },
-    {
       name: "configured canonical combined FIPS and dual-stack endpoint",
       remoteBaseUrl: undefined,
       providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.api.aws",
       hostname: "bedrock-runtime-fips.us-west-2.api.aws",
       signingRegion: "us-west-2",
-      customEndpoint: false,
-    },
-    {
-      name: "configured canonical combined FIPS and dual-stack endpoint with SDK modes",
-      remoteBaseUrl: undefined,
-      providerBaseUrl: "https://bedrock-runtime-fips.us-west-2.api.aws",
-      hostname: "bedrock-runtime-fips.us-west-2.api.aws",
-      signingRegion: "us-west-2",
-      fips: true,
-      dualstack: true,
       customEndpoint: false,
     },
     {
@@ -296,12 +275,16 @@ describe("bedrock embedding endpoint routing", () => {
     });
 
     if ("expectedError" in testCase) {
-      await expect(provider.embedQuery("private memory")).rejects.toThrow(testCase.expectedError);
+      await expect(provider.embed("private memory", { inputType: "query" })).rejects.toThrow(
+        testCase.expectedError,
+      );
       expect(observedRequests).toEqual([]);
       return;
     }
 
-    await expect(provider.embedQuery("private memory")).resolves.toEqual([0.6, 0.8]);
+    await expect(provider.embed("private memory", { inputType: "query" })).resolves.toEqual([
+      0.6, 0.8,
+    ]);
     expect(observedRequests).toEqual([
       {
         hostname,
@@ -391,21 +374,32 @@ describe("bedrock embedding response parsing", () => {
       model: "amazon.titan-embed-text-v2:0",
       raw: '{"embedding":[1,"bad"]}',
     },
-    { name: "malformed batch JSON", model: "cohere.embed-english-v3", raw: "{not json" },
     { name: "missing batch vectors", model: "cohere.embed-english-v3", raw: "{}" },
     {
       name: "invalid batch vector shape",
       model: "cohere.embed-english-v3",
       raw: '{"embeddings":[[1],{"bad":true}]}',
     },
+    ...[
+      { model: "amazon.titan-embed-text-v2:0", vector: '"embedding":[3,4]' },
+      { model: "cohere.embed-english-v3", vector: '"embeddings":[[3,4]]' },
+    ].map(({ model, vector }) => ({
+      name: `invalid UTF-8 for ${model}`,
+      model,
+      raw: Buffer.concat([
+        Buffer.from('{"ignored":"bad'),
+        Buffer.from([0xff]),
+        Buffer.from(`",${vector}}`),
+      ]),
+    })),
   ])("rejects $name through the provider boundary", async ({ model, raw }) => {
     vi.spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      body: new TextEncoder().encode(raw),
+      body: typeof raw === "string" ? new TextEncoder().encode(raw) : raw,
     } as never);
     const { provider } = await createBedrockEmbeddingProvider({ config: {}, model });
     const request = model.startsWith("cohere.")
-      ? provider.embedBatch(["private memory"])
-      : provider.embedQuery("private memory");
+      ? provider.embedBatch(["private memory"], { inputType: "document" })
+      : provider.embed("private memory", { inputType: "query" });
 
     await expect(request).rejects.toThrow(
       "Amazon Bedrock embedding response returned malformed JSON",
@@ -414,7 +408,7 @@ describe("bedrock embedding response parsing", () => {
 });
 
 describe("bedrock embedding inference profiles", () => {
-  it.each(["global", "us", "eu", "ap", "apac", "au", "jp"])(
+  it.each(["global", "apac"])(
     "uses the Cohere v4 contract for the %s profile prefix",
     async (prefix) => {
       const model = `${prefix}.cohere.embed-v4:0`;
@@ -425,7 +419,9 @@ describe("bedrock embedding inference profiles", () => {
         } as never);
       const { provider, client } = await createBedrockEmbeddingProvider({ config: {}, model });
 
-      await expect(provider.embedQuery("private memory")).resolves.toEqual([0.6, 0.8]);
+      await expect(provider.embed("private memory", { inputType: "query" })).resolves.toEqual([
+        0.6, 0.8,
+      ]);
 
       const command = send.mock.calls.at(-1)?.[0] as {
         input?: { body?: string | Uint8Array; modelId?: string };

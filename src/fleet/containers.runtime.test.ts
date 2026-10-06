@@ -1,26 +1,30 @@
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const spawnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", () => ({
+  spawn: spawnMock,
+}));
+
 const profileMocks = vi.hoisted(() => ({
-  buildCellRunArgs: vi.fn((_profile: unknown, options: { environmentFile: string }) => [
-    "run",
-    "--env-file",
-    options.environmentFile,
-    "cell-image",
-  ]),
-  buildCellCreateArgs: vi.fn((_profile: unknown, options: { environmentFile: string }) => [
-    "create",
-    "--env-file",
-    options.environmentFile,
-    "cell-image",
-  ]),
+  buildCellContainerArgs: vi.fn(
+    (operation: "run" | "create", _profile: unknown, options: { environmentFile: string }) => [
+      operation,
+      "--env-file",
+      options.environmentFile,
+      "cell-image",
+    ],
+  ),
+  validateCellContainerProfile: vi.fn(),
   validateFleetImage: vi.fn((image: string) => image),
 }));
 
 vi.mock("./cell-profile.js", () => profileMocks);
 
 import type { CellContainerProfile } from "./cell-profile.js";
-import { createRedactingStreamWriter } from "./containers.redaction.js";
 import { createFleetContainerRuntime } from "./containers.runtime.js";
 
 type FleetContainerCommandExecutor = NonNullable<Parameters<typeof createFleetContainerRuntime>[0]>;
@@ -32,6 +36,23 @@ function successfulExecutor() {
     stderr: "",
     code: 0,
   }));
+}
+
+function createStreamChild(pid?: number): ChildProcess {
+  const stdout = Object.assign(new EventEmitter(), {
+    pause: vi.fn(),
+    resume: vi.fn(),
+  });
+  const stderr = Object.assign(new EventEmitter(), {
+    pause: vi.fn(),
+    resume: vi.fn(),
+  });
+  return Object.assign(new EventEmitter(), {
+    pid,
+    stdout,
+    stderr,
+    kill: vi.fn(() => true),
+  }) as unknown as ChildProcess;
 }
 
 describe("fleet container runtime", () => {
@@ -109,37 +130,44 @@ describe("fleet container runtime", () => {
       }
       environmentFiles.push(environmentFile);
       await expect(fs.readFile(environmentFile, "utf8")).resolves.toBe(
-        "OPENCLAW_GATEWAY_TOKEN=fake-value\n",
+        "AAA_FEATURE=synthetic-first\nOPENCLAW_GATEWAY_TOKEN=fake-value\nZZZ_FEATURE=synthetic-last\n",
       );
+      expect(args.join(" ")).not.toContain("fake-value");
+      expect(args.join(" ")).not.toContain("synthetic-first");
+      expect(args.join(" ")).not.toContain("synthetic-last");
       return { stdout: "", stderr: "", code: 0 };
     });
     const runtime = createFleetContainerRuntime(executor);
     const profile = {
       runtime: "podman",
-      environment: { OPENCLAW_GATEWAY_TOKEN: "fake-value" },
+      environment: {
+        ZZZ_FEATURE: "synthetic-last",
+        OPENCLAW_GATEWAY_TOKEN: "fake-value",
+        AAA_FEATURE: "synthetic-first",
+      },
     } as unknown as CellContainerProfile;
 
     await runtime.run(profile, true);
     await runtime.run(profile, false);
 
-    expect(profileMocks.buildCellRunArgs).toHaveBeenCalledWith(profile, {
+    expect(profileMocks.buildCellContainerArgs).toHaveBeenCalledWith("run", profile, {
       environmentFile: environmentFiles[0],
     });
-    expect(profileMocks.buildCellCreateArgs).toHaveBeenCalledWith(profile, {
+    expect(profileMocks.buildCellContainerArgs).toHaveBeenCalledWith("create", profile, {
       environmentFile: environmentFiles[1],
     });
     expect(executor).toHaveBeenNthCalledWith(
       1,
       "podman",
       ["run", "--env-file", environmentFiles[0], "cell-image"],
-      { redactValues: ["fake-value"] },
+      { redactValues: ["synthetic-last", "fake-value", "synthetic-first"] },
     );
     expect(executor).toHaveBeenNthCalledWith(
       2,
       "podman",
       ["create", "--env-file", environmentFiles[1], "cell-image"],
       {
-        redactValues: ["fake-value"],
+        redactValues: ["synthetic-last", "fake-value", "synthetic-first"],
       },
     );
     await Promise.all(
@@ -147,6 +175,21 @@ describe("fleet container runtime", () => {
         await expect(fs.stat(environmentFile)).rejects.toMatchObject({ code: "ENOENT" });
       }),
     );
+  });
+
+  it("preserves fleet profile validation errors before staging an invalid environment", async () => {
+    const executor = successfulExecutor();
+    const failure = new Error("Invalid fleet cell environment entry: BAD KEY");
+    profileMocks.validateCellContainerProfile.mockImplementationOnce(() => {
+      throw failure;
+    });
+    const profile = {
+      runtime: "docker",
+      environment: { "BAD KEY": "synthetic-invalid-value" },
+    } as unknown as CellContainerProfile;
+
+    await expect(createFleetContainerRuntime(executor).run(profile, true)).rejects.toBe(failure);
+    expect(executor).not.toHaveBeenCalled();
   });
 
   it("normalizes Docker and Podman inspect output", async () => {
@@ -404,11 +447,21 @@ describe("fleet container runtime", () => {
   it.each([
     [{}, ["logs", "cell-acme"]],
     [{ follow: true }, ["logs", "--follow", "cell-acme"]],
+    [{ timestamps: true }, ["logs", "--timestamps", "cell-acme"]],
     [{ tail: 200 }, ["logs", "--tail", "200", "cell-acme"]],
     [{ since: "10m" }, ["logs", "--since", "10m", "cell-acme"]],
     [
-      { follow: true, tail: 100, since: "2026-07-11T10:00:00Z" },
-      ["logs", "--follow", "--tail", "100", "--since", "2026-07-11T10:00:00Z", "cell-acme"],
+      { follow: true, timestamps: true, tail: 100, since: "2026-07-11T10:00:00Z" },
+      [
+        "logs",
+        "--follow",
+        "--timestamps",
+        "--tail",
+        "100",
+        "--since",
+        "2026-07-11T10:00:00Z",
+        "cell-acme",
+      ],
     ],
   ] as const)("streams logs with exact argv for %o", async (options, expectedArgs) => {
     const stream = vi.fn<FleetContainerStreamExecutor>(async () => ({ code: 0, signal: null }));
@@ -464,6 +517,39 @@ describe("fleet container runtime", () => {
     ).rejects.toThrow(/podman logs failed with signal SIGSEGV/iu);
   });
 
+  it("rejects a log stream spawn error when the child has no pid", async () => {
+    const child = createStreamChild();
+    spawnMock.mockReturnValue(child);
+    const runtime = createFleetContainerRuntime(successfulExecutor());
+
+    const logs = runtime.logs("podman", "cell-acme", { follow: true, redactValues: [] });
+    child.emit("error", new Error("spawn failed"));
+
+    await expect(logs).rejects.toThrow("spawn failed");
+    child.emit("close", -2, null);
+  });
+
+  it("waits for log stream close across repeated operational errors", async () => {
+    const child = createStreamChild(4242);
+    spawnMock.mockReturnValue(child);
+    const runtime = createFleetContainerRuntime(successfulExecutor());
+    let settled = false;
+
+    const logs = runtime
+      .logs("podman", "cell-acme", { follow: true, redactValues: [] })
+      .finally(() => {
+        settled = true;
+      });
+    child.emit("error", new Error("first signal delivery failed"));
+    child.emit("error", new Error("second signal delivery failed"));
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+
+    child.emit("close", 0, null);
+    await expect(logs).resolves.toBeUndefined();
+  });
+
   it("creates and removes a labeled per-cell network", async () => {
     const executor = successfulExecutor();
     const runtime = createFleetContainerRuntime(executor);
@@ -506,32 +592,6 @@ describe("fleet container runtime", () => {
     const runtime = createFleetContainerRuntime(executor);
     await runtime.createNetwork("podman", "openclaw-cell-acme-net", {}, { internal });
     expect(executor.mock.calls[0]?.[1].includes("--internal")).toBe(expected);
-  });
-
-  it("redacts secrets from streamed log output, including across chunk boundaries", () => {
-    const written: string[] = [];
-    const target = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
-    const writer = createRedactingStreamWriter(target, ["gw-secret-token"]);
-    writer.write(Buffer.from("boot ok\ntoken=gw-sec"));
-    writer.write(Buffer.from("ret-token done\ntail without newline"));
-    writer.flush();
-    const output = written.join("");
-    expect(output).toContain("token=<redacted> done");
-    expect(output).toContain("tail without newline");
-    expect(output).not.toContain("gw-secret-token");
-  });
-
-  it("never splits a secret across a forced long-line flush", () => {
-    const written: string[] = [];
-    const target = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
-    const writer = createRedactingStreamWriter(target, ["gw-secret-token"]);
-    // An unterminated line ending exactly in a secret prefix at the flush point.
-    writer.write(Buffer.from(`${"x".repeat(64 * 1024)}gw-sec`));
-    writer.write(Buffer.from("ret-token trailing"));
-    writer.flush();
-    const output = written.join("");
-    expect(output).toContain("<redacted> trailing");
-    expect(output).not.toContain("gw-secret-token");
   });
 
   it("parses hardened inspect fields and Docker network internal state", async () => {

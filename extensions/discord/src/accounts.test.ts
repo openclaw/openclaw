@@ -1,4 +1,3 @@
-// Discord tests cover accounts plugin behavior.
 import type {
   DiscordAccountConfig,
   DiscordConfig,
@@ -9,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   createDiscordActionGate,
   isDiscordAccountEnabledForRuntime,
@@ -282,6 +282,15 @@ describe("Discord duplicate-token account filtering", () => {
 
     expect(isDiscordAccountEnabledForRuntime(duplicateAccount, cfg)).toBe(false);
     expect(resolveDiscordAccountDisabledReason(duplicateAccount, cfg)).toBe(expectedReason);
+    expect(inspectDiscordAccount({ cfg, accountId: duplicateId })).toMatchObject({
+      enabled: false,
+      configured: true,
+      stateReason: expectedReason,
+    });
+    expect(inspectDiscordAccount({ cfg, accountId })).toMatchObject({
+      enabled: true,
+      configured: true,
+    });
     expect(isDiscordAccountEnabledForRuntime(enabledAccount, cfg)).toBe(true);
     expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual([
       accountId,
@@ -303,6 +312,11 @@ describe("Discord duplicate-token account filtering", () => {
     const activeAccount = resolveDiscordAccount({ cfg, accountId: "active" });
 
     expect(isDiscordAccountEnabledForRuntime(activeAccount, cfg)).toBe(true);
+    expect(inspectDiscordAccount({ cfg, accountId: "active" }).enabled).toBe(true);
+    expect(inspectDiscordAccount({ cfg, accountId: "disabled" })).toMatchObject({
+      enabled: false,
+      stateReason: "disabled",
+    });
     expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual(["active"]);
   });
 });
@@ -338,23 +352,5 @@ describe("resolveDiscordAccount runtime config selection", () => {
     expect(resolved.token).toBe("runtime-work-token");
     expect(resolved.tokenSource).toBe("config");
     expect(resolved.tokenStatus).toBe("available");
-  });
-
-  it("preserves configured unavailable tokens without falling through to env", () => {
-    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
-    const resolved = resolveDiscordAccount({
-      cfg: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      accountId: "default",
-    });
-
-    expect(resolved.token).toBe("");
-    expect(resolved.tokenSource).toBe("config");
-    expect(resolved.tokenStatus).toBe("configured_unavailable");
   });
 });

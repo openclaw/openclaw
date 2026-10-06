@@ -1,98 +1,104 @@
-// Normalizes the Gateway's update-availability and update-schedule payloads into
-// the shapes the Control UI renders. These readers are the trust boundary for
-// wire data, so they stay separate from the lifecycle controllers that consume them.
+// Narrow only rendered fields and tolerate additive fields across Gateway restarts.
+// Schema-parity tests enforce required strings without loading TypeBox at startup.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isNonEmptyProtocolString } from "../../../packages/gateway-protocol/src/protocol-value-normalization.js";
+import type { UpdateImmutableInstall } from "../../../packages/gateway-protocol/src/schema/config.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+
+function isBoundedInteger(value: unknown, minimum: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= minimum;
+}
+
+// Match the protocol's commit cap even when a producer sends excess entries.
+const MAX_COMMITS = 5;
 
 export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
   const snapshot = hello?.snapshot;
   if (!isRecord(snapshot)) {
     return null;
   }
-  const update = (snapshot as { updateAvailable?: unknown }).updateAvailable;
-  return readUpdateAvailableValue(update);
+  return readUpdateAvailableValue(snapshot.updateAvailable);
 }
 
 export function readUpdateAvailableValue(update: unknown): UpdateAvailable | null {
-  if (!isRecord(update)) {
+  if (
+    !isRecord(update) ||
+    !isNonEmptyProtocolString(update.currentVersion) ||
+    !isNonEmptyProtocolString(update.latestVersion) ||
+    !isNonEmptyProtocolString(update.channel)
+  ) {
     return null;
   }
+  // Drop malformed entries individually. String.length cannot enforce the
+  // protocol's grapheme limit for subjects containing emoji or combining marks.
   const rawCommits = update.commits;
-  const commits =
-    Array.isArray(rawCommits) &&
-    rawCommits.length <= 5 &&
-    rawCommits.every(
-      (commit): commit is { sha: string; subject: string } =>
-        isRecord(commit) &&
-        typeof commit.sha === "string" &&
-        commit.sha.length > 0 &&
-        typeof commit.subject === "string" &&
-        commit.subject.length <= 120,
-    )
-      ? rawCommits.map((commit) => ({ sha: commit.sha, subject: commit.subject }))
-      : undefined;
-  return typeof update.currentVersion === "string" &&
-    typeof update.latestVersion === "string" &&
-    typeof update.channel === "string"
-    ? {
-        currentVersion: update.currentVersion,
-        latestVersion: update.latestVersion,
-        channel: update.channel,
-        ...(typeof update.currentSha === "string" ? { currentSha: update.currentSha } : {}),
-        ...(typeof update.upstreamRef === "string" ? { upstreamRef: update.upstreamRef } : {}),
-        ...(typeof update.upstreamSha === "string" ? { upstreamSha: update.upstreamSha } : {}),
-        ...(Number.isInteger(update.commitsBehind) && Number(update.commitsBehind) >= 0
-          ? { commitsBehind: Number(update.commitsBehind) }
-          : {}),
-        ...(commits ? { commits } : {}),
-      }
-    : null;
+  const commits = Array.isArray(rawCommits)
+    ? rawCommits
+        .filter(
+          (commit): commit is { sha: string; subject: string } =>
+            isRecord(commit) &&
+            isNonEmptyProtocolString(commit.sha) &&
+            typeof commit.subject === "string",
+        )
+        .map((commit) => ({ sha: commit.sha, subject: commit.subject }))
+        .slice(0, MAX_COMMITS)
+    : undefined;
+  return {
+    currentVersion: update.currentVersion,
+    latestVersion: update.latestVersion,
+    channel: update.channel,
+    ...(isNonEmptyProtocolString(update.currentSha) ? { currentSha: update.currentSha } : {}),
+    ...(isNonEmptyProtocolString(update.upstreamRef) ? { upstreamRef: update.upstreamRef } : {}),
+    ...(isNonEmptyProtocolString(update.upstreamSha) ? { upstreamSha: update.upstreamSha } : {}),
+    ...(isNonEmptyProtocolString(update.repositoryUrl)
+      ? { repositoryUrl: update.repositoryUrl }
+      : {}),
+    ...(isBoundedInteger(update.commitsBehind, 0) ? { commitsBehind: update.commitsBehind } : {}),
+    ...(commits?.length ? { commits } : {}),
+  };
 }
 
 function readScheduleTarget(value: unknown): UpdateScheduleState["target"] | null {
   if (!isRecord(value)) {
     return null;
   }
-  if (value.kind === "package" && typeof value.version === "string") {
-    return { kind: "package", version: value.version };
+  if (value.kind === "package") {
+    return isNonEmptyProtocolString(value.version)
+      ? { kind: "package", version: value.version }
+      : null;
   }
-  if (
-    value.kind === "git" &&
-    typeof value.upstreamRef === "string" &&
-    typeof value.upstreamSha === "string" &&
-    Number.isInteger(value.commitsBehind) &&
-    Number(value.commitsBehind) >= 0
-  ) {
-    return {
-      kind: "git",
-      upstreamRef: value.upstreamRef,
-      upstreamSha: value.upstreamSha,
-      commitsBehind: Number(value.commitsBehind),
-    };
+  if (value.kind === "git") {
+    return isNonEmptyProtocolString(value.upstreamRef) &&
+      isNonEmptyProtocolString(value.upstreamSha) &&
+      isBoundedInteger(value.commitsBehind, 0)
+      ? {
+          kind: "git",
+          upstreamRef: value.upstreamRef,
+          upstreamSha: value.upstreamSha,
+          commitsBehind: value.commitsBehind,
+        }
+      : null;
   }
   return null;
 }
 
+/** Optional install metadata: a malformed entry is dropped, never fatal to the status. */
 function readGitInstallMetadata(value: Record<string, unknown>): {
   currentSha?: string;
+  upstreamSha?: string;
+  repositoryUrl?: string;
   commitAtMs?: number;
   installedAtMs?: number;
-} | null {
-  if (
-    (value.currentSha !== undefined &&
-      (typeof value.currentSha !== "string" || value.currentSha.length === 0)) ||
-    (value.commitAtMs !== undefined &&
-      (!Number.isInteger(value.commitAtMs) || Number(value.commitAtMs) < 0)) ||
-    (value.installedAtMs !== undefined &&
-      (!Number.isInteger(value.installedAtMs) || Number(value.installedAtMs) < 0))
-  ) {
-    return null;
-  }
+} {
   return {
-    ...(typeof value.currentSha === "string" ? { currentSha: value.currentSha } : {}),
-    ...(value.commitAtMs === undefined ? {} : { commitAtMs: Number(value.commitAtMs) }),
-    ...(value.installedAtMs === undefined ? {} : { installedAtMs: Number(value.installedAtMs) }),
+    ...(isNonEmptyProtocolString(value.currentSha) ? { currentSha: value.currentSha } : {}),
+    ...(isNonEmptyProtocolString(value.upstreamSha) ? { upstreamSha: value.upstreamSha } : {}),
+    ...(isNonEmptyProtocolString(value.repositoryUrl)
+      ? { repositoryUrl: value.repositoryUrl }
+      : {}),
+    ...(isBoundedInteger(value.commitAtMs, 0) ? { commitAtMs: value.commitAtMs } : {}),
+    ...(isBoundedInteger(value.installedAtMs, 0) ? { installedAtMs: value.installedAtMs } : {}),
   };
 }
 
@@ -103,38 +109,25 @@ function readGitUpdateStatus(
     return null;
   }
   const metadata = readGitInstallMetadata(value);
-  if (!metadata) {
-    return null;
-  }
   if (value.status === "current") {
     return { ...metadata, status: "current" };
   }
-  if (
-    value.status === "behind" &&
-    Number.isInteger(value.commitsBehind) &&
-    Number(value.commitsBehind) > 0
-  ) {
-    return { ...metadata, status: "behind", commitsBehind: Number(value.commitsBehind) };
+  if (value.status === "behind" && isBoundedInteger(value.commitsBehind, 1)) {
+    return { ...metadata, status: "behind", commitsBehind: value.commitsBehind };
   }
-  if (
-    value.status === "ahead" &&
-    Number.isInteger(value.commitsAhead) &&
-    Number(value.commitsAhead) > 0
-  ) {
-    return { ...metadata, status: "ahead", commitsAhead: Number(value.commitsAhead) };
+  if (value.status === "ahead" && isBoundedInteger(value.commitsAhead, 1)) {
+    return { ...metadata, status: "ahead", commitsAhead: value.commitsAhead };
   }
   if (
     value.status === "diverged" &&
-    Number.isInteger(value.commitsAhead) &&
-    Number(value.commitsAhead) > 0 &&
-    Number.isInteger(value.commitsBehind) &&
-    Number(value.commitsBehind) > 0
+    isBoundedInteger(value.commitsAhead, 1) &&
+    isBoundedInteger(value.commitsBehind, 1)
   ) {
     return {
       ...metadata,
       status: "diverged",
-      commitsAhead: Number(value.commitsAhead),
-      commitsBehind: Number(value.commitsBehind),
+      commitsAhead: value.commitsAhead,
+      commitsBehind: value.commitsBehind,
     };
   }
   if (
@@ -153,38 +146,70 @@ function readGitUpdateStatus(
 function readScheduleCampaign(value: unknown): UpdateScheduleState["campaign"] | null {
   if (
     !isRecord(value) ||
-    typeof value.id !== "string" ||
+    !isNonEmptyProtocolString(value.id) ||
     (value.state !== "waiting-for-idle" &&
       value.state !== "countdown" &&
       value.state !== "applying") ||
-    !Number.isInteger(value.announcedAtMs) ||
-    Number(value.announcedAtMs) < 0 ||
-    !Number.isInteger(value.forceAtMs) ||
-    Number(value.forceAtMs) < 0 ||
-    !Number.isInteger(value.updatedAtMs) ||
-    Number(value.updatedAtMs) < 0 ||
-    (value.applyAtMs !== undefined &&
-      (!Number.isInteger(value.applyAtMs) || Number(value.applyAtMs) < 0)) ||
-    (value.holdUntilMs !== undefined &&
-      (!Number.isInteger(value.holdUntilMs) || Number(value.holdUntilMs) < 0))
+    !isBoundedInteger(value.announcedAtMs, 0) ||
+    !isBoundedInteger(value.forceAtMs, 0) ||
+    !isBoundedInteger(value.updatedAtMs, 0)
   ) {
     return null;
   }
   return {
     id: value.id,
     state: value.state,
-    announcedAtMs: Number(value.announcedAtMs),
-    ...(value.applyAtMs === undefined ? {} : { applyAtMs: Number(value.applyAtMs) }),
-    ...(value.holdUntilMs === undefined ? {} : { holdUntilMs: Number(value.holdUntilMs) }),
-    forceAtMs: Number(value.forceAtMs),
-    updatedAtMs: Number(value.updatedAtMs),
+    announcedAtMs: value.announcedAtMs,
+    ...(isBoundedInteger(value.applyAtMs, 0) ? { applyAtMs: value.applyAtMs } : {}),
+    ...(isBoundedInteger(value.holdUntilMs, 0) ? { holdUntilMs: value.holdUntilMs } : {}),
+    forceAtMs: value.forceAtMs,
+    updatedAtMs: value.updatedAtMs,
+  };
+}
+
+function readImmutableInstall(value: unknown): UpdateImmutableInstall | null {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyProtocolString(value.root) ||
+    typeof value.currentSha !== "string" ||
+    !/^[a-f0-9]{40}$/.test(value.currentSha) ||
+    !isNonEmptyProtocolString(value.currentPath)
+  ) {
+    return null;
+  }
+  let prepared: UpdateImmutableInstall["prepared"];
+  if (value.prepared !== undefined) {
+    const candidate = value.prepared;
+    if (
+      !isRecord(candidate) ||
+      typeof candidate.sha !== "string" ||
+      !/^[a-f0-9]{40}$/.test(candidate.sha) ||
+      !isNonEmptyProtocolString(candidate.path) ||
+      typeof candidate.buildDigest !== "string" ||
+      !/^[a-f0-9]{64}$/.test(candidate.buildDigest) ||
+      !isBoundedInteger(candidate.preparedAtMs, 0)
+    ) {
+      return null;
+    }
+    prepared = {
+      sha: candidate.sha,
+      path: candidate.path,
+      buildDigest: candidate.buildDigest,
+      preparedAtMs: candidate.preparedAtMs,
+    };
+  }
+  return {
+    root: value.root,
+    currentSha: value.currentSha,
+    currentPath: value.currentPath,
+    ...(prepared ? { prepared } : {}),
   };
 }
 
 export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | null {
   if (
     !isRecord(value) ||
-    typeof value.channel !== "string" ||
+    !isNonEmptyProtocolString(value.channel) ||
     typeof value.autoEnabled !== "boolean"
   ) {
     return null;
@@ -192,7 +217,10 @@ export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | n
   const rawInstall = isRecord(value.install) ? value.install : null;
   const rawInstallKind = rawInstall?.kind;
   const installKind =
-    rawInstallKind === "package" || rawInstallKind === "git" || rawInstallKind === "unknown"
+    rawInstallKind === "package" ||
+    rawInstallKind === "git" ||
+    rawInstallKind === "immutable" ||
+    rawInstallKind === "unknown"
       ? rawInstallKind
       : undefined;
   if (value.install !== undefined && installKind === undefined) {
@@ -200,6 +228,11 @@ export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | n
   }
   const gitStatus = rawInstall?.git === undefined ? undefined : readGitUpdateStatus(rawInstall.git);
   if (rawInstall?.git !== undefined && !gitStatus) {
+    return null;
+  }
+  const immutable =
+    rawInstall?.immutable === undefined ? undefined : readImmutableInstall(rawInstall.immutable);
+  if (rawInstall?.immutable !== undefined && !immutable) {
     return null;
   }
   const target = value.target === undefined ? undefined : readScheduleTarget(value.target);
@@ -211,7 +244,13 @@ export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | n
     channel: value.channel,
     autoEnabled: value.autoEnabled,
     ...(installKind
-      ? { install: { kind: installKind, ...(gitStatus ? { git: gitStatus } : {}) } }
+      ? {
+          install: {
+            kind: installKind,
+            ...(gitStatus ? { git: gitStatus } : {}),
+            ...(immutable ? { immutable } : {}),
+          },
+        }
       : {}),
     ...(target ? { target } : {}),
     ...(campaign ? { campaign } : {}),

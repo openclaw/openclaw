@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "./canvas.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -71,6 +72,10 @@ export const BoardWidgetSchema = closedObject({
   tabId: BoardTabIdSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app"), Type.Literal("plugin")]),
+  contentOwner: Type.Optional(
+    Type.Enum(["html", "mcp-app", "plugin", "registered"] as const, { type: "string" }),
+  ),
+  registeredContentKind: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" })),
   pluginKind: Type.Optional(BoardWidgetPluginKindSchema),
   props: Type.Optional(BoardWidgetPluginPropsSchema),
   presentation: Type.Optional(BoardWidgetPresentationSchema),
@@ -95,6 +100,7 @@ export const BoardWidgetSchema = closedObject({
   sandboxUrl: Type.Optional(Type.String()),
   sandboxPort: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
   sandboxOrigin: Type.Optional(Type.String()),
+  kindLabel: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
 });
 export type BoardWidget = Static<typeof BoardWidgetSchema>;
 
@@ -180,7 +186,7 @@ export type BoardMcpAppDescriptor = Static<typeof BoardMcpAppDescriptorSchema>;
 
 export const BoardWidgetHtmlContentSchema = closedObject({
   kind: Type.Literal("html"),
-  html: Type.String({ maxLength: 262_144 }),
+  html: Type.String({ maxLength: WIDGET_HTML_MAX_UTF8_BYTES }),
 });
 export const BoardWidgetMcpAppContentSchema = closedObject({
   kind: Type.Literal("mcp-app"),
@@ -195,16 +201,25 @@ export const BoardWidgetPluginContentSchema = closedObject({
   pluginKind: BoardWidgetPluginKindSchema,
   props: Type.Optional(BoardWidgetPluginPropsSchema),
 });
+export const BoardWidgetRegisteredContentSchema = closedObject({
+  kind: Type.Literal("registered"),
+  contentKind: Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" }),
+  source: Type.String({ maxLength: 262_144 }),
+});
 export const BoardWidgetContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContentSchema,
   BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContentSchema,
 ]);
 export type BoardWidgetContent = Static<typeof BoardWidgetContentSchema>;
 export type BoardWidgetMaterializedContent =
   | Static<typeof BoardWidgetHtmlContentSchema>
   | (Static<typeof BoardWidgetMcpAppContentSchema> & { interactive: boolean })
   | Static<typeof BoardWidgetPluginContentSchema>;
+export type BoardWidgetRegisteredMaterializedContent = Static<
+  typeof BoardWidgetRegisteredContentSchema
+> & { pluginKind: string };
 
 export const BoardCanvasDocumentSourceSchema = closedObject({
   kind: Type.Literal("canvas-doc"),
@@ -216,6 +231,7 @@ export const BoardWidgetPutContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppPutContentSchema,
   BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContentSchema,
   BoardCanvasDocumentSourceSchema,
 ]);
 export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;
@@ -241,7 +257,7 @@ export const BoardWidgetPutParamsSchema = closedObject({
 export type BoardWidgetPutParams = Static<typeof BoardWidgetPutParamsSchema>;
 /** Materialized input accepted by the board store after gateway source resolution. */
 export type BoardWidgetMaterializedPutParams = Omit<BoardWidgetPutParams, "content"> & {
-  content: BoardWidgetMaterializedContent;
+  content: BoardWidgetMaterializedContent | BoardWidgetRegisteredMaterializedContent;
 };
 export const BoardWidgetPutResultSchema = closedObject({
   ...BoardSnapshotFields,

@@ -4,7 +4,7 @@
  */
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-registration";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildCodexAppInventoryCacheKey,
@@ -13,13 +13,13 @@ import {
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
+  resolveCodexAppServerUserHomeDir,
 } from "./auth-start-options.js";
 import type { CodexAppServerRuntimeIdentity } from "./client.js";
-import {
-  resolveCodexAppServerUserHomeDir,
-  type CodexAppServerRuntimeOptions,
-  type CodexAppServerStartOptions,
-} from "./config.js";
+import type {
+  CodexAppServerRuntimeOptions,
+  CodexAppServerStartOptions,
+} from "./config-contracts.js";
 
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
@@ -32,6 +32,7 @@ type CodexPluginAppCacheKeyParams = Omit<
   appServer: Pick<CodexAppServerRuntimeOptions, "start">;
   agentDir?: string;
   runtimeIdentity?: CodexAppServerRuntimeIdentity;
+  desktopGenerationFingerprint?: string;
 };
 
 /** Builds the full app inventory cache key for Codex plugin/app discovery. */
@@ -46,7 +47,12 @@ export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams
       accountId: params.accountId,
       envApiKeyFingerprint: params.envApiKeyFingerprint,
       appServerVersion: params.appServerVersion ?? params.runtimeIdentity?.serverVersion,
-      runtimeIdentity: params.runtimeIdentity,
+      runtimeIdentity: params.desktopGenerationFingerprint
+        ? {
+            ...params.runtimeIdentity,
+            desktopGeneration: params.desktopGenerationFingerprint,
+          }
+        : params.runtimeIdentity,
     },
     OPENCLAW_VERSION,
     CODEX_PLUGIN_VERSION,
@@ -93,7 +99,7 @@ function resolveCodexAppServerConnectionHome(
   start: CodexAppServerStartOptions,
   agentDir?: string,
 ): string | null {
-  const configured = start.env?.CODEX_HOME?.trim();
+  const configured = start.codexHome ?? start.env?.CODEX_HOME?.trim();
   if (configured) {
     return configured;
   }
@@ -127,7 +133,7 @@ function resolveCodexPluginAppCacheCodexHome(
   appServer: Pick<CodexAppServerRuntimeOptions, "start">,
   agentDir?: string,
 ): string | undefined {
-  const configuredCodexHome = appServer.start.env?.CODEX_HOME?.trim();
+  const configuredCodexHome = appServer.start.codexHome ?? appServer.start.env?.CODEX_HOME?.trim();
   if (configuredCodexHome) {
     return configuredCodexHome;
   }

@@ -1,6 +1,7 @@
 // MCP channels Docker client drives the QA-owned channel bridge smoke.
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { hasExpectedSeededMcpAttachment } from "../../../../scripts/e2e/lib/mcp-channels-attachment-contract.mjs";
 import {
   assert,
   assertGatewayScopes,
@@ -232,6 +233,10 @@ async function main() {
     assert(
       (attachments.structuredContent?.attachments?.length ?? 0) === 1,
       "expected one seeded attachment",
+    );
+    assert(
+      hasExpectedSeededMcpAttachment(attachments.structuredContent?.attachments?.[0]),
+      `expected persisted media attachment: ${JSON.stringify(attachments.structuredContent)}`,
     );
 
     let waitCursor = 0;
@@ -498,6 +503,7 @@ async function main() {
           nonOwnerReplyForwarded: true,
           nonOwnerPermissionBlocked: true,
           ownerPermissionAllowed: permission.behavior === "allow",
+          mediaAttachmentFound: true,
           rawNotifications: connectedMcp.rawMessages.filter(
             (entry) =>
               ClaudeChannelNotificationSchema.safeParse(entry).success ||

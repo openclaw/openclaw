@@ -1,4 +1,3 @@
-// Discord plugin module implements send.reactions behavior.
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   createOwnMessageReaction,
@@ -9,33 +8,16 @@ import {
 import {
   buildReactionIdentifier,
   createDiscordClient,
-  formatReactionEmoji,
   normalizeReactionEmoji,
 } from "./send.shared.js";
-import type {
-  DiscordReactionRuntimeContext,
-  DiscordReactionSummary,
-  DiscordReactOpts,
-} from "./send.types.js";
-
-function createDiscordReactionRuntimeClient(opts: DiscordReactionRuntimeContext) {
-  return createDiscordClient(opts);
-}
+import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
 
 function resolveDiscordReactionClient(opts: DiscordReactOpts) {
-  if (!opts.cfg) {
-    throw new Error(
-      "Discord reactions requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
+  if (opts.rest && opts.cfg && opts.accountId) {
+    return createDiscordClient(opts);
   }
   const cfg = requireRuntimeConfig(opts.cfg, "Discord reactions");
   return createDiscordClient({ ...opts, cfg });
-}
-
-function isDiscordReactionRuntimeContext(
-  opts: DiscordReactOpts,
-): opts is DiscordReactionRuntimeContext {
-  return Boolean(opts.rest && opts.cfg && opts.accountId);
 }
 
 export async function reactMessageDiscord(
@@ -44,9 +26,7 @@ export async function reactMessageDiscord(
   emoji: string,
   opts: DiscordReactOpts,
 ) {
-  const { rest, request } = isDiscordReactionRuntimeContext(opts)
-    ? createDiscordReactionRuntimeClient(opts)
-    : resolveDiscordReactionClient(opts);
+  const { rest, request } = resolveDiscordReactionClient(opts);
   const encoded = normalizeReactionEmoji(emoji);
   await request(() => createOwnMessageReaction(rest, channelId, messageId, encoded), "react");
   return { ok: true };
@@ -58,9 +38,7 @@ export async function removeReactionDiscord(
   emoji: string,
   opts: DiscordReactOpts,
 ) {
-  const { rest, request } = isDiscordReactionRuntimeContext(opts)
-    ? createDiscordReactionRuntimeClient(opts)
-    : resolveDiscordReactionClient(opts);
+  const { rest, request } = resolveDiscordReactionClient(opts);
   const encoded = normalizeReactionEmoji(emoji);
   await request(
     () => deleteOwnMessageReaction(rest, channelId, messageId, encoded),
@@ -74,9 +52,7 @@ export async function removeOwnReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts,
 ): Promise<{ ok: true; removed: string[] }> {
-  const { rest, request } = isDiscordReactionRuntimeContext(opts)
-    ? createDiscordReactionRuntimeClient(opts)
-    : resolveDiscordReactionClient(opts);
+  const { rest, request } = resolveDiscordReactionClient(opts);
   const message = await request(
     () => getChannelMessage(rest, channelId, messageId),
     "reaction-list",
@@ -111,9 +87,7 @@ export async function fetchReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts & { limit?: number },
 ): Promise<DiscordReactionSummary[]> {
-  const { rest, request } = isDiscordReactionRuntimeContext(opts)
-    ? createDiscordReactionRuntimeClient(opts)
-    : resolveDiscordReactionClient(opts);
+  const { rest, request } = resolveDiscordReactionClient(opts);
   const message = await request(
     () => getChannelMessage(rest, channelId, messageId),
     "reaction-list",
@@ -142,7 +116,7 @@ export async function fetchReactionsDiscord(
       emoji: {
         id: reaction.emoji.id ?? null,
         name: reaction.emoji.name ?? null,
-        raw: formatReactionEmoji(reaction.emoji),
+        raw: identifier,
       },
       count: reaction.count,
       users: users.map((user) => ({

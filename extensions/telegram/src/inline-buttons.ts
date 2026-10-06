@@ -1,6 +1,7 @@
-// Telegram plugin module implements inline buttons behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { TelegramInlineButtonsScope } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  OpenClawConfig,
+  TelegramInlineButtonsScope,
+} from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -12,9 +13,6 @@ const DEFAULT_INLINE_BUTTONS_SCOPE: TelegramInlineButtonsScope = "allowlist";
 
 function normalizeInlineButtonsScope(value: unknown): TelegramInlineButtonsScope | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
-  if (!trimmed) {
-    return undefined;
-  }
   if (
     trimmed === "off" ||
     trimmed === "dm" ||
@@ -22,43 +20,35 @@ function normalizeInlineButtonsScope(value: unknown): TelegramInlineButtonsScope
     trimmed === "all" ||
     trimmed === "allowlist"
   ) {
-    return trimmed as TelegramInlineButtonsScope;
+    return trimmed;
   }
   return undefined;
-}
-
-function readInlineButtonsCapability(value: unknown): unknown {
-  if (!value || Array.isArray(value) || typeof value !== "object" || !("inlineButtons" in value)) {
-    return undefined;
-  }
-  return value.inlineButtons;
 }
 
 export function resolveTelegramInlineButtonsConfigScope(
   capabilities: unknown,
 ): TelegramInlineButtonsScope | undefined {
-  return normalizeInlineButtonsScope(readInlineButtonsCapability(capabilities));
+  if (
+    !capabilities ||
+    Array.isArray(capabilities) ||
+    typeof capabilities !== "object" ||
+    !("inlineButtons" in capabilities)
+  ) {
+    return undefined;
+  }
+  return normalizeInlineButtonsScope(capabilities.inlineButtons);
 }
 
 export function resolveTelegramInlineButtonsScopeFromCapabilities(
   capabilities: unknown,
 ): TelegramInlineButtonsScope {
-  if (!capabilities) {
-    return DEFAULT_INLINE_BUTTONS_SCOPE;
-  }
-  if (Array.isArray(capabilities)) {
-    if (capabilities.length === 0) {
-      return DEFAULT_INLINE_BUTTONS_SCOPE;
-    }
+  if (Array.isArray(capabilities) && capabilities.length > 0) {
     const enabled = capabilities.some(
       (entry) => normalizeLowercaseStringOrEmpty(String(entry)) === "inlinebuttons",
     );
     return enabled ? "all" : "off";
   }
-  if (typeof capabilities === "object") {
-    return resolveTelegramInlineButtonsConfigScope(capabilities) ?? DEFAULT_INLINE_BUTTONS_SCOPE;
-  }
-  return DEFAULT_INLINE_BUTTONS_SCOPE;
+  return resolveTelegramInlineButtonsConfigScope(capabilities) ?? DEFAULT_INLINE_BUTTONS_SCOPE;
 }
 
 export function resolveTelegramInlineButtonsScope(params: {

@@ -1,9 +1,9 @@
 // Device bootstrap profile tests cover profile normalization for paired devices.
 import { describe, expect, test } from "vitest";
 import {
-  BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+  CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -13,48 +13,16 @@ import {
   isVoiceNodePairingSetupBootstrapProfile,
   normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
-  resolveBootstrapProfileScopesForRole,
-  resolveBootstrapProfileScopesForRoles,
 } from "./device-bootstrap-profile.js";
 
 describe("device bootstrap profile", () => {
-  test("bounds bootstrap handoff scopes by role", () => {
+  test("keeps node handoffs free of scopes", () => {
     expect(
-      resolveBootstrapProfileScopesForRole("operator", [
-        "node.exec",
-        "operator.admin",
-        "operator.approvals",
-        "operator.pairing",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ]),
-    ).toEqual(["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]);
-
-    expect(
-      resolveBootstrapProfileScopesForRole("node", ["node.exec", "operator.approvals"]),
-    ).toStrictEqual([]);
-  });
-
-  test("bounds bootstrap handoff scopes across profile roles", () => {
-    expect(
-      resolveBootstrapProfileScopesForRoles(
-        ["node", "operator"],
-        [
-          "node.exec",
-          "operator.admin",
-          "operator.approvals",
-          "operator.pairing",
-          "operator.read",
-          "operator.talk.secrets",
-          "operator.write",
-        ],
-      ),
-    ).toEqual(["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]);
-
-    expect(
-      resolveBootstrapProfileScopesForRoles(["node"], ["node.exec", "operator.admin"]),
-    ).toStrictEqual([]);
+      normalizeDeviceBootstrapHandoffProfile({
+        roles: ["node"],
+        scopes: ["node.exec", "operator.approvals", "operator.admin"],
+      }),
+    ).toEqual({ roles: ["node"], scopes: [] });
   });
 
   test("normalizes issued handoff profiles to the bootstrap allowlist", () => {
@@ -183,6 +151,17 @@ describe("device bootstrap profile", () => {
     expect(isMobilePairingSetupBootstrapProfile(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(false);
   });
 
+  test("cloud worker setup remains node-only while retaining lifecycle purpose", () => {
+    expect(CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
+      roles: ["node"],
+      scopes: [],
+      purpose: "cloud-worker",
+    });
+    expect(isNodePairingSetupBootstrapProfile(CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(
+      true,
+    );
+  });
+
   test("voice-node setup profile carries only node, read, and Talk access", () => {
     expect(VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
       roles: ["node", "operator"],
@@ -220,15 +199,5 @@ describe("device bootstrap profile", () => {
         scopes: ["operator.admin", "operator.approvals", "operator.read", "operator.write"],
       }),
     ).toBe(false);
-  });
-
-  test("bootstrap handoff operator allowlist stays bounded", () => {
-    expect([...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]).toEqual([
-      "operator.approvals",
-      "operator.questions",
-      "operator.read",
-      "operator.talk.secrets",
-      "operator.write",
-    ]);
   });
 });

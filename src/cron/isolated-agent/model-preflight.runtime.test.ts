@@ -1,6 +1,7 @@
 // Runtime model preflight tests cover provider/model checks before cron execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -15,25 +16,31 @@ import {
   resetCronModelProviderPreflightCacheForTest,
 } from "./model-preflight.runtime.js";
 
+function makeLocalPreflightParams(
+  provider: "ollama" | "vllm",
+): Parameters<typeof preflightCronModelProvider>[0] {
+  return {
+    cfg: {
+      models: {
+        providers: {
+          [provider]: {
+            api: provider === "ollama" ? "ollama" : "openai-completions",
+            baseUrl: provider === "ollama" ? "http://localhost:11434" : "http://127.0.0.1:8000/v1",
+            models: [],
+          },
+        },
+      },
+    },
+    provider,
+    model: provider === "ollama" ? "qwen3:32b" : "llama",
+  };
+}
+
 function mockReachableResponse(status = 200) {
   fetchWithSsrFGuardMock.mockResolvedValueOnce({
     response: { status },
     release: vi.fn(async () => {}),
   });
-}
-
-function requireFetchPreflightRequest(): {
-  url?: string;
-  timeoutMs?: number;
-  auditContext?: string;
-} {
-  const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as
-    | { url?: string; timeoutMs?: number; auditContext?: string }
-    | undefined;
-  if (!request) {
-    throw new Error("Expected cron model preflight fetch request");
-  }
-  return request;
 }
 
 describe("preflightCronModelProvider", () => {
@@ -68,7 +75,6 @@ describe("preflightCronModelProvider", () => {
 
   it.each([
     "127.0.0.1",
-    "127.0.0.2",
     "127.255.255.254",
     "10.0.0.1",
     "172.16.0.1",
@@ -96,7 +102,7 @@ describe("preflightCronModelProvider", () => {
     });
 
     expect(result).toEqual({ status: "available" });
-    const request = requireFetchPreflightRequest();
+    const request = mockFirstObjectArg(fetchWithSsrFGuardMock);
     expect(request.url).toBe(`http://${host}:8000/v1/models`);
     expect(request.timeoutMs).toBe(2500);
   });
@@ -155,21 +161,7 @@ describe("preflightCronModelProvider", () => {
       release,
     });
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            vllm: {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:8000/v1",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "vllm",
-      model: "llama",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("vllm"));
 
     expect(result).toEqual({ status: "available" });
     expect(cancel).toHaveBeenCalledOnce();
@@ -184,21 +176,7 @@ describe("preflightCronModelProvider", () => {
       release,
     });
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            vllm: {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:8000/v1",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "vllm",
-      model: "llama",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("vllm"));
 
     expect(result).toEqual({ status: "available" });
     expect(cancel).not.toHaveBeenCalled();
@@ -280,7 +258,7 @@ describe("preflightCronModelProvider", () => {
     expect(first.retryAfterMs).toBe(300000);
     expect(first.reason).toContain("the local provider preflight failed");
     expect(first.reason).not.toContain("endpoint is not reachable");
-    expect(first.reason).toContain("Last error: Error: ECONNREFUSED");
+    expect(first.reason).toContain("Last error: ECONNREFUSED");
     expect(first.reason).not.toContain("timed out after");
     expect(second.status).toBe("unavailable");
     if (second.status !== "unavailable") {
@@ -291,9 +269,44 @@ describe("preflightCronModelProvider", () => {
     expect(second.baseUrl).toBe("http://localhost:11434");
     expect(second.retryAfterMs).toBe(300000);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    const request = requireFetchPreflightRequest();
+    const request = mockFirstObjectArg(fetchWithSsrFGuardMock);
     expect(request.url).toBe("http://localhost:11434/api/tags");
     expect(request.auditContext).toBe("cron-model-provider-preflight");
+  });
+
+  it.each([false, true])("reprobes after a client timeout (nested: %s)", async (nested) => {
+    const timeout = new DOMException("request timed out", "TimeoutError");
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      nested ? new TypeError("fetch failed", { cause: timeout }) : timeout,
+    );
+    mockReachableResponse();
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            api: "openai-completions" as const,
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    const first = await preflightCronModelProvider({
+      cfg,
+      provider: "vllm",
+      model: "first",
+      nowMs: 1000,
+    });
+    const next = await preflightCronModelProvider({
+      cfg,
+      provider: "vllm",
+      model: "next",
+      nowMs: 2000,
+    });
+
+    expect(first.status).toBe("unavailable");
+    expect(next).toEqual({ status: "available" });
   });
 
   it("reports a nested guarded-fetch deadline separately from endpoint failures", async () => {
@@ -303,21 +316,7 @@ describe("preflightCronModelProvider", () => {
       new TypeError("fetch failed", { cause: timeoutError }),
     );
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            ollama: {
-              api: "ollama",
-              baseUrl: "http://localhost:11434",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "ollama",
-      model: "qwen3:32b",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
 
     expect(result.status).toBe("unavailable");
     if (result.status !== "unavailable") {
@@ -325,7 +324,7 @@ describe("preflightCronModelProvider", () => {
     }
     expect(result.reason).toContain(
       "Last error: Local provider preflight exceeded its configured 2500ms deadline | " +
-        "TypeError: fetch failed | TimeoutError: request timed out",
+        "fetch failed | request timed out",
     );
     expect(result.reason).not.toContain("ECONNREFUSED");
   });
@@ -341,29 +340,14 @@ describe("preflightCronModelProvider", () => {
     });
     fetchWithSsrFGuardMock.mockRejectedValueOnce(abortError);
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            ollama: {
-              api: "ollama",
-              baseUrl: "http://localhost:11434",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "ollama",
-      model: "qwen3:32b",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
 
     expect(result.status).toBe("unavailable");
     if (result.status !== "unavailable") {
       throw new Error(`expected preflight unavailable, got ${result.status}`);
     }
     expect(result.reason).toContain(
-      "Last error: AbortError: request aborted (code=ABORT_ERR) | " +
-        "ConnectError: connect ECONNREFUSED (code=ECONNREFUSED)",
+      "Last error: request aborted | ABORT_ERR | connect ECONNREFUSED | ECONNREFUSED",
     );
     expect(result.reason).not.toContain("timed out after");
     expect(result.reason).not.toContain("endpoint is not reachable");
@@ -383,49 +367,22 @@ describe("preflightCronModelProvider", () => {
     errors.at(-1)!.cause = errors[0];
     fetchWithSsrFGuardMock.mockRejectedValueOnce(errors[0]);
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            ollama: {
-              api: "ollama",
-              baseUrl: "http://localhost:11434",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "ollama",
-      model: "qwen3:32b",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
 
     expect(result.status).toBe("unavailable");
     if (result.status !== "unavailable") {
       throw new Error(`expected preflight unavailable, got ${result.status}`);
     }
     expect(result.reason.match(/failure-0/g)).toHaveLength(1);
-    expect(result.reason).toContain("NestedError7: failure-7 (code=ELOOP7)");
-    expect(result.reason).not.toContain("failure-8");
+    expect(result.reason).toContain("failure-7 | ELOOP7");
+    expect(result.reason).toContain("failure-11 | ELOOP11");
+    expect(result.reason).not.toContain("NestedError");
   });
 
   it("bounds long diagnostics without splitting UTF-16 surrogate pairs", async () => {
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error(`${"x".repeat(992)}😀truncated-detail`));
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            ollama: {
-              api: "ollama",
-              baseUrl: "http://localhost:11434",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "ollama",
-      model: "qwen3:32b",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
 
     expect(result.status).toBe("unavailable");
     if (result.status !== "unavailable") {
@@ -433,8 +390,7 @@ describe("preflightCronModelProvider", () => {
     }
     const diagnostic = result.reason.split("Last error: ")[1];
     expect(diagnostic).toHaveLength(1_000);
-    expect(diagnostic).toMatch(/^Error: x+…$/u);
-    expect(diagnostic).not.toContain("😀");
+    expect(diagnostic).toMatch(/^x{992}😀trunc…$/u);
     expect(diagnostic).not.toContain("truncated-detail");
     expect(/[\uD800-\uDBFF]$/u.test(diagnostic ?? "")).toBe(false);
   });

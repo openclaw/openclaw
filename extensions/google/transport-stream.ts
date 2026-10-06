@@ -1,7 +1,5 @@
-// Google plugin module implements transport stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
-  calculateCost,
   getEnvApiKey,
   resolveProviderContext,
   type Context,
@@ -24,26 +22,28 @@ import {
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  buildAssistantMessage,
   buildGuardedModelFetch,
-  coerceTransportToolCallArguments,
+  consumeGoogleGenerateContentStream,
+  projectGoogleMessages,
+  requiresGoogleToolCallId,
+  convertGoogleTools,
+  type GoogleStreamChunk as GoogleSseChunk,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
-  describeToolResultMediaPlaceholder,
-  extractToolResultText,
   failTransportStream,
-  finalizeTransportStream,
   mergeTransportHeaders,
+  notifyProviderHttpResponse,
   sanitizeTransportPayloadText,
-  sortPromptCacheToolsByName,
   stripSystemPromptCacheBoundary,
   transformTransportMessages,
-  type WritableTransportStream,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { isGoogleNativeVideoModelId } from "./provider-models.js";
@@ -57,10 +57,8 @@ import {
   type GoogleThinkingInputLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
-import {
-  isGoogleVertexCredentialsMarker,
-  resolveGoogleVertexAuthorizedUserHeaders,
-} from "./vertex-adc.js";
+import { isGoogleVertexCredentialsMarker } from "./vertex-adc-config.js";
+import { resolveGoogleVertexAuthorizedUserHeaders } from "./vertex-adc.js";
 
 type CanonicalGoogleTransportApi = "google-generative-ai" | "google-vertex";
 type GoogleTransportApi = CanonicalGoogleTransportApi | "openclaw-google-generative-ai-transport";
@@ -119,171 +117,15 @@ type GoogleVideoSlots = Map<Record<string, unknown>, VideoContent>;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
 const GOOGLE_SSE_EVENT_BOUNDARY_RE = /(?:\r\n|\r(?!\n)|\n){2}/u;
-
-type GoogleTransportContentBlock =
-  | { type: "text"; text: string; textSignature?: string }
-  | { type: "thinking"; thinking: string; thinkingSignature?: string }
-  | {
-      type: "toolCall";
-      id: string;
-      name: string;
-      arguments: Record<string, unknown>;
-      thoughtSignature?: string;
-    };
-
-type MutableAssistantOutput = {
-  role: "assistant";
-  content: Array<GoogleTransportContentBlock>;
-  api: CanonicalGoogleTransportApi;
-  provider: string;
-  model: string;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-  };
-  stopReason: string;
-  timestamp: number;
-  responseId?: string;
-  errorMessage?: string;
-};
+// Compare Google-owned publisher resources without changing outbound request paths.
+const GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX =
+  /^(?:projects\/[^/]+\/locations\/[^/]+\/)?publishers\/google\/models\//u;
 
 const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
 
-type GoogleSseChunk = {
-  responseId?: string;
-  promptFeedback?: {
-    blockReason?: string;
-    blockReasonMessage?: string;
-  };
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        text?: string;
-        thought?: boolean;
-        thoughtSignature?: string;
-        functionCall?: {
-          id?: string;
-          name?: string;
-          args?: Record<string, unknown>;
-        };
-      }>;
-    };
-    finishReason?: string;
-    finishMessage?: string;
-  }>;
-  usageMetadata?: {
-    promptTokenCount?: number;
-    cachedContentTokenCount?: number;
-    candidatesTokenCount?: number;
-    thoughtsTokenCount?: number;
-    toolUsePromptTokenCount?: number;
-    totalTokenCount?: number;
-  };
-};
-
 let toolCallCounter = 0;
-const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
-
-function requiresToolCallId(modelId: string): boolean {
-  return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
-}
-
 function requiresToolCallThoughtSignature(modelId: string): boolean {
   return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
-}
-
-function supportsMultimodalFunctionResponse(modelId: string): boolean {
-  const match = normalizeLowercaseStringOrEmpty(modelId).match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
-  if (!match) {
-    return true;
-  }
-  return Number.parseInt(match[1] ?? "", 10) >= 3;
-}
-
-function retainThoughtSignature(existing: string | undefined, incoming: string | undefined) {
-  if (typeof incoming === "string" && incoming.length > 0) {
-    return incoming;
-  }
-  return existing;
-}
-
-function stableStringifyGoogleToolCallValue(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringifyGoogleToolCallValue(item)).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .toSorted()
-      .map((key) => `${JSON.stringify(key)}:${stableStringifyGoogleToolCallValue(record[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function isJsonLikeThoughtSignature(value: string): boolean {
-  const trimmed = value.trim();
-  return (
-    trimmed.startsWith("{") ||
-    trimmed.startsWith("[") ||
-    trimmed.includes('":') ||
-    trimmed.includes('","') ||
-    trimmed.includes('"type"')
-  );
-}
-
-const GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
-const GEMINI_THOUGHT_SIGNATURE_BASE64_RE =
-  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-
-function hasGeminiThoughtSignatureTruncationFootprint(value: string): boolean {
-  return GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value);
-}
-
-function isGeminiThoughtSignaturePayload(value: string): boolean {
-  return GEMINI_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length > 0;
-}
-
-function sanitizeGeminiThoughtSignature(thoughtSignature: string | undefined): string | undefined {
-  if (typeof thoughtSignature !== "string") {
-    return undefined;
-  }
-  const trimmed = thoughtSignature.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (isJsonLikeThoughtSignature(trimmed)) {
-    return undefined;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  if (
-    lowered === "reasoning" ||
-    lowered === normalizeLowercaseStringOrEmpty(GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP)
-  ) {
-    return undefined;
-  }
-  if (hasGeminiThoughtSignatureTruncationFootprint(trimmed)) {
-    return undefined;
-  }
-  if (!isGeminiThoughtSignaturePayload(trimmed)) {
-    return undefined;
-  }
-  return trimmed;
-}
-
-function isSameGoogleTransportRoute(
-  source: { api?: string; provider?: string; model?: string },
-  model: GoogleTransportModel,
-): boolean {
-  return (
-    source.provider === model.provider &&
-    normalizeGoogleTransportRouteApi(source.api) === normalizeGoogleTransportRouteApi(model.api) &&
-    source.model === model.id
-  );
 }
 
 function normalizeGoogleTransportRouteApi(
@@ -330,18 +172,6 @@ function normalizeGoogleTransportMessageRoutes(messages: Context["messages"]): C
     const api = normalizeGoogleTransportRouteApi(msg.api);
     return api && api !== msg.api ? Object.assign({}, msg, { api }) : msg;
   });
-}
-
-function toolCallThoughtSignatureReplayKey(block: {
-  id: string;
-  name: string;
-  arguments: unknown;
-}): string {
-  return [
-    block.id,
-    block.name,
-    stableStringifyGoogleToolCallValue(coerceTransportToolCallArguments(block.arguments)),
-  ].join("\u0000");
 }
 
 function mapToolChoice(
@@ -574,202 +404,23 @@ function convertGoogleMessages(
   context: Context | ProviderContext,
   videoSlots?: GoogleVideoSlots,
 ) {
-  const contents: Array<Record<string, unknown>> = [];
-  const replayToolCallThoughtSignatures = new Map<string, string>();
-  const shouldReplayToolCallThoughtSignature = requiresToolCallThoughtSignature(model.id);
   const routeModel = normalizeGoogleTransportModelRoute(model);
-  const transformedMessages = transformTransportMessages(
-    normalizeGoogleTransportMessageRoutes(context.messages as Context["messages"]),
-    canonicalGoogleModel(routeModel),
-    (id) => (requiresToolCallId(model.id) ? normalizeToolCallId(id) : id),
-    {
-      preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id),
+  return projectGoogleMessages({
+    model: routeModel,
+    messages: transformTransportMessages(
+      normalizeGoogleTransportMessageRoutes(context.messages as Context["messages"]),
+      canonicalGoogleModel(routeModel),
+      (id) => (requiresGoogleToolCallId(model.id) ? normalizeToolCallId(id) : id),
+      { preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id) },
+    ) as ProviderContext["messages"],
+    replay: "managed",
+    requiresToolCallSignature: requiresToolCallThoughtSignature(model.id),
+    videoPart: (video) => {
+      const placeholder = { text: GOOGLE_VIDEO_SLOT_OMISSION };
+      videoSlots?.set(placeholder, video);
+      return placeholder;
     },
-  ) as ProviderContext["messages"];
-  // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
-  // live inside functionResponse, so hold them until the consecutive result run ends.
-  const pendingToolResultImageTurns: Array<Record<string, unknown>> = [];
-  let activeToolResultParts: Array<Record<string, unknown>> | undefined;
-  const flushToolResultRun = (): void => {
-    contents.push(...pendingToolResultImageTurns);
-    pendingToolResultImageTurns.length = 0;
-    activeToolResultParts = undefined;
-  };
-
-  for (const msg of transformedMessages) {
-    if (msg.role !== "toolResult") {
-      flushToolResultRun();
-    }
-    if (msg.role === "user") {
-      if (typeof msg.content === "string") {
-        contents.push({
-          role: "user",
-          parts: [{ text: sanitizeTransportPayloadText(msg.content) || " " }],
-        });
-        continue;
-      }
-      const parts = msg.content
-        .map((item) => {
-          if (item.type === "text") {
-            return { text: sanitizeTransportPayloadText(item.text) || " " };
-          }
-          if (item.type === "image") {
-            return { inlineData: { mimeType: item.mimeType, data: item.data } };
-          }
-          const placeholder = { text: GOOGLE_VIDEO_SLOT_OMISSION };
-          videoSlots?.set(placeholder, item);
-          return placeholder;
-        })
-        .filter((item) => model.input.includes("image") || !("inlineData" in item));
-      if (parts.length === 0) {
-        parts.push({ text: " " });
-      }
-      contents.push({ role: "user", parts });
-      continue;
-    }
-
-    if (msg.role === "assistant") {
-      const isSameRoute = isSameGoogleTransportRoute(msg, model);
-      const parts: Array<Record<string, unknown>> = [];
-      const nextReplayToolCallThoughtSignatures = new Map<string, string>();
-      for (const block of msg.content) {
-        if (block.type === "text") {
-          if (!block.text.trim()) {
-            continue;
-          }
-          const sanitizedTextSignature = isSameRoute
-            ? sanitizeGeminiThoughtSignature(block.textSignature)
-            : undefined;
-          parts.push({
-            text: sanitizeTransportPayloadText(block.text),
-            ...(sanitizedTextSignature ? { thoughtSignature: sanitizedTextSignature } : {}),
-          });
-          continue;
-        }
-        if (block.type === "thinking") {
-          if (!block.thinking.trim()) {
-            continue;
-          }
-          if (isSameRoute) {
-            const sanitizedThinkingSignature = sanitizeGeminiThoughtSignature(
-              block.thinkingSignature,
-            );
-            parts.push({
-              thought: true,
-              text: sanitizeTransportPayloadText(block.thinking),
-              ...(sanitizedThinkingSignature
-                ? { thoughtSignature: sanitizedThinkingSignature }
-                : {}),
-            });
-          } else {
-            parts.push({ text: sanitizeTransportPayloadText(block.thinking) });
-          }
-          continue;
-        }
-        if (block.type === "toolCall") {
-          const replayKey = toolCallThoughtSignatureReplayKey(block);
-          const replayedThoughtSignature =
-            shouldReplayToolCallThoughtSignature && isSameRoute
-              ? replayToolCallThoughtSignatures.get(replayKey)
-              : undefined;
-          // Use a block's own same-route signature first; otherwise fall back
-          // to a same-route replayed value from already-converted context.
-          // Never replay signatures from foreign providers — Gemini requires
-          // its own signatures returned exactly as issued.
-          const ownSignature = isSameRoute
-            ? sanitizeGeminiThoughtSignature(block.thoughtSignature)
-            : undefined;
-          if (ownSignature) {
-            nextReplayToolCallThoughtSignatures.set(replayKey, ownSignature);
-          }
-          const thoughtSignature =
-            ownSignature ??
-            replayedThoughtSignature ??
-            (shouldReplayToolCallThoughtSignature
-              ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
-              : undefined);
-          parts.push({
-            functionCall: {
-              name: block.name,
-              args: coerceTransportToolCallArguments(block.arguments),
-              ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
-            },
-            ...(thoughtSignature ? { thoughtSignature } : {}),
-          });
-        }
-      }
-      for (const [key, signature] of nextReplayToolCallThoughtSignatures) {
-        replayToolCallThoughtSignatures.set(key, signature);
-      }
-      if (parts.length > 0) {
-        contents.push({ role: "model", parts });
-      }
-      continue;
-    }
-
-    if (msg.role === "toolResult") {
-      const textResult = extractToolResultText(msg.content);
-      const imageContent = model.input.includes("image")
-        ? msg.content.filter(
-            (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
-              item.type === "image" && describeToolResultMediaPlaceholder([item]) !== undefined,
-          )
-        : [];
-      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-      const responseValue = textResult
-        ? sanitizeTransportPayloadText(textResult)
-        : (mediaPlaceholder ?? "");
-      const imageParts = imageContent.map((imageBlock) => ({
-        inlineData: {
-          mimeType: imageBlock.mimeType,
-          data: imageBlock.data,
-        },
-      }));
-      const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
-      const functionResponse = {
-        functionResponse: {
-          name: msg.toolName,
-          response: msg.isError ? { error: responseValue } : { output: responseValue },
-          ...(modelSupportsMultimodalFunctionResponse && imageParts.length > 0
-            ? { parts: imageParts }
-            : {}),
-          ...(requiresToolCallId(model.id) ? { id: msg.toolCallId } : {}),
-        },
-      };
-      if (activeToolResultParts) {
-        activeToolResultParts.push(functionResponse);
-      } else {
-        activeToolResultParts = [functionResponse];
-        contents.push({ role: "user", parts: activeToolResultParts });
-      }
-      if (imageParts.length > 0 && !modelSupportsMultimodalFunctionResponse) {
-        pendingToolResultImageTurns.push({
-          role: "user",
-          parts: [{ text: "Tool result image:" }, ...imageParts],
-        });
-      }
-    }
-  }
-  flushToolResultRun();
-  if (contents.length === 0) {
-    contents.push({ role: "user", parts: [{ text: " " }] });
-  }
-  return contents;
-}
-
-function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
-  if (tools.length === 0) {
-    return undefined;
-  }
-  return [
-    {
-      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parametersJsonSchema: tool.parameters,
-      })),
-    },
-  ];
+  });
 }
 
 export function buildGoogleGenerativeAiParams(
@@ -984,11 +635,8 @@ function buildGoogleTransportRequestUrl(
     : buildGoogleGenerativeAiRequestUrl(model);
 }
 
-function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
-  const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
-  if (raw === undefined || raw.trim() === "") {
-    return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
-  }
+function resolveGoogleGemini3FirstResponseRetryMs(): number {
+  const raw = process.env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
 }
 
@@ -1005,32 +653,20 @@ function shouldRetryGoogleGemini3FirstResponse(params: {
   return isGoogleGemini3ProModel(params.model.id) || isGoogleGemini3FlashModel(params.model.id);
 }
 
-function resolveGoogleGemini3RetryThinkingLevel(modelId: string): GoogleThinkingLevel | undefined {
-  if (isGoogleGemini3ProModel(modelId)) {
-    return "LOW";
-  }
-  if (isGoogleGemini3FlashModel(modelId)) {
-    return "MINIMAL";
-  }
-  return undefined;
-}
-
-function cloneGoogleGenerateContentRequest(
-  params: GoogleGenerateContentRequest,
-): GoogleGenerateContentRequest {
-  const serialized = JSON.stringify(params);
-  return JSON.parse(serialized) as GoogleGenerateContentRequest;
-}
-
 function buildGoogleGemini3FirstResponseRetryParams(params: {
   model: GoogleTransportModel;
   request: GoogleGenerateContentRequest;
 }): GoogleGenerateContentRequest | undefined {
-  const thinkingLevel = resolveGoogleGemini3RetryThinkingLevel(params.model.id);
+  const thinkingLevel = resolveGoogleGemini3ThinkingLevel({
+    modelId: params.model.id,
+    thinkingLevel: "off",
+  });
   if (!thinkingLevel) {
     return undefined;
   }
-  const retryRequest = cloneGoogleGenerateContentRequest(params.request);
+  // Retry copies retain JSON wire semantics, including omitted undefined fields.
+  const serializedRequest = JSON.stringify(params.request);
+  const retryRequest = JSON.parse(serializedRequest) as GoogleGenerateContentRequest;
   const generationConfig =
     retryRequest.generationConfig && typeof retryRequest.generationConfig === "object"
       ? retryRequest.generationConfig
@@ -1066,9 +702,10 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
       parent.addEventListener("abort", abortFromParent, { once: true });
     }
   }
-  if (timeoutMs > 0) {
+  if (!controller.signal.aborted && timeoutMs > 0) {
     timeout = setTimeout(() => {
       timedOut = true;
+      timeout = undefined;
       controller.abort(new Error("Google Gemini first response retry deadline reached"));
     }, timeoutMs);
     timeout.unref?.();
@@ -1090,24 +727,22 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
   };
 }
 
-function iteratorToAsyncGenerator<T>(
-  iterator: AsyncIterator<T>,
+async function* iterateGoogleSseChunks(
+  iterator: AsyncIterator<GoogleSseChunk>,
   cleanup?: () => void,
-): AsyncGenerator<T> {
-  return (async function* () {
-    try {
-      for (;;) {
-        const next = await iterator.next();
-        if (next.done) {
-          return;
-        }
-        yield next.value;
+): AsyncGenerator<GoogleSseChunk> {
+  try {
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) {
+        return;
       }
-    } finally {
-      cleanup?.();
-      await iterator.return?.();
+      yield next.value;
     }
-  })();
+  } finally {
+    cleanup?.();
+    await iterator.return?.();
+  }
 }
 
 type GoogleSseAttempt =
@@ -1127,44 +762,62 @@ async function openGoogleSseAttempt(params: {
   parentSignal?: AbortSignal;
   firstResponseTimeoutMs: number;
   errorPrefix: string;
+  model: GoogleTransportModel;
+  options: GoogleTransportOptions | undefined;
 }): Promise<GoogleSseAttempt> {
   const attemptSignal =
     params.firstResponseTimeoutMs > 0
       ? createChildSignal(params.parentSignal, params.firstResponseTimeoutMs)
       : undefined;
   const signal = attemptSignal?.signal ?? params.parentSignal;
-  try {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
-      headers: params.headers,
-      body: serializeGoogleRequest(params.request, params.videoSlots),
-      signal,
-    });
-    if (!response.ok) {
-      throw await createProviderHttpError(response, params.errorPrefix);
-    }
-    const chunks = parseGoogleSseChunks(response, signal);
-    const iterator = chunks[Symbol.asyncIterator]();
-    const first = await iterator.next();
-    attemptSignal?.clearDeadline();
-    if (first.done) {
-      return {
-        type: "ready",
-        chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
-      };
-    }
-    return {
-      type: "ready",
-      firstChunk: first.value,
-      chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
-    };
-  } catch (error) {
+  const handleTimedOperationError = (error: unknown): GoogleSseAttempt => {
     attemptSignal?.cleanup();
     if (attemptSignal?.timedOut() && !params.parentSignal?.aborted) {
       return { type: "timeout" };
     }
     throw error;
+  };
+  let response: Response;
+  try {
+    response = await params.guardedFetch(params.url, {
+      method: "POST",
+      headers: params.headers,
+      body: serializeGoogleRequest(params.request, params.videoSlots),
+      signal,
+    });
+  } catch (error) {
+    return handleTimedOperationError(error);
   }
+  try {
+    // Response hooks share the first-response deadline. A stalled hook must cancel
+    // the unread body and enter the same Gemini fallback as a stalled fetch or body.
+    await notifyProviderHttpResponse({
+      options: params.options,
+      response,
+      model: canonicalGoogleModel(params.model),
+      signal,
+    });
+  } catch (error) {
+    return handleTimedOperationError(error);
+  }
+  if (!response.ok) {
+    attemptSignal?.cleanup();
+    throw await createProviderHttpError(response, params.errorPrefix);
+  }
+  const chunks = parseGoogleSseChunks(response, signal);
+  const iterator = chunks[Symbol.asyncIterator]();
+  let first: IteratorResult<GoogleSseChunk>;
+  try {
+    first = await iterator.next();
+  } catch (error) {
+    return handleTimedOperationError(error);
+  }
+  attemptSignal?.clearDeadline();
+  return {
+    type: "ready",
+    ...(!first.done ? { firstChunk: first.value } : {}),
+    chunks: iterateGoogleSseChunks(iterator, attemptSignal?.cleanup),
+  };
 }
 
 async function openGoogleSseChunks(params: {
@@ -1181,28 +834,20 @@ async function openGoogleSseChunks(params: {
     params.kind === "google-vertex"
       ? "Google Vertex AI API error"
       : "Google Generative AI API error";
-  if (!shouldRetryGoogleGemini3FirstResponse({ kind: params.kind, model: params.model })) {
+  const retryMs = shouldRetryGoogleGemini3FirstResponse(params)
+    ? resolveGoogleGemini3FirstResponseRetryMs()
+    : 0;
+  if (retryMs <= 0) {
     const response = await params.guardedFetch(params.url, {
       method: "POST",
       headers: params.headers,
       body: serializeGoogleRequest(params.request, params.videoSlots),
       signal: params.options?.signal,
     });
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
-    return {
-      type: "ready",
-      chunks: parseGoogleSseChunks(response, params.options?.signal),
-    };
-  }
-
-  const retryMs = resolveGoogleGemini3FirstResponseRetryMs();
-  if (retryMs <= 0) {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
-      headers: params.headers,
-      body: serializeGoogleRequest(params.request, params.videoSlots),
+    await notifyProviderHttpResponse({
+      options: params.options,
+      response,
+      model: canonicalGoogleModel(params.model),
       signal: params.options?.signal,
     });
     if (!response.ok) {
@@ -1215,11 +860,7 @@ async function openGoogleSseChunks(params: {
   }
 
   const firstAttempt = await openGoogleSseAttempt({
-    guardedFetch: params.guardedFetch,
-    url: params.url,
-    headers: params.headers,
-    request: params.request,
-    videoSlots: params.videoSlots,
+    ...params,
     parentSignal: params.options?.signal,
     firstResponseTimeoutMs: retryMs,
     errorPrefix,
@@ -1235,11 +876,8 @@ async function openGoogleSseChunks(params: {
     request: params.request,
   })!;
   const retryAttempt = await openGoogleSseAttempt({
-    guardedFetch: params.guardedFetch,
-    url: params.url,
-    headers: params.headers,
+    ...params,
     request: retryRequest,
-    videoSlots: params.videoSlots,
     parentSignal: params.options?.signal,
     firstResponseTimeoutMs: 0,
     errorPrefix,
@@ -1248,23 +886,6 @@ async function openGoogleSseChunks(params: {
     throw new Error("Google Gemini first response retry timed out unexpectedly");
   }
   return retryAttempt;
-}
-
-async function buildGoogleTransportHeaders(params: {
-  kind: CanonicalGoogleTransportApi;
-  model: GoogleTransportModel;
-  apiKey: string | undefined;
-  optionHeaders: Record<string, string> | undefined;
-  fetchImpl?: typeof fetch;
-}): Promise<Record<string, string>> {
-  return params.kind === "google-vertex"
-    ? await buildGoogleVertexHeaders(
-        params.model,
-        params.apiKey,
-        params.optionHeaders,
-        params.fetchImpl,
-      )
-    : buildGoogleHeaders(params.model, params.apiKey, params.optionHeaders);
 }
 
 async function* parseGoogleSseChunks(
@@ -1290,17 +911,25 @@ async function* parseGoogleSseChunks(
       signal?.throwIfAborted();
       if (done) {
         buffer += decoder.decode();
-        if (
-          buffer
-            .split(/\r\n|\n|\r/u)
-            .some((line) => line.startsWith("data:") && line.slice(5).trim().length > 0)
-        ) {
+        const trailingData = buffer
+          .split(/\r\n|\n|\r/u)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trim())
+          .join("\n");
+        const trailingPayload = trailingData || buffer.trim();
+        if (!trailingPayload || (!trailingData && !trailingPayload.startsWith("{"))) {
+          completed = true;
+          break;
+        }
+        const trailingChunk = safeParseJson(trailingPayload);
+        if (!isRecord(trailingChunk) || !isRecord(trailingChunk.error)) {
           throw new Error("Google SSE stream ended with an incomplete frame");
         }
-        completed = true;
-        break;
+        // Provider errors can arrive as bare JSON or data frames without their final delimiter.
+        buffer = `data: ${JSON.stringify(trailingChunk)}\n\n`;
+      } else {
+        buffer += decoder.decode(value, { stream: true });
       }
-      buffer += decoder.decode(value, { stream: true });
       let boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
       while (boundary) {
         const rawEvent = buffer.slice(0, boundary.index);
@@ -1343,66 +972,6 @@ async function* parseGoogleSseChunks(
   }
 }
 
-function updateUsage(
-  output: MutableAssistantOutput,
-  model: GoogleTransportModel,
-  chunk: GoogleSseChunk,
-  knownUsage: NonNullable<GoogleSseChunk["usageMetadata"]>,
-): void {
-  if (!chunk.usageMetadata) {
-    return;
-  }
-  for (const field of Object.keys(knownUsage) as Array<keyof typeof knownUsage>) {
-    const value = chunk.usageMetadata[field];
-    if (typeof value === "number") {
-      knownUsage[field] = value;
-    }
-  }
-  const promptTokens = knownUsage.promptTokenCount ?? 0;
-  const cacheRead = knownUsage.cachedContentTokenCount ?? 0;
-  const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount ?? 0;
-  const outputTokens =
-    (knownUsage.candidatesTokenCount ?? 0) + (knownUsage.thoughtsTokenCount ?? 0);
-  output.usage = {
-    input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
-    output: outputTokens,
-    cacheRead,
-    cacheWrite: 0,
-    totalTokens:
-      chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-  calculateCost(canonicalGoogleModel(model), output.usage);
-}
-
-function pushTextBlockEnd(
-  stream: WritableTransportStream,
-  output: MutableAssistantOutput,
-  blockIndex: number,
-) {
-  const block = output.content[blockIndex];
-  if (!block) {
-    return;
-  }
-  if (block.type === "thinking") {
-    stream.push({
-      type: "thinking_end",
-      contentIndex: blockIndex,
-      content: block.thinking,
-      partial: output as never,
-    });
-    return;
-  }
-  if (block.type === "text") {
-    stream.push({
-      type: "text_end",
-      contentIndex: blockIndex,
-      content: block.text,
-      partial: output as never,
-    });
-  }
-}
-
 function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as GoogleTransportModel;
@@ -1410,16 +979,12 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
     const options = rawOptions as GoogleTransportOptions | undefined;
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
-      const output: MutableAssistantOutput = {
-        role: "assistant",
+      const output = buildAssistantMessage({
+        model: { api: kind, provider: model.provider, id: model.id },
         content: [],
-        api: kind,
-        provider: model.provider,
-        model: model.id,
         usage: createEmptyTransportUsage(),
         stopReason: "stop",
-        timestamp: Date.now(),
-      };
+      });
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? undefined;
         const guardedFetch = buildGuardedModelFetch(canonicalModel);
@@ -1436,13 +1001,10 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         const requestUrl = buildGoogleTransportRequestUrl(kind, model, options);
         const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
         const openSse = async (apiKeyForRequest: string | undefined) => {
-          const requestHeaders = await buildGoogleTransportHeaders({
-            kind,
-            model,
-            apiKey: apiKeyForRequest,
-            optionHeaders: options?.headers,
-            fetchImpl,
-          });
+          const requestHeaders =
+            kind === "google-vertex"
+              ? await buildGoogleVertexHeaders(model, apiKeyForRequest, options?.headers, fetchImpl)
+              : buildGoogleHeaders(model, apiKeyForRequest, options?.headers);
           return await openGoogleSseChunks({
             kind,
             model,
@@ -1469,21 +1031,6 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                 execute: openSse,
               })
             : await openSse(apiKey);
-        stream.push({ type: "start", partial: output as never });
-        let currentBlockIndex = -1;
-        let sawTerminalReason = false;
-        let terminalGenerationError: Error | undefined;
-        const knownUsage: NonNullable<GoogleSseChunk["usageMetadata"]> = {
-          promptTokenCount: 0,
-          cachedContentTokenCount: 0,
-          toolUsePromptTokenCount: 0,
-          candidatesTokenCount: 0,
-          thoughtsTokenCount: 0,
-        };
-        const toolCallBlocksById = new Map<
-          string,
-          Extract<GoogleTransportContentBlock, { type: "toolCall" }>
-        >();
         const chunks =
           sse.firstChunk === undefined
             ? sse.chunks
@@ -1491,179 +1038,24 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                 yield firstChunk;
                 yield* sse.chunks;
               })(sse.firstChunk);
-        for await (const chunk of chunks) {
-          output.responseId ||= chunk.responseId;
-          updateUsage(output, model, chunk, knownUsage);
-          const candidate = chunk.candidates?.[0];
-          const promptFeedback = chunk.promptFeedback;
-          if (!candidate && promptFeedback) {
-            const blockReason =
-              normalizeOptionalString(promptFeedback.blockReason) ?? "PROMPT_BLOCKED";
-            const blockMessage = normalizeOptionalString(promptFeedback.blockReasonMessage);
-            const message = `Google prompt blocked (${blockReason})${blockMessage ? `: ${blockMessage}` : ""}`;
-            throw Object.assign(new Error(message), {
-              code: blockReason,
-              type: "google_prompt_blocked",
-            });
-          }
-          if (candidate?.content?.parts) {
-            for (const part of candidate.content.parts) {
-              const hasThoughtSignature =
-                typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0;
-              const hasText = typeof part.text === "string";
-              if (hasText || (hasThoughtSignature && !part.functionCall)) {
-                if (hasThoughtSignature && !hasText && part.thought !== true) {
-                  const latestBlock = output.content[output.content.length - 1];
-                  if (latestBlock?.type === "toolCall") {
-                    latestBlock.thoughtSignature = retainThoughtSignature(
-                      latestBlock.thoughtSignature,
-                      part.thoughtSignature,
-                    );
-                    continue;
-                  }
-                }
-                const isThinking = part.thought === true || !hasText;
-                const currentBlock = output.content[currentBlockIndex];
-                if (
-                  currentBlockIndex < 0 ||
-                  !currentBlock ||
-                  (isThinking && currentBlock.type !== "thinking") ||
-                  (!isThinking && currentBlock.type !== "text")
-                ) {
-                  if (currentBlockIndex >= 0) {
-                    pushTextBlockEnd(stream, output, currentBlockIndex);
-                  }
-                  if (isThinking) {
-                    output.content.push({ type: "thinking", thinking: "" });
-                    currentBlockIndex = output.content.length - 1;
-                    stream.push({
-                      type: "thinking_start",
-                      contentIndex: currentBlockIndex,
-                      partial: output as never,
-                    });
-                  } else {
-                    output.content.push({ type: "text", text: "" });
-                    currentBlockIndex = output.content.length - 1;
-                    stream.push({
-                      type: "text_start",
-                      contentIndex: currentBlockIndex,
-                      partial: output as never,
-                    });
-                  }
-                }
-                const activeBlock = output.content[currentBlockIndex];
-                if (activeBlock?.type === "thinking") {
-                  const delta = hasText ? part.text : "";
-                  activeBlock.thinking += delta;
-                  activeBlock.thinkingSignature = retainThoughtSignature(
-                    activeBlock.thinkingSignature,
-                    part.thoughtSignature,
-                  );
-                  stream.push({
-                    type: "thinking_delta",
-                    contentIndex: currentBlockIndex,
-                    delta,
-                    partial: output as never,
-                  });
-                } else if (activeBlock?.type === "text") {
-                  activeBlock.text += part.text;
-                  activeBlock.textSignature = retainThoughtSignature(
-                    activeBlock.textSignature,
-                    part.thoughtSignature,
-                  );
-                  stream.push({
-                    type: "text_delta",
-                    contentIndex: currentBlockIndex,
-                    delta: part.text,
-                    partial: output as never,
-                  });
-                }
-              }
-              if (part.functionCall) {
-                if (currentBlockIndex >= 0) {
-                  pushTextBlockEnd(stream, output, currentBlockIndex);
-                  currentBlockIndex = -1;
-                }
-                const providedId = part.functionCall.id;
-                const existingToolCall =
-                  typeof providedId === "string" ? toolCallBlocksById.get(providedId) : undefined;
-                const isDuplicate = existingToolCall !== undefined;
-                const toolCallId =
-                  providedId && !isDuplicate
-                    ? providedId
-                    : `${part.functionCall.name || "tool"}_${Date.now()}_${++toolCallCounter}`;
-                const toolCall: GoogleTransportContentBlock = {
-                  type: "toolCall",
-                  id: toolCallId,
-                  name: part.functionCall.name || "",
-                  arguments: part.functionCall.args ?? {},
-                  ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
-                };
-                output.content.push(toolCall);
-                if (!toolCallBlocksById.has(toolCall.id)) {
-                  toolCallBlocksById.set(toolCall.id, toolCall);
-                }
-                const blockIndex = output.content.length - 1;
-                stream.push({
-                  type: "toolcall_start",
-                  contentIndex: blockIndex,
-                  partial: output as never,
-                });
-                stream.push({
-                  type: "toolcall_delta",
-                  contentIndex: blockIndex,
-                  delta: JSON.stringify(toolCall.arguments),
-                  partial: output as never,
-                });
-                stream.push({
-                  type: "toolcall_end",
-                  contentIndex: blockIndex,
-                  toolCall,
-                  partial: output as never,
-                });
-              }
-            }
-          }
-          if (typeof candidate?.finishReason === "string") {
-            sawTerminalReason = true;
-            output.stopReason = mapStopReasonString(candidate.finishReason);
-            if (output.stopReason === "error") {
-              const finishMessage = normalizeOptionalString(candidate.finishMessage);
-              terminalGenerationError = Object.assign(
-                new Error(
-                  `Google generation stopped (${candidate.finishReason})${finishMessage ? `: ${finishMessage}` : ""}`,
-                ),
-                { code: candidate.finishReason, type: "google_generation_failed" },
-              );
-            }
-            // MAX_TOKENS can leave a complete-looking partial call. Only a normal
-            // Google stop may promote parsed calls into an executable tool-use turn.
-            if (
-              output.stopReason === "stop" &&
-              output.content.some((block) => block.type === "toolCall")
-            ) {
-              output.stopReason = "toolUse";
-            }
-          }
-        }
-        if (currentBlockIndex >= 0) {
-          pushTextBlockEnd(stream, output, currentBlockIndex);
-        }
-        if (terminalGenerationError && !options?.signal?.aborted) {
-          throw terminalGenerationError;
-        }
-        if (!sawTerminalReason && !options?.signal?.aborted) {
-          throw Object.assign(new Error("Google stream ended before a terminal finish reason"), {
-            code: "STREAM_INCOMPLETE",
-            type: "google_incomplete_stream",
-          });
-        }
-        finalizeTransportStream({ stream, output, signal: options?.signal });
+        await consumeGoogleGenerateContentStream({
+          chunks,
+          model: canonicalModel,
+          output,
+          stream,
+          signal: options?.signal,
+          nextToolCallId: (name) => `${name || "tool"}_${Date.now()}_${++toolCallCounter}`,
+          // Managed SSE has always accumulated text deltas; the SDK preserves signed Parts.
+          profile: "managed",
+          normalizeModelId: (id) =>
+            resolveGoogleModelPath(id.replace(GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX, "")),
+          resolveStopReason: mapStopReasonString,
+        });
       } catch (error) {
         failTransportStream({ stream, output, signal: options?.signal, error });
       }
     })();
-    return eventStream as unknown as ReturnType<StreamFn>;
+    return eventStream;
   };
 }
 

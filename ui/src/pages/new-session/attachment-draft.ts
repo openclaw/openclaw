@@ -1,38 +1,35 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";
-import { ChatAttachmentReadLifecycle } from "../chat/components/chat-attachments.ts";
+import {
+  releaseChatAttachmentPayloads,
+  releaseDisplacedChatAttachmentPayloads,
+} from "../chat/attachment-payload-store.ts";
+import { ChatAttachmentReadLifecycle } from "../chat/components/chat-attachment-reads.ts";
 
 export class NewSessionAttachmentDraft {
   attachments: ChatAttachment[] = [];
-  private readonly reads: ChatAttachmentReadLifecycle;
+  readonly reads: ChatAttachmentReadLifecycle;
 
-  constructor(private readonly notify: () => void) {
+  constructor(
+    private readonly notify: () => void,
+    private readonly onUserChange: () => void,
+  ) {
     this.reads = new ChatAttachmentReadLifecycle(notify);
-  }
-
-  get pendingReads(): number {
-    return this.reads.pendingReads;
-  }
-
-  get readSignal() {
-    return this.reads.readSignal;
   }
 
   replace(attachments: ChatAttachment[]) {
     this.attachments = attachments;
+    this.onUserChange();
     this.notify();
   }
 
-  updatePending(readSignal: AbortSignal, delta: 1 | -1) {
-    this.reads.updatePending(readSignal, delta);
-  }
-
-  abortReads() {
-    this.reads.abortReads();
+  restore(attachments: ChatAttachment[]) {
+    releaseDisplacedChatAttachmentPayloads(this.attachments, [attachments]);
+    this.attachments = attachments;
+    this.notify();
   }
 
   take(): ChatAttachment[] {
-    this.abortReads();
+    this.reads.abortReads();
     const attachments = this.attachments;
     this.attachments = [];
     this.notify();
@@ -40,12 +37,8 @@ export class NewSessionAttachmentDraft {
   }
 
   reset(options: { release: boolean }) {
-    this.abortReads();
-    if (options.release) {
-      releaseChatAttachmentPayloads(this.attachments);
-    }
-    this.attachments = [];
-    this.notify();
+    this.reads.abortReads();
+    this.clearAfterSubmit(options.release);
   }
 
   clearAfterSubmit(release: boolean) {

@@ -2,14 +2,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+let tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker>;
 
 export function installAndroidFixtureCleanup(): void {
-  afterEach(() => {
-    cleanupTempDirs(tempDirs);
-  });
+  tempDirs = useAutoCleanupTempDirTracker(afterEach);
 }
 
 export function writeAndroidFixture(params: {
@@ -21,7 +19,7 @@ export function writeAndroidFixture(params: {
   versionProperties?: string;
   prefix?: string;
 }): string {
-  const rootDir = makeTempDir(tempDirs, params.prefix ?? "openclaw-android-version-");
+  const rootDir = tempDirs.make(params.prefix ?? "openclaw-android-version-");
   fs.mkdirSync(path.join(rootDir, "apps", "android", "Config"), { recursive: true });
   fs.mkdirSync(path.join(rootDir, "apps", "android", "fastlane", "metadata", "android", "en-US"), {
     recursive: true,

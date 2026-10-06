@@ -1,4 +1,3 @@
-// Discord plugin module implements send.voice behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
@@ -11,10 +10,9 @@ import {
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { withTempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
-import { resolveDiscordAccount } from "./accounts.js";
 import type { RequestClient } from "./internal/discord.js";
+import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
-import type { DiscordReplyReference } from "./reply-reference.js";
 import type { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import { buildDiscordSendError, createDiscordClient, resolveChannelId } from "./send.shared.js";
@@ -39,20 +37,8 @@ type VoiceMessageOpts = Pick<
   | "mediaLocalRoots"
   | "mediaReadFile"
   | "onPlatformSendDispatch"
+  | "assertPlatformSendAuthorized"
 >;
-
-function toDiscordSendResult(
-  result: { id?: string | null; channel_id?: string | null },
-  fallbackChannelId: string,
-  reply?: DiscordReplyReference,
-): DiscordSendResult {
-  return createDiscordSendResult({
-    result,
-    fallbackChannelId,
-    kind: "voice",
-    reply,
-  });
-}
 
 async function withMaterializedVoiceMessageInput<T>(
   mediaUrl: string,
@@ -82,17 +68,18 @@ async function withMaterializedVoiceMessageInput<T>(
   );
 }
 
-/**
- * Send a voice message to Discord.
- *
- * Voice messages are a special Discord feature that displays audio with a waveform
- * visualization. They require OGG/Opus format and cannot include text content.
- *
- * @param to - Recipient (user ID for DM or channel ID)
- * @param audioPath - Path to local audio file (will be converted to OGG/Opus if needed)
- * @param opts - Send options
- */
+/** Discord voice messages require OGG/Opus audio with a waveform and cannot include text. */
 export async function sendVoiceMessageDiscord(
+  to: string,
+  audioPath: string,
+  opts: VoiceMessageOpts,
+): Promise<DiscordSendResult> {
+  return await withDiscordRequestAuthority(opts.assertPlatformSendAuthorized, () =>
+    sendVoiceMessageDiscordInternal(to, audioPath, opts),
+  );
+}
+
+async function sendVoiceMessageDiscordInternal(
   to: string,
   audioPath: string,
   opts: VoiceMessageOpts,
@@ -106,15 +93,12 @@ export async function sendVoiceMessageDiscord(
     let channelId: string | undefined;
 
     try {
-      const accountInfo = resolveDiscordAccount({
-        cfg,
-        accountId: opts.accountId,
-      });
       const client = createDiscordClient({ ...opts, cfg });
       token = client.token;
       rest = client.rest;
       const request = client.request;
-      const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
+      const accountInfo = client.account;
+      const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
       channelId = (await resolveChannelId(rest, recipient, request)).channelId;
 
       const ogg = await ensureOggOpus(localInputPath);
@@ -123,7 +107,6 @@ export async function sendVoiceMessageDiscord(
 
       const metadata = await getVoiceMessageMetadata(oggPath);
       const audioBuffer = await fs.readFile(oggPath);
-      await opts.onPlatformSendDispatch?.();
       const result = await sendDiscordVoiceMessage(
         rest,
         channelId,
@@ -133,6 +116,8 @@ export async function sendVoiceMessageDiscord(
         request,
         opts.silent,
         token,
+        opts.onPlatformSendDispatch,
+        opts.assertPlatformSendAuthorized,
       );
 
       recordChannelActivity({
@@ -141,7 +126,12 @@ export async function sendVoiceMessageDiscord(
         direction: "outbound",
       });
 
-      return toDiscordSendResult(result, channelId, opts.reply);
+      return createDiscordSendResult({
+        result,
+        fallbackChannelId: channelId,
+        kind: "voice",
+        reply: opts.reply,
+      });
     } catch (err) {
       if (channelId && rest && token) {
         throw await buildDiscordSendError(err, {

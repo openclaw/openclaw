@@ -1,0 +1,281 @@
+openclaw-debug-overlay,
+openclaw-debug-overlay-content {
+  display: contents;
+}
+
+.debug-overlay {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: var(--z-toast);
+  display: flex;
+  width: min(560px, calc(100vw - 32px));
+  height: min(78dvh, 760px);
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  backdrop-filter: blur(18px) saturate(1.15);
+  /* The layout owner animates size explicitly. Global reduced-motion durations
+     must not turn direct pointer/keyboard placement into CSS transitions. */
+  transition-property: none;
+}
+
+.debug-overlay__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 14px 11px;
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.debug-overlay__header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.debug-overlay--dragging .debug-overlay__header {
+  cursor: grabbing;
+}
+
+.debug-overlay__header h2,
+.debug-overlay__section h3 {
+  margin: 0;
+}
+
+.debug-overlay__header h2 {
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+
+.debug-overlay__eyebrow {
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.debug-overlay__controls {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.debug-overlay__control {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.debug-overlay__control:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.debug-overlay__control:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.debug-overlay__control svg {
+  width: 16px;
+  height: 16px;
+}
+
+.debug-overlay__body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.debug-overlay__section {
+  padding: 12px 14px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.debug-overlay__section:last-child {
+  border-bottom: 0;
+}
+
+.debug-overlay__section h3 {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 560px) {
+  .debug-overlay {
+    right: 8px;
+    bottom: 8px;
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+}
+
+.debug-overlay--minimized {
+  width: min(210px, calc(100vw - 32px));
+  height: auto;
+  max-height: min(92px, calc(100dvh - 32px));
+
+  .debug-overlay__header {
+    gap: 6px;
+    padding: 2px 4px 2px 8px;
+  }
+
+  .debug-overlay__header h2 {
+    font-size: 11px;
+  }
+
+  .debug-overlay__control {
+    width: 24px;
+    height: 24px;
+  }
+
+  .debug-overlay__body {
+    padding: 4px;
+  }
+
+  .gateway-vital {
+    min-height: 50px;
+    padding: 4px 5px 0;
+  }
+
+  .sparkline-tile__head {
+    display: flex;
+    line-height: 1;
+  }
+
+  .sparkline-tile__label {
+    font-size: 8.5px;
+    letter-spacing: 0.03em;
+  }
+
+  .sparkline-tile__value {
+    overflow: hidden;
+    margin: 2px 0 1px;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sparkline-tile__sub {
+    display: none;
+  }
+
+  .sparkline-tile__chart svg {
+    height: 20px;
+  }
+
+  .sparkline-tile__chart {
+    margin-inline: -5px;
+  }
+
+  .sparkline-tile__secondary {
+    font-size: 8px;
+    line-height: 9px;
+  }
+
+  .gateway-vital--cpu .sparkline-tile__chart svg {
+    height: 11px;
+  }
+}
+
+.debug-overlay__widget {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.debug-overlay__compact-loading {
+  display: grid;
+  min-height: 50px;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.debug-overlay__placeholder-content {
+  animation: fade-in 120ms 180ms both;
+}
+
+.debug-overlay__placeholder-lanes {
+  display: grid;
+  grid-template-columns: 2fr repeat(3, 1fr);
+  align-items: center;
+  gap: 15px 18px;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.debug-overlay__placeholder-line {
+  height: 8px;
+  border-radius: var(--radius-sm);
+}
+
+.debug-overlay__placeholder-vitals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.debug-overlay__placeholder-vital {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.debug-overlay__placeholder-value {
+  width: 48%;
+  height: 20px;
+}
+
+.debug-overlay__placeholder-vital .debug-overlay__placeholder-line {
+  width: 70%;
+}
+
+.debug-overlay__placeholder-rows {
+  display: grid;
+  gap: 9px;
+  padding-top: 3px;
+}
+
+.debug-overlay__placeholder-rows .debug-overlay__placeholder-line {
+  width: 46%;
+}
+
+.debug-overlay__placeholder-rows .debug-overlay__placeholder-line:nth-child(2) {
+  width: 65%;
+}
+
+@media (max-width: 560px) {
+  .debug-overlay__placeholder-vitals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

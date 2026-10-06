@@ -8,11 +8,13 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
@@ -34,23 +36,6 @@ type PendingMemoryImport = {
   idempotencyKey: string;
   attempted: boolean;
 };
-
-function toErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : typeof error === "string"
-      ? error
-      : "request failed";
-}
-
-function createIdempotencyKey(): string {
-  if (typeof globalThis.crypto.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-  return [...globalThis.crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
-}
 
 export class MemoryImportPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -80,30 +65,22 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     plan: MigrationsMemoryPlanResult;
   } | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
-    );
+    .watchStore(() => this.context?.gateway)
+    .watchStore(() => this.context?.agents)
+    .watchStore(() => this.context?.agentSelection);
 
   private readonly planTask = new Task(this, {
     args: () => {
       const snapshot = this.context?.gateway.snapshot;
       return [
         this.isConnected && snapshot?.phase === "connected" ? (snapshot.client ?? null) : null,
+        snapshot ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null) : false,
         this.currentAgentId(),
         this.replaceExisting,
       ] as const;
     },
-    task: async ([client, agentId, overwrite], { signal }) => {
-      if (!client || !agentId) {
+    task: async ([client, canAdmin, agentId, overwrite], { signal }) => {
+      if (!client || !canAdmin || !agentId) {
         return initialState;
       }
       const plan = await client.request<MigrationsMemoryPlanResult>(
@@ -138,7 +115,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   });
 
   override disconnectedCallback() {
-    void this.planTask.run([null, null, this.replaceExisting]);
+    void this.planTask.run([null, false, null, this.replaceExisting]);
     this.applyEpoch += 1;
     this.backfillEpoch += 1;
     this.subscriptions.clear();
@@ -147,9 +124,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
 
   override updated() {
     const snapshot = this.context.gateway.snapshot;
-    if (!this.context.agents.state.agentsList) {
-      void this.context.agents.ensureList();
-    }
     if (
       this.pendingImport &&
       (snapshot.phase !== "connected" ||
@@ -199,7 +173,13 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private get error(): string | null {
-    return this.planTask.status === TaskStatus.ERROR ? toErrorMessage(this.planTask.error) : null;
+    return this.planTask.status === TaskStatus.ERROR
+      ? formatUiError(this.planTask.error, "request failed")
+      : null;
+  }
+
+  private get canAdmin(): boolean {
+    return hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
   }
 
   private resetMutationState(options: { preserveAttemptedImport?: boolean } = {}) {
@@ -216,7 +196,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private refresh(): Promise<void> {
-    return this.planTask.run();
+    return this.currentAgentId()
+      ? this.planTask.run()
+      : this.context.agents.ensureList().then(() => undefined);
   }
 
   private selectAgent(agentId: string) {
@@ -243,6 +225,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private requestImport(providerId: string) {
+    if (!this.canAdmin) {
+      return;
+    }
     const agentId = this.currentAgentId();
     const planFingerprint = this.plan?.providers.find(
       (provider) => provider.providerId === providerId,
@@ -269,13 +254,14 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       planFingerprint,
       itemIds: [...itemIds],
       overwrite: this.replaceExisting,
-      idempotencyKey: createIdempotencyKey(),
+      idempotencyKey: generateUUID(),
       attempted: false,
     };
   }
 
   private async confirmImport() {
     if (
+      !this.canAdmin ||
       this.applyingProviderId !== null ||
       this.backfillBusy === "apply" ||
       this.backfillBusy === "rollback" ||
@@ -321,7 +307,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       await this.refresh();
     } catch (error) {
       if (applyEpoch === this.applyEpoch) {
-        this.applyError = toErrorMessage(error);
+        this.applyError = formatUiError(error, "request failed");
       }
     } finally {
       if (applyEpoch === this.applyEpoch) {
@@ -351,146 +337,100 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     };
   }
 
-  private isCurrentBackfillRequest(
-    epoch: number,
-    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>,
-    agentId: string,
-  ): boolean {
-    return (
-      epoch === this.backfillEpoch &&
-      this.context.gateway.snapshot.phase === "connected" &&
-      this.context.gateway.snapshot.client === client &&
-      this.currentAgentId() === agentId
-    );
-  }
-
-  private async previewBackfill() {
-    const snapshot = this.context.gateway.snapshot;
-    const client = snapshot.client;
-    const agentId = this.currentAgentId();
-    if (!client || !agentId || this.backfillBusy !== null || this.applyingProviderId !== null) {
-      return;
-    }
-    const epoch = ++this.backfillEpoch;
-    this.backfillBusy = "preview";
-    this.backfillError = null;
-    this.backfillPreview = null;
-    this.backfillProgress = null;
-    this.backfillRollbackResult = null;
-    try {
-      const result = await client.request<SessionBackfillGatewayResult>(
-        "memory.sessionBackfill.preview",
-        this.backfillRequest(agentId),
-      );
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillPreview = result;
-      }
-    } catch (error) {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillError = toErrorMessage(error);
-      }
-    } finally {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillBusy = null;
-      }
-    }
-  }
-
-  private async applyBackfill() {
-    const snapshot = this.context.gateway.snapshot;
-    const client = snapshot.client;
-    const agentId = this.currentAgentId();
-    if (!client || !agentId || this.backfillBusy !== null || this.applyingProviderId !== null) {
-      return;
-    }
-    const epoch = ++this.backfillEpoch;
-    this.backfillBusy = "apply";
-    this.backfillError = null;
-    this.backfillPreview = null;
-    this.backfillRollbackResult = null;
-    this.backfillProgress = {
-      days: 0,
-      candidates: 0,
-      staged: 0,
-      complete: false,
-    };
-    let progress = this.backfillProgress;
-    const processedDays = new Set<string>();
-    try {
-      while (true) {
-        const chunk = await client.request<SessionBackfillGatewayResult>(
-          "memory.sessionBackfill.apply",
-          this.backfillRequest(agentId),
-        );
-        if (!this.isCurrentBackfillRequest(epoch, client, agentId)) {
-          return;
-        }
-        if (chunk.candidates > 0 && chunk.cursor?.advanced !== true) {
-          throw new Error("Session backfill stopped because the server cursor did not advance.");
-        }
-        if (chunk.candidates === 0 && chunk.cursor?.exhausted !== true) {
-          throw new Error("Session backfill stopped because the server cursor was not exhausted.");
-        }
-        for (const day of chunk.perDay) {
-          processedDays.add(day.day);
-        }
-        progress = {
-          days: processedDays.size,
-          candidates: progress.candidates + chunk.candidates,
-          staged: progress.staged + chunk.staged,
-          complete: chunk.candidates === 0,
-        };
-        this.backfillProgress = progress;
-        // A zero-candidate call is the idempotent completion sentinel; cursor metadata proves
-        // that the server's persisted scan agrees before the client stops driving chunks.
-        if (chunk.candidates === 0) {
-          break;
-        }
-      }
-    } catch (error) {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillError = toErrorMessage(error);
-      }
-    } finally {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillBusy = null;
-      }
-    }
-  }
-
-  private async confirmBackfillRollback() {
-    const snapshot = this.context.gateway.snapshot;
-    const client = snapshot.client;
+  private async runBackfill(operation: "preview" | "apply" | "rollback") {
+    const client = this.context.gateway.snapshot.client;
     const agentId = this.currentAgentId();
     if (
+      !this.canAdmin ||
       !client ||
       !agentId ||
       this.backfillBusy !== null ||
       this.applyingProviderId !== null ||
-      !this.backfillRollbackPending
+      (operation === "rollback" && !this.backfillRollbackPending)
     ) {
       return;
     }
     const epoch = ++this.backfillEpoch;
-    this.backfillBusy = "rollback";
+    const isCurrent = () =>
+      epoch === this.backfillEpoch &&
+      this.context.gateway.snapshot.phase === "connected" &&
+      this.context.gateway.snapshot.client === client &&
+      this.currentAgentId() === agentId;
+    this.backfillBusy = operation;
     this.backfillError = null;
+    if (operation !== "rollback") {
+      this.backfillPreview = null;
+      this.backfillProgress = null;
+      this.backfillRollbackResult = null;
+    }
     try {
-      const result = await client.request<SessionBackfillRollbackResult>(
-        "memory.sessionBackfill.rollback",
-        { agentId },
-      );
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillRollbackResult = result;
-        this.backfillPreview = null;
-        this.backfillProgress = null;
-        this.backfillRollbackPending = false;
+      if (operation === "rollback") {
+        const result = await client.request<SessionBackfillRollbackResult>(
+          "memory.sessionBackfill.rollback",
+          { agentId },
+        );
+        if (isCurrent()) {
+          this.backfillRollbackResult = result;
+          this.backfillPreview = null;
+          this.backfillProgress = null;
+          this.backfillRollbackPending = false;
+        }
+      } else if (operation === "preview") {
+        const result = await client.request<SessionBackfillGatewayResult>(
+          "memory.sessionBackfill.preview",
+          this.backfillRequest(agentId),
+        );
+        if (isCurrent()) {
+          this.backfillPreview = result;
+        }
+      } else {
+        let progress: SessionBackfillProgress = {
+          days: 0,
+          candidates: 0,
+          staged: 0,
+          complete: false,
+        };
+        this.backfillProgress = progress;
+        const processedDays = new Set<string>();
+        while (true) {
+          const chunk = await client.request<SessionBackfillGatewayResult>(
+            "memory.sessionBackfill.apply",
+            this.backfillRequest(agentId),
+          );
+          if (!isCurrent()) {
+            return;
+          }
+          if (chunk.candidates > 0 && chunk.cursor?.advanced !== true) {
+            throw new Error("Session backfill stopped because the server cursor did not advance.");
+          }
+          if (chunk.candidates === 0 && chunk.cursor?.exhausted !== true) {
+            throw new Error(
+              "Session backfill stopped because the server cursor was not exhausted.",
+            );
+          }
+          for (const day of chunk.perDay) {
+            processedDays.add(day.day);
+          }
+          progress = {
+            days: processedDays.size,
+            candidates: progress.candidates + chunk.candidates,
+            staged: progress.staged + chunk.staged,
+            complete: chunk.candidates === 0,
+          };
+          this.backfillProgress = progress;
+          // A zero-candidate call is the idempotent completion sentinel; cursor metadata proves
+          // that the server's persisted scan agrees before the client stops driving chunks.
+          if (chunk.candidates === 0) {
+            break;
+          }
+        }
       }
     } catch (error) {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
-        this.backfillError = toErrorMessage(error);
+      if (isCurrent()) {
+        this.backfillError = formatUiError(error, "request failed");
       }
     } finally {
-      if (this.isCurrentBackfillRequest(epoch, client, agentId)) {
+      if (isCurrent()) {
         this.backfillBusy = null;
       }
     }
@@ -502,11 +442,12 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     const agentId = this.currentAgentId();
     const body = renderMemoryImport({
       connected: snapshot.phase === "connected",
+      canAdmin: this.canAdmin,
       agents: listSelectableAgents(agentsList?.agents ?? []),
       selectedAgentId: agentId,
       plan: this.plan,
-      loading: this.loading,
-      error: this.error,
+      loading: this.loading || this.context.agents.state.agentsLoading,
+      error: (agentId ? null : this.context.agents.state.agentsError) ?? this.error,
       applyError: this.applyError,
       replaceExisting: this.replaceExisting,
       selectedByProvider: this.selectedByProvider,
@@ -551,15 +492,15 @@ export class MemoryImportPage extends OpenClawLightDomElement {
         this.backfillRollbackResult = null;
         this.backfillError = null;
       },
-      onBackfillPreview: () => void this.previewBackfill(),
-      onBackfillApply: () => void this.applyBackfill(),
+      onBackfillPreview: () => void this.runBackfill("preview"),
+      onBackfillApply: () => void this.runBackfill("apply"),
       onBackfillRollbackRequest: () => {
         if (this.backfillBusy === null) {
           this.backfillRollbackPending = true;
           this.backfillError = null;
         }
       },
-      onBackfillRollbackConfirm: () => void this.confirmBackfillRollback(),
+      onBackfillRollbackConfirm: () => void this.runBackfill("rollback"),
       onBackfillRollbackCancel: () => {
         if (this.backfillBusy === null) {
           this.backfillRollbackPending = false;
@@ -567,15 +508,11 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       },
     });
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("memory-import")}</div>
-          <div class="page-subtitle">
-            ${subtitleForRoute("memory-import")}
-            ${renderDocsLink(MEMORY_IMPORT_DOCS_URL, t("common.learnMore"))}
-          </div>
-        </div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("memory-import"),
+        subtitle: html`${subtitleForRoute("memory-import")}
+        ${renderLearnMoreLink(MEMORY_IMPORT_DOCS_URL)}`,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

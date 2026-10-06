@@ -28,7 +28,7 @@ export type ExporterHealthUpdate = {
 };
 
 type FailureReason = ExporterHealthReason | "unspecified";
-type PublicExporterHealthUpdate = Omit<ExporterHealthUpdate, "status"> & {
+export type PublicExporterHealthUpdate = Omit<ExporterHealthUpdate, "status"> & {
   status: Exclude<ExporterHealthUpdate["status"], "recovered">;
 };
 type PublicSignalState = {
@@ -150,14 +150,14 @@ export function createPublicExporterHealthEventEmitter(
  * Observes the exporter result callback, which runs only after the OTLP
  * transport has exhausted dependency-owned retries.
  */
-export function observeOtlpExporterHealth<TExporter extends object>(
+export function observeOtlpExporterHealth<TExporter extends ObservableOtlpExporter>(
   exporter: TExporter,
   params: {
     emitExporterEvent: (event: ExporterHealthUpdate) => void;
     signal: ExporterHealthUpdate["signal"];
   },
 ): TExporter {
-  const observed = exporter as unknown as ObservableOtlpExporter;
+  const observed = exporter;
   const exportItems = observed.export.bind(observed);
   const shutdown = observed.shutdown.bind(observed);
 

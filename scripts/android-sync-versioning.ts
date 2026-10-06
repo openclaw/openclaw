@@ -18,6 +18,11 @@ function main(argv = process.argv.slice(2)): number {
     return 0;
   }
 
+  if (options.releaseVersion) {
+    throw new Error(
+      "Android version sync uses the pinned version; store notes come from the release artifact.",
+    );
+  }
   const result = syncAndroidVersioning({ mode: options.mode, rootDir: options.rootDir });
 
   if (options.mode === "check") {

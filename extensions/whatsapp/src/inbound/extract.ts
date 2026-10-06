@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements extract behavior.
 import type { proto } from "baileys";
 import { extractMessageContent, getContentType, normalizeMessageContent } from "baileys";
 import {
@@ -9,7 +8,7 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
-import { jidToE164 } from "../text-runtime.js";
+import { jidToE164 } from "../targets-runtime.js";
 import { parseVcard } from "../vcard.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import type { WhatsAppStructuredContactContext } from "./types.js";
@@ -35,7 +34,12 @@ function getFutureProofInnerMessage(message: proto.IMessage): proto.IMessage | u
   return undefined;
 }
 
-function buildMessageChain(message: proto.IMessage | undefined): proto.IMessage[] {
+type WhatsAppInboundMessageProjection = readonly proto.IMessage[];
+type WhatsAppInboundMessageSource = proto.IMessage | WhatsAppInboundMessageProjection | undefined;
+
+export function projectWhatsAppInboundMessage(
+  message: proto.IMessage | undefined,
+): WhatsAppInboundMessageProjection {
   const chain: proto.IMessage[] = [];
   let current = normalizeMessageContent(message);
   while (current && chain.length < 4) {
@@ -45,11 +49,25 @@ function buildMessageChain(message: proto.IMessage | undefined): proto.IMessage[
   return chain;
 }
 
+function isWhatsAppInboundMessageProjection(
+  message: WhatsAppInboundMessageSource,
+): message is WhatsAppInboundMessageProjection {
+  return Array.isArray(message);
+}
+
+function resolveWhatsAppInboundMessageProjection(
+  message: WhatsAppInboundMessageSource,
+): WhatsAppInboundMessageProjection {
+  return isWhatsAppInboundMessageProjection(message)
+    ? message
+    : projectWhatsAppInboundMessage(message);
+}
+
 export function findMessageSection<K extends keyof proto.IMessage>(
   rawMessage: proto.IMessage | undefined,
   sectionNames: readonly K[],
 ): { name: K; value: Record<string, unknown> } | undefined {
-  const chain = buildMessageChain(rawMessage);
+  const chain = projectWhatsAppInboundMessage(rawMessage);
   for (const name of sectionNames) {
     for (const message of chain) {
       const value = message[name];
@@ -61,9 +79,8 @@ export function findMessageSection<K extends keyof proto.IMessage>(
   return undefined;
 }
 
-function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  const chain = buildMessageChain(message);
-  return chain.at(-1);
+function unwrapMessage(message: WhatsAppInboundMessageSource): proto.IMessage | undefined {
+  return resolveWhatsAppInboundMessageProjection(message).at(-1);
 }
 
 function extractContextInfoFromMessage(message: proto.IMessage): proto.IContextInfo | undefined {
@@ -117,9 +134,9 @@ function extractContextInfoFromMessage(message: proto.IMessage): proto.IContextI
 }
 
 export function extractContextInfo(
-  message: proto.IMessage | undefined,
+  message: WhatsAppInboundMessageSource,
 ): proto.IContextInfo | undefined {
-  for (const candidate of buildMessageChain(message)) {
+  for (const candidate of resolveWhatsAppInboundMessageProjection(message)) {
     const contextInfo = extractContextInfoFromMessage(candidate);
     if (contextInfo) {
       return contextInfo;
@@ -128,9 +145,9 @@ export function extractContextInfo(
   return undefined;
 }
 
-export function extractMentionedJids(rawMessage: proto.IMessage | undefined): string[] | undefined {
+export function extractMentionedJids(message: WhatsAppInboundMessageSource): string[] | undefined {
   // Context ownership already follows Baileys envelopes without entering quoted messages.
-  const mentionedJids = extractContextInfo(rawMessage)?.mentionedJid?.filter(Boolean);
+  const mentionedJids = extractContextInfo(message)?.mentionedJid?.filter(Boolean);
   if (!mentionedJids?.length) {
     return undefined;
   }
@@ -157,8 +174,9 @@ function extractNativeFlowResponseText(
   }
 }
 
-export function extractText(rawMessage: proto.IMessage | undefined): string | undefined {
-  const message = unwrapMessage(rawMessage);
+export function extractText(source: WhatsAppInboundMessageSource): string | undefined {
+  const projection = resolveWhatsAppInboundMessageProjection(source);
+  const message = unwrapMessage(projection);
   if (!message) {
     return undefined;
   }
@@ -214,25 +232,22 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
       }
     }
   }
-  const contactPlaceholder =
-    extractContactPlaceholder(message) ??
+  return (
+    extractContactPlaceholder(projection) ??
     (extracted && extracted !== message
       ? extractContactPlaceholder(extracted as proto.IMessage | undefined)
-      : undefined);
-  if (contactPlaceholder) {
-    return contactPlaceholder;
-  }
-  return undefined;
+      : undefined)
+  );
 }
 
-export function extractExternalAdReplyContext(rawMessage: proto.IMessage | undefined):
+export function extractExternalAdReplyContext(source: WhatsAppInboundMessageSource):
   | {
       title?: string;
       sourceUrl?: string;
       body?: string;
     }
   | undefined {
-  const message = unwrapMessage(rawMessage);
+  const message = unwrapMessage(source);
   const adReply =
     message?.imageMessage?.contextInfo?.externalAdReply ??
     message?.videoMessage?.contextInfo?.externalAdReply;
@@ -246,9 +261,9 @@ export function extractExternalAdReplyContext(rawMessage: proto.IMessage | undef
 }
 
 export function extractMediaKind(
-  rawMessage: proto.IMessage | undefined,
+  source: WhatsAppInboundMessageSource,
 ): NonNullable<ChannelInboundMediaInput["kind"]> | undefined {
-  const message = unwrapMessage(rawMessage);
+  const message = unwrapMessage(source);
   if (!message) {
     return undefined;
   }
@@ -271,8 +286,8 @@ export function extractMediaKind(
   return undefined;
 }
 
-function extractContactPlaceholder(rawMessage: proto.IMessage | undefined): string | undefined {
-  const contactContext = extractContactContext(rawMessage);
+function extractContactPlaceholder(source: WhatsAppInboundMessageSource): string | undefined {
+  const contactContext = extractContactContext(source);
   if (!contactContext) {
     return undefined;
   }
@@ -284,22 +299,18 @@ function extractContactPlaceholder(rawMessage: proto.IMessage | undefined): stri
 }
 
 export function extractContactContext(
-  rawMessage: proto.IMessage | undefined,
+  source: WhatsAppInboundMessageSource,
 ): WhatsAppStructuredContactContext | undefined {
-  const message = unwrapMessage(rawMessage);
+  const message = unwrapMessage(source);
   if (!message) {
     return undefined;
   }
   const contact = message.contactMessage ?? undefined;
   if (contact) {
-    const { name, phones } = describeContact({
-      displayName: contact.displayName,
-      vcard: contact.vcard,
-    });
     return {
       kind: "contact",
       total: 1,
-      contacts: [{ name, phones }],
+      contacts: [describeContact(contact)],
     };
   }
   const contactsArray = message.contactsArrayMessage?.contacts ?? undefined;
@@ -309,9 +320,7 @@ export function extractContactContext(
   return {
     kind: "contacts",
     total: contactsArray.length,
-    contacts: contactsArray.map((entry) =>
-      describeContact({ displayName: entry.displayName, vcard: entry.vcard }),
-    ),
+    contacts: contactsArray.map(describeContact),
   };
 }
 
@@ -326,67 +335,60 @@ function describeContact(input: { displayName?: string | null; vcard?: string | 
 }
 
 export function extractLocationData(
-  rawMessage: proto.IMessage | undefined,
+  source: WhatsAppInboundMessageSource,
 ): NormalizedLocation | null {
-  const message = unwrapMessage(rawMessage);
-  if (!message) {
-    return null;
-  }
-
-  const live = message.liveLocationMessage ?? undefined;
-  if (live) {
-    const latitudeRaw = live.degreesLatitude;
-    const longitudeRaw = live.degreesLongitude;
-    if (latitudeRaw != null && longitudeRaw != null) {
-      const latitude = latitudeRaw;
-      const longitude = longitudeRaw;
-      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-        return {
-          latitude,
-          longitude,
-          accuracy: live.accuracyInMeters ?? undefined,
-          caption: live.caption ?? undefined,
-          source: "live",
-          isLive: true,
-        };
-      }
+  const message = unwrapMessage(source);
+  for (const [location, locationSource] of [
+    [message?.liveLocationMessage, "live"],
+    [message?.locationMessage, "pin"],
+  ] as const) {
+    const latitude = location?.degreesLatitude;
+    const longitude = location?.degreesLongitude;
+    if (
+      !location ||
+      latitude == null ||
+      longitude == null ||
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude)
+    ) {
+      continue;
     }
-  }
-
-  const location = message.locationMessage ?? undefined;
-  if (location) {
-    const latitudeRaw = location.degreesLatitude;
-    const longitudeRaw = location.degreesLongitude;
-    if (latitudeRaw != null && longitudeRaw != null) {
-      const latitude = latitudeRaw;
-      const longitude = longitudeRaw;
-      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-        const isLive = Boolean(location.isLive);
-        return {
-          latitude,
-          longitude,
-          accuracy: location.accuracyInMeters ?? undefined,
-          name: location.name ?? undefined,
-          address: location.address ?? undefined,
-          caption: location.comment ?? undefined,
-          source: isLive ? "live" : location.name || location.address ? "place" : "pin",
-          isLive,
-        };
-      }
+    const coordinates = { latitude, longitude, accuracy: location.accuracyInMeters ?? undefined };
+    if (locationSource === "live") {
+      return {
+        ...coordinates,
+        caption: location.caption ?? undefined,
+        source: locationSource,
+        isLive: true,
+      };
     }
+    const isLive = Boolean(location.isLive);
+    return {
+      ...coordinates,
+      name: location.name ?? undefined,
+      address: location.address ?? undefined,
+      caption: location.comment ?? undefined,
+      source: isLive ? "live" : location.name || location.address ? "place" : "pin",
+      isLive,
+    };
   }
 
   return null;
 }
 
 export function describeReplyContext(
-  rawMessage: proto.IMessage | undefined,
+  source: WhatsAppInboundMessageSource,
 ): WhatsAppReplyContext | null {
-  const message = unwrapMessage(rawMessage);
+  const projection = resolveWhatsAppInboundMessageProjection(source);
+  const message = unwrapMessage(projection);
   if (!message) {
     return null;
   }
-  const contextInfo = extractContextInfo(message);
+  const contextProjection =
+    projection.length === 1 && projection[0] === message
+      ? projection
+      : projectWhatsAppInboundMessage(message);
+  const contextInfo = extractContextInfo(contextProjection);
   const quoted = normalizeMessageContent(contextInfo?.quotedMessage as proto.IMessage | undefined);
   if (!quoted && !contextInfo?.stanzaId) {
     return null;
@@ -404,16 +406,17 @@ export function describeReplyContext(
       sender,
     };
   }
-  const location = extractLocationData(quoted);
+  const quotedProjection = projectWhatsAppInboundMessage(quoted);
+  const location = extractLocationData(quotedProjection);
   const locationText = location ? formatLocationText(location) : undefined;
-  const text = extractText(quoted);
+  const text = extractText(quotedProjection);
   const body = [text, locationText].filter(Boolean).join("\n").trim();
-  const mediaKind = extractMediaKind(quoted);
+  const mediaKind = extractMediaKind(quotedProjection);
   const media = mediaKind
     ? { kind: mediaKind, contentType: resolveInboundMediaMimetype(quoted) }
     : undefined;
   if (!body && !media) {
-    const quotedType = quoted ? getContentType(quoted) : undefined;
+    const quotedType = getContentType(quoted);
     logVerbose(
       `Quoted message missing extractable body${quotedType ? ` (type ${quotedType})` : ""}`,
     );
@@ -421,26 +424,10 @@ export function describeReplyContext(
   }
   return {
     id: contextInfo?.stanzaId || undefined,
-    body: body ?? "",
+    body,
     media,
     sender,
   };
-}
-
-function hasInteractiveResponseContent(message: proto.IMessage | undefined): boolean {
-  if (!message) {
-    return false;
-  }
-  // Button/list/template/interactive selections that the existing four
-  // extractors do not cover. Treat any presence of these keys as user
-  // content — Baileys never delivers these as receipts or protocol
-  // envelopes, only as explicit user choices.
-  return Boolean(
-    message.buttonsResponseMessage ||
-    message.listResponseMessage ||
-    message.templateButtonReplyMessage ||
-    message.interactiveResponseMessage,
-  );
 }
 
 /**
@@ -450,25 +437,19 @@ function hasInteractiveResponseContent(message: proto.IMessage | undefined): boo
  * `messages.upsert` stream as real messages but should not trigger pairing
  * access-control side effects.
  */
-export function hasInboundUserContent(rawMessage: proto.IMessage | undefined): boolean {
-  if (!rawMessage) {
-    return false;
-  }
-  if (extractText(rawMessage)) {
-    return true;
-  }
-  if (extractMediaKind(rawMessage)) {
-    return true;
-  }
-  if (extractLocationData(rawMessage)) {
-    return true;
-  }
-  // Walk wrappers (ephemeral, viewOnce, etc.) — interactive responses
-  // can arrive nested.
-  for (const candidate of buildMessageChain(rawMessage)) {
-    if (hasInteractiveResponseContent(candidate)) {
-      return true;
-    }
-  }
-  return false;
+export function hasInboundUserContent(source: WhatsAppInboundMessageSource): boolean {
+  const projection = resolveWhatsAppInboundMessageProjection(source);
+  return Boolean(
+    extractText(projection) ||
+    extractMediaKind(projection) ||
+    extractLocationData(projection) ||
+    // Interactive choices can be nested in wrappers and carry no extractable text.
+    projection.some(
+      (message) =>
+        message.buttonsResponseMessage ||
+        message.listResponseMessage ||
+        message.templateButtonReplyMessage ||
+        message.interactiveResponseMessage,
+    ),
+  );
 }

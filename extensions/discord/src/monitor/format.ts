@@ -1,4 +1,4 @@
-// Discord helper module supports format behavior.
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { Guild, User } from "../internal/discord.js";
 
 export function resolveDiscordSystemLocation(params: {
@@ -40,4 +40,3 @@ export function formatDiscordUserTag(user: User) {
 export function resolveTimestampMs(timestamp?: string | null) {
   return parseDateStringTimestampMs(timestamp);
 }
-import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";

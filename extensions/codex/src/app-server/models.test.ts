@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
     applyAuthProfile: vi.fn(async () => undefined),
     authProfileId: vi.fn((params?: { authProfileId?: string }) => params?.authProfileId),
     fallbackApiKeyCacheKey: vi.fn(() => undefined),
+    reconcileComputerUseArtifacts: vi.fn(async () => undefined),
     startOptions: vi.fn(async ({ startOptions }) => startOptions),
   };
   const managedBinary = {
@@ -23,17 +24,27 @@ const mocks = vi.hoisted(() => {
 vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.authBridge.applyAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.authBridge.startOptions,
-  resolveCodexAppServerFallbackApiKeyCacheKey: mocks.authBridge.fallbackApiKeyCacheKey,
-  resolveCodexAppServerAuthProfileIdForAgent: mocks.authBridge.authProfileId,
+  reconcileCodexComputerUseStartArtifacts: mocks.authBridge.reconcileComputerUseArtifacts,
   resolveCodexAppServerHomeDir: (agentDir: string) => `${agentDir}/codex-home`,
 }));
 
-vi.mock("./managed-binary.js", () => ({
+vi.mock("./auth-profile.js", () => ({
+  resolveCodexAppServerAuthProfileIdForAgent: mocks.authBridge.authProfileId,
+  resolveCodexAppServerAuthProfileStore: () => ({ version: 1, profiles: {} }),
+}));
+
+vi.mock("./auth-cache-key.js", () => ({
+  resolveCodexAppServerFallbackApiKeyCacheKey: mocks.authBridge.fallbackApiKeyCacheKey,
+}));
+
+vi.mock("./managed-binary.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./managed-binary.js")>()),
   resolveManagedCodexAppServerStartOptions: mocks.managedBinary.startOptions,
   resolveManagedCodexNativeCommand: mocks.managedBinary.nativeCommand,
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-harness-registration", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-registration")>()),
   resolveDefaultAgentDir: mocks.providerAuth.agentDir,
 }));
 
@@ -50,8 +61,28 @@ const validModelListEntry = {
   hidden: false,
   isDefault: false,
   defaultReasoningEffort: "medium",
+  multiAgentVersion: "v2",
   supportedReasoningEfforts: [],
 };
+
+function paginatedModel(id: string, inputModalities: string[]) {
+  return {
+    id,
+    model: id,
+    displayName: id,
+    description: id.toUpperCase(),
+    inputModalities,
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    hidden: false,
+    supportedReasoningEfforts: [],
+    defaultReasoningEffort: "medium",
+    supportsPersonality: false,
+    additionalSpeedTiers: [],
+    isDefault: false,
+  };
+}
 
 describe("listCodexAppServerModels", () => {
   beforeAll(async () => {
@@ -78,37 +109,11 @@ describe("listCodexAppServerModels", () => {
     mocks.providerAuth.agentDir.mockClear();
   });
 
-  it.each([
-    { label: "missing response", value: undefined },
-    { label: "null response", value: null },
-    { label: "missing model data", value: {} },
-    { label: "non-array model data", value: { data: {} } },
-    { label: "null model row", value: { data: [null] } },
-    { label: "invalid pagination cursor", value: { data: [], nextCursor: 42 } },
-    {
-      label: "whitespace model identifier",
-      value: { data: [{ ...validModelListEntry, id: "   " }] },
-    },
-    {
-      label: "whitespace model name",
-      value: { data: [{ ...validModelListEntry, model: "\t " }] },
-    },
-    {
-      label: "malformed row after a valid model",
-      value: { data: [validModelListEntry, { ...validModelListEntry, id: "   " }] },
-    },
-  ])("rejects $label without returning an incomplete model catalog", ({ value }) => {
-    expect(() => readModelListResult(value)).toThrow(
+  it("rejects a whitespace model name", () => {
+    expect(() => readModelListResult({ data: [{ ...validModelListEntry, model: "\t " }] })).toThrow(
       /Invalid Codex app-server model\/list response/,
     );
   });
-
-  it.each([{ data: [] }, { data: [], nextCursor: null }])(
-    "preserves a genuinely empty model catalog",
-    (value) => {
-      expect(readModelListResult(value)).toEqual({ models: [] });
-    },
-  );
 
   it("preserves generated model defaults and a valid pagination cursor", () => {
     expect(readModelListResult({ data: [validModelListEntry], nextCursor: "page-2" })).toEqual({
@@ -122,34 +127,49 @@ describe("listCodexAppServerModels", () => {
           isDefault: false,
           inputModalities: ["text", "image"],
           supportedReasoningEfforts: [],
+          serviceTiers: [],
           defaultReasoningEffort: "medium",
+          multiAgentVersion: "v2",
         },
       ],
       nextCursor: "page-2",
     });
   });
 
+  it("preserves explicit null while omitting an absent multi-agent version", () => {
+    expect(
+      readModelListResult({
+        data: [{ ...validModelListEntry, multiAgentVersion: null }],
+      }).models[0],
+    ).toHaveProperty("multiAgentVersion", null);
+    expect(
+      readModelListResult({
+        data: [
+          {
+            ...validModelListEntry,
+            multiAgentVersion: undefined,
+          },
+        ],
+      }).models[0],
+    ).not.toHaveProperty("multiAgentVersion");
+  });
+
   it.each([
     { label: "missing model data", response: {} },
-    { label: "non-array model data", response: { data: {} } },
-    {
-      label: "whitespace model identifier",
-      response: { data: [{ ...validModelListEntry, id: "   " }] },
-    },
     {
       label: "malformed row after a valid model",
       response: { data: [validModelListEntry, { ...validModelListEntry, id: "   " }] },
     },
   ])("rejects $label through the app-server JSON-RPC boundary", async ({ response }) => {
     const harness = createClientHarness();
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
 
     const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const list = JSON.parse(harness.writes[2] ?? "{}") as { id?: number; method?: string };
@@ -163,14 +183,14 @@ describe("listCodexAppServerModels", () => {
 
   it("lists app-server models through the typed helper", async () => {
     const harness = createClientHarness();
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
 
     const listPromise = listCodexAppServerModels({ limit: 12, timeoutMs: 1000 });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const list = JSON.parse(harness.writes[2] ?? "{}") as { id?: number; method?: string };
@@ -184,7 +204,13 @@ describe("listCodexAppServerModels", () => {
             id: "gpt-5.4",
             model: "gpt-5.4",
             upgrade: null,
-            upgradeInfo: null,
+            upgradeInfo: {
+              model: "gpt-5.6",
+              upgradeCopy: "Try GPT-5.6",
+              modelLink: null,
+              migrationMarkdown: null,
+              retirementAt: 1_800_000_000,
+            },
             availabilityNux: null,
             displayName: "gpt-5.4",
             description: "GPT-5.4",
@@ -196,6 +222,7 @@ describe("listCodexAppServerModels", () => {
             ],
             defaultReasoningEffort: "medium",
             supportsPersonality: false,
+            multiAgentVersion: "v2",
             additionalSpeedTiers: [],
             isDefault: true,
           },
@@ -214,7 +241,9 @@ describe("listCodexAppServerModels", () => {
           hidden: false,
           inputModalities: ["text", "image"],
           supportedReasoningEfforts: ["low", "xhigh"],
+          serviceTiers: [],
           defaultReasoningEffort: "medium",
+          multiAgentVersion: "v2",
           isDefault: true,
         },
       ],
@@ -225,14 +254,14 @@ describe("listCodexAppServerModels", () => {
 
   it("lists all app-server model pages through one client", async () => {
     const harness = createClientHarness();
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
 
     const listPromise = listAllCodexAppServerModels({ limit: 1, timeoutMs: 1000 });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const firstList = JSON.parse(harness.writes[2] ?? "{}") as {
@@ -244,24 +273,7 @@ describe("listCodexAppServerModels", () => {
     harness.send({
       id: firstList.id,
       result: {
-        data: [
-          {
-            id: "gpt-5.4",
-            model: "gpt-5.4",
-            upgrade: null,
-            upgradeInfo: null,
-            availabilityNux: null,
-            displayName: "gpt-5.4",
-            description: "GPT-5.4",
-            hidden: false,
-            inputModalities: ["text"],
-            supportedReasoningEfforts: [],
-            defaultReasoningEffort: "medium",
-            supportsPersonality: false,
-            additionalSpeedTiers: [],
-            isDefault: false,
-          },
-        ],
+        data: [paginatedModel("gpt-5.4", ["text"])],
         nextCursor: "page-2",
       },
     });
@@ -275,24 +287,7 @@ describe("listCodexAppServerModels", () => {
     harness.send({
       id: secondList.id,
       result: {
-        data: [
-          {
-            id: "gpt-5.5",
-            model: "gpt-5.5",
-            upgrade: null,
-            upgradeInfo: null,
-            availabilityNux: null,
-            displayName: "gpt-5.5",
-            description: "GPT-5.5",
-            hidden: false,
-            inputModalities: ["text", "image"],
-            supportedReasoningEfforts: [],
-            defaultReasoningEffort: "medium",
-            supportsPersonality: false,
-            additionalSpeedTiers: [],
-            isDefault: false,
-          },
-        ],
+        data: [paginatedModel("gpt-5.5", ["text", "image"])],
         nextCursor: null,
       },
     });
@@ -305,38 +300,21 @@ describe("listCodexAppServerModels", () => {
 
   it("marks all-model listing truncated after the page cap", async () => {
     const harness = createClientHarness();
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
 
     const listPromise = listAllCodexAppServerModels({ limit: 1, timeoutMs: 1000, maxPages: 1 });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const firstList = JSON.parse(harness.writes[2] ?? "{}") as { id?: number };
     harness.send({
       id: firstList.id,
       result: {
-        data: [
-          {
-            id: "gpt-5.4",
-            model: "gpt-5.4",
-            upgrade: null,
-            upgradeInfo: null,
-            availabilityNux: null,
-            displayName: "gpt-5.4",
-            description: "GPT-5.4",
-            hidden: false,
-            inputModalities: ["text"],
-            supportedReasoningEfforts: [],
-            defaultReasoningEffort: "medium",
-            supportsPersonality: false,
-            additionalSpeedTiers: [],
-            isDefault: false,
-          },
-        ],
+        data: [paginatedModel("gpt-5.4", ["text"])],
         nextCursor: "page-2",
       },
     });

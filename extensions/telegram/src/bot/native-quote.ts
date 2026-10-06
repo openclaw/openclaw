@@ -1,27 +1,15 @@
-// Telegram plugin module implements native quote behavior.
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { TelegramTextEntity } from "./body-helpers.js";
 
 const TELEGRAM_NATIVE_QUOTE_MAX_LENGTH = 1024;
 
-type TelegramNativeQuoteCandidate = {
+export type TelegramNativeQuoteCandidate = {
   text: string;
   position?: number;
   entities?: unknown[];
 };
 
 export type TelegramNativeQuoteCandidateByMessageId = Record<string, TelegramNativeQuoteCandidate>;
-
-function truncateUtf16Safe(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  let end = Math.max(0, Math.trunc(maxLength));
-  const lastCodeUnit = value.charCodeAt(end - 1);
-  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) {
-    end -= 1;
-  }
-  return value.slice(0, end);
-}
 
 function sliceTelegramEntitiesForQuote(
   entities: readonly TelegramTextEntity[] | undefined,
@@ -86,4 +74,51 @@ export function addTelegramNativeQuoteCandidate(
     return;
   }
   target[key] = candidate;
+}
+
+type TelegramReplyQuoteForSend = {
+  messageId?: number;
+  text?: string;
+  position?: number;
+  entities?: unknown[];
+};
+
+export function resolveReplyQuoteForSend(params: {
+  replyToId?: number;
+  replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
+  replyQuoteMessageId?: number;
+  replyQuoteText?: string;
+  replyQuotePosition?: number;
+  replyQuoteEntities?: unknown[];
+}): TelegramReplyQuoteForSend {
+  if (params.replyToId != null) {
+    const mapped = params.replyQuoteByMessageId?.[String(params.replyToId)];
+    if (mapped?.text) {
+      const quote: TelegramReplyQuoteForSend = {
+        messageId: params.replyToId,
+        text: mapped.text,
+      };
+      if (typeof mapped.position === "number") {
+        quote.position = mapped.position;
+      }
+      if (mapped.entities) {
+        quote.entities = mapped.entities;
+      }
+      return quote;
+    }
+  }
+  const quote: TelegramReplyQuoteForSend = {};
+  if (params.replyQuoteMessageId != null) {
+    quote.messageId = params.replyQuoteMessageId;
+  }
+  if (params.replyQuoteText != null) {
+    quote.text = params.replyQuoteText;
+  }
+  if (params.replyQuotePosition != null) {
+    quote.position = params.replyQuotePosition;
+  }
+  if (params.replyQuoteEntities != null) {
+    quote.entities = params.replyQuoteEntities;
+  }
+  return quote;
 }

@@ -25,35 +25,6 @@ describe("mcp cli OAuth", () => {
     await cleanupMcpCliTestState();
   });
 
-  it("includes OAuth credential status in MCP status output", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      readMcpOAuthCredentialsStatus.mockResolvedValueOnce({
-        state: "authorized",
-      });
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
-      ]);
-      mockLog.mockClear();
-
-      await runMcpCommand(["mcp", "status", "--json"]);
-
-      expect(JSON.parse(lastLogLine()).servers[0]).toMatchObject({
-        name: "docs",
-        auth: "oauth",
-        authStatus: {
-          hasTokens: false,
-          state: "authorized",
-        },
-      });
-    });
-  });
-
   it("surfaces required OAuth authorization in status and doctor", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
@@ -102,7 +73,7 @@ describe("mcp cli OAuth", () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      countMcpOAuthPrincipals.mockReturnValue(2);
+      countMcpOAuthPrincipals.mockResolvedValue(2);
 
       await runMcpCommand([
         "mcp",
@@ -172,27 +143,81 @@ describe("mcp cli OAuth", () => {
     });
   });
 
-  it("clears stored OAuth credentials on logout", async () => {
+  it.each([
+    {
+      name: "per-requester identity and redirect metadata",
+      oauth: {
+        identity: "per-requester",
+        scope: "docs.read",
+        redirectUrl: "https://gateway.example.com/oauth/mcp/callback",
+        clientMetadataUrl: "https://gateway.example.com/oauth/mcp.json",
+      },
+    },
+  ])("preserves $name when updating OAuth scope", async ({ oauth }) => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
       await runMcpCommand([
         "mcp",
         "set",
         "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
-      ]);
-      clearMcpOAuthCredentials.mockClear();
-      await runMcpCommand(["mcp", "logout", "docs"]);
-
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith(
-        expect.objectContaining({
-          serverName: "docs",
-          serverUrl: "https://mcp.example.com",
+        JSON.stringify({
+          url: "https://mcp.example.com",
+          transport: "streamable-http",
+          auth: "oauth",
+          oauth,
+          toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
         }),
-      );
-      expect(lastLogLine()).toBe('MCP OAuth credentials cleared for "docs".');
+      ]);
+
+      await runMcpCommand([
+        "mcp",
+        "configure",
+        "docs",
+        "--oauth-scope",
+        "docs.write",
+        "--include",
+        "search",
+      ]);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine())).toMatchObject({
+        oauth: { ...oauth, scope: "docs.write" },
+        toolFilter: { include: ["search"], exclude: ["admin_*"] },
+      });
+    });
+  });
+
+  it("does not restore previous OAuth metadata after an explicit clear", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        JSON.stringify({
+          url: "https://mcp.example.com",
+          auth: "oauth",
+          oauth: { authProfileId: "docs:mcp", scope: "docs.read" },
+        }),
+      ]);
+
+      await runMcpCommand([
+        "mcp",
+        "configure",
+        "docs",
+        "--clear-auth",
+        "--auth",
+        "oauth",
+        "--oauth-scope",
+        "docs.write",
+      ]);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine()).oauth).toEqual({ scope: "docs.write" });
     });
   });
 

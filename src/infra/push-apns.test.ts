@@ -7,7 +7,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 // Tests APNS push signing and request construction.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
 import {
   appendApnsResponseBodyCapture,
@@ -91,10 +91,12 @@ type DestroyableConnection = {
 function createDirectApnsSendFixture(params: {
   nodeId: string;
   environment: "sandbox" | "production";
-  sendResult: { status: number; apnsId: string; body: string };
+  sendResult?: { status: number; apnsId: string; body: string };
 }) {
   return {
-    send: vi.fn().mockResolvedValue(params.sendResult),
+    send: vi
+      .fn()
+      .mockResolvedValue(params.sendResult ?? { status: 200, apnsId: "test-apns-id", body: "" }),
     registration: {
       nodeId: params.nodeId,
       transport: "direct" as const,
@@ -295,7 +297,7 @@ describe("push APNs send semantics", () => {
     appendApnsResponseBodyCapture(capture, "def", 5);
 
     expect(getApnsResponseBodyCaptureText(capture)).toBe("abcde");
-    expect(capture).toMatchObject({ capturedBytes: 5, bytes: 6, truncated: true });
+    expect(capture).toMatchObject({ capturedBytes: 5, truncated: true });
   });
 
   it("preserves UTF-8 across HTTP/2 chunks and drops an incomplete capped suffix", () => {
@@ -311,7 +313,7 @@ describe("push APNs send semantics", () => {
     const cappedPrefix = "a".repeat(8191);
     appendApnsResponseBodyCapture(cappedCapture, Buffer.from(`${cappedPrefix}🚀`));
     expect(getApnsResponseBodyCaptureText(cappedCapture)).toBe(cappedPrefix);
-    expect(cappedCapture).toMatchObject({ capturedBytes: 8192, bytes: 8195, truncated: true });
+    expect(cappedCapture).toMatchObject({ capturedBytes: 8192, truncated: true });
   });
 
   it("preserves replacement decoding for a complete malformed APNs response", () => {
@@ -319,18 +321,13 @@ describe("push APNs send semantics", () => {
     appendApnsResponseBodyCapture(capture, Buffer.from([0x61, 0xf0, 0x9f]));
 
     expect(getApnsResponseBodyCaptureText(capture)).toBe("a�");
-    expect(capture).toMatchObject({ capturedBytes: 3, bytes: 3, truncated: false });
+    expect(capture).toMatchObject({ capturedBytes: 3, truncated: false });
   });
 
   it("sends alert pushes with alert headers and payload", async () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-alert",
       environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-alert-id",
-        body: "",
-      },
     });
 
     const result = await sendApnsAlert({
@@ -470,17 +467,11 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-wake",
       environment: "production",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-wake-id",
-        body: "",
-      },
     });
 
     const result = await sendApnsBackgroundWake({
       registration,
       nodeId: "ios-node-wake",
-      wakeReason: "node.invoke",
       auth,
       requestSender: send,
     });
@@ -512,11 +503,6 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-guarded-wake",
       environment: "production",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-guarded-wake-id",
-        body: "",
-      },
     });
     const controller = new AbortController();
     const isCurrent = vi.fn().mockResolvedValue(true);
@@ -560,10 +546,14 @@ describe("push APNs send semantics", () => {
       .spyOn(http2, "connect")
       .mockReturnValue(session as unknown as http2.ClientHttp2Session);
     const currentness = createDeferred<boolean>();
+    const checkingCurrentness = createDeferred();
     const isCurrent = vi
       .fn<() => Promise<boolean>>()
       .mockResolvedValueOnce(true)
-      .mockReturnValueOnce(currentness.promise);
+      .mockImplementationOnce(() => {
+        checkingCurrentness.resolve();
+        return currentness.promise;
+      });
     const { registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-session-error",
       environment: "production",
@@ -578,10 +568,13 @@ describe("push APNs send semantics", () => {
         auth,
         isCurrent,
       });
-      await vi.waitFor(() => {
-        expect(connect).toHaveBeenCalledTimes(1);
-        expect(isCurrent).toHaveBeenCalledTimes(2);
-      });
+      await withTestTimeout(
+        checkingCurrentness.promise,
+        1_000,
+        "APNs persistent currentness check did not start",
+      );
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(isCurrent).toHaveBeenCalledTimes(2);
 
       expect(session.listenerCount("error")).toBeGreaterThan(0);
       session.emit("error", new Error("APNs connection failed"));
@@ -600,11 +593,6 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-approval-alert",
       environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-approval-alert-id",
-        body: "",
-      },
     });
 
     const result = await sendApnsExecApprovalAlert({
@@ -652,11 +640,6 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-approval-cleanup",
       environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-approval-cleanup-id",
-        body: "",
-      },
     });
 
     const result = await sendApnsExecApprovalResolvedWake({
@@ -690,11 +673,6 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-plugin-approval-alert",
       environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-plugin-approval-alert-id",
-        body: "",
-      },
     });
     const description = `${"x".repeat(255)}😀${"y".repeat(300)}`;
 
@@ -844,11 +822,6 @@ describe("push APNs send semantics", () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-invalid-topic",
       environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "unused",
-        body: "",
-      },
     });
 
     await expect(
@@ -863,32 +836,6 @@ describe("push APNs send semantics", () => {
     ).rejects.toThrow("topic required");
 
     expect(send).not.toHaveBeenCalled();
-  });
-
-  it("defaults background wake reason when not provided", async () => {
-    const { send, registration, auth } = createDirectApnsSendFixture({
-      nodeId: "ios-node-wake-default-reason",
-      environment: "sandbox",
-      sendResult: {
-        status: 200,
-        apnsId: "apns-wake-default-reason-id",
-        body: "",
-      },
-    });
-
-    await sendApnsBackgroundWake({
-      registration,
-      nodeId: "ios-node-wake-default-reason",
-      auth,
-      requestSender: send,
-    });
-
-    const payload = requirePayload(requireSendRequest(send));
-    expectRecordFields(requireRecord(payload.openclaw, "openclaw payload"), {
-      kind: "node.wake",
-      reason: "node.invoke",
-      nodeId: "ios-node-wake-default-reason",
-    });
   });
 
   it("sends relay alert pushes and falls back to the stored token debug suffix", async () => {

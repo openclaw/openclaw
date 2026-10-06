@@ -1,12 +1,34 @@
 {
   "id": "workboard",
+  "uiCapabilities": [
+    "page",
+    "navigation",
+    "accessory",
+    "widget"
+  ],
+  "categories": [
+    "productivity"
+  ],
+  "cliCommands": [
+    {
+      "name": "workboard",
+      "description": "Manage Workboard cards and worker dispatch",
+      "hasSubcommands": true
+    }
+  ],
   "doctorContract": {
-    "stateMigrations": true
+    "stateMigrations": [
+      {
+        "id": "workboard-28-kv-to-sqlite"
+      }
+    ]
   },
   "enabledByDefault": false,
   "activation": {
     "onStartup": true,
-    "onCommands": ["workboard"]
+    "onCommands": [
+      "workboard"
+    ]
   },
   "dashboard": {
     "dataBindings": [
@@ -35,7 +57,10 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "boardId": { "type": "string", "minLength": 1 }
+            "boardId": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       }
@@ -43,7 +68,10 @@
   },
   "name": "Workboard",
   "description": "Dashboard workboard for agent-owned issues and sessions.",
-  "catalog": { "featured": true, "order": 10 },
+  "catalog": {
+    "featured": true,
+    "order": 10
+  },
   "contracts": {
     "tools": [
       "workboard_list",
@@ -61,6 +89,9 @@
       "workboard_board_create",
       "workboard_board_archive",
       "workboard_board_delete",
+      "workboard_sessions_board_read",
+      "workboard_sessions_board_update",
+      "workboard_sessions_board_move",
       "workboard_stats",
       "workboard_runs",
       "workboard_specify",
@@ -83,7 +114,11 @@
       "workboard_move"
     ]
   },
-  "commandAliases": [{ "name": "workboard" }],
+  "commandAliases": [
+    {
+      "name": "workboard"
+    }
+  ],
   "toolMetadata": {
     "workboard_list": {
       "optional": true
@@ -195,5 +230,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/0ad1758b44fdfe8cf6d7267c2abc81cf7a3aec6c28a837b3bdecf3656c3fa6e1/index.js",
+    "styles": [
+      "dist/control-ui/0ad1758b44fdfe8cf6d7267c2abc81cf7a3aec6c28a837b3bdecf3656c3fa6e1/index.css"
+    ]
   }
 }

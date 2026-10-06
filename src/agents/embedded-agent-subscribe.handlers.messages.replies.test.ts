@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   consumePendingToolMediaIntoReply,
-  consumePendingToolMediaReply,
   readPendingToolMediaReply,
+  restorePendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 
 describe("consumePendingToolMediaIntoReply", () => {
@@ -42,27 +42,6 @@ describe("consumePendingToolMediaIntoReply", () => {
     });
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolMediaAttachments).toStrictEqual([]);
-  });
-
-  it("does not append queued image tool media when the reply already names media", () => {
-    const state = {
-      pendingToolMediaUrls: ["/tmp/generated.png"],
-      pendingToolMediaTrustByUrl: new Map([["/tmp/generated.png", true]]),
-      pendingToolAudioAsVoice: false,
-    };
-
-    expect(
-      consumePendingToolMediaIntoReply(state, {
-        text: "done",
-        mediaUrls: ["./selected.png"],
-      }),
-    ).toEqual({
-      text: "done",
-      mediaUrls: ["./selected.png"],
-    });
-    expect(state.pendingToolMediaUrls).toStrictEqual([]);
-    expect(state.pendingToolAudioAsVoice).toBe(false);
-    expect(state.pendingToolMediaTrustByUrl.size).toBe(0);
   });
 
   it("retains queued metadata for explicitly selected media", () => {
@@ -173,7 +152,7 @@ describe("consumePendingToolMediaIntoReply", () => {
   });
 });
 
-describe("consumePendingToolMediaReply", () => {
+describe("pending tool-media reply ownership", () => {
   it("reads a media-only reply without consuming queued tool media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
@@ -189,18 +168,40 @@ describe("consumePendingToolMediaReply", () => {
     expect(state.pendingToolAudioAsVoice).toBe(true);
   });
 
-  it("builds a media-only reply for orphaned tool media", () => {
+  it("restores rejected media before newer pending media without widening trust", () => {
     const state = {
-      pendingToolMediaUrls: ["/tmp/reply.opus"],
-      pendingToolMediaTrustByUrl: new Map([["/tmp/reply.opus", false]]),
-      pendingToolAudioAsVoice: true,
+      pendingToolMediaUrls: ["/tmp/newer.png"],
+      pendingToolMediaAttachments: [{ type: "image" as const, path: "/tmp/newer.png" }],
+      pendingToolMediaTrustByUrl: new Map([["/tmp/newer.png", false]]),
+      pendingToolAudioAsVoice: false,
+      pendingToolMediaDeliveryFailed: false,
     };
 
-    expect(consumePendingToolMediaReply(state)).toEqual({
-      mediaUrls: ["/tmp/reply.opus"],
+    restorePendingToolMediaReply(state, {
+      mediaUrls: ["/tmp/trusted.opus", "/tmp/untrusted.opus"],
+      attachments: [
+        { path: "/tmp/trusted.opus", mimeType: "audio/ogg", trustedLocalMedia: true },
+        { path: "/tmp/untrusted.opus", mimeType: "audio/ogg" },
+      ],
       audioAsVoice: true,
     });
-    expect(state.pendingToolMediaUrls).toStrictEqual([]);
-    expect(state.pendingToolAudioAsVoice).toBe(false);
+
+    expect(readPendingToolMediaReply(state)).toEqual({
+      mediaUrls: ["/tmp/trusted.opus", "/tmp/untrusted.opus", "/tmp/newer.png"],
+      attachments: [
+        { path: "/tmp/trusted.opus", mimeType: "audio/ogg", trustedLocalMedia: true },
+        { path: "/tmp/untrusted.opus", mimeType: "audio/ogg" },
+        { type: "image", path: "/tmp/newer.png" },
+      ],
+      audioAsVoice: true,
+    });
+    expect(state.pendingToolMediaTrustByUrl).toEqual(
+      new Map([
+        ["/tmp/newer.png", false],
+        ["/tmp/trusted.opus", true],
+        ["/tmp/untrusted.opus", false],
+      ]),
+    );
+    expect(state.pendingToolMediaDeliveryFailed).toBe(true);
   });
 });

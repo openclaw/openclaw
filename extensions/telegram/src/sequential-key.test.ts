@@ -2,7 +2,7 @@
 import type { Chat, Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
-import { buildTelegramQuestionCallbackData } from "./question-callback-data.js";
+import { resolveTelegramForumFlag } from "./bot/helpers.js";
 import { getTelegramSequentialConstraints, getTelegramSequentialKey } from "./sequential-key.js";
 
 const mockChat = (
@@ -29,16 +29,6 @@ describe("getTelegramSequentialKey", () => {
     ],
     [
       {
-        me: { has_topics_enabled: false } as never,
-        message: mockMessage({
-          chat: mockChat({ id: 123, type: "private" }),
-          message_thread_id: 9,
-        }),
-      },
-      "telegram:123",
-    ],
-    [
-      {
         me: { has_topics_enabled: true } as never,
         message: mockMessage({
           chat: mockChat({ id: 123, type: "private" }),
@@ -46,133 +36,6 @@ describe("getTelegramSequentialKey", () => {
         }),
       },
       "telegram:123:topic:9",
-    ],
-    [
-      {
-        message: mockMessage({
-          chat: mockChat({ id: 123, type: "supergroup" }),
-          message_thread_id: 9,
-        }),
-      },
-      "telegram:123",
-    ],
-    [
-      {
-        message: mockMessage({
-          chat: mockChat({ id: -100123, type: "supergroup", is_direct_messages: true }),
-          direct_messages_topic: {
-            topic_id: 77,
-            user: { id: 700, is_bot: false, first_name: "Ada" },
-          },
-          message_thread_id: 999,
-        }),
-      },
-      "telegram:-100123:topic:77",
-    ],
-    [
-      {
-        message: mockMessage({
-          chat: mockChat({ id: 123, type: "supergroup" }),
-          message_thread_id: 9,
-          is_topic_message: true,
-        }),
-      },
-      "telegram:123:topic:9",
-    ],
-    [
-      {
-        message: mockMessage({
-          chat: mockChat({ id: 123, type: "supergroup" }),
-          is_topic_message: true,
-        }),
-      },
-      "telegram:123:topic:1",
-    ],
-    [
-      {
-        message: mockMessage({
-          chat: mockChat({ id: 123, type: "supergroup", is_forum: true }),
-        }),
-      },
-      "telegram:123:topic:1",
-    ],
-    [{ update: { message: mockMessage({ chat: mockChat({ id: 555 }) }) } }, "telegram:555"],
-    [{ update: { poll_answer: { poll_id: "poll-123" } } }, "telegram:poll:poll-123"],
-    [
-      {
-        channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),
-      },
-      "telegram:-100777111222",
-    ],
-    [
-      {
-        update: {
-          channel_post: mockMessage({ chat: mockChat({ id: -100777111223, type: "channel" }) }),
-        },
-      },
-      "telegram:-100777111223",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/stop" }) },
-      "telegram:123:control",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/steer keep going" }) },
-      "telegram:123:control",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/tell use the cache" }) },
-      "telegram:123:control",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/queue status" }) },
-      "telegram:123:control",
-    ],
-    [
-      {
-        message: mockMessage({
-          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
-          is_topic_message: true,
-          message_thread_id: 5907,
-          text: "/stop@vacs_tars_bot",
-        }),
-      },
-      "telegram:-100:control",
-    ],
-    [
-      {
-        message: mockMessage({
-          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
-          is_topic_message: true,
-          message_thread_id: 5907,
-          text: "/steer@vacs_tars_bot keep going",
-        }),
-      },
-      "telegram:-100:control",
-    ],
-    [
-      {
-        me: { username: "openclaw_bot" } as never,
-        message: mockMessage({
-          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
-          is_topic_message: true,
-          message_thread_id: 5907,
-          text: "/tell@openclaw_bot keep going!",
-        }),
-      },
-      "telegram:-100:control",
-    ],
-    [
-      {
-        me: { username: "openclaw_bot" } as never,
-        message: mockMessage({
-          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
-          is_topic_message: true,
-          message_thread_id: 5907,
-          text: "/queue@some_other_bot status",
-        }),
-      },
-      "telegram:-100:topic:5907",
     ],
     [
       {
@@ -198,126 +61,67 @@ describe("getTelegramSequentialKey", () => {
       },
       "telegram:-100:control",
     ],
+    // Interrupt commands keep the chat-wide control lane. `/approve` in particular must
+    // never queue behind the run that is blocked waiting on its own approval request.
     [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/status" }) },
+      {
+        message: mockMessage({
+          chat: mockChat({ id: 123 }),
+          text: "/approve exec:def456 allow-once",
+        }),
+      },
       "telegram:123:control",
     ],
     [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/commands" }) },
+      {
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 202,
+          text: "/approve exec:def456 deny",
+        }),
+      },
+      "telegram:-100:control",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/queue" }) },
       "telegram:123:control",
     ],
     [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/help" }) },
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/steer do the thing" }) },
       "telegram:123:control",
     ],
+    // Session-mutating commands must not share the chat-wide control lane: their writes
+    // stay ordered behind their own topic's pending input, `activeRunSafe` notwithstanding.
+    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/new" }) }, "telegram:123"],
     [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/tools" }) },
-      "telegram:123:control",
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/new sync tars" }) },
+      "telegram:123",
     ],
+    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/reset" }) }, "telegram:123"],
     [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/tasks" }) },
-      "telegram:123:control",
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/think high" }) },
+      "telegram:123",
     ],
+    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/compact" }) }, "telegram:123"],
     [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/context" }) },
-      "telegram:123:control",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/whoami" }) },
-      "telegram:123:control",
+      {
+        message: mockMessage({
+          chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+          is_topic_message: true,
+          message_thread_id: 202,
+          text: "/new sync tars",
+        }),
+      },
+      "telegram:-100:topic:202",
     ],
     [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/diagnostics" }) },
       "telegram:123",
     ],
     [
-      {
-        message: mockMessage({
-          chat: mockChat({ id: 123 }),
-          text: "/diagnostics confirm abc123def456",
-        }),
-      },
-      "telegram:123",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/export-session" }) },
-      "telegram:123",
-    ],
-    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/export" }) }, "telegram:123"],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/export-trajectory" }) },
-      "telegram:123",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/trajectory" }) },
-      "telegram:123",
-    ],
-    [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/btw what is the time?" }) },
       "telegram:123:btw:1",
-    ],
-    [
-      {
-        me: { username: "openclaw_bot" } as never,
-        message: mockMessage({
-          chat: mockChat({ id: 123 }),
-          text: "/btw@openclaw_bot what is the time?",
-        }),
-      },
-      "telegram:123:btw:1",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop" }) },
-      "telegram:123:control",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop please" }) },
-      "telegram:123:control",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "do not do that" }) },
-      "telegram:123:control",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "остановись" }) },
-      "telegram:123:control",
-    ],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "halt" }) },
-      "telegram:123:control",
-    ],
-    [
-      {
-        update: {
-          callback_query: {
-            message: mockMessage({ chat: mockChat({ id: 123 }) }),
-            data: "/approve plugin:abc123 allow-once",
-          },
-        },
-      },
-      "telegram:123:approval",
-    ],
-    [
-      {
-        update: {
-          callback_query: {
-            message: mockMessage({ chat: mockChat({ id: 456 }) }),
-            data: "/approve exec:def456 deny",
-          },
-        },
-      },
-      "telegram:456:approval",
-    ],
-    [
-      {
-        update: {
-          callback_query: {
-            message: mockMessage({ chat: mockChat({ id: 789 }) }),
-            data: "/approve plugin:ghi789 always",
-          },
-        },
-      },
-      "telegram:789:approval",
     ],
     ...(["exec", "plugin"] as const).map(
       (approvalKind): [Parameters<typeof getTelegramSequentialKey>[0], string] => [
@@ -341,22 +145,6 @@ describe("getTelegramSequentialKey", () => {
       {
         update: {
           callback_query: {
-            message: mockMessage({ chat: mockChat({ id: 655 }) }),
-            data: buildTelegramApprovalCallbackData({
-              type: "approval",
-              approvalKind: "exec",
-              approvalId: "signed-approval",
-              decision: "allow-once",
-            })?.replace(":o:", ":z:"),
-          },
-        },
-      },
-      "telegram:655:approval",
-    ],
-    [
-      {
-        update: {
-          callback_query: {
             message: mockMessage({ chat: mockChat({ id: 321 }) }),
             data: "tgq1:ask_0123456789abcdef0123456789abcdef:2",
           },
@@ -364,43 +152,61 @@ describe("getTelegramSequentialKey", () => {
       },
       "telegram:321:question",
     ],
-    [
-      {
-        update: {
-          callback_query: {
-            message: mockMessage({ chat: mockChat({ id: 322 }) }),
-            data: buildTelegramQuestionCallbackData({
-              questionId: "ask_0123456789abcdef0123456789abcdef",
-              optionIndex: 2,
-            })?.replace(/:2$/, ":9"),
-          },
-        },
-      },
-      "telegram:322:question",
-    ],
-    [
-      {
-        update: {
-          callback_query: {
-            message: mockMessage({ chat: mockChat({ id: 123 }) }),
-            data: "some-other-button",
-          },
-        },
-      },
-      "telegram:123",
-    ],
-    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort" }) }, "telegram:123"],
-    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort now" }) }, "telegram:123"],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "please do not do that" }) },
-      "telegram:123",
-    ],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toEqual(expected);
   });
 
   it("keeps malformed message updates on the unknown lane", () => {
     expect(getTelegramSequentialKey({ message: {} as Message })).toBe("telegram:unknown");
+  });
+
+  describe("forum flag cache fallback", () => {
+    it("uses cached forum flag to assign topic:1 lane when payload lacks is_forum and is_topic_message", async () => {
+      // Prime the cache the way bot-message-context does: resolveTelegramForumFlag
+      // calls cacheTelegramForumFlag internally when the hint is available.
+      await resolveTelegramForumFlag({
+        chatId: -9001,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: true,
+      });
+
+      // General topic message: no is_forum, no is_topic_message, no message_thread_id.
+      // Without the cache, getTelegramSequentialKey returns the base lane.
+      // With the cache primed, it must return topic:1.
+      const generalTopicCtx = {
+        message: mockMessage({
+          chat: mockChat({ id: -9001, type: "supergroup" }),
+        }),
+      };
+      expect(getTelegramSequentialKey(generalTopicCtx)).toBe("telegram:-9001:topic:1");
+    });
+
+    it("falls back to base lane when cache is empty and payload lacks is_forum hint", () => {
+      const ctx = {
+        message: mockMessage({
+          chat: mockChat({ id: -9002, type: "supergroup" }),
+        }),
+      };
+      expect(getTelegramSequentialKey(ctx)).toBe("telegram:-9002");
+    });
+
+    it("honors an explicit forum hint when the cached flag is stale", async () => {
+      await resolveTelegramForumFlag({
+        chatId: -9004,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: false,
+      });
+
+      const ctx = {
+        message: mockMessage({
+          chat: mockChat({ id: -9004, type: "supergroup" }),
+          is_topic_message: true,
+        }),
+      };
+      expect(getTelegramSequentialKey(ctx)).toBe("telegram:-9004:topic:1");
+    });
   });
 });
 

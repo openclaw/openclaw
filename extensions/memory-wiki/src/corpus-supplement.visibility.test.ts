@@ -20,7 +20,7 @@ const { createVault } = createMemoryWikiTestHarness();
 const appConfig = {
   // This suite registers memory-core directly; runtime discovery would load unrelated plugins.
   plugins: { enabled: false },
-  agents: { list: [{ id: "main", default: true }, { id: "secondary" }] },
+  agents: { entries: { main: {}, secondary: {} } },
 } as OpenClawConfig;
 
 async function writeBridgePage(params: {
@@ -219,15 +219,16 @@ describe("memory-wiki corpus supplement visibility", () => {
 
       expect(assertToolDetailsRecord(foreignGet.details)).toMatchObject({
         text: "",
-        disabled: true,
-        error: "wiki corpus result not found",
+        status: "not_found",
+        corpora: [{ corpus: "wiki", outcome: "ok" }],
       });
       expect(assertToolDetailsRecord(unownedGet.details)).toMatchObject({
         text: "",
-        disabled: true,
-        error: "wiki corpus result not found",
+        status: "not_found",
+        corpora: [{ corpus: "wiki", outcome: "ok" }],
       });
       expect(assertToolDetailsRecord(ownGet.details)).toMatchObject({
+        status: "ok",
         path: "sources/main-private.md",
         text: expect.stringContaining("REDACTED-OWN-MARKER"),
       });
@@ -236,6 +237,7 @@ describe("memory-wiki corpus supplement visibility", () => {
         expect.objectContaining({ path: "sources/main-private.md" }),
       ]);
       expect(assertToolDetailsRecord(openForeignGet.details)).toMatchObject({
+        status: "ok",
         path: "sources/secondary-private.md",
         text: expect.stringContaining("REDACTED-FOREIGN-MARKER"),
       });

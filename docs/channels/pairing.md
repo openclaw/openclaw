@@ -17,7 +17,9 @@ Security context: [Security](/gateway/security)
 
 ## 1) DM pairing (inbound chat access)
 
-When a channel is configured with DM policy `pairing`, unknown senders get a short code and their message is **not processed** until you approve.
+DM pairing applies to channels that implement OpenClaw's pairing API. With DM
+policy `pairing`, unknown senders get a short code and their message is **not
+processed** until you approve.
 
 Default DM policies are documented in: [Security](/gateway/security)
 
@@ -65,12 +67,33 @@ such as `telegram:123456789`. This gives first-time setups an explicit owner for
 privileged commands and exec approval prompts. After an owner exists, later
 pairing approvals only grant DM access; they do not add more owners.
 
+Manually allowlisted senders are not automatically command owners. If an
+authorized sender has no owner access, owner-only commands reply with the exact
+`openclaw config set commands.ownerAllowFrom` command for the operator to run.
+
+### Set up an owner without DM pairing
+
+Run `openclaw channels add` and complete the channel setup. When no command owner
+exists, the wizard offers **Set up my operator account** separately from chat
+access. Enter your personal user ID and confirm the exact account that may
+administer this installation. **Skip for now** leaves ownership unchanged.
+
+This also works for Discord servers and other group channels with DMs disabled.
+An owner can use `/update`, restart the Gateway, change configuration, and approve
+commands. Ownership does not grant chat access: existing channel and group access
+rules still apply. The wizard never promotes chat allowlists automatically or
+replaces an existing owner.
+
 <Note>
 WhatsApp's login QR links a WhatsApp account to OpenClaw. DM access requests
 approve people who message that account. These are separate flows.
 </Note>
 
-Supported channels (any installed channel plugin that declares pairing; external plugins such as `openclaw-weixin` can add more): `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `sms`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
+Supported channels include: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `sms`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
+
+Installed external plugins can also support DM pairing if they implement
+OpenClaw's pairing API. Check the plugin's documentation for version-specific
+limitations.
 
 ### Reusable sender groups
 
@@ -103,7 +126,8 @@ Access groups are documented in detail here: [Access groups](/channels/access-gr
 
 ### Where the state lives
 
-Stored in the shared SQLite state database at
+For channels that use OpenClaw's pairing API, state is stored in the shared SQLite
+database at
 `~/.openclaw/state/openclaw.sqlite`:
 
 - pending requests in `channel_pairing_requests`
@@ -112,13 +136,14 @@ Stored in the shared SQLite state database at
 Account scoping behavior:
 
 - each request and approved sender is keyed by channel and account
-- runtime reads only the canonical SQLite rows; it does not merge legacy files
+- channels using the pairing API read only the canonical SQLite rows; they do not merge legacy files
 
 Older gateways wrote `<channel>-pairing.json` and
 `<channel>-<accountId>-allowFrom.json` under `~/.openclaw/credentials/`.
-Startup migration and `openclaw doctor --fix` import those files into SQLite and
-remove each source after a successful import. Treat the SQLite database as
-sensitive because these rows gate access to your assistant.
+`openclaw doctor --fix` imports those files into SQLite and removes each source
+after a successful import. Normal Gateway startup leaves these legacy files
+unchanged. Treat the SQLite database as sensitive because these rows gate access
+to your assistant.
 
 <Note>
 The pairing allowlist store is for DM access. Group authorization is separate.
@@ -154,6 +179,8 @@ scopes before approving it.
 The button is disabled when the current Control UI session does not have
 administrator access. Use the CLI approval flow below from the Gateway host in
 that case.
+
+<a id="pair-via-telegram-recommended-for-ios" />
 
 ### Pair via Telegram
 
@@ -203,12 +230,20 @@ emulator host. Non-loopback plaintext routes receive limited access. Tailnet
 CGNAT addresses, `.ts.net` names, and public hosts still fail closed before
 QR/setup-code issuance.
 
-For `gateway.bind=lan` setup URLs, OpenClaw detects persistent Tailscale Serve
-HTTPS roots that proxy the active Gateway's loopback port and advertises them
-alongside the LAN route. The setup command adds this fallback only
-for `lan`; `custom` and `tailnet` keep their explicitly advertised routes. The
-iOS app probes the advertised routes in order and saves the first reachable
-endpoint.
+OpenClaw advertises Tailscale setup URLs only when it owns the route through
+`gateway.tailscale.mode=serve|funnel`. Legacy external Serve routes that proxy a
+`gateway.bind=lan` listener are not advertised because the ordinary listener
+rejects Tailscale-shaped proxy ingress. Run `openclaw doctor` to inspect the
+route; Doctor leaves the configuration unchanged because it cannot prove route
+ownership. If you confirm it is a stale route from an older OpenClaw release,
+remove only its root handler with `tailscale serve --yes --https=443
+--set-path=/ off` or `tailscale funnel --yes --https=443 --set-path=/ off`, then
+configure `gateway.bind=loopback` and `gateway.tailscale.mode=serve` manually and
+restart the Gateway. If another service owns the route, leave managed Tailscale
+ingress off and configure the explicit `gateway.trustedProxies` compatibility
+path. Custom Serve ports and Tailscale Services require manual migration.
+For a retired `gateway.tailscale.serviceName` config, Doctor disables managed
+ingress and prints the command needed to clear the retained Service route.
 
 ### Approve a node device
 
@@ -262,8 +297,9 @@ Stored in the shared SQLite state database at `~/.openclaw/state/openclaw.sqlite
 - pending device pairing requests (short-lived; they expire after 5 minutes)
 - paired devices + tokens
 
-Older gateways kept this state in `~/.openclaw/devices/*.json`; those files are
-imported into SQLite at gateway startup and archived with a `.migrated` suffix.
+Older gateways kept this state in `~/.openclaw/devices/*.json`. Stop the Gateway
+and run `openclaw doctor --fix` to import those files into SQLite and archive
+them with a `.migrated` suffix. Normal startup leaves legacy files unchanged.
 
 ### Notes
 
@@ -285,3 +321,4 @@ imported into SQLite at gateway startup and archived with a `.migrated` suffix.
   - iMessage: [iMessage](/channels/imessage)
   - Discord: [Discord](/channels/discord)
   - Slack: [Slack](/channels/slack)
+- [`openclaw pairing`](/cli/pairing) — drive pairing from the CLI

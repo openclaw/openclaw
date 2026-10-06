@@ -80,6 +80,34 @@ describe("tool-result-char-estimator", () => {
     expect(estimateMessageCharsCached(msg, cache)).toBe(8);
   });
 
+  it("uses current text when a tool-result block is reused across guard passes", () => {
+    const block = { type: "text" as const, text: "" };
+    for (const [text, expected] of [
+      ["a".repeat(16_000), 32_000],
+      ["你".repeat(16_000), 64_000],
+      ["𠀀".repeat(8_000), 128_000],
+      ["😀".repeat(8_000), 32_000],
+      ["\ud800".repeat(16_000), 32_000],
+      ["ok", 4],
+      ["", 0],
+    ] as const) {
+      block.text = text;
+      for (let pass = 0; pass < 2; pass += 1) {
+        const message: AgentMessage = {
+          role: "toolResult",
+          toolCallId: "read-1",
+          toolName: "read",
+          content: [block],
+          isError: false,
+          timestamp: 0,
+        };
+        expect(estimateMessageCharsCached(message, createMessageCharEstimateCache())).toBe(
+          expected,
+        );
+      }
+    }
+  });
+
   it("estimates a large bashExecution near its rendered size", () => {
     const bigOutput = "build log line\n".repeat(60000);
     const msg = {
@@ -98,21 +126,34 @@ describe("tool-result-char-estimator", () => {
     expect(chars).toBeGreaterThan(500_000);
   });
 
-  it("returns 0 for bashExecution with excludeFromContext", () => {
-    const msg = {
+  it.each([
+    {
       role: "bashExecution",
-      command: "npm run build",
-      output: "huge output ".repeat(50000),
-      exitCode: 0,
-      cancelled: false,
-      truncated: false,
-      excludeFromContext: true,
-      timestamp: 1,
-    } as unknown as AgentMessage;
-
+      message: {
+        role: "bashExecution",
+        command: "npm run build",
+        output: "huge output ".repeat(50000),
+        exitCode: 0,
+        cancelled: false,
+        truncated: false,
+        excludeFromContext: true,
+        timestamp: 1,
+      },
+    },
+    {
+      role: "custom",
+      message: {
+        role: "custom",
+        customType: "display-note",
+        content: "huge output ".repeat(50000),
+        display: true,
+        excludeFromContext: true,
+        timestamp: 1,
+      },
+    },
+  ])("returns 0 for excluded $role messages", ({ message }) => {
     const cache = createMessageCharEstimateCache();
-    const chars = estimateMessageCharsCached(msg, cache);
-    expect(chars).toBe(0);
+    expect(estimateMessageCharsCached(message as AgentMessage, cache)).toBe(0);
   });
 
   it("estimates compactionSummary with prefix/suffix", () => {
@@ -145,13 +186,13 @@ describe("tool-result-char-estimator", () => {
     expect(chars).toBeGreaterThan(256);
   });
 
-  it("estimates custom message with string content", () => {
+  it.each([true, false])("estimates custom message with display=%s", (display) => {
     const text = "custom data ".repeat(5000);
     const msg = {
       role: "custom",
       customType: "test",
       content: text,
-      display: true,
+      display,
       timestamp: 1,
     } as unknown as AgentMessage;
 

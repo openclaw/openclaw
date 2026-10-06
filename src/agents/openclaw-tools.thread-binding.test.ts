@@ -1,0 +1,50 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
+import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
+
+describe("registered sessions_spawn binding discovery", () => {
+  afterEach(() => resetPluginRuntimeStateForTest());
+
+  it.each(["current", "child"] as const)("%s placement", (placement) => {
+    const available = placement === "child";
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "binding-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "binding-chat", label: "Binding chat" }),
+            conversationBindings: {
+              defaultTopLevelPlacement: placement,
+              supportsCurrentConversationBinding: true,
+            },
+          },
+        },
+      ]),
+    );
+    const config = { session: { threadBindings: { enabled: true, spawnSessions: true } } };
+    const tool = createOpenClawTools({
+      agentChannel: "binding-chat",
+      config,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    expect(tool?.parameters).toMatchObject({
+      properties: { mode: { enum: available ? ["run", "session"] : ["run"] } },
+    });
+    if (available) {
+      expect(tool?.parameters).toHaveProperty("properties.thread.type", "boolean");
+    } else {
+      expect(tool?.parameters).not.toHaveProperty("properties.thread");
+    }
+    const capabilities = collectRuntimeChannelCapabilities({
+      cfg: config,
+      channel: "binding-chat",
+    });
+    expect(capabilities ?? []).toEqual(
+      available ? ["threadbound-subagent-spawn", "threadbound-acp-spawn"] : [],
+    );
+  });
+});

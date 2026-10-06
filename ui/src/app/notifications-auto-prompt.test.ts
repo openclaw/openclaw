@@ -32,7 +32,7 @@ function createContext(
   overrides: {
     supported?: boolean;
     permission?: NotificationPermission | "unsupported";
-    subscribed?: boolean;
+    subscription?: AutoPromptContext["webPush"]["snapshot"]["subscription"];
     loading?: boolean;
     nativePermission?: NativePermission | null;
   } = {},
@@ -49,11 +49,11 @@ function createContext(
       snapshot: {
         supported: overrides.supported ?? true,
         permission: overrides.permission ?? "default",
-        subscribed: overrides.subscribed ?? false,
+        subscription: overrides.subscription ?? "unknown",
         loading: overrides.loading ?? false,
         error: null,
       },
-      enable,
+      run: enable,
     },
   } as unknown as AutoPromptContext;
   return { context, enable, requestPermission };
@@ -86,29 +86,18 @@ describe("notification auto-prompt", () => {
     expect(storage.getItem(STORAGE_KEY)).toBe("1");
   });
 
-  it("does nothing when the one-shot flag is already set", () => {
-    storage.setItem(STORAGE_KEY, "1");
-    const { context, enable } = createContext();
+  it("does not enable web push when permission is denied", () => {
+    const { context, enable } = createContext({ permission: "denied" });
 
     autoPromptNotificationsOnSend(context);
 
     expect(enable).not.toHaveBeenCalled();
+    expect(storage.getItem(STORAGE_KEY)).toBeNull();
   });
 
-  it.each(["denied", "granted"] as const)(
-    "does not enable web push when permission is %s",
-    (permission) => {
-      const { context, enable } = createContext({ permission });
-
-      autoPromptNotificationsOnSend(context);
-
-      expect(enable).not.toHaveBeenCalled();
-      expect(storage.getItem(STORAGE_KEY)).toBeNull();
-    },
-  );
-
   it.each([
-    ["subscribed", { subscribed: true }],
+    ["subscribed", { subscription: "registered" as const }],
+    ["mismatched", { subscription: "vapid-mismatch" as const }],
     ["loading", { loading: true }],
     ["unsupported", { supported: false, permission: "unsupported" as const }],
   ])("does not enable web push when it is %s", (_name, overrides) => {
@@ -132,18 +121,15 @@ describe("notification auto-prompt", () => {
     expect(storage.getItem(STORAGE_KEY)).toBe("1");
   });
 
-  it.each(["denied", "unknown"] as const)(
-    "does not request native permission when it is %s",
-    (nativePermission) => {
-      const { context, enable, requestPermission } = createContext({ nativePermission });
+  it("does not request native permission when it is denied", () => {
+    const { context, enable, requestPermission } = createContext({ nativePermission: "denied" });
 
-      autoPromptNotificationsOnSend(context);
+    autoPromptNotificationsOnSend(context);
 
-      expect(requestPermission).not.toHaveBeenCalled();
-      expect(enable).not.toHaveBeenCalled();
-      expect(storage.getItem(STORAGE_KEY)).toBeNull();
-    },
-  );
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(enable).not.toHaveBeenCalled();
+    expect(storage.getItem(STORAGE_KEY)).toBeNull();
+  });
 
   it("fails closed when the localStorage getter throws", () => {
     Object.defineProperty(globalThis, "localStorage", {

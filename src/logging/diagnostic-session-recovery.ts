@@ -1,4 +1,3 @@
-// Diagnostic session recovery types describe session recovery diagnostic payloads.
 import type {
   DiagnosticSessionActiveWorkKind,
   DiagnosticSessionState,
@@ -7,14 +6,15 @@ import type {
 type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
   | "active_reply_work"
+  | "human_input_wait"
+  | "runtime_owned_wait"
   | "deferred_maintenance_wait"
+  | "terminal_outcome_committed"
   | "global_lane_wait"
   | "active_lane_task"
   | "already_in_flight"
   | "missing_session_ref"
   | "stale_session_state";
-
-type DiagnosticSessionRecoveryNoopReason = "no_active_work";
 
 export type StuckSessionRecoveryRequest = {
   sessionId?: string;
@@ -23,6 +23,8 @@ export type StuckSessionRecoveryRequest = {
   ageMs: number;
   queueDepth?: number;
   allowActiveAbort?: boolean;
+  /** Revalidate semantic no-progress evidence after deferred recovery dispatch. */
+  repeatedRequestNoProgressAbortMs?: number;
   expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
   /**
@@ -67,7 +69,7 @@ export type StuckSessionRecoveryOutcome =
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "released";
       action: "release_lane";
-      reason?: "stale_lane_task";
+      reason?: "no_active_work" | "stale_lane_task";
       released: number;
       queuedCount?: number;
     })
@@ -79,42 +81,25 @@ export type StuckSessionRecoveryOutcome =
       queuedCount?: number;
     })
   | (DiagnosticSessionRecoveryBaseOutcome & {
-      status: "noop";
-      action: "none";
-      reason: DiagnosticSessionRecoveryNoopReason;
-    })
-  | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "failed";
       action: "none";
       reason: "exception";
       error: string;
+    })
+  | (DiagnosticSessionRecoveryBaseOutcome & {
+      status: "failed";
+      action: "fail_worker_turn";
+      reason: "terminal_worker";
+      error: string;
     });
-
-export function recoveryOutcomeMutatesSessionState(
-  outcome: StuckSessionRecoveryOutcome | undefined,
-): boolean {
-  if (!outcome) {
-    return false;
-  }
-  return (
-    outcome.status === "aborted" ||
-    outcome.status === "released" ||
-    (outcome.status === "noop" && outcome.reason === "no_active_work")
-  );
-}
 
 export function recoveryOutcomeClearsQueuedSessionState(
   outcome: StuckSessionRecoveryOutcome,
 ): boolean {
   return (
-    outcome.status === "released" ||
-    (outcome.status === "aborted" && outcome.released > 0 && (outcome.queuedCount ?? 0) === 0) ||
-    (outcome.status === "noop" && outcome.reason === "no_active_work")
+    (outcome.status === "released" || (outcome.status === "aborted" && outcome.released > 0)) &&
+    (outcome.queuedCount ?? 0) === 0
   );
-}
-
-export function recoveryOutcomeReleasedCount(outcome: StuckSessionRecoveryOutcome): number {
-  return "released" in outcome ? outcome.released : 0;
 }
 
 export function formatRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): string {

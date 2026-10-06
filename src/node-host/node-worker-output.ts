@@ -1,31 +1,28 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
-import { finalizeCapturedOutput, type CapturedOutputBuffers } from "../process/exec-output.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 
 export const NODE_WORKER_STDOUT_MAX_BYTES = 64 * 1024;
-const STDERR_MAX_BYTES = 4 * 1024;
+export const NODE_WORKER_STDERR_MAX_BYTES = 4 * 1024;
 
-export type NodeWorkerCredentialScrubber = {
-  maxRepresentationBytes: number;
-  scrub: (text: string) => string;
-};
+export type NodeWorkerCredentialScrubber = ReturnType<typeof createNodeWorkerCredentialScrubber>;
 
-export function createNodeWorkerCredentialScrubber(
-  credential: string,
-): NodeWorkerCredentialScrubber {
-  const representations = new Set([
-    credential,
-    encodeURIComponent(credential),
-    JSON.stringify(credential).slice(1, -1),
-  ]);
+export function createNodeWorkerCredentialScrubber(credentials: string | readonly string[]) {
+  const values = typeof credentials === "string" ? [credentials] : credentials;
+  const representations = new Set(
+    values.flatMap((credential) => [
+      credential,
+      encodeURIComponent(credential),
+      JSON.stringify(credential).slice(1, -1),
+    ]),
+  );
   const ordered = [...representations].toSorted((left, right) => right.length - left.length);
   return {
     maxRepresentationBytes: Math.max(
       ...ordered.map((representation) => Buffer.byteLength(representation, "utf8")),
     ),
-    scrub: (text) => {
+    scrub: (text: string) => {
       let scrubbed = text;
       for (const representation of ordered) {
         scrubbed = scrubbed.replaceAll(representation, "[REDACTED]");
@@ -49,17 +46,13 @@ export function sanitizeNodeWorkerDiagnostic(
   const oneLine = redactLaunchText(formatErrorMessage(value), scrubCredential)
     .replace(/\s+/gu, " ")
     .trim();
-  return truncateUtf8Suffix(oneLine || fallback, STDERR_MAX_BYTES);
+  return truncateUtf8Suffix(oneLine || fallback, NODE_WORKER_STDERR_MAX_BYTES);
 }
 
-export function parseNodeWorkerSuccessfulResult(
-  stdout: CapturedOutputBuffers,
+export function parseNodeWorkerOutputJson(
+  raw: string,
   scrubCredential: (text: string) => string,
 ): string {
-  if (stdout.truncatedBytes > 0) {
-    throw new Error(`worker stdout exceeded ${NODE_WORKER_STDOUT_MAX_BYTES} bytes`);
-  }
-  const raw = finalizeCapturedOutput(stdout, "head", true).toString("utf8").trim();
   const redacted = redactLaunchText(raw, scrubCredential);
   let parsed: unknown;
   try {
@@ -73,5 +66,3 @@ export function parseNodeWorkerSuccessfulResult(
   }
   return result;
 }
-
-export const NODE_WORKER_STDERR_MAX_BYTES = STDERR_MAX_BYTES;

@@ -7,24 +7,6 @@ import { loadManifestContractSnapshot } from "./manifest-contract-eligibility.js
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
 
-/** Lists bundled plugin ids with a non-empty contract contribution in a manifest snapshot. */
-function listBundledManifestContractPluginIds(params: {
-  plugins: readonly PluginManifestRecord[];
-  contract: PluginManifestContractListKey;
-  onlyPluginIds?: readonly string[];
-}): string[] {
-  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
-  return params.plugins
-    .filter(
-      (plugin) =>
-        plugin.origin === "bundled" &&
-        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
-        (plugin.contracts?.[params.contract]?.length ?? 0) > 0,
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 /** Applies config activation and compatibility rules before returning bundled contract owners. */
 export function resolveEnabledBundledManifestContractPlugins(params: {
   config?: OpenClawConfig;
@@ -32,18 +14,25 @@ export function resolveEnabledBundledManifestContractPlugins(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: readonly string[];
   contract: PluginManifestContractListKey;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): PluginManifestRecord[] {
   if (params.config?.plugins?.enabled === false) {
     return [];
   }
-  let manifestRecords: readonly PluginManifestRecord[] | undefined;
-  const loadManifestRecords = (config?: OpenClawConfig) => {
+  let manifestRecords = params.manifestRecords;
+  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
+  const loadCandidates = () => {
     manifestRecords ??= loadManifestContractSnapshot({
-      config,
+      config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
     }).plugins;
-    return manifestRecords;
+    return manifestRecords.filter(
+      (plugin) =>
+        plugin.origin === "bundled" &&
+        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
+        (plugin.contracts?.[params.contract]?.length ?? 0) > 0,
+    );
   };
 
   const activation = resolveBundledCompatActivationInputs({
@@ -52,29 +41,21 @@ export function resolveEnabledBundledManifestContractPlugins(params: {
     workspaceDir: params.workspaceDir,
     onlyPluginIds: params.onlyPluginIds,
     applyAutoEnable: true,
-    resolveBundledPluginIds: (compatParams) =>
-      listBundledManifestContractPluginIds({
-        plugins: loadManifestRecords(compatParams.config),
-        contract: params.contract,
-        onlyPluginIds: compatParams.onlyPluginIds,
-      }),
+    resolveBundledPluginIds: () =>
+      loadCandidates()
+        .map((plugin) => plugin.id)
+        .toSorted((left, right) => left.localeCompare(right)),
   });
-  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
-  return loadManifestRecords(activation.config).filter((plugin) => {
-    if (
-      plugin.origin !== "bundled" ||
-      (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.id)) ||
-      (plugin.contracts?.[params.contract]?.length ?? 0) === 0
-    ) {
-      return false;
-    }
-    return resolveEffectivePluginActivationState({
-      id: plugin.id,
-      origin: plugin.origin,
-      config: activation.normalized,
-      rootConfig: activation.config,
-      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
-      activationSource: activation.activationSource,
-    }).enabled;
-  });
+  return loadCandidates().filter(
+    (plugin) =>
+      resolveEffectivePluginActivationState({
+        id: plugin.id,
+        origin: plugin.origin,
+        channelIds: plugin.channels,
+        config: activation.normalized,
+        rootConfig: activation.config,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+        activationSource: activation.activationSource,
+      }).enabled,
+  );
 }

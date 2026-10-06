@@ -1,10 +1,8 @@
-// Discord API module exposes the plugin public contract.
 export { discordPlugin } from "./src/channel.js";
 export { discordSetupPlugin } from "./src/channel.setup.js";
 export {
   handleDiscordSubagentDeliveryTarget,
   handleDiscordSubagentEnded,
-  handleDiscordSubagentSpawning,
 } from "./src/subagent-hooks.js";
 export { inspectDiscordAccount, type InspectedDiscordAccount } from "./src/account-inspect.js";
 export { type DiscordCredentialStatus } from "./src/token.js";
@@ -23,11 +21,11 @@ export { tryHandleDiscordMessageActionGuildAdmin } from "./src/actions/handle-ac
 export { DiscordApiError, fetchDiscord, requestDiscord } from "./src/api.js";
 export { buildDiscordComponentMessage } from "./src/components.js";
 type DiscordMessageActionHandler =
-  typeof import("./src/channel-actions.runtime.js").handleDiscordMessageAction;
+  typeof import("./src/actions/handle-action.js").handleDiscordMessageAction;
 
 // Deprecated compatibility surface for existing @openclaw/discord/api.js consumers.
 export const handleDiscordMessageAction: DiscordMessageActionHandler = async (...args) =>
-  (await import("./src/channel-actions.runtime.js")).handleDiscordMessageAction(...args);
+  (await import("./src/actions/handle-action.js")).handleDiscordMessageAction(...args);
 export {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -109,7 +107,10 @@ export {
   type DiscordProbe,
 } from "./src/probe.js";
 export { normalizeExplicitDiscordSessionKey } from "./src/session-key-normalization.js";
-export { parseDiscordSendTarget, type SendDiscordTarget } from "./src/send-target-parsing.js";
+export {
+  parseDiscordTarget as parseDiscordSendTarget,
+  type DiscordTarget as SendDiscordTarget,
+} from "./src/target-parsing.js";
 export {
   parseDiscordTarget,
   resolveDiscordChannelId,

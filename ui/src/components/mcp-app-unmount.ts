@@ -4,6 +4,7 @@ type McpAppUnmountTarget = Element & {
   restartAfterTeardown(): void;
   teardown(): Promise<void>;
 };
+type McpAppUnmountKey = string | readonly string[];
 
 function isMcpAppUnmountTarget(value: Element): value is McpAppUnmountTarget {
   return (
@@ -12,16 +13,13 @@ function isMcpAppUnmountTarget(value: Element): value is McpAppUnmountTarget {
   );
 }
 
-function findMcpAppUnmountTargets(
-  roots: Iterable<ParentNode>,
-  selector = "mcp-app-view",
-): McpAppUnmountTarget[] {
+function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTarget[] {
   const targets = new Set<McpAppUnmountTarget>();
   for (const root of roots) {
-    if (root instanceof Element && root.matches(selector) && isMcpAppUnmountTarget(root)) {
+    if (root instanceof Element && root.matches("mcp-app-view") && isMcpAppUnmountTarget(root)) {
       targets.add(root);
     }
-    for (const candidate of root.querySelectorAll(selector)) {
+    for (const candidate of root.querySelectorAll("mcp-app-view")) {
       if (isMcpAppUnmountTarget(candidate)) {
         targets.add(candidate);
       }
@@ -30,30 +28,28 @@ function findMcpAppUnmountTargets(
   return [...targets];
 }
 
-/**
- * Keeps the currently rendered subtree connected while MCP Apps acknowledge teardown.
- * New renders coalesce behind one bounded component-owned teardown instead of queuing.
- */
+/** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */
 export class McpAppUnmountGate {
-  private renderedKey: string | null = null;
+  private renderedKey: McpAppUnmountKey | null = null;
   private renderedValue: unknown;
   private pending = false;
   private restartTargets: McpAppUnmountTarget[] | null = null;
 
-  constructor(
-    private readonly host: ReactiveControllerHost,
-    private readonly selector = "mcp-app-view",
-  ) {}
+  constructor(private readonly host: ReactiveControllerHost) {}
 
-  private apply(key: string, value: unknown): unknown {
+  get retiring(): boolean {
+    return this.pending || this.restartTargets !== null;
+  }
+
+  private apply(key: McpAppUnmountKey, renderValue: () => unknown): unknown {
+    this.renderedValue = renderValue();
     this.renderedKey = key;
-    this.renderedValue = value;
     return this.renderedValue;
   }
 
   render(
-    key: string,
-    value: unknown,
+    key: McpAppUnmountKey,
+    renderValue: () => unknown,
     leavingRoots: () => Iterable<ParentNode>,
     options: { retainRenderedValue?: boolean } = {},
   ): unknown {
@@ -74,18 +70,18 @@ export class McpAppUnmountGate {
       });
       return this.renderedKey === key && options.retainRenderedValue
         ? this.renderedValue
-        : this.apply(key, value);
+        : this.apply(key, renderValue);
     }
     if (this.renderedKey === key && options.retainRenderedValue) {
       return this.renderedValue;
     }
     if (this.renderedKey === null || this.renderedKey === key) {
-      return this.apply(key, value);
+      return this.apply(key, renderValue);
     }
 
-    const targets = findMcpAppUnmountTargets(leavingRoots(), this.selector);
+    const targets = findMcpAppUnmountTargets(leavingRoots());
     if (targets.length === 0) {
-      return this.apply(key, value);
+      return this.apply(key, renderValue);
     }
 
     this.pending = true;

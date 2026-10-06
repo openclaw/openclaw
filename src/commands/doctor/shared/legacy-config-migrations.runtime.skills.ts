@@ -1,13 +1,9 @@
-import {
-  defineLegacyConfigMigration,
-  getRecord,
-  type LegacyConfigMigrationSpec,
-} from "../../../config/legacy.shared.js";
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
+import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "skills.workshop.autonomous.enabled->mode",
-    describe: "Migrate Skill Workshop autonomy to its three-position mode.",
     legacyRules: [
       {
         path: ["skills", "workshop", "autonomous", "enabled"],
@@ -31,5 +27,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
       }
       delete autonomous.enabled;
     },
-  }),
+  },
+  {
+    id: "skills.workshop.allowSymlinkTargetWrites-retired",
+    legacyRules: [
+      {
+        path: ["skills", "workshop", "allowSymlinkTargetWrites"],
+        message:
+          'skills.workshop.allowSymlinkTargetWrites is retired; Skill Workshop writes only inside its own directory. Run "openclaw doctor --fix".',
+      },
+    ],
+    apply: (raw, changes) => {
+      if (deleteRetiredPath(raw, ["skills", "workshop", "allowSymlinkTargetWrites"])) {
+        changes.push(
+          "Removed retired skills.workshop.allowSymlinkTargetWrites; Skill Workshop writes only inside its own directory.",
+        );
+      }
+    },
+  },
 ];

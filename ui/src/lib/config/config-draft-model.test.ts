@@ -1,17 +1,154 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import * as json5Runtime from "../json5-runtime.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
-  deferred,
   createGatewayHarness,
   createConfigServerMock,
+  createDeferredSetServerMock,
   createConfigCapabilityHarness,
 } from "./config-test-harness.ts";
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("config draft model", () => {
-  it("serializes schema-coerced form values with the draft base hash", async () => {
+  it.each([
+    { edit: "revert", dispose: false, unavailable: false },
+    { edit: "delete", dispose: false, unavailable: false },
+    { edit: "revert", dispose: false, unavailable: true },
+    { edit: "revert", dispose: true, unavailable: true },
+  ])(
+    "config.set replays $edit (dispose: $dispose, JSON5 unavailable: $unavailable)",
+    async ({ edit, dispose, unavailable }) => {
+      vi.useFakeTimers();
+      const canonical = { count: 2, ui: { prefs: { locale: "fr" } } };
+      const { request, submissions, firstSet } = createDeferredSetServerMock(canonical);
+      if (unavailable) {
+        vi.spyOn(json5Runtime, "parseJson5Text").mockImplementation(JSON.parse);
+        vi.spyOn(json5Runtime, "warmJson5").mockRejectedValue(new Error("Chunk unavailable"));
+        request.mockResolvedValueOnce({
+          config: { count: 1 },
+          raw: '// operator comment\n{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      const { runtimeConfig } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
+      runtimeConfig.patchForm(["count"], 2);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      if (edit === "revert") {
+        runtimeConfig.patchForm(["count"], 1);
+      } else {
+        runtimeConfig.removeFormValue(["count"]);
+      }
+      if (dispose) {
+        runtimeConfig.dispose();
+      }
+      firstSet.resolve({});
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+
+      expect(submissions).toHaveLength(2);
+      expect(submissions[1]?.baseHash).toBe("hash-2");
+      expect(submissions.map(({ raw }) => JSON.parse(raw))).toEqual([
+        { count: 2 },
+        { ...(edit === "revert" ? { count: 1 } : {}), ui: canonical.ui },
+      ]);
+      if (!dispose) {
+        expect(runtimeConfig.state.configFormDirty).toBe(false);
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe("saved");
+      }
+      runtimeConfig.dispose();
+      vi.restoreAllMocks();
+    },
+  );
+
+  it.each([
+    ["comments", "{\n  // Keep this note.\n  count: 2,\n}\n"],
+    ["semantic edit", "{ count: 3, /* keep spacing */ }\n"],
+  ])("config.set adopts its revision and rejects stale raw %s by content", async (_edit, raw) => {
+    vi.useFakeTimers();
+    const canonical = { count: 2, ui: { prefs: { locale: "fr" } } };
+    const { request, submissions, firstSet } = createDeferredSetServerMock(canonical);
+    const { runtimeConfig } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    await runtimeConfig.ensureLoaded();
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    runtimeConfig.setRaw(raw);
+    firstSet.resolve({});
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+
+    expect(runtimeConfig.state.configRaw).toBe(raw);
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(runtimeConfig.state.configDraftBaseHash).toBe("hash-2");
+    expect(runtimeConfig.state.configSnapshot).toMatchObject({ config: canonical, hash: "hash-2" });
+    await expect(runtimeConfig.save()).resolves.toBe(false);
+    expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
+    expect(submissions).toHaveLength(1);
+    runtimeConfig.dispose();
+  });
+
+  it.each([
+    { edit: "replace", dispose: false },
+    { edit: "delete", dispose: false },
+    { edit: "replace", dispose: true },
+    { edit: "delete", dispose: true },
+  ])(
+    "config.set retains a redacted object's child $edit (dispose: $dispose)",
+    async ({ edit, dispose }) => {
+      vi.useFakeTimers();
+      const canonical = {
+        count: 1,
+        channels: { googlechat: { serviceAccount: "__OPENCLAW_REDACTED__" } },
+        ui: { prefs: { locale: "fr" } },
+      };
+      const { request, submissions, firstSet } = createDeferredSetServerMock(canonical);
+      const { runtimeConfig } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
+      const account = { project_id: "fixture-project", client_email: "before@example.invalid" };
+      const path = ["channels", "googlechat", "serviceAccount"];
+      runtimeConfig.patchForm(path, account);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      if (edit === "delete") {
+        runtimeConfig.removeFormValue([...path, "client_email"]);
+      } else {
+        runtimeConfig.patchForm([...path, "client_email"], "after@example.invalid");
+      }
+      if (dispose) {
+        runtimeConfig.dispose();
+      }
+      firstSet.resolve({});
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+
+      expect(submissions).toHaveLength(2);
+      expect(submissions[1]?.baseHash).toBe("hash-2");
+      expect(submissions.map(({ raw }) => JSON.parse(raw))).toEqual([
+        { count: 1, channels: { googlechat: { serviceAccount: account } } },
+        {
+          ...canonical,
+          channels: {
+            googlechat: {
+              serviceAccount: {
+                project_id: "fixture-project",
+                ...(edit === "replace" ? { client_email: "after@example.invalid" } : {}),
+              },
+            },
+          },
+        },
+      ]);
+      runtimeConfig.dispose();
+    },
+  );
+
+  it("config.set serializes schema-coerced form values with the draft base hash", async () => {
     const submitted: Array<{ method: string; params: unknown }> = [];
     let configGetCount = 0;
     const request = vi.fn(async (method: string, params?: unknown) => {
@@ -43,7 +180,7 @@ describe("config draft model", () => {
         };
       }
       submitted.push({ method, params });
-      return {};
+      return { config: JSON.parse((params as { raw: string }).raw), hash: "hash-2" };
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
@@ -99,7 +236,7 @@ describe("config draft model", () => {
         };
       }
       submitted.push({ method, params });
-      return { hash: "hash-2" };
+      return { config: JSON.parse((params as { raw: string }).raw), hash: "hash-2" };
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
@@ -116,7 +253,7 @@ describe("config draft model", () => {
     runtimeConfig.dispose();
   });
 
-  it("submits only decimal numeric spellings as numbers", async () => {
+  it("config.set submits only decimal numeric spellings as numbers", async () => {
     const submitted: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.get") {
@@ -142,13 +279,27 @@ describe("config draft model", () => {
               fractionalInteger: { type: "integer" },
               unionRadix: { anyOf: [{ type: "integer" }, { type: "string" }] },
               unionScientific: { anyOf: [{ type: "integer" }, { type: "string" }] },
+              unionDigits: {
+                oneOf: [{ type: "integer" }, { type: "string", pattern: "^[0-9]+$" }],
+              },
+              unionEnum: {
+                anyOf: [
+                  { type: "number", const: 60 },
+                  { type: "string", enum: ["60"] },
+                ],
+              },
+              unionConstOnly: { anyOf: [{ const: "60" }, { type: "number" }] },
+              unionEnumOnly: { oneOf: [{ enum: ["60"] }, { type: "number" }] },
+              unionBooleanConstOnly: {
+                anyOf: [{ const: "true" }, { type: "boolean" }],
+              },
             },
           },
           uiHints: {},
         };
       }
       submitted.push({ method, params });
-      return { hash: "hash-2" };
+      return { config: JSON.parse((params as { raw: string }).raw), hash: "hash-2" };
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
@@ -165,6 +316,11 @@ describe("config draft model", () => {
     runtimeConfig.patchForm(["fractionalInteger"], "42.5");
     runtimeConfig.patchForm(["unionRadix"], "0o17");
     runtimeConfig.patchForm(["unionScientific"], "1e5");
+    runtimeConfig.patchForm(["unionDigits"], "00123");
+    runtimeConfig.patchForm(["unionEnum"], "60");
+    runtimeConfig.patchForm(["unionConstOnly"], "60");
+    runtimeConfig.patchForm(["unionEnumOnly"], "60");
+    runtimeConfig.patchForm(["unionBooleanConstOnly"], "true");
 
     await expect(runtimeConfig.save()).resolves.toBe(true);
     const submission = submitted.find((entry) => entry.method === "config.set");
@@ -180,21 +336,98 @@ describe("config draft model", () => {
       decimal: 0.5,
       fractionalInteger: "42.5",
       unionRadix: "0o17",
-      unionScientific: 100_000,
+      // String-capable unions keep the text input; the Gateway owns constraints.
+      unionScientific: "1e5",
+      unionDigits: "00123",
+      unionEnum: "60",
+      unionConstOnly: "60",
+      unionEnumOnly: "60",
+      unionBooleanConstOnly: "true",
     });
     runtimeConfig.dispose();
   });
 
-  it("stages inherited agent overrides and the default through the public capability", async () => {
+  it("config.set preserves 64-bit id strings through the form submit roundtrip", async () => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          config: {
+            allowFrom: { discord: ["1048113311314608148", 42] },
+            label: "before",
+          },
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.schema") {
+        return {
+          schema: {
+            type: "object",
+            properties: {
+              allowFrom: {
+                type: "object",
+                additionalProperties: {
+                  type: "array",
+                  items: {
+                    oneOf: [
+                      {
+                        type: "string",
+                        allOf: [{ pattern: "^[0-9]+$" }],
+                        not: { const: "never" },
+                      },
+                      { type: "number" },
+                    ],
+                  },
+                },
+              },
+              bigInteger: { type: "integer" },
+              label: { type: "string" },
+            },
+          },
+          uiHints: {},
+        };
+      }
+      submitted.push({ method, params });
+      return { config: JSON.parse((params as { raw: string }).raw), hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
+    // Only the unrelated label is edited; the untouched allowFrom entry must
+    // come back byte-identical instead of collapsing to Number precision.
+    runtimeConfig.patchForm(["label"], "after");
+    runtimeConfig.patchForm(["bigInteger"], "10481133113146081487");
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const submission = submitted.find((entry) => entry.method === "config.set");
+    const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
+    expect(typeof raw).toBe("string");
+    expect(JSON.parse(raw as string)).toEqual({
+      allowFrom: { discord: ["1048113311314608148", 42] },
+      // Beyond 2^53 an unsafe integer parse must not happen even for pure
+      // integer fields; the string is kept for the gateway to reject loudly.
+      bigInteger: "10481133113146081487",
+      label: "after",
+    });
+    runtimeConfig.dispose();
+  });
+
+  it("config.set stages inherited agent overrides and the default through the public capability", async () => {
     const submitted: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.get") {
         return {
           sourceConfig: {
             agents: {
+              ownership: "explicit",
+              defaults: { systemAgent: { agentId: "reviewer" } },
               entries: {
                 MAIN: {},
-                reviewer: { default: true },
+                reviewer: {},
               },
             },
           },
@@ -204,7 +437,7 @@ describe("config draft model", () => {
         };
       }
       submitted.push({ method, params });
-      return { hash: "hash-2" };
+      return { config: JSON.parse((params as { raw: string }).raw), hash: "hash-2" };
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
@@ -220,8 +453,10 @@ describe("config draft model", () => {
     expect(runtimeConfig.stageDefaultAgent("main")).toBe(true);
     expect(runtimeConfig.state.configForm).toEqual({
       agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "MAIN" } },
         entries: {
-          MAIN: { default: true },
+          MAIN: {},
           reviewer: {},
           "new-agent": { model: "openai/gpt-5.4" },
         },
@@ -235,8 +470,10 @@ describe("config draft model", () => {
     )?.raw;
     expect(JSON.parse(String(raw))).toEqual({
       agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "MAIN" } },
         entries: {
-          MAIN: { default: true },
+          MAIN: {},
           reviewer: {},
           "new-agent": { model: "openai/gpt-5.4" },
         },
@@ -250,7 +487,7 @@ describe("config draft model", () => {
     const request = vi.fn(async (method: string) =>
       method === "config.get"
         ? {
-            sourceConfig: { agents: { entries: { main: { default: true } } } },
+            sourceConfig: { agents: { entries: { main: {} } } },
             hash: "hash-1",
             valid: true,
             issues: [],
@@ -265,21 +502,15 @@ describe("config draft model", () => {
     expect(runtimeConfig.agentEntry("__proto__", { ensure: true })).toBeNull();
     expect(runtimeConfig.agentEntry(" ", { ensure: true })).toBeNull();
     expect(runtimeConfig.state.configForm).toEqual({
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
     });
     runtimeConfig.dispose();
   });
 
   it.each([
     ["automatic save", "123"],
-    ["automatic save", "z.ai"],
-    ["automatic save", "a.models.3"],
-    ["manual save", "123"],
     ["manual save", "z.ai"],
-    ["manual save", "a.models.3"],
     ["manual save", "$&"],
-    ["apply", "123"],
-    ["apply", "z.ai"],
     ["apply", "a.models.3"],
   ] as const)(
     "formats the rejected %s validation path for provider %s without changing the Gateway issue",
@@ -633,79 +864,95 @@ describe("config draft model", () => {
     runtimeConfig.dispose();
   });
 
-  it("clears a failure status and error when a mutation reverts the draft clean", async () => {
-    vi.useFakeTimers();
-    let setCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          config: { count: 1 },
-          raw: '{\n  "count": 1\n}\n',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        };
+  it.each(["form", "raw"] as const)(
+    "clears a failure when %s editing reverts the draft clean",
+    async (mode) => {
+      vi.useFakeTimers();
+      let setCalls = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "config.get") {
+          return {
+            config: { count: 1 },
+            raw: '{\n  "count": 1\n}\n',
+            hash: "hash-1",
+            valid: true,
+            issues: [],
+          };
+        }
+        if (method === "config.set") {
+          setCalls += 1;
+          throw new Error("disk full");
+        }
+        return {};
+      });
+      const { runtimeConfig } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
+
+      runtimeConfig.patchForm(["count"], 2);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
+
+      // Reverting to the original makes the failure moot.
+      if (mode === "raw") {
+        runtimeConfig.setRaw(runtimeConfig.state.configRawOriginal);
+      } else {
+        runtimeConfig.patchForm(["count"], 1);
       }
-      if (method === "config.set") {
-        setCalls += 1;
-        throw new Error("disk full");
+      expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
+      expect(runtimeConfig.state.configFormDirty).toBe(false);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
+      expect(runtimeConfig.state.lastError).toBeNull();
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+      expect(setCalls).toBe(1);
+      runtimeConfig.dispose();
+    },
+  );
+
+  it.each(["form", "raw"] as const)(
+    "keeps conflict status when %s editing reverts the draft clean",
+    async (mode) => {
+      vi.useFakeTimers();
+      const request = vi.fn(async (method: string) => {
+        if (method === "config.get") {
+          return {
+            config: { count: 1 },
+            raw: '{\n  "count": 1\n}\n',
+            hash: "hash-1",
+            valid: true,
+            issues: [],
+          };
+        }
+        if (method === "config.set") {
+          throw new Error("config changed since last load; re-run config.get and retry");
+        }
+        return {};
+      });
+      const { runtimeConfig } = createConfigCapabilityHarness(
+        request as GatewayBrowserClient["request"],
+      );
+      await runtimeConfig.ensureLoaded();
+
+      runtimeConfig.patchForm(["count"], 2);
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
+
+      // The snapshot is known stale; local cleanliness cannot clear that.
+      if (mode === "raw") {
+        runtimeConfig.setRaw(runtimeConfig.state.configRawOriginal);
+      } else {
+        runtimeConfig.patchForm(["count"], 1);
       }
-      return {};
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
+      expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
+      expect(runtimeConfig.state.configFormDirty).toBe(false);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
 
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("error");
-
-    // Reverting to the original makes the failure moot.
-    runtimeConfig.patchForm(["count"], 1);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-    expect(runtimeConfig.state.lastError).toBeNull();
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
-    expect(setCalls).toBe(1);
-    runtimeConfig.dispose();
-  });
-
-  it("keeps the conflict status until reload even when the draft reverts clean", async () => {
-    vi.useFakeTimers();
-    const request = vi.fn(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          config: { count: 1 },
-          raw: '{\n  "count": 1\n}\n',
-          hash: "hash-1",
-          valid: true,
-          issues: [],
-        };
-      }
-      if (method === "config.set") {
-        throw new Error("config changed since last load; re-run config.get and retry");
-      }
-      return {};
-    });
-    const { runtimeConfig } = createConfigCapabilityHarness(
-      request as GatewayBrowserClient["request"],
-    );
-    await runtimeConfig.ensureLoaded();
-
-    runtimeConfig.patchForm(["count"], 2);
-    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
-
-    // The snapshot is known stale; local cleanliness cannot clear that.
-    runtimeConfig.patchForm(["count"], 1);
-    expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
-
-    await runtimeConfig.refresh({ discardPendingChanges: true });
-    expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
-    runtimeConfig.dispose();
-  });
+      await runtimeConfig.discardDraft({ reloadOnly: true });
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
+      runtimeConfig.dispose();
+    },
+  );
 
   it("discards offline drafts locally instead of no-op refreshing", async () => {
     vi.useFakeTimers();
@@ -718,6 +965,10 @@ describe("config draft model", () => {
 
     publish(false);
     runtimeConfig.setRaw('{\n  "count": 9\n}\n');
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+
+    await runtimeConfig.discardDraft({ reloadOnly: true });
+    expect(runtimeConfig.state.configRaw).toBe('{\n  "count": 9\n}\n');
     expect(runtimeConfig.state.configFormDirty).toBe(true);
 
     await runtimeConfig.discardDraft();

@@ -1,123 +1,82 @@
-import { html } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
 
-type ChatTimestampDisplay = {
-  label: string;
-  title: string;
-  dateTime: string;
-};
-
-function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
-  const date = new Date(timestamp);
-  if (!Number.isFinite(date.getTime())) {
-    return {
-      label: t("chat.messages.unknownDate"),
-      title: t("chat.messages.unknownDate"),
-      dateTime: "",
-    };
-  }
-
-  return {
-    label: date.toLocaleString([], {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      timeZoneName: "short",
-    }),
-    title: date.toLocaleString([], {
-      weekday: "long",
-      month: "long",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      second: "2-digit",
-      timeZoneName: "short",
-    }),
-    dateTime: date.toISOString(),
-  };
-}
+registerChatMessageMetadataEnglish();
 
 const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
 
-/** Footer label: relative for recent messages, compact date beyond a week. */
-function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
+export function renderChatTimestamp(timestamp: number, metadata: TemplateResult[] = []) {
   const date = new Date(timestamp);
-  if (!Number.isFinite(date.getTime())) {
-    return t("chat.messages.unknownDate");
-  }
+  const valid = Number.isFinite(date.getTime());
+  const label = valid
+    ? date.toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short",
+      })
+    : t("chat.messages.unknownDate");
+  const title = valid
+    ? date.toLocaleString([], {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZoneName: "short",
+      })
+    : label;
+  const nowMs = Date.now();
   const ageMs = nowMs - date.getTime();
-  // Derive from ageMs so the injected clock stays the single time source.
-  // Slightly-future (clock-skewed) messages clamp to "just now"; anything
-  // further out falls through to the compact date instead of lying forever.
-  if (
-    ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS &&
-    ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
-  ) {
-    return formatTimeAgo(Math.max(0, ageMs));
-  }
-  return date.toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-    ...(date.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
-  });
-}
-
-// Footer times read relative ("5m ago"); the absolute timestamp lives in the
-// tooltip, or in the msg-meta popover when usage metadata makes the
-// timestamp interactive (a nested tooltip would fight the popover).
-export function renderChatTimestamp(timestamp: number, interactive = false) {
-  const display = formatChatTimestampForDisplay(timestamp);
-  const timeEl = html`
-    <time class="chat-group-timestamp" datetime=${display.dateTime} aria-live="off">
-      ${formatChatRelativeTimestampLabel(timestamp)}
+  // Slightly-future messages clamp to "just now"; older or distant-future ones use a date.
+  const relativeLabel = !valid
+    ? label
+    : ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS && ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
+      ? formatTimeAgo(Math.max(0, ageMs))
+      : date.toLocaleDateString([], {
+          month: "short",
+          day: "numeric",
+          ...(date.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
+        });
+  const time = html`
+    <time class="chat-group-timestamp" datetime=${valid ? date.toISOString() : ""} aria-live="off">
+      ${relativeLabel}
     </time>
   `;
-  if (interactive) {
-    return timeEl;
-  }
-  return html`<openclaw-tooltip content=${display.label}>${timeEl}</openclaw-tooltip>`;
-}
-
-function resolveMessageMetaDetails(target: EventTarget | null): HTMLDetailsElement | null {
-  if (target instanceof HTMLDetailsElement) {
-    return target;
-  }
-  return target instanceof HTMLElement
-    ? target.closest<HTMLDetailsElement>("details.msg-meta")
-    : null;
-}
-
-function previewMessageMeta(event: PointerEvent | FocusEvent) {
-  const details = resolveMessageMetaDetails(event.currentTarget);
-  if (!details || details.open || ("pointerType" in event && event.pointerType === "touch")) {
-    return;
-  }
-  details.dataset.preview = "true";
-  details.open = true;
-}
-
-function closeMessageMetaPreview(event: PointerEvent | FocusEvent) {
-  const details = resolveMessageMetaDetails(event.currentTarget);
-  if (!details || details.dataset.preview !== "true" || details.matches(":hover, :focus-within")) {
-    return;
-  }
-  delete details.dataset.preview;
-  details.open = false;
-}
-
-function pinMessageMetaPreview(event: MouseEvent) {
-  const details = resolveMessageMetaDetails(event.currentTarget);
-  if (details?.dataset.preview !== "true") {
-    return;
-  }
-  event.preventDefault();
-  delete details.dataset.preview;
+  return html`
+    <openclaw-tooltip
+      class="msg-meta"
+      ?open-on-click=${metadata.length > 0}
+      content=${metadata.length ? "" : label}
+    >
+      ${
+        metadata.length
+          ? html`<button
+              type="button"
+              class="msg-meta__summary"
+              aria-label=${t("chat.messages.contextFor", { timestamp: title })}
+            >
+              ${time}
+            </button>`
+          : time
+      }
+      ${
+        metadata.length
+          ? html`<span slot="content" class="msg-meta__details">
+              <span class="msg-meta__time">${label}</span>${metadata}
+            </span>`
+          : nothing
+      }
+    </openclaw-tooltip>
+  `;
 }
 
 type GroupMeta = {
@@ -194,34 +153,21 @@ export function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
 
   const parts: Array<ReturnType<typeof html>> = [];
 
-  // Token counts: ↑input ↓output
-  if (meta.input) {
-    parts.push(html`<span class="msg-meta__tokens">↑${formatCompactTokenCount(meta.input)}</span>`);
-  }
-  if (meta.output) {
-    parts.push(
-      html`<span class="msg-meta__tokens">↓${formatCompactTokenCount(meta.output)}</span>`,
-    );
-  }
-
-  // Cache: R/W
-  if (meta.cacheRead) {
-    parts.push(
-      html`<span class="msg-meta__cache">R${formatCompactTokenCount(meta.cacheRead)}</span>`,
-    );
-  }
-  if (meta.cacheWrite) {
-    parts.push(
-      html`<span class="msg-meta__cache">W${formatCompactTokenCount(meta.cacheWrite)}</span>`,
-    );
+  for (const [value, prefix, className] of [
+    [meta.input, "↑", "msg-meta__tokens"],
+    [meta.output, "↓", "msg-meta__tokens"],
+    [meta.cacheRead, "R", "msg-meta__cache"],
+    [meta.cacheWrite, "W", "msg-meta__cache"],
+  ] as const) {
+    if (value) {
+      parts.push(html`<span class=${className}>${prefix}${formatCompactTokenCount(value)}</span>`);
+    }
   }
 
-  // Cost
   if (meta.cost > 0) {
     parts.push(html`<span class="msg-meta__cost">${formatCost(meta.cost)}</span>`);
   }
 
-  // Context %
   if (meta.contextPercent !== null) {
     const pct = meta.contextPercent;
     const cls =
@@ -233,37 +179,10 @@ export function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
     parts.push(html`<span class="${cls}">${pct}% ctx</span>`);
   }
 
-  // Model
   if (meta.model) {
-    // Shorten model name: strip provider prefix if present (e.g. "anthropic/claude-3.5-sonnet" → "claude-3.5-sonnet")
     const shortModel = meta.model.includes("/") ? meta.model.split("/").pop()! : meta.model;
     parts.push(html`<span class="msg-meta__model">${shortModel}</span>`);
   }
 
-  if (parts.length === 0) {
-    return renderChatTimestamp(timestamp);
-  }
-
-  const display = formatChatTimestampForDisplay(timestamp);
-  // Absolute time leads the popover; the summary label itself stays relative.
-  parts.unshift(html`<span class="msg-meta__time">${display.label}</span>`);
-
-  return html`
-    <details
-      class="msg-meta"
-      @pointerenter=${previewMessageMeta}
-      @pointerleave=${closeMessageMetaPreview}
-      @focusin=${previewMessageMeta}
-      @focusout=${closeMessageMetaPreview}
-    >
-      <summary
-        class="msg-meta__summary"
-        aria-label=${t("chat.messages.contextFor", { timestamp: display.title })}
-        @click=${pinMessageMetaPreview}
-      >
-        ${renderChatTimestamp(timestamp, true)}
-      </summary>
-      <span class="msg-meta__details">${parts}</span>
-    </details>
-  `;
+  return renderChatTimestamp(timestamp, parts);
 }

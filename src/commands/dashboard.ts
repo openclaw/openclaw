@@ -1,6 +1,6 @@
-// Implements `openclaw dashboard` URL resolution, readiness check, clipboard, and browser launch.
 import { readConfigFileSnapshot } from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
+import { isRemoteEnvironment } from "../infra/remote-env.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   hasVerifiedControlUiLoopbackAlias,
@@ -8,7 +8,7 @@ import {
   resolveControlUiHandoffTarget,
   waitForControlUiDocument,
 } from "./control-ui-handoff.js";
-import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
+import { ensureDashboardGatewayReady } from "./gateway-readiness.js";
 import { detectBrowserOpenSupport, formatControlUiSshHint, openUrl } from "./onboard-helpers.js";
 
 type DashboardOptions = {
@@ -44,14 +44,10 @@ async function ensureDashboardTargetReady(params: {
   yes?: boolean;
   allowRecovery?: boolean;
 }) {
-  return ensureGatewayReadyForOperation({
+  return ensureDashboardGatewayReady({
     runtime: params.runtime,
-    operation: "open the dashboard",
     yes: params.yes,
     probeUrl: params.target.probeUrl,
-    // First-time CLI probes intentionally lack paired operator scope. Gateway
-    // handshake evidence plus the same-PID alias check below proves the target.
-    readyWhenReachable: true,
     ...(params.allowRecovery === false ? { allowInstall: false, interactive: false } : {}),
   });
 }
@@ -90,7 +86,7 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
       dashboardJsonFailure(runtime, document.reason);
       return;
     }
-    const browserHandoff = await issueControlUiBrowserHandoff(target.links.httpUrl);
+    const browserHandoff = await issueControlUiBrowserHandoff(target.links);
 
     writeRuntimeJson(
       runtime,
@@ -116,7 +112,6 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
   }
 }
 
-/** Open or print the Control UI dashboard URL after ensuring the Gateway is reachable. */
 export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DashboardOptions = {},
@@ -177,7 +172,7 @@ export async function dashboardCommand(
   }
   let browserUrl: string;
   try {
-    browserUrl = (await issueControlUiBrowserHandoff(target.links.httpUrl)).browserUrl;
+    browserUrl = (await issueControlUiBrowserHandoff(target.links)).browserUrl;
   } catch (error) {
     runtime.error(
       `Could not create a one-time browser pairing link: ${error instanceof Error ? error.message : String(error)}`,
@@ -185,7 +180,7 @@ export async function dashboardCommand(
     runtime.log("Run `openclaw doctor`, then retry `openclaw dashboard`.");
     return;
   }
-  const { port, basePath, links, includeTokenInUrl } = target;
+  const { port, basePath, links, includeTokenInUrl, tlsConfig } = target;
 
   runtime.log(`Dashboard URL: ${links.httpUrl}`);
   runtime.log("One-time browser pairing included in browser/clipboard URL.");
@@ -199,15 +194,24 @@ export async function dashboardCommand(
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
       opened = await openUrl(browserUrl);
-      hint = opened
-        ? undefined
-        : copied
-          ? "Browser launch failed. Open the one-time pairing URL copied to clipboard."
-          : "Browser launch failed. Open the Dashboard URL above manually.";
+      if (!opened && !copied && isRemoteEnvironment()) {
+        hint = formatControlUiSshHint({
+          port,
+          basePath,
+          tlsEnabled: tlsConfig?.enabled === true,
+        });
+      } else {
+        hint = opened
+          ? undefined
+          : copied
+            ? "Browser launch failed. Open the one-time pairing URL copied to clipboard."
+            : "Browser launch failed. Open the Dashboard URL above manually.";
+      }
     } else {
       hint = formatControlUiSshHint({
         port,
         basePath,
+        tlsEnabled: tlsConfig?.enabled === true,
       });
     }
   } else {

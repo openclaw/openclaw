@@ -1,5 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  buildSkillProposalRevisionChangedErrorDetails,
+  ErrorCodes,
+  errorShape,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import {
   listAgentIds,
@@ -8,15 +12,21 @@ import {
 } from "../../agents/agent-scope.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import { SkillProposalRevisionChangedError } from "../../skills/workshop/service-evaluation.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+} from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
-export function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestContext) {
+export function resolveSkillsAgentWorkspace(
+  params: { agentId?: string },
+  context: GatewayRequestContext,
+) {
   const cfg = context.getRuntimeConfig();
-  const agentIdRaw =
-    params && typeof params === "object" && "agentId" in params
-      ? normalizeOptionalString((params as { agentId?: unknown }).agentId)
-      : undefined;
+  const agentIdRaw = normalizeOptionalString(params.agentId);
   let agentId: string;
   try {
     agentId = agentIdRaw
@@ -55,35 +65,51 @@ export type ResolvedSkillsWorkspace = Extract<
 
 export const SKILL_PROPOSAL_RESPONSE_HANDLED = Symbol("skill proposal response handled");
 
-export async function runSkillsProposalWorkspaceHandler<TParams, TResult>(params: {
-  method: string;
-  rawParams: unknown;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-  validate: Validator<TParams>;
+export function defineSkillsProposalWorkspaceHandler<TParams extends { agentId?: string }>(
+  method: string,
+  validate: Validator<TParams>,
   run: (
     parsedParams: TParams,
     resolved: ResolvedSkillsWorkspace,
-  ) => Promise<TResult | typeof SKILL_PROPOSAL_RESPONSE_HANDLED>;
-}): Promise<void> {
-  if (!assertValidParams(params.rawParams, params.validate, params.method, params.respond)) {
-    return;
-  }
-  const resolved = resolveSkillsAgentWorkspace(params.rawParams, params.context);
-  if (!resolved.ok) {
-    params.respond(false, undefined, resolved.error);
-    return;
-  }
-  try {
-    const result = await params.run(params.rawParams, resolved);
-    if (result !== SKILL_PROPOSAL_RESPONSE_HANDLED) {
-      params.respond(true, result, undefined);
+    options: GatewayRequestHandlerOptions,
+  ) => Promise<unknown>,
+): GatewayRequestHandler {
+  return async (options) => {
+    const { params, respond, context } = options;
+    if (!assertValidParams(params, validate, method, respond)) {
+      return;
     }
-  } catch (error) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)),
-    );
-  }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      const result = await run(params, resolved, options);
+      if (result !== SKILL_PROPOSAL_RESPONSE_HANDLED) {
+        respond(true, result, undefined);
+      }
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        respond(false, undefined, error.error);
+        return;
+      }
+      const details =
+        error instanceof SkillProposalRevisionChangedError
+          ? buildSkillProposalRevisionChangedErrorDetails({
+              expectedRevisionHash: error.expectedRevisionHash,
+              currentRevisionHash: error.currentRevisionHash,
+            })
+          : undefined;
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          formatErrorMessage(error),
+          details ? { details } : undefined,
+        ),
+      );
+    }
+  };
 }

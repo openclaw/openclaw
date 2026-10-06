@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import OpenClaw
 
@@ -291,6 +292,46 @@ struct CLIInstallerTests {
             defaults: defaults) == "2026.7.2")
     }
 
+    @Test func `validated CLI cache changes only when the ready tuple changes`() throws {
+        let suite = "CLIInstallerTests.validated-cache.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let notificationCount = OSAllocatedUnfairLock(initialState: 0)
+        let initialLocation = "/Users/test/.local/bin/openclaw"
+        defaults.set(initialLocation, forKey: cliValidatedExecutableKey)
+        defaults.set("2026.8.1", forKey: cliValidatedVersionKey)
+        let observer = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: defaults,
+            queue: nil)
+        { _ in
+            notificationCount.withLock { $0 += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        CLIInstaller.rememberValidated(
+            .ready(location: initialLocation, version: "2026.8.1"),
+            defaults: defaults)
+
+        #expect(notificationCount.withLock { $0 } == 0)
+
+        let updatedLocation = "/opt/homebrew/bin/openclaw"
+        CLIInstaller.rememberValidated(
+            .ready(location: updatedLocation, version: "2026.8.1"),
+            defaults: defaults)
+
+        #expect(notificationCount.withLock { $0 } == 1)
+        #expect(defaults.string(forKey: cliValidatedExecutableKey) == updatedLocation)
+        #expect(defaults.string(forKey: cliValidatedVersionKey) == "2026.8.1")
+
+        CLIInstaller.rememberValidated(
+            .ready(location: updatedLocation, version: "2026.8.2"),
+            defaults: defaults)
+
+        #expect(notificationCount.withLock { $0 } == 2)
+        #expect(defaults.string(forKey: cliValidatedVersionKey) == "2026.8.2")
+    }
+
     @Test func `managed setup requires a parseable compatible version`() {
         let location = "/Users/test/.openclaw/bin/openclaw"
 
@@ -366,18 +407,28 @@ struct CLIInstallerTests {
         defer { try? FileManager().removeItem(at: root) }
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
         let executable = root.appendingPathComponent("openclaw")
+        let node = root.appendingPathComponent("node")
         try "#!/bin/sh\necho 'OpenClaw 2026.7.3'\n".write(
             to: executable,
             atomically: true,
             encoding: .utf8)
+        try "#!/bin/sh\necho 'v24.16.0'\n".write(
+            to: node,
+            atomically: true,
+            encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
 
         let status = await CLIInstaller.status(location: executable.path)
 
         #expect(status == .ready(location: executable.path, version: "2026.7.3"))
     }
 
-    @Test func `matching external CLI with unsupported Node is unusable`() async throws {
+    @Test(arguments: [("v20.18.0", 0), ("v24.15.0", 1)])
+    func `matching external CLI with an unusable Node runtime needs repair`(
+        version: String,
+        exitCode: Int) async throws
+    {
         let root = FileManager().temporaryDirectory.appendingPathComponent(
             "openclaw-old-node-cli-\(UUID().uuidString)")
         defer { try? FileManager().removeItem(at: root) }
@@ -388,7 +439,7 @@ struct CLIInstallerTests {
             to: executable,
             atomically: true,
             encoding: .utf8)
-        try "#!/bin/sh\necho 'v20.18.0'\n".write(
+        try "#!/bin/sh\necho '\(version)'\nexit \(exitCode)\n".write(
             to: node,
             atomically: true,
             encoding: .utf8)
@@ -428,22 +479,25 @@ struct CLIInstallerTests {
         ].joined(separator: ":"))
     }
 
-    @Test func `successful CLI setup starts the local gateway and waits for readiness`() async {
+    @Test(arguments: [false, true])
+    func `successful CLI setup starts the local gateway and waits for readiness`(pauseDuringReadiness: Bool) async {
         var didStart = false
         var didWait = false
+        var paused = false
 
         let activation = await CLIInstaller.activateLocalGateway(
             mode: .local,
-            paused: false,
+            paused: paused,
             start: { didStart = true },
             waitUntilReady: {
                 didWait = true
+                paused = pauseDuringReadiness
                 return true
             })
 
         #expect(didStart)
         #expect(didWait)
-        #expect(activation == .ready)
+        #expect(activation == (pauseDuringReadiness ? .deferred : .ready))
     }
 
     @Test func `paused CLI setup defers gateway activation`() async {
@@ -462,5 +516,16 @@ struct CLIInstallerTests {
         #expect(!didStart)
         #expect(!didWait)
         #expect(activation == .deferred)
+    }
+
+    @Test func `failed CLI setup binds the reason to this activation attempt`() async {
+        let activation = await CLIInstaller.activateLocalGateway(
+            mode: .local,
+            paused: false,
+            start: {},
+            waitUntilReady: { false },
+            failureReason: { "launchd disabled" })
+
+        #expect(activation == .failed(reason: "launchd disabled"))
     }
 }

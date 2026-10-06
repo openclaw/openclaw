@@ -1,4 +1,3 @@
-// Msteams plugin module implements inbound behavior.
 import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 
 type MSTeamsQuoteInfo = {
@@ -15,7 +14,7 @@ type MSTeamsQuoteInfo = {
 /**
  * Strip HTML tags, preserving text content.
  */
-function htmlToPlainText(html: string): string {
+export function htmlToPlainText(html: string): string {
   return decodeHtmlEntities(html.replace(/<[^>]*>/g, " "))
     .replaceAll("\u00a0", " ")
     .replace(/\s+/g, " ")

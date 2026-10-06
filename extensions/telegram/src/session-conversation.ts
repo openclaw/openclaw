@@ -1,4 +1,3 @@
-// Telegram plugin module implements session conversation behavior.
 import { normalizeTelegramChatId, normalizeTelegramLookupTarget } from "./targets.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
@@ -12,13 +11,21 @@ export function resolveTelegramSessionConversation(params: {
   }
   return {
     id: parsed.chatId,
-    threadId: parsed.topicId,
+    threadId: `${parsed.thread.scope === "direct-messages" ? "direct-topic:" : ""}${parsed.thread.id}`,
     baseConversationId: parsed.chatId,
     parentConversationCandidates: [parsed.chatId],
   };
 }
 
-export function resolveTelegramSessionTarget(params: { kind: "group" | "channel"; id: string }) {
+export function resolveTelegramSessionTarget(params: {
+  kind: "group" | "channel";
+  id: string;
+  threadId?: string | null;
+}) {
   const raw = params.kind === "group" ? `telegram:group:${params.id}` : `telegram:${params.id}`;
-  return normalizeTelegramChatId(raw) ?? normalizeTelegramLookupTarget(raw);
+  const chatId = normalizeTelegramChatId(raw) ?? normalizeTelegramLookupTarget(raw);
+  const threadId = params.threadId?.startsWith("direct-topic:")
+    ? params.threadId
+    : params.threadId && `topic:${params.threadId}`;
+  return chatId && threadId ? `${chatId}:${threadId}` : chatId;
 }

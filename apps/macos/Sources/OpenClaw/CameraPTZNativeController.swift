@@ -1,3 +1,4 @@
+import AVFoundation
 import Darwin
 import Foundation
 import OpenClawCameraPTZNative
@@ -27,21 +28,6 @@ struct CameraUSBIdentity: Equatable, Sendable {
     }
 }
 
-enum CameraUVCDescriptorParser {
-    static func parse(_ descriptors: [UInt8]) -> (terminalId: UInt8, controls: UInt32)? {
-        var terminalId: UInt8 = 1
-        var controls: UInt32 = 0
-        let parsed = descriptors.withUnsafeBytes { bytes in
-            openclaw_uvc_parse_camera_terminal(
-                bytes.bindMemory(to: UInt8.self).baseAddress,
-                bytes.count,
-                &terminalId,
-                &controls)
-        }
-        return parsed == 1 ? (terminalId, controls) : nil
-    }
-}
-
 enum CameraUVCControlInfo {
     private static let setCapability: UInt8 = 0x02
 
@@ -53,6 +39,37 @@ enum CameraUVCControlInfo {
 struct NativeCameraPTZBackend: CameraPTZBackend {
     func open(deviceId: String) throws -> any CameraPTZControlling {
         try NativeCameraPTZController(deviceId: deviceId)
+    }
+
+    func withCaptureSession<T>(deviceId: String, body: () throws -> T) throws -> T {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+        else {
+            throw CameraPTZError.unsupported("Camera permission required; relaunch without --no-activate and retry")
+        }
+        guard let device = CameraDeviceResolver.camera(deviceId: deviceId) else {
+            throw CameraPTZError.deviceNotFound(deviceId)
+        }
+        let session = AVCaptureSession()
+        let input = try AVCaptureDeviceInput(device: device)
+        guard session.canAddInput(input) else {
+            throw CameraPTZError.unsupported("camera cannot start a video stream")
+        }
+        session.addInput(input)
+        let output = AVCaptureVideoDataOutput()
+        guard session.canAddOutput(output) else {
+            throw CameraPTZError.unsupported("camera cannot provide a video stream")
+        }
+        session.addOutput(output)
+
+        // UVC controls require a live video stream, which briefly lights the camera privacy indicator.
+        // Without a sample-buffer delegate, video frames are neither delivered nor retained.
+        session.startRunning()
+        defer { session.stopRunning() }
+        guard session.isRunning else {
+            throw CameraPTZError.unsupported("camera video stream did not start")
+        }
+        return try body()
     }
 }
 

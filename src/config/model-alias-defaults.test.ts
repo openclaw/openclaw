@@ -2,7 +2,6 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { applyModelDefaults as applyModelDefaultsWithPolicy } from "./defaults.js";
 import type { ModelProviderConfig, OpenClawConfig } from "./types.js";
@@ -96,7 +95,7 @@ describe("applyModelDefaults", () => {
   }
 
   function buildProviderTokenDefaultsConfig(params: {
-    provider: { contextWindow?: number; contextTokens?: number; maxTokens?: number };
+    provider: { maxTokens?: number };
     model?: { contextWindow?: number; contextTokens?: number; maxTokens?: number };
   }) {
     return {
@@ -158,7 +157,9 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
+            "anthropic/claude-opus-5-5": {},
             "anthropic/claude-opus-5": {},
+            "anthropic/claude-sonnet-5-5": {},
             "anthropic/claude-sonnet-5": {},
             "openai/gpt-5.4": {},
           },
@@ -167,25 +168,11 @@ describe("applyModelDefaults", () => {
     } satisfies OpenClawConfig;
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBe("opus");
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5-5"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBeUndefined();
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5-5"]?.alias).toBe("sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBeUndefined();
     expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
-  });
-
-  it("does not override existing aliases", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-8": { alias: "Opus" },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]?.alias).toBe("Opus");
   });
 
   it("preserves an authored Opus alias when the new default target is also present", () => {
@@ -193,8 +180,8 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-8": { alias: "Opus" },
-            "anthropic/claude-opus-5": {},
+            "anthropic/claude-opus-5": { alias: "Opus" },
+            "anthropic/claude-opus-5-5": {},
           },
         },
       },
@@ -202,8 +189,8 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]?.alias).toBe("Opus");
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBeUndefined();
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5"]?.alias).toBe("Opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-5-5"]?.alias).toBeUndefined();
   });
 
   it("preserves an authored Sonnet alias when the new default target is also present", () => {
@@ -211,8 +198,8 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-            "anthropic/claude-sonnet-5": {},
+            "anthropic/claude-sonnet-5": { alias: "Sonnet" },
+            "anthropic/claude-sonnet-5-5": {},
           },
         },
       },
@@ -220,8 +207,8 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.alias).toBe("Sonnet");
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBeUndefined();
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("Sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5-5"]?.alias).toBeUndefined();
   });
 
   it("respects explicit empty alias disables", () => {
@@ -266,25 +253,39 @@ describe("applyModelDefaults", () => {
     });
   });
 
-  it("normalizes retired Gemini primary and fallback refs", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "google/gemini-3-pro-preview",
-            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
+  it.each([
+    ["google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview"],
+    ["google-vertex/gemini-3-pro-preview", "google-vertex/gemini-3.1-pro-preview"],
+    ["google-gemini-cli/gemini-3-pro-preview", "google-gemini-cli/gemini-3.1-pro-preview"],
+    ["myproxy/google/gemini-3-pro-preview", "myproxy/google/gemini-3.1-pro-preview"],
+    ["custom/custom/model", "custom/custom/model"],
+  ])(
+    "normalizes primary, fallback, and policy refs without merging literal namespaces: %s",
+    (authored, replacement) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: {
+              primary: authored,
+              fallbacks: [authored, "custom/model"],
+            },
+            models: { [authored]: { alias: "Selected" }, "custom/model": { alias: "Control" } },
           },
         },
-      },
-    } satisfies OpenClawConfig;
+      } satisfies OpenClawConfig;
 
-    const next = applyModelDefaults(cfg);
+      const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
-    });
-  });
+      expect(next.agents?.defaults?.model).toEqual({
+        primary: replacement,
+        fallbacks: [replacement, "custom/model"],
+      });
+      expect(next.agents?.defaults?.models).toEqual({
+        [replacement]: { alias: "Selected" },
+        "custom/model": { alias: "Control" },
+      });
+    },
+  );
 
   it("normalizes the retired Together default primary and fallback refs", () => {
     const cfg = {
@@ -315,9 +316,8 @@ describe("applyModelDefaults", () => {
   it("normalizes retired Gemini per-agent model refs", () => {
     const cfg = {
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             model: {
               primary: "google/gemini-3-pro-preview",
               fallbacks: ["google/gemini-3-pro-preview"],
@@ -326,56 +326,19 @@ describe("applyModelDefaults", () => {
               "google/gemini-3-pro-preview": {},
             },
           },
-        ],
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.list?.[0]?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-      fallbacks: ["google/gemini-3.1-pro-preview"],
-    });
-    expect(next.agents?.list?.[0]?.models).toEqual({
-      "google/gemini-3.1-pro-preview": {},
-    });
-  });
-
-  it("applies provider policy normalization to configured provider rows", () => {
-    const cfg = {
-      models: {
-        providers: {
-          google: {
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            api: "google-generative-ai",
-            apiKey: "GOOGLE_API_KEY",
-            models: [
-              {
-                id: "google/gemini-3-pro-preview",
-                name: "Gemini 3 Pro",
-                input: ["text", "image"],
-                reasoning: true,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1_048_576,
-                maxTokens: 65_536,
-              },
-            ],
-          },
         },
       },
     } satisfies OpenClawConfig;
 
-    const provider = cfg.models.providers.google;
-    mockNormalizedProvider({
-      ...provider,
-      models: provider.models.map((model) =>
-        Object.assign({}, model, { id: "google/gemini-3.1-pro-preview" }),
-      ),
-    });
-
     const next = applyModelDefaults(cfg);
 
-    expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
+    expect(next.agents?.entries?.ops?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(next.agents?.entries?.ops?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {},
+    });
   });
 
   it("preserves an explicit provider api after provider policy normalization", () => {
@@ -462,8 +425,8 @@ describe("applyModelDefaults", () => {
     expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
   });
 
-  it("fills missing model provider defaults", () => {
-    const cfg = buildProxyProviderConfig();
+  it("leaves an omitted native context window undefined", () => {
+    const cfg = buildProviderTokenDefaultsConfig({ provider: {} });
 
     const next = applyModelDefaults(cfg);
     const model = next.models?.providers?.myproxy?.models?.[0];
@@ -471,7 +434,7 @@ describe("applyModelDefaults", () => {
     expect(model?.reasoning).toBe(false);
     expect(model?.input).toEqual(["text"]);
     expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-    expect(model?.contextWindow).toBe(DEFAULT_CONTEXT_TOKENS);
+    expect(model?.contextWindow).toBeUndefined();
     expect(model?.maxTokens).toBe(8192);
   });
 
@@ -487,21 +450,21 @@ describe("applyModelDefaults", () => {
 
   it.each([
     {
-      name: "inherits provider defaults",
-      provider: { contextWindow: 50_000, contextTokens: 32_000, maxTokens: 4_096 },
+      name: "inherits only the provider output-token default",
+      provider: { maxTokens: 4_096 },
       model: undefined,
-      expected: { contextWindow: 50_000, contextTokens: 32_000, maxTokens: 4_096 },
+      expected: { contextWindow: undefined, contextTokens: undefined, maxTokens: 4_096 },
     },
     {
       name: "keeps model overrides",
-      provider: { contextWindow: 50_000, contextTokens: 32_000, maxTokens: 4_096 },
+      provider: { maxTokens: 4_096 },
       model: { contextWindow: 10_000, contextTokens: 8_000, maxTokens: 2_048 },
       expected: { contextWindow: 10_000, contextTokens: 8_000, maxTokens: 2_048 },
     },
     {
-      name: "clamps inherited maxTokens to the inherited contextWindow",
-      provider: { contextWindow: 4_096, maxTokens: 8_192 },
-      model: undefined,
+      name: "clamps provider maxTokens to the model contextWindow",
+      provider: { maxTokens: 8_192 },
+      model: { contextWindow: 4_096 },
       expected: { contextWindow: 4_096, contextTokens: undefined, maxTokens: 4_096 },
     },
   ])("$name", ({ provider, model, expected }) => {
@@ -525,14 +488,6 @@ describe("applyModelDefaults", () => {
 
     expect(model?.contextWindow).toBe(262144);
     expect(model?.maxTokens).toBe(16384);
-  });
-
-  it("caps explicit mistral maxTokens above the named model limit", () => {
-    const cfg = buildMistralProviderConfig({ maxTokens: 17_000 });
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(16_384);
   });
 
   it.each(["custom-mistral-model", "constructor"])(

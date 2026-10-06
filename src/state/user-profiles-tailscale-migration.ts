@@ -10,8 +10,14 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import {
+  publishUserProfileAuthorityChange,
+  stageUserProfileEmailBindingChange,
+} from "./user-profile-events.js";
+import { githubAuthenticationSubject } from "./user-profile-github-identity.js";
+import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
-import { ensureUserProfilesSchema, type UserProfilesDatabase } from "./user-profiles.js";
+import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 type UserProfileIdentityMigrationResult = {
   changes: string[];
@@ -49,14 +55,17 @@ export function migrateLegacyTailscaleProfileIdentities(
       let migrated = 0;
       const warnings: string[] = [];
       for (const row of legacyRows) {
-        executeSqliteQuerySync(
+        const subject =
+          row.provider === "github" ? githubAuthenticationSubject(row.subject) : row.subject;
+        const inserted = executeSqliteQuerySync(
           db,
           transactionKysely
             .insertInto("user_profile_identities")
             .values({
               provider: row.provider,
-              subject: row.subject,
+              subject,
               profile_id: row.profile_id,
+              canonical_login: null,
               created_at: row.created_at,
             })
             .onConflict((conflict) => conflict.columns(["provider", "subject"]).doNothing()),
@@ -67,7 +76,7 @@ export function migrateLegacyTailscaleProfileIdentities(
             .selectFrom("user_profile_identities")
             .select("profile_id")
             .where("provider", "=", row.provider)
-            .where("subject", "=", row.subject),
+            .where("subject", "=", subject),
         );
         if (identity?.profile_id !== row.profile_id) {
           warnings.push(
@@ -75,13 +84,19 @@ export function migrateLegacyTailscaleProfileIdentities(
           );
           continue;
         }
-        executeSqliteQuerySync(
+        const deleted = executeSqliteQuerySync(
           db,
           transactionKysely
             .deleteFrom("user_profile_emails")
             .where("email", "=", row.email)
             .where("profile_id", "=", row.profile_id),
         );
+        if ((deleted.numAffectedRows ?? 0n) > 0n) {
+          stageUserProfileEmailBindingChange(db, row.email, null);
+        }
+        if ((inserted.numAffectedRows ?? 0n) > 0n || (deleted.numAffectedRows ?? 0n) > 0n) {
+          publishUserProfileAuthorityChange(db, row.profile_id);
+        }
         migrated += 1;
       }
       return {

@@ -43,6 +43,26 @@ const LOCALIZED_RECALL_INTENT_PATTERNS = [
     retrospective:
       /(?:지난\s*(?:번|주|달)|저번|예전|어제).{0,24}(?:논의했|(?:이야기|얘기|대화)했|말했|언급했|결정했)/u,
   },
+  {
+    intent:
+      /(?<!\p{L})(?:помнишь|помните|вспоминаешь|вспоминаете|вспомни(?:те)?)(?!\p{L})|(?<!\p{L})напомни(?:те)?[,\s]+(?:(?:мне|нам)\s+)?(?:что|о\s+ч[её]м|как|когда|где|почему)(?!\p{L})|(?<!\p{L})(?:мы|ты|вы|я|в\s+прошлый\s+раз|раньше|вчера)(?!\p{L}).{0,32}(?<!\p{L})(?:обсуждал[аи]?|решил[аи]?|договорились|договорил(?:ся|ась)|говорил[аи]?|упоминали|упомянул[аи]?|выбрал[аи]?)(?!\p{L})/iu,
+    future:
+      /(?<!\p{L})(?:сегодня|завтра|послезавтра|вечером|потом|позже|будет|буду|будем|будешь|будете|будут)(?!\p{L})|в\s+(?:\d{1,2}(?::\d{2})?|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|на\s+следующей\s+неделе|в\s+следующем\s+месяце|в\s+будущем|через\s+(?:(?:\d+|один|одну|два|две|три|четыре|пять)\s+)?(?:минут|час|день|дня|дней|недел|месяц|год)/iu,
+    retrospective:
+      /(?<!\p{L})(?:вчера|позавчера|раньше|прежде|обсуждал[аи]?|решил[аи]?|договорились|договорил(?:ся|ась)|говорил[аи]?|упоминали|упомянул[аи]?|выбрал[аи]?)(?!\p{L})|в\s+прошлый\s+раз|на\s+прошлой\s+неделе|в\s+прошлом\s+месяце/iu,
+  },
+  {
+    // -amos verbs are syncretic (present = past), so intent requires an
+    // adjacent past marker or recall-question construction; "lembra" needs a
+    // retrospective interrogative (o que/do que/quando/...) rather than a
+    // bare question mark, so "lembra de configurar isso?" stays a reminder.
+    intent:
+      /(?<![\p{L}\p{N}_])(?:(?:lembra|recorda)(?:-se)?\s+(?:o\s+que|do\s+que|quando|onde|por\s+que|como|quem)\b|(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|dia\s+desses|[úu]ltima\s+vez).{0,30}(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos)|(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos).{0,30}(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|dia\s+desses|[úu]ltima\s+vez|hoje)|a\s+gente\s+(?:discutiu|decidiu|conversou|falou|combinou)|o\s+que\s+(?:decidimos|discutimos|conversamos|falamos|combinamos))(?![\p{L}\p{N}_])/iu,
+    future:
+      /(?<![\p{L}\p{N}_])(?:amanh[ãa]|depois\s+de\s+amanh[ãa]|pr[óo]xima\s+semana|pr[óo]ximo\s+(?:m[êe]s|ano)|(?:semana|m[êe]s|ano)\s+que\s+vem|daqui\s+a|no\s+futuro|em\s+breve|mais\s+tarde|hoje\s+[àa]\s+(?:noite|tarde))(?![\p{L}\p{N}_])/iu,
+    retrospective:
+      /(?<![\p{L}\p{N}_])(?:(?:ontem|anteontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|dia\s+desses|[úu]ltima\s+vez).{0,30}(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos|discutiu|decidiu|conversou|falou|combinou)|(?:discutimos|conversamos|decidimos|falamos|combinamos|investigamos).{0,30}(?:ontem|semana\s+passada|m[êe]s\s+passado|outro\s+dia|[úu]ltima\s+vez)|(?:lembra|recorda)(?:-se)?\s+(?:o\s+que|do\s+que|quando|onde|por\s+que|como|quem)\b.{0,30}(?:decidimos|discutimos|conversamos|falamos|combinamos|investigamos))(?![\p{L}\p{N}_])/iu,
+  },
 ];
 
 export function hasRecallIntent(message: string): boolean {
@@ -57,16 +77,21 @@ export function hasRecallIntent(message: string): boolean {
   );
 }
 
-export function shouldEscalateRecall(params: {
+type RecallEscalationDecision = "recall" | "mode-off" | "strong-lane-one-hit" | "no-recall-intent";
+
+export function resolveRecallEscalationDecision(params: {
   mode: ActiveMemoryMode;
   message: string;
   hasStrongLaneOneHit: boolean;
-}): boolean {
+}): RecallEscalationDecision {
   if (params.mode === "off") {
-    return false;
+    return "mode-off";
   }
   if (params.mode === "always") {
-    return true;
+    return "recall";
   }
-  return !params.hasStrongLaneOneHit && hasRecallIntent(params.message);
+  if (params.hasStrongLaneOneHit) {
+    return "strong-lane-one-hit";
+  }
+  return hasRecallIntent(params.message) ? "recall" : "no-recall-intent";
 }

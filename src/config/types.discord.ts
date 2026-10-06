@@ -1,23 +1,17 @@
-import type {
-  ChannelPreviewStreamingConfig,
-  ChannelStreamingProgressConfig,
-} from "./types.base.js";
+import type { ChannelPreviewStreamingConfig, SessionThreadBindingsConfig } from "./types.base.js";
 import type {
   ChannelBotInteractionConfig,
   ChannelExecApprovalConfig,
   ChannelReactionConfig,
+  CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
 import type { DiscordPresenceEventsConfig } from "./types.discord-presence.js";
 import type { ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
-export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
-export type DiscordChannelStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
-  progress?: ChannelStreamingProgressConfig;
-};
+export type DiscordChannelStreamingConfig = ChannelPreviewStreamingConfig;
 
 export type DiscordPluralKitConfig = {
   enabled?: boolean;
@@ -35,26 +29,19 @@ export type DiscordDmConfig = {
   groupChannels?: string[];
 };
 
-export type DiscordGuildChannelConfig = {
-  requireMention?: boolean;
+export type DiscordGuildChannelConfig = Omit<CommonChannelGroupConfig, "allowFrom"> & {
+  /** Override mention gating in threads created by this bot; omitted preserves autoThread behavior. */
+  requireMentionInBotThreads?: boolean;
   /**
-   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
+   * If true, drop messages addressed to another identity by mention or bot reply, but not this
+   * bot (not @everyone/@here).
    * Default: false.
    */
   ignoreOtherMentions?: boolean;
-  /** Optional tool policy overrides for this channel. */
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
-  /** If specified, only load these skills for this channel. Omit = all skills; empty = no skills. */
-  skills?: string[];
-  /** If false, disable the bot for this channel. */
-  enabled?: boolean;
   /** Optional allowlist for channel senders (ids or names). */
   users?: string[];
   /** Optional allowlist for channel senders by role ID. */
   roles?: string[];
-  /** Optional system prompt snippet for this channel. */
-  systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
   /** If true, automatically create a thread for each new message in this channel. */
@@ -67,23 +54,19 @@ export type DiscordGuildChannelConfig = {
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 
-export type DiscordGuildEntry = {
+export type DiscordGuildEntry = Pick<
+  DiscordGuildChannelConfig,
+  | "requireMention"
+  | "requireMentionInBotThreads"
+  | "ignoreOtherMentions"
+  | "tools"
+  | "toolsBySender"
+  | "users"
+  | "roles"
+> & {
   slug?: string;
-  requireMention?: boolean;
-  /**
-   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
-   * Default: false.
-   */
-  ignoreOtherMentions?: boolean;
-  /** Optional tool policy overrides for this guild (used when channel override is missing). */
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
-  /** Optional allowlist for guild senders (ids or names). */
-  users?: string[];
-  /** Optional allowlist for guild senders by role ID. */
-  roles?: string[];
   presenceEvents?: DiscordPresenceEventsConfig;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
@@ -125,11 +108,9 @@ export type DiscordIntentsConfig = {
   voiceStates?: boolean;
 };
 
-export type DiscordVoiceAutoJoinConfig = {
-  /** Guild ID that owns the voice channel. */
-  guildId: string;
-  /** Voice channel ID to join. */
-  channelId: string;
+export type DiscordVoiceAutoJoinConfig = DiscordVoiceAllowedChannelConfig & {
+  /** Join and remain connected only while at least one human is in the channel. Default: false. */
+  whenOccupied?: boolean;
 };
 
 export type DiscordVoiceAllowedChannelConfig = {
@@ -196,7 +177,7 @@ export type DiscordVoiceConfig = {
   model?: string;
   /** Realtime provider settings for agent-proxy or bidi modes. */
   realtime?: DiscordVoiceRealtimeConfig;
-  /** Voice channels to auto-join on startup. */
+  /** Voice channels to join automatically, optionally only while occupied. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
   /** If false, configured followUsers are ignored without removing the saved user list. */
   followUsersEnabled?: boolean;
@@ -221,9 +202,6 @@ export type DiscordVoiceConfig = {
 export type DiscordExecApprovalConfig = ChannelExecApprovalConfig<string> & {
   /** Delete approval DMs after approval, denial, or timeout. Default: false. */
   cleanupAfterResolve?: boolean;
-  /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
-   *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
-   *  are only usable by resolved approvers; other users receive an ephemeral denial. */
 };
 
 export type DiscordAgentComponentsConfig = {
@@ -233,18 +211,7 @@ export type DiscordAgentComponentsConfig = {
   ttlMs?: number;
 };
 
-export type DiscordThreadBindingsConfig = {
-  /** Enable Discord thread binding features. Overrides session.threadBindings.enabled. */
-  enabled?: boolean;
-  /** Inactivity window in hours. Set 0 to disable. Default: 24. */
-  idleHours?: number;
-  /** Hard max age in hours. Set 0 to disable. Default: 0. */
-  maxAgeHours?: number;
-  /** Allow session spawns to create and bind Discord threads. Default: true. */
-  spawnSessions?: boolean;
-  /** Default context mode for native subagents. Default: fork. */
-  defaultSpawnContext?: "isolated" | "fork";
-};
+export type DiscordThreadBindingsConfig = SessionThreadBindingsConfig;
 
 export type DiscordSlashCommandConfig = {
   /** Reply ephemerally (default: true). */
@@ -263,9 +230,6 @@ export type DiscordAutoPresenceConfig = {
   intervalMs?: number;
   /** Minimum spacing between actual gateway presence updates (ms). Default: 15000. */
   minUpdateIntervalMs?: number;
-  /** Optional custom status text while runtime is healthy; supports plain text. */
-  /** Optional custom status text while runtime/quota state is degraded or unknown. */
-  /** Optional custom status text while runtime detects quota/token exhaustion. */
   /** @deprecated Doctor-only legacy input. */
   exhaustedText?: string;
 };
@@ -276,6 +240,8 @@ export type DiscordAccountConfig = Omit<
 > &
   ChannelBotInteractionConfig &
   ChannelReactionConfig<never, never, string> & {
+    /** Post a room-specific introduction when joining a group. Default: true. */
+    joinIntro?: boolean;
     /** Override native command registration for Discord (bool or "auto"). */
     commands?: ProviderCommandsConfig;
     token?: SecretInput;
@@ -311,14 +277,10 @@ export type DiscordAccountConfig = Omit<
     execApprovals?: DiscordExecApprovalConfig;
     /** Agent-controlled interactive components (buttons, select menus). */
     agentComponents?: DiscordAgentComponentsConfig;
-    /** Discord UI customization (components, modals, etc.). */
     /** Slash command configuration. */
     slashCommand?: DiscordSlashCommandConfig;
     /** Thread binding lifecycle settings. */
     threadBindings?: DiscordThreadBindingsConfig;
-    /** Show subagent count reactions and typing on the source message. Default: false. */
-    /** @deprecated Doctor-only legacy input. */
-    subagentProgress?: boolean;
     /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
     intents?: DiscordIntentsConfig;
     /** Voice channel conversation settings. */

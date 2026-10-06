@@ -1,12 +1,18 @@
 // Discord tests cover client plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordClient, createDiscordRestClient } from "./client.js";
 import type { RequestClient } from "./internal/discord.js";
 import type { GatewayPlugin } from "./internal/gateway.js";
 import { clearGateways, registerGateway } from "./monitor/gateway-registry.js";
+import { makeDiscordRest } from "./send.test-harness.js";
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   clearGateways();
 });
@@ -33,6 +39,34 @@ describe("createDiscordClient", () => {
     await expect(request(operation, "send")).resolves.toBe("sent");
     expect(operation).toHaveBeenCalledTimes(3);
   });
+
+  it("keeps explicit-token retries bound to the REST account", async () => {
+    registerGateway("default", { isConnected: false } as GatewayPlugin);
+    registerGateway("ops", { isConnected: true } as GatewayPlugin);
+    const client = createDiscordClient({
+      cfg: {
+        channels: {
+          discord: {
+            defaultAccount: "ops",
+            accounts: { ops: { token: "configured-token" } },
+          },
+        },
+      },
+      token: "explicit-token",
+      rest: {} as RequestClient,
+      retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+    const operation = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue("sent");
+
+    expect(client.account.accountId).toBe("ops");
+    await expect(client.request(operation, "send")).resolves.toBe("sent");
+    expect(operation).toHaveBeenCalledTimes(4);
+  });
 });
 
 describe("createDiscordRestClient", () => {
@@ -56,6 +90,44 @@ describe("createDiscordRestClient", () => {
     expect(result.token).toBe("explicit-token");
     expect(result.rest).toBe(fakeRest);
     expect(result.account.accountId).toBe("default");
+  });
+
+  it("keeps a resolved account token when a command has only pinned its unresolved config", async () => {
+    const sourceConfig: OpenClawConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            work: { token: { source: "env", provider: "default", id: "DISCORD_WORK_TOKEN" } },
+          },
+        },
+      },
+    };
+    const resolvedConfig: OpenClawConfig = {
+      channels: { discord: { accounts: { work: { token: "Bot resolved-work-token" } } } },
+    };
+    // Command startup can pin source config before command-scoped resolution returns
+    // a separate resolved object; that cache is not an activated secrets snapshot.
+    setRuntimeConfigSnapshot(sourceConfig);
+
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ id: "789", type: 0 });
+    postMock.mockResolvedValue({ id: "sent-message", channel_id: "789" });
+    const client = createDiscordRestClient({
+      cfg: resolvedConfig,
+      accountId: "work",
+      rest,
+    });
+
+    expect(client.token).toBe("resolved-work-token");
+    expect(client.account.accountId).toBe("work");
+    const { sendMessageDiscord } = await import("./send.js");
+    await expect(
+      sendMessageDiscord("channel:789", "hello", { cfg: resolvedConfig, accountId: "work", rest }),
+    ).resolves.toMatchObject({ messageId: "sent-message", channelId: "789" });
+    expect(postMock).toHaveBeenCalledOnce();
+    expect(() =>
+      createDiscordRestClient({ cfg: sourceConfig, accountId: "work", rest: fakeRest }),
+    ).toThrow(/configured for account "work" is unavailable/i);
   });
 
   it("applies a caller timeout to a dedicated REST client", () => {

@@ -1,5 +1,5 @@
-// Tracks image attachments that belong to the current reply turn.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -13,9 +13,13 @@ import {
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
 import type { MediaAttachment } from "../../media-understanding/types.js";
+import { normalizeMediaFacts } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
-import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
+import {
+  collectDescribedImageAttachmentIndexes,
+  resolveAgentTurnAttachments,
+} from "./agent-turn-attachments.js";
 
 type CurrentImageAttachment = MediaAttachment & { path: string };
 
@@ -26,35 +30,28 @@ type OrderedTurnImage = {
   sequence: number;
 };
 
+export type CurrentTurnImages = {
+  images?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: Array<number | undefined>;
+  unresolvedSourceIndexes?: number[];
+  /** Admission-owned slot-to-media identity used by later runtime adapters. */
+  mediaImageLayout?: MediaImageLayout;
+};
+
 function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
+  const hydrationSuppressedIndexes = new Set(
+    normalizeMediaFacts(ctx.media).flatMap((fact, index) =>
+      fact.hydrationSuppressed === true ? [index] : [],
+    ),
+  );
   return normalizeAttachments(ctx).flatMap((attachment) => {
+    if (hydrationSuppressedIndexes.has(attachment.index)) {
+      return [];
+    }
     const mediaPath = normalizeOptionalString(attachment.path);
     return mediaPath && isImageAttachment(attachment) ? [{ ...attachment, path: mediaPath }] : [];
   });
-}
-
-function collectDescribedImageAttachmentIndexes(ctx: MsgContext): Set<number> {
-  return new Set(
-    ctx.MediaUnderstanding?.filter((output) => output.kind === "image.description").map(
-      (output) => output.attachmentIndex,
-    ) ?? [],
-  );
-}
-
-function createUndescribedImageContext(
-  ctx: MsgContext,
-  undescribedAttachments: CurrentImageAttachment[],
-): MsgContext {
-  const media = undescribedAttachments.map((attachment) => ({
-    path: attachment.path,
-    contentType: attachment.mime,
-    kind: attachment.kind,
-    workspaceDir: attachment.workspaceDir,
-  }));
-  return {
-    ...ctx,
-    media,
-  };
 }
 
 function appendOrderedImages(params: {
@@ -64,20 +61,8 @@ function appendOrderedImages(params: {
   sourceIndex?: number;
 }) {
   const images = params.images ?? [];
-  if (!params.imageOrder || params.imageOrder.length === 0) {
-    for (const image of images) {
-      params.entries.push({
-        image,
-        imageOrder: "inline",
-        sourceIndex: params.sourceIndex,
-        sequence: params.entries.length,
-      });
-    }
-    return;
-  }
-
   let inlineIndex = 0;
-  for (const imageOrder of params.imageOrder) {
+  for (const imageOrder of params.imageOrder ?? []) {
     params.entries.push({
       image: imageOrder === "inline" ? images[inlineIndex++] : undefined,
       imageOrder,
@@ -107,9 +92,6 @@ function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
     if (left.sourceIndex !== undefined && right.sourceIndex !== undefined) {
       return left.sourceIndex - right.sourceIndex || left.sequence - right.sequence;
     }
-    if (left.sourceIndex !== undefined || right.sourceIndex !== undefined) {
-      return left.sequence - right.sequence;
-    }
     return left.sequence - right.sequence;
   });
   const images = merged.flatMap((entry) => (entry.image ? [entry.image] : []));
@@ -130,12 +112,7 @@ export async function resolveCurrentTurnImages(params: {
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   extractedFileImages?: ExtractedFileImage[];
-}): Promise<{
-  images?: ImageContent[];
-  imageOrder?: PromptImageOrderEntry[];
-  imageSourceIndexes?: Array<number | undefined>;
-  unresolvedSourceIndexes?: number[];
-}> {
+}): Promise<CurrentTurnImages> {
   const entries: OrderedTurnImage[] = [];
   appendOrderedImages({
     entries,
@@ -150,12 +127,8 @@ export async function resolveCurrentTurnImages(params: {
     });
   }
 
-  const currentImageAttachments = collectCurrentImageAttachments(params.ctx);
-  if (currentImageAttachments.length === 0) {
-    return resolveMergedTurnImages(entries);
-  }
   const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
-  const undescribedImageAttachments = currentImageAttachments.filter(
+  const undescribedImageAttachments = collectCurrentImageAttachments(params.ctx).filter(
     (attachment) => !describedImageIndexes.has(attachment.index),
   );
   if (undescribedImageAttachments.length === 0) {
@@ -165,18 +138,15 @@ export async function resolveCurrentTurnImages(params: {
   try {
     // Only send undescribed current images natively; described images already exist as text context.
     const resolved = await resolveAgentTurnAttachments({
-      ctx: createUndescribedImageContext(params.ctx, undescribedImageAttachments),
+      ctx: params.ctx,
       cfg: params.cfg,
       includeRecentHistoryImages: false,
-      includeAttachmentIndexes: true,
     });
-    const images = resolved.attachments.map(
-      (attachment): ImageContent => ({
-        type: "image",
-        data: attachment.data,
-        mimeType: attachment.mediaType,
-      }),
-    );
+    const images = resolved.attachments.map((attachment): ImageContent => ({
+      type: "image",
+      data: attachment.data,
+      mimeType: attachment.mediaType,
+    }));
     const resolvedIndexes = resolved.attachmentIndexes ?? [];
     if (images.length < undescribedImageAttachments.length) {
       logVerbose(
@@ -187,8 +157,8 @@ export async function resolveCurrentTurnImages(params: {
       resolvedIndexes.map((resolvedIndex, imageIndex) => [resolvedIndex, images[imageIndex]]),
     );
     const unresolvedSourceIndexes: number[] = [];
-    for (const [subsetIndex, attachment] of undescribedImageAttachments.entries()) {
-      const image = imageByResolvedIndex.get(subsetIndex);
+    for (const attachment of undescribedImageAttachments) {
+      const image = imageByResolvedIndex.get(attachment.index);
       if (image) {
         appendOrderedImages({
           entries,
@@ -207,13 +177,8 @@ export async function resolveCurrentTurnImages(params: {
     logVerbose(
       `agent-runner: media attachment image resolution failed, proceeding without native images: ${formatErrorMessage(error)}`,
     );
-    const merged = resolveMergedTurnImages(entries);
-    return undescribedImageAttachments.length > 0
-      ? Object.assign(merged, {
-          unresolvedSourceIndexes: undescribedImageAttachments.map(
-            (attachment) => attachment.index,
-          ),
-        })
-      : merged;
+    return Object.assign(resolveMergedTurnImages(entries), {
+      unresolvedSourceIndexes: undescribedImageAttachments.map((attachment) => attachment.index),
+    });
   }
 }

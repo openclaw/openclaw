@@ -26,6 +26,7 @@ describe("Telegram QA profiles", () => {
 
     expect(live).not.toContain("telegram-long-final-reuses-preview");
     expect(mock).toContain("telegram-long-final-reuses-preview");
+    expect(mock).not.toContain("telegram-participant-identity-inspection");
     expect(mock).not.toContain("telegram-assistant-transcript-role-boundary");
     expect(mock).not.toContain("telegram-startup-getme-live");
   });
@@ -37,13 +38,13 @@ describe("Telegram QA profiles", () => {
     });
 
     expect(scenarioIds).toContain("channel-message-flows");
+    expect(scenarioIds).toContain("telegram-participant-identity-inspection");
     expect(scenarioIds).not.toContain("native-command-session-target");
   });
 
   it("lets explicit scenarios override profile selection", () => {
     expect(
       resolveTelegramQaScenarioIds({
-        profile: "release",
         providerMode: "live-frontier",
         scenarioIds: ["telegram-help-command"],
       }),
@@ -62,6 +63,13 @@ describe("Telegram QA profiles", () => {
         scenarioIds: ["channel-canary"],
       }),
     ).toEqual(["channel-canary"]);
+    expect(
+      resolveTelegramQaScenarioIds({
+        profile: "release",
+        providerMode: "mock-openai",
+        scenarioIds: ["telegram-participant-identity-inspection"],
+      }),
+    ).toEqual(["telegram-participant-identity-inspection"]);
   });
 
   it("selects the native queue-validation regression as an explicit live scenario", () => {
@@ -72,6 +80,15 @@ describe("Telegram QA profiles", () => {
         scenarioIds: ["telegram-queue-invalid-mode"],
       }),
     ).toEqual(["telegram-queue-invalid-mode"]);
+  });
+
+  it("selects the Claude CLI compaction final-priority regression explicitly", () => {
+    expect(
+      resolveTelegramQaScenarioIds({
+        providerMode: "live-frontier",
+        scenarioIds: ["telegram-claude-cli-compaction-final-priority"],
+      }),
+    ).toEqual(["telegram-claude-cli-compaction-final-priority"]);
   });
 
   it("rejects unknown profiles and channel-ineligible explicit scenarios", () => {
@@ -103,6 +120,9 @@ describe("Telegram QA profiles", () => {
     expect(
       scenarios.find(({ id }) => id === "telegram-long-final-three-chunks")?.defaultEnabled,
     ).toBe(true);
+    expect(
+      scenarios.find(({ id }) => id === "telegram-participant-identity-inspection")?.defaultEnabled,
+    ).toBe(false);
     expect(scenarios.map(({ id }) => id)).not.toContain("telegram-startup-getme-live");
     expect(scenarioById.get("telegram-startup-getme-live")?.execution.kind).toBe("script");
   });

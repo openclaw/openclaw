@@ -2,41 +2,37 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
-import { withEnv } from "../test-utils/env.js";
-import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import * as userProfileList from "../state/user-profile-list.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { execCompletionSchema } from "./bash-tools.schemas.js";
+import { createCodeModeTools } from "./code-mode.js";
 import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "./cron-creator-authority-context.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
-  collectPresentOpenClawTools,
-  shouldIncludeAskUserToolForOpenClawTools,
-  shouldIncludeUpdatePlanToolForOpenClawTools,
+  shouldIncludePrimarySessionToolForOpenClawTools,
+  shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
-import { textResult, type AnyAgentTool } from "./tools/common.js";
-import { createPdfTool } from "./tools/pdf-tool.js";
-import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import * as inProcessGateway from "./tools/in-process-gateway.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
 }));
 
-type UpdatePlanGatingParams = Parameters<typeof shouldIncludeUpdatePlanToolForOpenClawTools>[0];
 type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
 
 function withDefaultRoster(config: OpenClawConfig | undefined): OpenClawConfig {
   return {
     ...config,
-    agents: config?.agents ?? { entries: { main: { default: true } } },
+    agents: config?.agents ?? { entries: { main: {} } },
   };
-}
-
-function expectUpdatePlanEnabled(params: UpdatePlanGatingParams, expected: boolean): void {
-  expect(
-    shouldIncludeUpdatePlanToolForOpenClawTools({
-      ...params,
-      config: withDefaultRoster(params.config),
-    }),
-  ).toBe(expected);
 }
 
 function toolNames(tools: ReturnType<typeof createOpenClawTools>): string[] {
@@ -73,101 +69,115 @@ function expectToolNamed(
   return tool;
 }
 
-describe("openclaw-tools update_plan gating", () => {
+it("keeps top-level tool argument names distinct from the required schema keyword", () => {
+  const config: OpenClawConfig = {
+    agents: { entries: { main: {} } },
+    tools: { swarm: true },
+  };
+  const directTools = createOpenClawCodingTools({
+    config,
+    sessionKey: "agent:main:main",
+    wrapBeforeToolCallHook: false,
+    toolConstructionPlan: {
+      includeBaseCodingTools: true,
+      includeShellTools: true,
+      includeChannelTools: false,
+      includeOpenClawTools: true,
+      includePluginTools: false,
+    },
+  });
+  const codeModeTools = createCodeModeTools({ config, agentId: "main" });
+  expect(toolNames(directTools)).toEqual(expect.arrayContaining(["exec", "agents_wait"]));
+  expect(toolNames(codeModeTools)).toEqual(["exec", "wait"]);
+  const surfaces = {
+    direct: directTools,
+    codeMode: codeModeTools,
+    completion: [{ name: "exec", parameters: execCompletionSchema }],
+  };
+  // Kimi confuses a top-level argument named required with JSON Schema's keyword.
+  for (const [surface, tools] of Object.entries(surfaces)) {
+    for (const tool of tools) {
+      expect
+        .soft(tool.parameters, `${surface}:${tool.name}`)
+        .not.toHaveProperty(["properties", "required"]);
+    }
+  }
+});
+
+describe("openclaw-tools progress_card gating", () => {
   afterEach(() => {
     setEmbeddedMode(false);
   });
 
-  it("keeps concrete OpenClaw tool names in the factory descriptor catalog", () => {
-    const emittedNames = createFastToolNames({
-      agentSessionKey: "agent:main:main",
-      config: {
-        tools: { allow: ["update_plan"] },
-        transcripts: { enabled: true },
-      } as OpenClawConfig,
-      cwd: "/repo",
-      enableHeartbeatTool: true,
-      taskSuggestionDeliveryMode: "gateway",
-    });
+  it.each([false, true])(
+    "gates personal instructions on multiple people (%s) without general filesystem access",
+    (multipleProfiles) => {
+      const identityCount = vi
+        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+        .mockReturnValue(multipleProfiles);
+      const tools = createOpenClawCodingTools({
+        sessionKey: "agent:main:dashboard:project",
+        runSessionKey: "agent:main:dashboard:project",
+        cwd: "/project/worktree",
+        workspaceDir: "/project/worktree",
+        config: {
+          agents: { entries: { main: { workspace: "/agent/workspace" } } },
+          tools: { allow: ["personal_instructions"], fs: { workspaceOnly: true } },
+        },
+        disableMessageTool: true,
+        wrapBeforeToolCallHook: false,
+      });
+      expect(toolNames(tools).includes("personal_instructions")).toBe(multipleProfiles);
+      expect(toolNames(tools)).not.toContain("write");
+      expect(toolNames(tools)).not.toContain("exec");
+      expect(resolveCoreToolFactoryFamily("personal_instructions")).toBe("openclaw");
+      setEmbeddedMode(true);
+      expect(createFastToolNames({ agentSessionKey: "agent:main:main" })).not.toContain(
+        "personal_instructions",
+      );
+      identityCount.mockRestore();
+    },
+  );
 
+  it("keeps human-question tools on permitted primary sessions", () => {
+    for (const toolName of ["ask_user", "secrets"] as const) {
+      const includeTool = (agentSessionKey?: string) =>
+        shouldIncludePrimarySessionToolForOpenClawTools(toolName, { agentSessionKey });
+      expect(includeTool()).toBe(false);
+      expect(includeTool("agent:main:main")).toBe(true);
+      expect(includeTool("agent:main:subagent:worker")).toBe(false);
+      expect(includeTool("agent:main:acp:worker")).toBe(false);
+    }
     expect(
-      emittedNames.filter((name) => resolveCoreToolFactoryFamily(name) !== "openclaw"),
-    ).toEqual([]);
-  });
-
-  it("enables update_plan by default", () => {
-    expectUpdatePlanEnabled({ config: {} as OpenClawConfig }, true);
-  });
-
-  it("exposes update_plan from default tool construction for every embedded model", () => {
-    const defaultTools = createFastToolNames({
-      config: {} as OpenClawConfig,
-      modelProvider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-    });
-
-    expect(defaultTools).toContain("update_plan");
-    expect(defaultTools).not.toContain("ask_user");
-  });
-
-  it("keeps ask_user on primary sessions and excludes spawned worker sessions", () => {
-    expect(shouldIncludeAskUserToolForOpenClawTools({})).toBe(false);
-    expect(shouldIncludeAskUserToolForOpenClawTools({ agentSessionKey: "agent:main:main" })).toBe(
-      true,
-    );
-    expect(
-      shouldIncludeAskUserToolForOpenClawTools({
-        agentSessionKey: "agent:main:subagent:worker",
+      shouldIncludePrimarySessionToolForOpenClawTools("secrets", {
+        agentSessionKey: "agent:main:main",
+        pluginToolDenylist: ["secrets"],
       }),
-    ).toBe(false);
-    expect(
-      shouldIncludeAskUserToolForOpenClawTools({ agentSessionKey: "agent:main:acp:worker" }),
     ).toBe(false);
     // ask_user must not depend on the TUI embedded-host flag; normal gateway
     // runs are the primary consumer.
     expect(
       createFastToolNames({
-        config: {} as OpenClawConfig,
         runSessionKey: "agent:main:non-embedded",
       }),
-    ).toContain("ask_user");
+    ).toEqual(expect.arrayContaining(["ask_user", "secrets"]));
     setEmbeddedMode(true);
 
     expect(
       createFastToolNames({
-        config: {} as OpenClawConfig,
         agentSessionKey: "agent:main:subagent:worker",
       }),
     ).not.toContain("ask_user");
     expect(
       createFastToolNames({
-        config: {} as OpenClawConfig,
         runSessionKey: "agent:main:run",
       }),
     ).toContain("ask_user");
   });
 
-  it("wraps constructed tools with before-tool-call hooks by default", () => {
-    const tools = createTestOpenClawTools({
-      config: {} as OpenClawConfig,
-      disablePluginTools: true,
-    });
-    const unwrappedTools = createTestOpenClawTools({
-      config: {} as OpenClawConfig,
-      disablePluginTools: true,
-      wrapBeforeToolCallHook: false,
-    });
-
-    expect(isToolWrappedWithBeforeToolCallHook(expectToolNamed(tools, "sessions_list"))).toBe(true);
-    expect(
-      isToolWrappedWithBeforeToolCallHook(expectToolNamed(unwrappedTools, "sessions_list")),
-    ).toBe(false);
-  });
-
   it("keeps message tool in embedded message-tool-only completions", () => {
     setEmbeddedMode(true);
     const tools = createTestOpenClawTools({
-      config: {} as OpenClawConfig,
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
       sourceReplyDeliveryMode: "message_tool_only",
@@ -178,21 +188,17 @@ describe("openclaw-tools update_plan gating", () => {
 
   it("exposes delegation only to regular unsandboxed gateway agents", () => {
     const regular = createFastToolNames({
-      config: {} as OpenClawConfig,
       agentSessionKey: "agent:main:main",
     });
     const sandboxed = createFastToolNames({
-      config: {} as OpenClawConfig,
       agentSessionKey: "agent:main:main",
       sandboxed: true,
     });
     const system = createFastToolNames({
-      config: {} as OpenClawConfig,
       agentSessionKey: "agent:openclaw:main",
     });
     setEmbeddedMode(true);
     const embedded = createFastToolNames({
-      config: {} as OpenClawConfig,
       agentSessionKey: "agent:main:main",
     });
 
@@ -202,13 +208,20 @@ describe("openclaw-tools update_plan gating", () => {
     expect(embedded).not.toContain("openclaw");
   });
 
-  it("registers transcripts by default with an explicit global opt-out", () => {
-    const defaultTools = createFastToolNames({
-      config: {} as OpenClawConfig,
-    });
-    const disabledTools = createFastToolNames({
-      config: { transcripts: { enabled: false } } as OpenClawConfig,
-    });
+  it("registers transcripts for an active local operator with an explicit global opt-out", () => {
+    const capability = createCronCreatorAuthorityCapability("run-local", { kind: "local" })!;
+    const { defaultTools, disabledTools } = runWithCronCreatorAuthorityCapability(
+      capability,
+      () => ({
+        defaultTools: createFastToolNames({
+          runId: "run-local",
+        }),
+        disabledTools: createFastToolNames({
+          config: { transcripts: { enabled: false } } as OpenClawConfig,
+          runId: "run-local",
+        }),
+      }),
+    );
 
     expect(defaultTools).toContain("transcripts");
     expect(disabledTools).not.toContain("transcripts");
@@ -216,17 +229,14 @@ describe("openclaw-tools update_plan gating", () => {
 
   it("registers task suggestions only for sessions with an actionable gateway sink", () => {
     const withoutSession = createFastToolNames({
-      config: {} as OpenClawConfig,
       cwd: "/repo",
       taskSuggestionDeliveryMode: "gateway",
     });
     const withoutSink = createFastToolNames({
-      config: {} as OpenClawConfig,
       agentSessionKey: "agent:main:main",
       cwd: "/repo",
     });
     const withSink = createFastToolNames({
-      config: {} as OpenClawConfig,
       agentSessionKey: "agent:main:main",
       cwd: "/repo",
       taskSuggestionDeliveryMode: "gateway",
@@ -242,7 +252,6 @@ describe("openclaw-tools update_plan gating", () => {
   it("keeps explicitly allowed message tool in embedded completions", () => {
     setEmbeddedMode(true);
     const fromRuntimeAllowlist = createTestOpenClawTools({
-      config: {} as OpenClawConfig,
       disablePluginTools: true,
       pluginToolAllowlist: ["message"],
       wrapBeforeToolCallHook: false,
@@ -253,7 +262,6 @@ describe("openclaw-tools update_plan gating", () => {
       wrapBeforeToolCallHook: false,
     });
     const denied = createTestOpenClawTools({
-      config: {} as OpenClawConfig,
       disablePluginTools: true,
       pluginToolAllowlist: ["message"],
       pluginToolDenylist: ["message"],
@@ -265,300 +273,12 @@ describe("openclaw-tools update_plan gating", () => {
     expect(toolNames(denied)).not.toContain("message");
   });
 
-  it("keeps subagent spawn available for trusted embedded gateway-bound runs", () => {
-    setEmbeddedMode(true);
-    const defaultTools = createFastToolNames({
-      config: {} as OpenClawConfig,
-    });
-    const gatewayBoundTools = createFastToolNames({
-      config: {} as OpenClawConfig,
-      allowGatewaySubagentBinding: true,
-    });
-
-    expect(defaultTools).not.toContain("sessions_spawn");
-    expect(defaultTools).not.toContain("sessions_send");
-    expect(gatewayBoundTools).toContain("sessions_spawn");
-    expect(gatewayBoundTools).not.toContain("sessions_send");
-  });
-
-  it("registers update_plan when explicitly enabled", () => {
-    const config = { tools: { updatePlan: true } } as OpenClawConfig;
-
-    expectUpdatePlanEnabled({ config }, true);
-    expect(createUpdatePlanTool().displaySummary).toBe("Track short work plan.");
-  });
-
-  it("registers update_plan when the runtime allowlist explicitly requests it", () => {
-    const tools = createFastToolNames({
-      config: {} as OpenClawConfig,
-      pluginToolAllowlist: ["update_plan"],
-      modelProvider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-    });
-
-    expect(tools).toContain("update_plan");
-  });
-
-  it("includes update_plan when a config allowlist group includes it", () => {
-    const includeUpdatePlan = shouldIncludeUpdatePlanToolForOpenClawTools({
-      config: { tools: { allow: ["group:agents"] } } as OpenClawConfig,
-    });
-
-    expect(includeUpdatePlan).toBe(true);
-  });
-
-  it("leaves normal deny policy enforcement to the assembled tool set", () => {
-    const tools = createFastToolNames({
-      config: {} as OpenClawConfig,
-      pluginToolAllowlist: ["group:agents"],
-      pluginToolDenylist: ["update_plan"],
-      modelProvider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-    });
-
-    expect(tools).not.toContain("update_plan");
-  });
-
   it("lets an explicit updatePlan false override an allowlist that includes the tool", () => {
-    expectUpdatePlanEnabled(
-      { config: { tools: { updatePlan: false, allow: ["update_plan"] } } as OpenClawConfig },
-      false,
-    );
-  });
-});
-
-function findOpenClawTool(name: string, modelHasVision?: boolean) {
-  return createTestOpenClawTools({ modelHasVision }).find((tool) => tool.name === name);
-}
-
-describe("model capability registration", () => {
-  it("omits computer input for models that cannot see the reference frame", () => {
-    expect(findOpenClawTool("computer", false)).toBeUndefined();
-  });
-
-  it("keeps computer when vision is supported or not yet resolved", () => {
-    expect(findOpenClawTool("computer", true)).toBeDefined();
-    expect(findOpenClawTool("computer")).toBeDefined();
-  });
-
-  it("keeps computer screenshots on the direct model-visible tool surface", () => {
-    expect(findOpenClawTool("computer", true)?.catalogMode).toBe("direct-only");
-  });
-
-  it("registers mobile UI independent of model vision", () => {
-    expect(findOpenClawTool("mobile_ui", false)).toBeDefined();
-    expect(findOpenClawTool("mobile_ui", true)).toBeDefined();
-    expect(findOpenClawTool("mobile_ui")).toBeDefined();
-  });
-
-  it("keeps mobile UI one-action-at-a-time execution explicit", () => {
-    expect(findOpenClawTool("mobile_ui")?.executionMode).toBe("sequential");
-  });
-});
-
-function stubAgentTool(name: string): AnyAgentTool {
-  return {
-    label: name,
-    name,
-    description: `${name} stub`,
-    parameters: { type: "object", properties: {} },
-    async execute() {
-      return textResult("ok", {});
-    },
-  };
-}
-
-describe.each([
-  { suite: "image", toolName: "image_generate", article: "an", label: "image-generation tool" },
-  { suite: "video", toolName: "video_generate", article: "a", label: "video-generation tool" },
-])("openclaw tools $suite generation registration", ({ toolName, article, label }) => {
-  it(`registers ${toolName} when ${article} ${label} is present`, () => {
-    const tool = stubAgentTool(toolName);
-    expect(collectPresentOpenClawTools([tool])).toEqual([tool]);
-  });
-
-  it(`omits ${toolName} when ${article} ${label} is absent`, () => {
-    expect(collectPresentOpenClawTools([null]).map((tool) => tool.name)).not.toContain(toolName);
-  });
-});
-
-describe("PDF registration", () => {
-  it("includes the pdf tool when the pdf factory returns a tool", () => {
-    const pdfTool = createPdfTool({
-      agentDir: "/tmp/openclaw-agent-main",
-      config: {
-        agents: { defaults: { pdfModel: { primary: "openai/gpt-5.4-mini" } } },
-      },
-    });
-
-    expect(pdfTool?.name).toBe("pdf");
-    expect(collectPresentOpenClawTools([pdfTool]).map((tool) => tool.name)).toEqual(["pdf"]);
-  });
-});
-
-function createSwarmToolNames(options: NonNullable<Parameters<typeof createOpenClawTools>[0]>) {
-  const config = options.config ?? {};
-  return createOpenClawTools({
-    disableMessageTool: true,
-    disablePluginTools: true,
-    wrapBeforeToolCallHook: false,
-    ...options,
-    config: {
-      ...config,
-      agents: config.agents ?? { entries: { main: {} } },
-    },
-  }).map((tool) => tool.name);
-}
-
-describe("Swarm registration", () => {
-  it("registers agents_wait only when tools.swarm is enabled", () => {
-    const base = { agentSessionKey: "agent:main:main" };
-    expect(createSwarmToolNames(base)).not.toContain("agents_wait");
-    expect(createSwarmToolNames({ ...base, config: { tools: { swarm: true } } })).toContain(
-      "agents_wait",
-    );
-  });
-
-  it("uses the effective requester agent override for the agents_wait gate", () => {
-    const base = {
-      agentSessionKey: "agent:worker:main",
-      requesterAgentIdOverride: "worker",
-    };
     expect(
-      createSwarmToolNames({
-        ...base,
-        config: {
-          tools: { swarm: false },
-          agents: {
-            list: [{ id: "main" }, { id: "worker", tools: { swarm: true } }],
-          },
-        },
+      shouldIncludeProgressCardToolForOpenClawTools({
+        config: { tools: { updatePlan: false, allow: ["update_plan"] } },
       }),
-    ).toContain("agents_wait");
-    expect(
-      createSwarmToolNames({
-        ...base,
-        config: {
-          tools: { swarm: true },
-          agents: {
-            list: [{ id: "main" }, { id: "worker", tools: { swarm: false } }],
-          },
-        },
-      }),
-    ).not.toContain("agents_wait");
-  });
-
-  it("injects structured_output only for schema-backed collector runs", () => {
-    const base = {
-      agentSessionKey: "agent:worker:subagent:child",
-      runId: "collector-run",
-      config: { tools: { swarm: true } },
-    };
-    expect(createSwarmToolNames({ ...base, swarmCollector: true })).not.toContain(
-      "structured_output",
-    );
-    expect(
-      createSwarmToolNames({
-        ...base,
-        swarmCollector: true,
-        swarmOutputSchema: { type: "object", properties: { answer: { type: "string" } } },
-      }),
-    ).toContain("structured_output");
-  });
-
-  it("keeps structured_output through restrictive child tool policy", () => {
-    const names = createOpenClawCodingTools({
-      sessionKey: "agent:worker:subagent:child",
-      runId: "collector-run",
-      config: {
-        agents: { entries: { main: { default: true } } },
-        tools: { allow: ["read"], swarm: true },
-      },
-      swarmCollector: true,
-      swarmOutputSchema: { type: "object", properties: { answer: { type: "string" } } },
-    }).map((tool) => tool.name);
-
-    expect(names).toContain("read");
-    expect(names).toContain("structured_output");
-    expect(names).not.toContain("exec");
-  });
-
-  it("omits the message tool for collector runs by invariant", () => {
-    const names = createOpenClawCodingTools({
-      sessionKey: "agent:worker:subagent:child",
-      runId: "collector-run",
-      config: {
-        agents: { entries: { main: { default: true } } },
-        tools: { swarm: true },
-      },
-      swarmCollector: true,
-    }).map((tool) => tool.name);
-
-    expect(names).not.toContain("message");
-  });
-
-  it("omits interactive and pausing tools for non-interactive collector runs", () => {
-    const names = createOpenClawCodingTools({
-      sessionKey: "agent:worker:main",
-      runId: "collector-run",
-      config: {
-        agents: { entries: { main: { default: true } } },
-        tools: { swarm: true },
-      },
-      swarmCollector: true,
-    }).map((tool) => tool.name);
-
-    expect(names).not.toContain("ask_user");
-    expect(names).not.toContain("sessions_send");
-    expect(names).not.toContain("sessions_yield");
-  });
-});
-
-describe("sessions_yield completion ownership", () => {
-  const controllerSessionKey = "agent:main:telegram:default:direct:1234";
-
-  it.each([
-    ["the durable run owner", "agent:main:main", "agent:main:main"],
-    ["a trimmed durable run owner", "  agent:main:main  ", "agent:main:main"],
-    ["the controller when the run owner is blank", "   ", controllerSessionKey],
-    ["the controller when the run owner is absent", undefined, controllerSessionKey],
-  ] as const)("records yield intent against %s", async (_, runSessionKey, expectedSessionKey) => {
-    const registry = await import("./subagents/registry/subagent-registry.js");
-    const markRequesterTurnYielded = vi
-      .spyOn(registry, "markRequesterTurnYielded")
-      .mockReturnValue(1);
-    const onYield = vi.fn(async () => undefined);
-
-    try {
-      const tool = expectToolNamed(
-        createTestOpenClawTools({
-          agentSessionKey: controllerSessionKey,
-          runSessionKey,
-          sessionId: "requester-session",
-          runId: "run-requester",
-          onYield,
-          disableMessageTool: true,
-          disablePluginTools: true,
-          wrapBeforeToolCallHook: false,
-        }),
-        "sessions_yield",
-      );
-
-      const result = await tool.execute("yield-requester", {});
-
-      expect(result.details).toMatchObject({ status: "yielded" });
-      expect(markRequesterTurnYielded).toHaveBeenCalledExactlyOnceWith({
-        requesterAgentId: "main",
-        requesterSessionKey: expectedSessionKey,
-        requesterTurnRunId: "run-requester",
-      });
-      expect(onYield).toHaveBeenCalledOnce();
-      expect(markRequesterTurnYielded.mock.invocationCallOrder[0]).toBeLessThan(
-        onYield.mock.invocationCallOrder[0]!,
-      );
-    } finally {
-      markRequesterTurnYielded.mockRestore();
-    }
+    ).toBe(false);
   });
 });
 
@@ -566,57 +286,143 @@ function hasTool(tools: readonly { name: string }[], name: string): boolean {
   return tools.some((tool) => tool.name === name);
 }
 
+type ChannelPresenter = Extract<WidgetPresenter, { target: "current_channel" }>;
+
+function widgetPresenter(overrides: Partial<ChannelPresenter> = {}): ChannelPresenter {
+  return {
+    target: "current_channel",
+    description: "Present in the configured Discord channel",
+    capabilities: { sourceKinds: ["html"] },
+    match: (context) => context.messageChannel === "discord" && context.accountId === "configured",
+    availability: async () => ({ ok: true, value: { available: true } }),
+    present: async () => {
+      throw new Error("present must not run");
+    },
+    ...overrides,
+  };
+}
+
+function registerPresenters(...presenters: WidgetPresenter[]) {
+  const registry = createEmptyPluginRegistry();
+  registry.widgetPresenters.push(
+    ...presenters.map((presenter, index) => ({
+      pluginId: `fixture-${index}`,
+      presenter,
+      source: "widget-fixture",
+    })),
+  );
+  setActivePluginRegistry(registry);
+}
+
 describe("gateway client capability tool filtering", () => {
-  it.each([
-    { name: "no gateway client caps exist", clientCaps: undefined },
-    { name: "a required cap is absent", clientCaps: ["tool-events"] },
-  ])("excludes capability-gated tools when $name", ({ clientCaps }) => {
-    expect(hasTool(createOpenClawTools({ clientCaps }), "show_widget")).toBe(false);
+  it("exposes one core widget tool for a matching current-channel presenter", async () => {
+    const present = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        kind: "message" as const,
+        receipt: {
+          primaryPlatformMessageId: "discord-message-1",
+          platformMessageIds: ["discord-message-1"],
+          parts: [],
+          sentAt: 1,
+        },
+      },
+    }));
+    registerPresenters(widgetPresenter({ present }));
+
+    try {
+      const tools = createOpenClawTools({
+        agentChannel: "discord",
+        agentAccountId: "configured",
+        nativeChannelId: "channel-1",
+        agentSessionKey: "agent:main:discord",
+      });
+      const widgetTools = tools.filter((tool) => tool.name === "show_widget");
+
+      expect(widgetTools).toHaveLength(1);
+      expect(widgetTools[0]?.requiredClientCaps).toBeUndefined();
+      const result = await widgetTools[0]?.execute("discord-widget", {
+        title: "Status",
+        widget_code: "<p>ready</p>",
+      });
+      expect(result?.details).toMatchObject({
+        kind: "widget",
+        presentation: {
+          target: "current_channel",
+          receipt: { primaryPlatformMessageId: "discord-message-1" },
+        },
+      });
+      expect(present).toHaveBeenCalledOnce();
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
   });
 
-  it("includes capability-gated tools when the client caps are a superset", () => {
+  it("hides current-channel widgets when no presenter matches the trusted run facts", () => {
+    registerPresenters(widgetPresenter());
+
+    try {
+      expect(
+        hasTool(
+          createOpenClawTools({ agentChannel: "discord", agentAccountId: "unconfigured" }),
+          "show_widget",
+        ),
+      ).toBe(false);
+      expect(hasTool(createOpenClawTools({ agentChannel: "slack" }), "show_widget")).toBe(false);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
+  it("fails closed when current-channel presenter matching is ambiguous", () => {
+    const match: WidgetPresenter["match"] = (context) => context.messageChannel === "discord";
+    registerPresenters(widgetPresenter({ match }), widgetPresenter({ match }));
+
+    try {
+      expect(hasTool(createOpenClawTools({ agentChannel: "discord" }), "show_widget")).toBe(false);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
+  it("retains the requesting browser through coding tool assembly", async () => {
+    const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
+    const targets: unknown[] = [];
+    const call = vi
+      .spyOn(inProcessGateway, "callInProcessGatewayTool")
+      .mockImplementation(async () => {
+        targets.push(getGatewayToolCallerIdentity()?.gatewayUiCommandTarget);
+        return { ok: true } as never;
+      });
+    try {
+      const tools = createOpenClawCodingTools({
+        config: withDefaultRoster(undefined),
+        sessionKey: "agent:main:main",
+        clientCaps: ["ui-commands"],
+        gatewayUiCommandTarget,
+      });
+      await expectToolNamed(tools, "screen").execute("select", {
+        action: "navigate",
+        sessionKey: "agent:main:other",
+      });
+      expect(targets).toEqual([gatewayUiCommandTarget]);
+    } finally {
+      call.mockRestore();
+    }
+  });
+
+  it("exposes GitHub publication only from a prepared session capability", () => {
+    expect(hasTool(createOpenClawTools(), "github_publish")).toBe(false);
+    expect(hasTool(createOpenClawTools(), "github_identity_status")).toBe(false);
     expect(
-      hasTool(
-        createOpenClawTools({ clientCaps: ["tool-events", "inline-widgets"] }),
-        "show_widget",
-      ),
+      hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_publish"),
+    ).toBe(false);
+    expect(
+      hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_identity_status"),
     ).toBe(true);
-  });
-
-  it("keeps the core widget tool out of Discord sessions", () => {
     expect(
-      hasTool(
-        createOpenClawTools({ agentChannel: "discord", clientCaps: ["inline-widgets"] }),
-        "show_widget",
-      ),
-    ).toBe(false);
-  });
-
-  it("keeps the core widget tool out when Canvas host config disables it", () => {
-    expect(
-      hasTool(
-        createOpenClawTools({
-          clientCaps: ["inline-widgets"],
-          config: {
-            plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
-          },
-        }),
-        "show_widget",
-      ),
-    ).toBe(false);
-  });
-
-  it("keeps the core widget tool out when OPENCLAW_SKIP_CANVAS_HOST is set", () => {
-    withEnv({ OPENCLAW_SKIP_CANVAS_HOST: "1" }, () => {
-      expect(hasTool(createOpenClawTools({ clientCaps: ["inline-widgets"] }), "show_widget")).toBe(
-        false,
-      );
-    });
-  });
-
-  it("only exposes screen to UI-command clients", () => {
-    expect(hasTool(createOpenClawTools(), "screen")).toBe(false);
-    expect(hasTool(createOpenClawTools({ clientCaps: ["ui-commands"] }), "screen")).toBe(true);
+      hasTool(createOpenClawTools({ githubPublicationAvailable: true }), "github_publish"),
+    ).toBe(true);
   });
 
   it("omits host UI runtime tools for sandboxed agents", () => {
@@ -680,6 +486,12 @@ describe("gateway client capability tool filtering", () => {
           toolConstructionPlan: plan,
         }),
         "show_widget",
+      ),
+    ).toBe(false);
+    expect(
+      hasTool(
+        createOpenClawCodingTools({ messageProvider: "webchat", toolConstructionPlan: plan }),
+        "progress_card",
       ),
     ).toBe(false);
   });

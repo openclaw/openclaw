@@ -1,4 +1,3 @@
-// Discord plugin module implements conversation identity behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -32,6 +31,18 @@ export function resolveDiscordConversationIdentity(params: {
   return params.isDirectMessage
     ? buildDiscordConversationIdentity("user", params.userId)
     : buildDiscordConversationIdentity("channel", params.channelId);
+}
+
+export function resolveDiscordRuntimeBindingConversationId(params: {
+  isDirectMessage: boolean;
+  isGroupDm: boolean;
+  userId?: string | null;
+  channelId: string;
+}): string {
+  if (params.isDirectMessage && !params.isGroupDm) {
+    return buildDiscordConversationIdentity("user", params.userId) ?? params.channelId;
+  }
+  return params.channelId;
 }
 
 export function resolveDiscordCurrentConversationIdentity(params: {

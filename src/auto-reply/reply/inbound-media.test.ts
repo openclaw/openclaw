@@ -6,10 +6,6 @@ import {
 } from "./inbound-media.js";
 
 describe("hasInboundMedia", () => {
-  it("detects retained type-only media facts", () => {
-    expect(hasInboundMedia({ media: [{ kind: "sticker" }] })).toBe(true);
-  });
-
   it("detects aligned type-only facts without a placeholder body", () => {
     expect(hasInboundMedia({ Body: "", media: [{ kind: "sticker" }, { kind: "image" }] })).toBe(
       true,
@@ -39,10 +35,6 @@ describe("hasInboundAudio", () => {
     ).toBe(true);
   });
 
-  it("accepts the structured audio kind when a MIME subtype is unavailable", () => {
-    expect(hasInboundAudio({ media: [{ kind: "audio" }] })).toBe(true);
-  });
-
   it("does not infer audio from placeholder or transcript text", () => {
     expect(hasInboundAudio({ Body: "<media:audio>" })).toBe(false);
     expect(hasInboundAudio({ Body: "[Audio]\nTranscript:\nhello" })).toBe(false);
@@ -50,6 +42,17 @@ describe("hasInboundAudio", () => {
 
   it("does not rederive audio from a media filename", () => {
     expect(hasInboundAudio({ media: [{ path: "/tmp/voice.ogg" }] })).toBe(false);
+    expect(
+      hasInboundAudio({
+        media: [
+          {
+            url: "https://cdn.example.test/download/opaque",
+            fileName: "voice.ogg",
+            contentType: "application/octet-stream",
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("does not treat non-audio media as audio", () => {

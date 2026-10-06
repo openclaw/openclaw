@@ -1,11 +1,10 @@
-// Stores and validates wide-area DNS discovery settings.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CONFIG_DIR } from "../utils.js";
-import { replaceFileAtomicSync } from "./replace-file.js";
 
 const DNS_LABEL_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const MAX_DNS_NAME_LENGTH = 253;
@@ -47,21 +46,13 @@ export function resolveWideAreaDiscoveryDomain(params?: {
   }
 }
 
-function zoneFilenameForDomain(domain: string): string {
-  return `${normalizedDomainLabels(domain).join(".")}.db`;
-}
-
-function assertZonePathUnderDnsDir(zonePath: string, dnsDir: string): void {
+export function getWideAreaZonePath(domain: string): string {
+  const dnsDir = path.resolve(CONFIG_DIR, "dns");
+  const zonePath = path.resolve(dnsDir, `${normalizedDomainLabels(domain).join(".")}.db`);
   const relativePath = path.relative(dnsDir, zonePath);
   if (relativePath === "" || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     throw new Error("wide-area discovery zone path must stay under DNS config directory");
   }
-}
-
-export function getWideAreaZonePath(domain: string): string {
-  const dnsDir = path.resolve(CONFIG_DIR, "dns");
-  const zonePath = path.resolve(dnsDir, zoneFilenameForDomain(domain));
-  assertZonePathUnderDnsDir(zonePath, dnsDir);
   return zonePath;
 }
 
@@ -101,16 +92,13 @@ function formatYyyyMmDd(date: Date): string {
 }
 
 function nextSerial(existingSerial: number | null, now: Date): number {
-  const today = formatYyyyMmDd(now);
-  const base = Number.parseInt(`${today}01`, 10);
-  if (!existingSerial || !Number.isFinite(existingSerial)) {
+  const base = Number.parseInt(`${formatYyyyMmDd(now)}01`, 10);
+  if (existingSerial === null || !Number.isFinite(existingSerial)) {
     return base;
   }
-  const existing = String(existingSerial);
-  if (existing.startsWith(today)) {
-    return existingSerial + 1;
-  }
-  return base;
+  // RFC 1982 accepts only advances smaller than half the unsigned serial space.
+  const distance = (base - existingSerial) >>> 0;
+  return distance > 0 && distance < 0x80000000 ? base : (existingSerial + 1) >>> 0;
 }
 
 function extractSerial(zoneText: string): number | null {
@@ -153,7 +141,9 @@ export type WideAreaGatewayZoneOpts = {
   cliPath?: string;
 };
 
-function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string {
+export function renderWideAreaGatewayZoneText(
+  opts: WideAreaGatewayZoneOpts & { serial: number },
+): string {
   const hostname = os.hostname().split(".")[0] ?? "openclaw";
   const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "openclaw");
   const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-gateway`, "openclaw-gw");
@@ -184,15 +174,15 @@ function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string 
     txt.push(`cliPath=${opts.cliPath.trim()}`);
   }
 
-  const records: string[] = [];
-
-  records.push(`$ORIGIN ${domain}`);
-  records.push(`$TTL 60`);
   const soaLine = `@ IN SOA ns1 hostmaster ${opts.serial} 7200 3600 1209600 60`;
-  records.push(soaLine);
-  records.push(`@ IN NS ns1`);
-  records.push(`ns1 IN A ${opts.tailnetIPv4}`);
-  records.push(`${hostLabel} IN A ${opts.tailnetIPv4}`);
+  const records = [
+    `$ORIGIN ${domain}`,
+    `$TTL 60`,
+    soaLine,
+    `@ IN NS ns1`,
+    `ns1 IN A ${opts.tailnetIPv4}`,
+    `${hostLabel} IN A ${opts.tailnetIPv4}`,
+  ];
   if (opts.tailnetIPv6) {
     records.push(`${hostLabel} IN AAAA ${opts.tailnetIPv6}`);
   }
@@ -210,12 +200,6 @@ function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string 
   const contentHash = computeContentHash(hashBody);
 
   return `; openclaw-content-hash: ${contentHash}\n${contentBody}`;
-}
-
-export function renderWideAreaGatewayZoneText(
-  opts: WideAreaGatewayZoneOpts & { serial: number },
-): string {
-  return renderZone(opts);
 }
 
 export async function writeWideAreaGatewayZone(

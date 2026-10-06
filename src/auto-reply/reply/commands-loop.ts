@@ -5,6 +5,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { commandReply as directReply, defineAuthorizedTextCommand } from "./command-gates.js";
+import { matchSlashCommandToken } from "./commands-slash-parse.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const LOOP_COMMAND_PREFIX = "/loop";
@@ -14,56 +15,36 @@ const LOOP_NAME_MAX_LENGTH = 40;
 const LOOP_USAGE =
   "Usage: /loop [interval] <prompt> — repeat a prompt in this chat (e.g. /loop 5m check deploy status). Without interval the loop self-paces between 1m and 1h. /loop status lists loops; /loop stop [name] stops.";
 
-function loopShortName(prompt: string): string {
-  return truncateUtf16Safe(prompt.trim(), LOOP_NAME_MAX_LENGTH).trimEnd();
-}
-
 // Conversation tag baked into the job name at create time. Status/stop match by
 // this same tag, so loop discovery never depends on how the cron side resolves
 // session keys (which can differ from the command pipeline's sessionKey and
 // made stored-binding checks misfire in live testing). 48 bits keeps accidental
 // cross-conversation prefix collisions negligible; all matched jobs are still
 // the owner's own agent jobs.
-function loopConversationTag(sessionKey: string): string {
-  return createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
-}
-
 function loopNamePrefix(sessionKey: string): string {
-  return `loop[${loopConversationTag(sessionKey)}]`;
+  const tag = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
+  return `loop[${tag}]`;
 }
 
 const LOOP_FINAL_REPLY_ONLY =
   "Reply with your normal final message only; do not use the message tool.";
 
-function buildLoopPayloadMessage(params: {
-  prompt: string;
-  shortName: string;
-  selfPaced: boolean;
-}): string {
+function buildLoopWorkOrder(prompt: string, sessionKey: string, everyMs?: number): string {
+  const shortName = truncateUtf16Safe(prompt.trim(), LOOP_NAME_MAX_LENGTH).trimEnd();
+  const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
+  const selfPaced = everyMs === undefined;
   const lines = [
-    `[loop ${params.shortName}] ${params.prompt}`,
+    `[loop ${shortName}] ${prompt}`,
     "Do the task and reply concisely. If nothing changed since the last run, reply briefly.",
   ];
-  if (params.selfPaced) {
+  if (selfPaced) {
     lines.push(
       `Before replying, ALWAYS call the ${AUTOMATIONS_TOOL_NAME} tool action:"next_check" with in:"<duration>" — pick the next check interval from how active the task is; back off toward 1h when quiet.`,
     );
   }
-  return lines.join("\n");
-}
-
-function buildFixedLoopWorkOrder(prompt: string, everyMs: number, sessionKey: string): string {
-  const shortName = loopShortName(prompt);
-  const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
-  const message = buildLoopPayloadMessage({ prompt, shortName, selfPaced: false });
-  return `Create a recurring loop with the ${AUTOMATIONS_TOOL_NAME} tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs}},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
-}
-
-function buildSelfPacedLoopWorkOrder(prompt: string, sessionKey: string): string {
-  const shortName = loopShortName(prompt);
-  const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
-  const message = buildLoopPayloadMessage({ prompt, shortName, selfPaced: true });
-  return `Create a recurring loop with the ${AUTOMATIONS_TOOL_NAME} tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${LOOP_DEFAULT_INTERVAL_MS}},pacing:{min:"1m",max:"1h"},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
+  const message = lines.join("\n");
+  const pacing = selfPaced ? 'pacing:{min:"1m",max:"1h"},' : "";
+  return `Create a recurring loop with the ${AUTOMATIONS_TOOL_NAME} tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs ?? LOOP_DEFAULT_INTERVAL_MS}},${pacing}sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
 }
 
 function buildLoopStatusWorkOrder(sessionKey: string): string {
@@ -83,16 +64,7 @@ function buildLoopStopWorkOrder(name: string, sessionKey: string): string {
 export const handleLoopCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: LOOP_COMMAND_PREFIX,
-    match: (body) => {
-      const trimmed = body.trim();
-      const commandEnd = trimmed.search(/\s/u);
-      const token = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
-      return token.toLowerCase() === LOOP_COMMAND_PREFIX
-        ? commandEnd === -1
-          ? ""
-          : trimmed.slice(commandEnd).trim()
-        : null;
-    },
+    match: (body) => matchSlashCommandToken(body, LOOP_COMMAND_PREFIX),
     ownerOnly: true,
   },
   (params, spec) => {
@@ -127,11 +99,11 @@ export const handleLoopCommand: CommandHandler = defineAuthorizedTextCommand(
       if (!prompt) {
         return directReply(LOOP_USAGE);
       }
-      applyCommandTextToParams(params, buildFixedLoopWorkOrder(prompt, everyMs, params.sessionKey));
+      applyCommandTextToParams(params, buildLoopWorkOrder(prompt, params.sessionKey, everyMs));
       return { shouldContinue: true };
     }
 
-    applyCommandTextToParams(params, buildSelfPacedLoopWorkOrder(spec, params.sessionKey));
+    applyCommandTextToParams(params, buildLoopWorkOrder(spec, params.sessionKey));
     return { shouldContinue: true };
   },
 );

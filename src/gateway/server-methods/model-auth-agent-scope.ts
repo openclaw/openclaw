@@ -7,11 +7,11 @@ import {
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 
 type ModelAuthAgentScopeResult =
   | { ok: true; agentId: string; agentDir: string }
-  | { ok: false; agentId: string; error?: ReturnType<typeof errorShape> };
+  | { ok: false; error: ReturnType<typeof errorShape> };
 
 /** Resolves model-auth RPC scope without letting explicit garbage reach the default store. */
 export function resolveModelAuthAgentScope(
@@ -31,7 +31,6 @@ export function resolveModelAuthAgentScope(
       }
       return {
         ok: false,
-        agentId: "",
         error: errorShape(ErrorCodes.INVALID_REQUEST, error.message),
       };
     }
@@ -42,35 +41,29 @@ export function resolveModelAuthAgentScope(
     };
   }
   if (typeof requestedAgentId !== "string") {
-    return {
-      ok: false,
-      agentId: requestedAgentId === null ? "null" : typeof requestedAgentId,
-    };
+    return unknownAgentScope(requestedAgentId === null ? "null" : typeof requestedAgentId);
   }
   const rawAgentId = requestedAgentId.trim();
   // Only the literal empty string keeps the omitted-param default; a
   // whitespace-only value is an explicit target and must not use default auth.
   if (!rawAgentId) {
-    return { ok: false, agentId: requestedAgentId };
+    return unknownAgentScope(requestedAgentId);
   }
-  const agentId = normalizeAgentId(rawAgentId);
-  // normalizeAgentId falls back to "main" when sanitization erases the entire
-  // input; explicit garbage must not inherit the default agent's credentials.
-  const collapsedToFallback = !/[A-Za-z0-9_]/u.test(rawAgentId);
-  if (collapsedToFallback || !listAgentIds(cfg).includes(agentId)) {
-    return { ok: false, agentId: rawAgentId };
+  const normalized = normalizeAgentIdStrict(rawAgentId);
+  if (!normalized.ok || !listAgentIds(cfg).includes(normalized.value)) {
+    return unknownAgentScope(rawAgentId);
   }
+  const agentId = normalized.value;
   return { ok: true, agentId, agentDir: resolveAgentDir(cfg, agentId) };
 }
 
-export function modelAuthAgentScopeError(scope: Extract<ModelAuthAgentScopeResult, { ok: false }>) {
-  return scope.error ?? unknownModelAuthAgentIdError(scope.agentId);
-}
-
-function unknownModelAuthAgentIdError(agentId: string) {
+function unknownAgentScope(agentId: string): ModelAuthAgentScopeResult {
   const details: UnknownAgentIdErrorDetails = {
     code: GatewayErrorDetailCodes.UNKNOWN_AGENT_ID,
     agentId,
   };
-  return errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentId}"`, { details });
+  return {
+    ok: false,
+    error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentId}"`, { details }),
+  };
 }

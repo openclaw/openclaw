@@ -1,93 +1,109 @@
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
-const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 type SessionEventRefreshCoordinatorOptions = {
-  canRefresh: () => boolean;
-  refresh: () => Promise<void>;
+  active: boolean;
+  refresh: (isCurrent: () => boolean) => Promise<void>;
 };
 
 /** Canonical bounded event refresh policy shared by session-list owners. */
-export function createSessionEventRefreshCoordinator(
-  options: SessionEventRefreshCoordinatorOptions,
-) {
-  let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let deadline: number | null = null;
-  let inFlight: Promise<void> | null = null;
-  let trailing = false;
-  let generation = 0;
-  let disposed = false;
+export function createSessionEventRefreshCoordinator({
+  active: initialActive,
+  refresh,
+}: SessionEventRefreshCoordinatorOptions) {
+  let active = initialActive;
+  let timer: ReturnType<typeof setTimeout> | 0 = 0;
+  let nextAllowed = 0;
+  let pending: object | null = null;
+  let revision = 0;
+  // Hidden pages and in-flight requests retain one trailing invalidation.
+  let queued = false;
+  let retryAt: number | null = null;
+  let fallback: ReturnType<typeof setTimeout> | undefined;
 
   const clearTimer = () => {
-    if (timer !== null) {
-      globalThis.clearTimeout(timer);
-      timer = null;
+    clearTimeout(timer);
+    timer = 0;
+  };
+
+  const arm = (debounce = true) => {
+    if (!active || pending || !queued || timer) {
+      return;
     }
-    deadline = null;
+    const now = Date.now();
+    const delay = debounce ? SESSION_EVENT_REFRESH_DEBOUNCE_MS * (1 - 0.2 * Math.random()) : 0;
+    timer = setTimeout(
+      start,
+      retryAt === null ? Math.max(delay, nextAllowed - now) : Math.max(0, retryAt - now),
+    );
   };
 
   const start = () => {
-    if (disposed || !options.canRefresh()) {
+    clearTimer();
+    if (!active || pending || !queued) {
       return;
     }
-    if (inFlight) {
-      trailing = true;
-      return;
-    }
-    const operationGeneration = generation;
-    const operation = options.refresh().catch(() => undefined);
-    const pending = operation.finally(() => {
-      if (generation !== operationGeneration || inFlight !== pending) {
-        return;
-      }
-      inFlight = null;
-      if (trailing) {
-        trailing = false;
-        start();
-      }
-    });
-    inFlight = pending;
+    queued = false;
+    retryAt = null;
+    const request = {};
+    pending = request;
+    const started = Date.now();
+    const requestRevision = revision;
+    void refresh(() => pending === request && requestRevision === revision)
+      .catch(() => {})
+      .finally(() => {
+        if (pending !== request) {
+          return;
+        }
+        pending = null;
+        const completed = Date.now();
+        nextAllowed = completed + Math.min(15_000, Math.max(5_000, 3 * (completed - started)));
+        arm();
+      });
+  };
+
+  const absorb = () => {
+    clearTimeout(fallback);
+    fallback = undefined;
+    revision += 1;
+    clearTimer();
+    queued = false;
+    retryAt = null;
+  };
+  const reset = () => {
+    absorb();
+    pending = null;
+    nextAllowed = 0;
   };
 
   return {
+    scheduleFallback() {
+      fallback ??= setTimeout(() => {
+        fallback = undefined;
+        queued = true;
+        arm();
+      }, 60_000);
+    },
+    scheduleRetry(delayMs: number) {
+      retryAt = Date.now() + delayMs;
+      queued = true;
+      clearTimer();
+      arm(false);
+    },
     schedule() {
-      if (disposed || !options.canRefresh()) {
+      queued = true;
+      arm();
+    },
+    setActive(next: boolean, markDirty = false) {
+      active = next;
+      if (next) {
+        arm(false);
         return;
       }
-      const now = Date.now();
-      deadline ??= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
-      if (timer !== null) {
-        globalThis.clearTimeout(timer);
-      }
-      const delay = Math.min(SESSION_EVENT_REFRESH_DEBOUNCE_MS, Math.max(0, deadline - now));
-      timer = globalThis.setTimeout(() => {
-        timer = null;
-        deadline = null;
-        start();
-      }, delay);
-    },
-    flush() {
-      if (timer === null) {
-        return;
-      }
+      queued ||= markDirty || timer !== 0;
       clearTimer();
-      start();
     },
-    absorb() {
-      clearTimer();
-      trailing = false;
-    },
-    reset() {
-      clearTimer();
-      trailing = false;
-      inFlight = null;
-      generation += 1;
-    },
-    dispose() {
-      clearTimer();
-      trailing = false;
-      inFlight = null;
-      generation += 1;
-      disposed = true;
-    },
+    absorb,
+    reset,
+    dispose: reset,
   };
 }

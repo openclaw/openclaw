@@ -1,14 +1,28 @@
 // Signal tests cover daemon plugin behavior.
 import { EventEmitter, once } from "node:events";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { spawnSignalDaemon } from "./daemon.js";
+import { assertSignalDaemonEndpointAvailable, spawnSignalDaemon } from "./daemon.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const ensurePortAvailableMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  ensurePortAvailableMock.mockImplementation(actual.ensurePortAvailable);
+  return {
+    ...actual,
+    ensurePortAvailable: (...args: unknown[]) => ensurePortAvailableMock(...args),
+  };
+});
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: spawnMock };
+});
 
 function createMockChild() {
   const child = new EventEmitter() as EventEmitter & {
@@ -32,6 +46,7 @@ beforeEach(() => {
   child = createMockChild();
   spawnMock.mockReset();
   spawnMock.mockReturnValue(child);
+  ensurePortAvailableMock.mockClear();
 });
 
 afterEach(() => {
@@ -42,6 +57,69 @@ afterEach(() => {
 });
 
 describe("spawnSignalDaemon", () => {
+  it("starts the opt-in socket daemon without exposing an HTTP listener", () => {
+    spawnSignalDaemon({
+      cliPath: "signal-cli",
+      socketPath: "/private/signal/rpc",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    });
+    const args = spawnMock.mock.calls[0]?.[1] as string[];
+    expect(args).toContain("--socket");
+    expect(args).toContain("/private/signal/rpc");
+    expect(args).not.toContain("--http");
+    expect(args).not.toContain("--tcp");
+    expect(args.slice(args.indexOf("--receive-mode"), args.indexOf("--receive-mode") + 2)).toEqual([
+      "--receive-mode",
+      "manual",
+    ]);
+  });
+  it("rejects an occupied managed endpoint with actionable port guidance", async () => {
+    const listener = createServer();
+    await new Promise<void>((resolve, reject) => {
+      listener.once("error", reject);
+      listener.listen(0, "127.0.0.1", resolve);
+    });
+    const address = listener.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected a TCP listener address");
+    }
+
+    try {
+      await expect(
+        assertSignalDaemonEndpointAvailable({
+          httpHost: "127.0.0.1",
+          httpPort: address.port,
+        }),
+      ).rejects.toThrow(
+        `Signal managed native endpoint 127.0.0.1:${address.port} is unavailable: Port ${address.port} is already in use. Stop the conflicting service, configure this Signal account with a different transport.httpPort, or use external-native for an intentionally operator-managed daemon.`,
+      );
+      expect(listener.listening).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        listener.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+    // The released port is unowned; let the kernel choose this free probe.
+    await expect(
+      assertSignalDaemonEndpointAvailable({ httpHost: "127.0.0.1", httpPort: 0 }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("defers non-collision bind failures to the operator-selected daemon", async () => {
+    const bindError = Object.assign(new Error("bind EACCES 127.0.0.1:443"), {
+      code: "EACCES",
+    });
+    ensurePortAvailableMock.mockRejectedValueOnce(bindError);
+
+    await expect(
+      assertSignalDaemonEndpointAvailable({
+        httpHost: "127.0.0.1",
+        httpPort: 443,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("expands home-relative configPath before passing it to signal-cli", () => {
     spawnSignalDaemon({
       cliPath: "signal-cli",

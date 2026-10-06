@@ -1,39 +1,71 @@
 import {
+  estimateStringChars,
+  estimateTokensFromChars,
+} from "@openclaw/normalization-core/cjk-chars";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
   normalizeUsage,
+  type ContextUsage,
   type UsageLike,
 } from "../agents/usage.js";
-import type { SessionTranscriptUsageSnapshot } from "./session-utils.fs.js";
 
-function extractSqliteUsageSnapshot(message: unknown): SessionTranscriptUsageSnapshot | null {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
+export type SessionTranscriptUsageSnapshot = {
+  modelProvider?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  contextUsage?: ContextUsage;
+  totalTokens?: number;
+  totalTokensFresh?: boolean;
+  costUsd?: number;
+};
+
+type TranscriptUsageSource = "sqlite" | "artifact";
+
+function extractTranscriptUsageSnapshot(
+  message: unknown,
+  source: TranscriptUsageSource,
+): SessionTranscriptUsageSnapshot | null {
+  if (!isRecord(message)) {
     return null;
   }
-  const record = message as {
-    api?: unknown;
-    model?: unknown;
-    provider?: unknown;
-    usage?: unknown;
-  };
-  const usageRaw =
-    record.usage && typeof record.usage === "object" && !Array.isArray(record.usage)
-      ? (record.usage as UsageLike & { cost?: { total?: unknown }; costUsd?: unknown })
-      : undefined;
+  const record = message;
+  if (source === "artifact" && typeof record.role === "string" && record.role !== "assistant") {
+    return null;
+  }
+  const usageRaw = isRecord(record.usage)
+    ? (record.usage as UsageLike & { cost?: { total?: unknown }; costUsd?: unknown })
+    : undefined;
   const usage = normalizeUsage(usageRaw);
   const normalizedUsage = usage ?? {};
-  const legacyCliUsage = record.api === "cli" && usageRaw && usageRaw.contextUsage === undefined;
-  const totalTokens = legacyCliUsage ? undefined : deriveSessionTotalTokens({ usage });
+  const api =
+    source === "artifact" && typeof record.api === "string" ? record.api.trim() : record.api;
+  const legacyCliUsage = api === "cli" && usageRaw && usageRaw.contextUsage === undefined;
+  const derivedTotalTokens = legacyCliUsage ? undefined : deriveSessionTotalTokens({ usage });
+  const totalTokens =
+    source === "artifact" ? asPositiveFiniteNumber(derivedTotalTokens) : derivedTotalTokens;
   const modelProvider = typeof record.provider === "string" ? record.provider.trim() : undefined;
   const model = typeof record.model === "string" ? record.model.trim() : undefined;
   const costUsd =
-    typeof usageRaw?.cost?.total === "number" && Number.isFinite(usageRaw.cost.total)
-      ? usageRaw.cost.total
-      : usageRaw?.costUsd;
+    source === "artifact"
+      ? asNonNegativeFiniteNumber(usageRaw?.cost?.total)
+      : typeof usageRaw?.cost?.total === "number" && Number.isFinite(usageRaw.cost.total)
+        ? usageRaw.cost.total
+        : usageRaw?.costUsd;
   const hasMeaningfulUsage =
     hasNonzeroUsage(usage) ||
     typeof totalTokens === "number" ||
-    (typeof costUsd === "number" && Number.isFinite(costUsd) && costUsd > 0);
+    (typeof costUsd === "number" &&
+      Number.isFinite(costUsd) &&
+      (source === "artifact" || costUsd > 0));
   const isDeliveryMirror = modelProvider === "openclaw" && model === "delivery-mirror";
   if (!hasMeaningfulUsage && !modelProvider && !model) {
     return null;
@@ -62,25 +94,66 @@ function extractSqliteUsageSnapshot(message: unknown): SessionTranscriptUsageSna
   };
 }
 
-export function aggregateSqliteUsageSnapshots(
-  messages: unknown[],
-): SessionTranscriptUsageSnapshot | null {
+function estimateTranscriptMessageChars(message: unknown): number {
+  if (!isRecord(message)) {
+    return 0;
+  }
+  const content = message.content;
+  if (typeof content === "string") {
+    return content.trim() ? estimateStringChars(content.trim()) : 0;
+  }
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  return content.reduce<number>((total, part) => {
+    if (!isRecord(part)) {
+      return total;
+    }
+    const { text, type } = part;
+    if (
+      typeof text !== "string" ||
+      (typeof type === "string" &&
+        type !== "text" &&
+        type !== "output_text" &&
+        type !== "input_text")
+    ) {
+      return total;
+    }
+    const normalized = text.trim();
+    return normalized ? total + estimateStringChars(normalized) : total;
+  }, 0);
+}
+
+export function createSessionTranscriptUsageAccumulator(source: TranscriptUsageSource = "sqlite") {
   const aggregate: SessionTranscriptUsageSnapshot = {};
   let sawUsage = false;
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let cacheRead = 0;
-  let cacheWrite = 0;
-  let costUsd = 0;
-  let sawInput = false;
-  let sawOutput = false;
-  let sawCacheRead = false;
-  let sawCacheWrite = false;
-  let sawCost = false;
-  for (const message of messages) {
-    const snapshot = extractSqliteUsageSnapshot(message);
+  const summedFields = [
+    "inputTokens",
+    "outputTokens",
+    "cacheRead",
+    "cacheWrite",
+    "costUsd",
+  ] as const;
+  const totals: Pick<SessionTranscriptUsageSnapshot, (typeof summedFields)[number]> = {};
+  let estimatedTranscriptChars = 0;
+  let sawEstimateModelIdentity = false;
+  const add = (message: unknown): void => {
+    if (source === "artifact" && isRecord(message)) {
+      const provider = typeof message.provider === "string" ? message.provider.trim() : undefined;
+      const model = typeof message.model === "string" ? message.model.trim() : undefined;
+      if (
+        (message.role === "user" || message.role === "assistant") &&
+        !(message.role === "assistant" && provider === "openclaw" && model === "delivery-mirror")
+      ) {
+        const estimatedChars = estimateTranscriptMessageChars(message);
+        estimatedTranscriptChars += estimatedChars;
+        sawEstimateModelIdentity ||=
+          message.role === "assistant" && estimatedChars > 0 && Boolean(provider || model);
+      }
+    }
+    const snapshot = extractTranscriptUsageSnapshot(message, source);
     if (!snapshot) {
-      continue;
+      return;
     }
     sawUsage = true;
     if (snapshot.modelProvider) {
@@ -89,21 +162,11 @@ export function aggregateSqliteUsageSnapshots(
     if (snapshot.model) {
       aggregate.model = snapshot.model;
     }
-    if (typeof snapshot.inputTokens === "number") {
-      inputTokens += snapshot.inputTokens;
-      sawInput = true;
-    }
-    if (typeof snapshot.outputTokens === "number") {
-      outputTokens += snapshot.outputTokens;
-      sawOutput = true;
-    }
-    if (typeof snapshot.cacheRead === "number") {
-      cacheRead += snapshot.cacheRead;
-      sawCacheRead = true;
-    }
-    if (typeof snapshot.cacheWrite === "number") {
-      cacheWrite += snapshot.cacheWrite;
-      sawCacheWrite = true;
+    for (const field of summedFields) {
+      const value = snapshot[field];
+      if (typeof value === "number") {
+        totals[field] = (totals[field] ?? 0) + value;
+      }
     }
     if (snapshot.contextUsage) {
       aggregate.contextUsage = snapshot.contextUsage;
@@ -119,28 +182,42 @@ export function aggregateSqliteUsageSnapshots(
       aggregate.totalTokens = snapshot.totalTokens;
       aggregate.totalTokensFresh = true;
     }
-    if (typeof snapshot.costUsd === "number") {
-      costUsd += snapshot.costUsd;
-      sawCost = true;
+  };
+  const finish = (): SessionTranscriptUsageSnapshot | null => {
+    if (!sawUsage) {
+      return null;
     }
+    for (const field of summedFields) {
+      const value = totals[field];
+      if (typeof value === "number") {
+        aggregate[field] = value;
+      }
+    }
+    if (
+      source === "artifact" &&
+      typeof aggregate.totalTokens !== "number" &&
+      aggregate.contextUsage?.state !== "unavailable" &&
+      estimatedTranscriptChars > 0 &&
+      sawEstimateModelIdentity
+    ) {
+      const estimatedTotalTokens = estimateTokensFromChars(estimatedTranscriptChars);
+      if (estimatedTotalTokens > 0) {
+        aggregate.totalTokens = estimatedTotalTokens;
+        aggregate.totalTokensFresh = true;
+      }
+    }
+    return aggregate;
+  };
+  return { add, finish };
+}
+
+export function aggregateSessionTranscriptUsage(
+  messages: unknown[],
+  source: TranscriptUsageSource = "sqlite",
+): SessionTranscriptUsageSnapshot | null {
+  const usage = createSessionTranscriptUsageAccumulator(source);
+  for (const message of messages) {
+    usage.add(message);
   }
-  if (!sawUsage) {
-    return null;
-  }
-  if (sawInput) {
-    aggregate.inputTokens = inputTokens;
-  }
-  if (sawOutput) {
-    aggregate.outputTokens = outputTokens;
-  }
-  if (sawCacheRead) {
-    aggregate.cacheRead = cacheRead;
-  }
-  if (sawCacheWrite) {
-    aggregate.cacheWrite = cacheWrite;
-  }
-  if (sawCost) {
-    aggregate.costUsd = costUsd;
-  }
-  return aggregate;
+  return usage.finish();
 }

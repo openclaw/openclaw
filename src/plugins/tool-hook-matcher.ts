@@ -12,8 +12,8 @@ const NON_CANONICAL_TOOL_MATCHER_NAMES = new Set([
   "bash",
   "exec_command",
   "apply-patch",
-  "write",
-  "edit",
+  "Write",
+  "Edit",
   "agent",
 ]);
 
@@ -44,15 +44,15 @@ export function normalizePluginToolMatcher(matcher: unknown): PluginToolMatcher 
     if (canonicalToolName === "*") {
       throw new TypeError("tool hook matcher wildcard entries are not supported");
     }
-    if (NON_CANONICAL_TOOL_MATCHER_NAMES.has(canonicalToolName)) {
+    if (
+      NON_CANONICAL_TOOL_MATCHER_NAMES.has(canonicalToolName) ||
+      NON_CANONICAL_TOOL_MATCHER_NAMES.has(toolName.trim())
+    ) {
       throw new TypeError("tool hook matcher entries must use canonical OpenClaw tool ids");
     }
     normalized.add(canonicalToolName);
   }
   const toolNames = Array.from(normalized).toSorted();
-  if (toolNames.length === 0) {
-    throw new TypeError("tool hook matcher entries must be non-empty strings");
-  }
   const [firstToolName, ...remainingToolNames] = toolNames;
   if (!firstToolName) {
     throw new TypeError("tool hook matcher entries must be non-empty strings");

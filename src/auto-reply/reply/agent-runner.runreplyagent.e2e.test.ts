@@ -1,14 +1,29 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 // E2E tests for run-reply-agent execution and generated session artifacts.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+  sqliteMethods,
+} from "../../../test/helpers/sqlite-parent-observer.js";
+import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
+import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../../agents/failover/user-copy.js";
+import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import {
+  runFallbackModelAttempt,
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -17,36 +32,62 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { TypingMode } from "../../config/types.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
+import type { OpenClawConfig, TypingMode } from "../../config/types.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
+import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
+import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
+import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
+import { registerReplyAdmissionCases } from "./agent-runner.runreplyagent.admission.cases.js";
+import { registerImmediateFailurePolicyCases } from "./agent-runner.runreplyagent.failure-policy.cases.js";
+import { createReplyAgentSessionFixture } from "./agent-runner.runreplyagent.fixture.test-support.js";
+import { registerFollowupDrainCases } from "./agent-runner.runreplyagent.followup-drain.cases.js";
+import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
+import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
+import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
+import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
-  clearSessionQueues,
   enqueueFollowupRun,
+  kickFollowupDrainIfIdle,
   refreshQueuedFollowupSession,
   scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
+import { clearFollowupQueueForTest } from "./queue.test-helpers.js";
+import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import {
   REPLY_OPERATION_RUN_STATE,
+  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import {
+  clearReplyRunForResetBySessionId,
   createReplyOperation,
   type ReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -63,6 +104,7 @@ type AgentRunParams = {
     isReasoning?: boolean;
     isCommentary?: boolean;
   }) => Promise<void> | void;
+  onBlockReplyFlush?: () => Promise<void>;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
@@ -79,6 +121,7 @@ const state = vi.hoisted(() => ({
   getChannelPluginMock: vi.fn(),
   materializeMcpAppChannelPresentationMock: vi.fn(),
   queueEmbeddedAgentMessageMock: vi.fn(),
+  activeBackendCancelMock: vi.fn(),
   runEmbeddedAgentMock: vi.fn(),
 }));
 const parkedSteer = vi.hoisted(() => {
@@ -95,17 +138,7 @@ const parkedSteer = vi.hoisted(() => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
+const { tempDirs, sessionKeys, createSessionStoreFile } = createReplyAgentSessionFixture();
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
@@ -123,13 +156,6 @@ function requireStoredSessionEntry(storePath: string, sessionKey = "main"): Sess
     throw new Error(`expected stored session entry for ${sessionKey}`);
   }
   return entry;
-}
-
-async function createSessionStoreFile(entry: SessionEntry, sessionKey = "main"): Promise<string> {
-  const dir = tempDirs.make("openclaw-agent-runner-");
-  const storePath = join(dir, "sessions.json");
-  await replaceSessionEntry({ storePath, sessionKey }, entry);
-  return storePath;
 }
 
 function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
@@ -180,9 +206,14 @@ function makeCompletedFallbackRunner(
       reason: "timeout",
     },
   ];
-  return async <T>({ run }: Parameters<typeof modelFallbackModule.runWithModelFallback<T>>[0]) => ({
+  return async <T>(params: Parameters<typeof modelFallbackModule.runWithModelFallback<T>>[0]) => ({
     outcome: "completed" as const,
-    result: await run(provider, model),
+    result: await runFallbackModelAttempt(
+      params,
+      provider,
+      model,
+      attempts.at(-1)?.reason ?? "unknown",
+    ),
     provider,
     model,
     attempts,
@@ -201,19 +232,11 @@ async function getRunReplyAgent() {
 }
 
 vi.mock("../../agents/model-fallback-runner.js", () => ({
-  runWithModelFallback: async ({
-    provider,
-    model,
-    run,
-  }: {
-    provider: string;
-    model: string;
-    run: (provider: string, model: string) => Promise<unknown>;
-  }) => ({
+  runWithModelFallback: async (params: TestModelFallbackRunnerParams) => ({
     outcome: "completed" as const,
-    result: await run(provider, model),
-    provider,
-    model,
+    result: await runInitialModelFallbackAttempt(params),
+    provider: params.provider,
+    model: params.model,
     attempts: [],
   }),
 }));
@@ -250,34 +273,41 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
   getChannelPlugin: (channel: unknown) => state.getChannelPluginMock(channel),
 }));
 
-vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
-  formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
-  queueEmbeddedAgentMessageWithOutcomeAsync: async (
-    sessionId: string,
-    prompt: string,
-    options: unknown,
-  ) => {
-    const result = state.queueEmbeddedAgentMessageMock(sessionId, prompt, options);
-    if (typeof result === "object") {
-      return result;
-    }
-    return result
-      ? {
-          queued: true,
-          sessionId,
-          target: "embedded_run",
-          gatewayHealth: "live",
-          enqueuedAtMs: Date.now(),
-        }
-      : {
-          queued: false,
-          sessionId,
-          reason: "no_active_run",
-          target: "none",
-          gatewayHealth: "live",
-        };
-  },
-}));
+vi.mock("../../agents/embedded-agent-runner/runs.js", async (importOriginal) => {
+  const { clearActiveEmbeddedRun, setActiveEmbeddedRun } =
+    await importOriginal<typeof import("../../agents/embedded-agent-runner/runs.js")>();
+  return {
+    // Queue admission is controlled here; logical-turn registration and retirement stay real.
+    clearActiveEmbeddedRun,
+    setActiveEmbeddedRun,
+    formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
+    queueEmbeddedAgentMessageWithOutcomeAsync: async (
+      sessionId: string,
+      prompt: string,
+      options: unknown,
+    ) => {
+      const result = state.queueEmbeddedAgentMessageMock(sessionId, prompt, options);
+      if (typeof result === "object") {
+        return result;
+      }
+      return result
+        ? {
+            queued: true,
+            sessionId,
+            target: "embedded_run",
+            gatewayHealth: "live",
+            enqueuedAtMs: Date.now(),
+          }
+        : {
+            queued: false,
+            sessionId,
+            reason: "no_active_run",
+            target: "none",
+            gatewayHealth: "live",
+          };
+    },
+  };
+});
 
 vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
   materializeMcpAppChannelPresentation: (params: unknown) =>
@@ -287,6 +317,7 @@ vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
 vi.mock("./queue.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./queue.js")>()),
   enqueueFollowupRun: vi.fn(),
+  kickFollowupDrainIfIdle: vi.fn(),
   parkSteerCandidate: parkedSteer.park,
   refreshQueuedFollowupSession: vi.fn(),
   scheduleFollowupDrain: vi.fn(),
@@ -300,7 +331,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  clearSessionQueues(["main"]);
+  clearFollowupQueueForTest("main");
   replyRunTesting.resetReplyRunRegistry();
   state.compactEmbeddedAgentSessionMock.mockReset();
   state.compactEmbeddedAgentSessionMock.mockResolvedValue({
@@ -314,6 +345,7 @@ beforeEach(() => {
     meta: { agentMeta: { usage: { input: 1, output: 1 } } },
   });
   state.queueEmbeddedAgentMessageMock.mockReset();
+  state.activeBackendCancelMock.mockReset();
   state.beforeAgentReplyHasHooksMock.mockReset().mockReturnValue(false);
   state.beforeAgentReplyRunMock.mockReset();
   state.queueEmbeddedAgentMessageMock.mockReturnValue(false);
@@ -332,6 +364,7 @@ beforeEach(() => {
   });
   vi.mocked(enqueueFollowupRun).mockReset().mockReturnValue(true);
   vi.mocked(refreshQueuedFollowupSession).mockReset();
+  vi.mocked(kickFollowupDrainIfIdle).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
@@ -356,6 +389,8 @@ function createMinimalRun(params?: {
   sourceTurnId?: string;
   runOverrides?: Partial<FollowupRun["run"]>;
   bindActiveAuthority?: boolean;
+  attachSteerBackend?: boolean;
+  activeBackendRunId?: string;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -377,6 +412,7 @@ function createMinimalRun(params?: {
     mode: params?.resolvedQueueMode ?? "interrupt",
   } as unknown as QueueSettings;
   const sessionKey = params?.sessionKey ?? "main";
+  sessionKeys.add(sessionKey);
   const followupRun = {
     prompt: "hello",
     summaryLine: "hello",
@@ -396,6 +432,16 @@ function createMinimalRun(params?: {
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude",
+      // Mocked reply routes already have prepared input facts; discovery has its own vision tests.
+      thinkingCatalog: [
+        { provider: "anthropic", id: "claude", input: ["text"] },
+        { provider: "anthropic", id: "claude-opus-4-7", input: ["text"] },
+        { provider: "openai", id: "gpt-5.5", input: ["text"] },
+        { provider: "openai", id: "gpt-5.6-sol", input: ["text"] },
+        { provider: "google", id: "gemini-2.5-flash", input: ["text"] },
+        { provider: "deepinfra", id: "moonshotai/Kimi-K2.5", input: ["text"] },
+        { provider: "lmstudio", id: "gemma-4-e4b-it", input: ["text"] },
+      ],
       thinkLevel: "low",
       verboseLevel: params?.resolvedVerboseLevel ?? "off",
       elevatedLevel: "off",
@@ -411,10 +457,8 @@ function createMinimalRun(params?: {
     },
   } as unknown as FollowupRun;
   const activeOperation = replyRunRegistry.get(sessionKey);
-  if (activeOperation && params?.bindActiveAuthority !== false) {
-    activeOperation.bindToolAuthorityFingerprint(
-      resolveFollowupRunToolAuthorityFingerprint(followupRun),
-    );
+  if (activeOperation && params?.isActive && params.bindActiveAuthority !== false) {
+    activeOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
   }
 
   return {
@@ -424,6 +468,48 @@ function createMinimalRun(params?: {
     opts,
     run: async () => {
       const runReplyAgent = await getRunReplyAgent();
+      const operation = replyRunRegistry.get(sessionKey);
+      if (operation && params?.attachSteerBackend !== false) {
+        operation.attachBackend({
+          kind: "embedded",
+          runId: params?.activeBackendRunId,
+          cancel: state.activeBackendCancelMock,
+          claimPendingUserInputAnswer: async (prompt, options) => {
+            const result = (await state.queueEmbeddedAgentMessageMock(
+              operation.sessionId,
+              prompt,
+              options,
+            )) as boolean | { queued: boolean };
+            return result === true || (typeof result === "object" && result.queued);
+          },
+          messageInjection: {
+            isAvailable: () => true,
+            queueMessage: async (prompt, options) => {
+              const result = (await state.queueEmbeddedAgentMessageMock(
+                operation.sessionId,
+                prompt,
+                options,
+              )) as
+                | boolean
+                | {
+                    queued: boolean;
+                    reason?: string;
+                    transcriptCommit?: "unconfirmed";
+                    errorMessage?: string;
+                  };
+              if (result === false || (typeof result === "object" && !result.queued)) {
+                throw new Error(typeof result === "object" ? result.reason : "queue rejected");
+              }
+              return typeof result === "object" && result.transcriptCommit === "unconfirmed"
+                ? {
+                    transcriptCommit: result.transcriptCommit,
+                    errorMessage: result.errorMessage ?? "commit unconfirmed",
+                  }
+                : undefined;
+            },
+          },
+        });
+      }
       return runReplyAgent({
         commandBody: "hello",
         followupRun,
@@ -451,6 +537,23 @@ function createMinimalRun(params?: {
       });
     },
   };
+}
+
+function createDiscordFallbackRun() {
+  return createMinimalRun({
+    runOverrides: {
+      provider: "lmstudio",
+      model: "gemma-4-e4b-it",
+      messageProvider: "discord",
+    },
+    sessionCtx: {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:C1",
+      AccountId: "primary",
+      MessageSid: "1503645939964055592",
+    },
+  });
 }
 
 function requireScheduledFollowupRunner(): (run: FollowupRun) => Promise<void> {
@@ -514,7 +617,7 @@ function attachSourceTurnRecorder(params: {
       cwd: "/tmp",
       sessionEntry: params.sessionEntry,
       sessionId: "session",
-      sessionKey: "main",
+      sessionKey: params.followupRun.run.sessionKey ?? "main",
       sessionStore: params.sessionStore,
       storePath: params.storePath,
     },
@@ -532,42 +635,143 @@ function requireBuiltChannelSourceTurnId(
 }
 
 describe("runReplyAgent active steering", () => {
-  it("queues instead of steering when privilege facts differ on the active route", async () => {
-    const activeRoute = { provider: "openai", model: "gpt-fallback" };
-    const { followupRun, run } = createMinimalRun({
-      isActive: true,
-      shouldSteer: true,
-      resolvedQueueMode: "steer",
-      bindActiveAuthority: false,
-    });
-    const active = createReplyOperation({
+  it("keeps the replacement source when retired admission completes", async ({ signal }) => {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
+    const sourceContext = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:24680",
+      MessageSid: "first-source-message",
+    };
+    const { followupRun } = createMinimalRun({ sessionCtx: sourceContext });
+    const first = createReplyOperation({
       sessionKey: "main",
       sessionId: "session",
       resetTriggered: false,
     });
-    active.bindToolAuthorityRoute(activeRoute);
-    active.bindToolAuthorityFingerprint(
-      resolveFollowupRunToolAuthorityFingerprint(
-        {
+    first.setPhase("running");
+    const createController = (
+      operation: ReplyOperation,
+      initialEntry: SessionEntry,
+      sourceTurnId: string,
+    ) => {
+      let entry = initialEntry;
+      return createReplyAgentRestartRecoveryController({
+        activeSessionStore: sessionStore,
+        cfg: {},
+        followupRun: {
           ...followupRun,
-          run: {
-            ...followupRun.run,
-            runtimePluginToolGrant: {
-              pluginId: "workboard",
-              toolNames: ["workboard_complete"],
-            },
-          },
+          run: { ...followupRun.run, sessionId: operation.sessionId },
         },
-        activeRoute,
-      ),
+        getActiveSessionEntry: () => entry,
+        opts: undefined,
+        replyOperation: operation,
+        restartRecoverySourceTurnId: sourceTurnId,
+        runtimePolicySessionKey: undefined,
+        sessionCtx: sourceContext,
+        sessionKey: "main",
+        setActiveSessionEntry: (nextEntry) => {
+          entry = nextEntry;
+        },
+        storePath,
+      });
+    };
+    const firstController = createController(first, sessionEntry, "source-first");
+    attachSourceTurnRecorder({
+      followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId: "source-first",
+      storePath,
+      text: "first source input",
+    });
+    const recorder = followupRun.userTurnTranscriptRecorder;
+    if (!recorder) {
+      throw new Error("expected the source recorder");
+    }
+    const committed = createDeferred();
+    const returnAdmission = createDeferred();
+    const persistApproved = recorder.persistApproved.bind(recorder);
+    const persistence = vi
+      .spyOn(recorder, "persistApproved")
+      .mockImplementation(async (...args) => {
+        const result = await persistApproved(...args);
+        committed.resolve();
+        await returnAdmission.promise;
+        return result;
+      });
+    const firstAdmission = firstController.admitUserTurn(recorder);
+    // A retired admission may reject; its successor must keep the same source either way.
+    const firstSettled = firstAdmission.then(
+      () => undefined,
+      () => undefined,
     );
-    active.setPhase("running");
+    let replacement: ReplyOperation | undefined;
+    try {
+      await withinTest(committed.promise, signal);
+      expect(requireStoredSessionEntry(storePath).restartRecoveryDeliverySourceRunId).toBe(
+        "source-first",
+      );
+      clearReplyRunForResetBySessionId("session");
+      const replacementEntry = makeSessionEntry({ sessionId: "replacement-session" });
+      await replaceSessionEntry({ storePath, sessionKey: "main" }, replacementEntry);
+      sessionStore.main = replacementEntry;
+      replacement = createReplyOperation({
+        sessionKey: "main",
+        sessionId: "replacement-session",
+        resetTriggered: true,
+      });
+      replacement.setPhase("running");
+      replacement.attachBackend({
+        kind: "embedded",
+        runId: "replacement-backend",
+        cancel: vi.fn(),
+        messageInjection: {
+          isAvailable: () => true,
+          queueMessage: async () => {},
+        },
+      });
+      const replacementRecorder = createUserTurnTranscriptRecorder({
+        input: { text: "replacement source input", idempotencyKey: "source-replacement" },
+        target: {
+          agentId: "main",
+          config: {},
+          cwd: "/tmp",
+          sessionEntry: replacementEntry,
+          sessionId: "replacement-session",
+          sessionKey: "main",
+          sessionStore,
+          storePath,
+        },
+      });
+      await createController(replacement, replacementEntry, "source-replacement").admitUserTurn(
+        replacementRecorder,
+      );
+      expect(replyRunRegistry.resolveCurrentMessageInjectionTarget("main")).toMatchObject({
+        sourceTurnId: "source-replacement",
+      });
 
-    await expect(run()).resolves.toBeUndefined();
+      returnAdmission.resolve();
+      await firstSettled;
 
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
-    active.complete();
+      expect(replyRunRegistry.get("main")).toBe(replacement);
+      expect(replyRunRegistry.resolveCurrentMessageInjectionTarget("main")).toMatchObject({
+        sourceTurnId: "source-replacement",
+      });
+    } finally {
+      returnAdmission.resolve();
+      await firstSettled;
+      persistence.mockRestore();
+      first.complete();
+      replacement?.complete();
+    }
+  });
+
+  registerSteeringReceiptCases({
+    createMinimalRun,
+    makeSessionEntry,
+    makeSessionFixture,
+    state,
   });
 
   it("offers a route-only mismatch to the pending-input owner", async () => {
@@ -584,10 +788,8 @@ describe("runReplyAgent active steering", () => {
       sessionId: "session",
       resetTriggered: false,
     });
+    active.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
     active.bindToolAuthorityRoute(activeRoute);
-    active.bindToolAuthorityFingerprint(
-      resolveFollowupRunToolAuthorityFingerprint(followupRun, activeRoute),
-    );
     active.setPhase("running");
 
     await expect(run()).resolves.toBeUndefined();
@@ -604,12 +806,16 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("drains an authority-mismatched turn after its provided operation clears", async () => {
+    using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
     const provided = createReplyOperation({
       sessionKey: "agent:main:telegram:slash:source",
       sessionId: "provided-session",
       resetTriggered: false,
     });
-    provided.bindToolAuthorityFingerprint("different-authority");
+    provided.bindToolAuthoritySnapshot({
+      fingerprint: () => "different-authority",
+      project: () => "different-authority",
+    });
     provided.setPhase("running");
     const { followupRun, run } = createMinimalRun({
       isActive: true,
@@ -617,6 +823,9 @@ describe("runReplyAgent active steering", () => {
       resolvedQueueMode: "steer",
       replyOperation: provided,
       bindActiveAuthority: false,
+      runOverrides: {
+        thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text", "image"] }],
+      },
     });
     const image = { type: "image" as const, data: "queued", mimeType: "image/png" };
     followupRun.images = [image];
@@ -630,6 +839,14 @@ describe("runReplyAgent active steering", () => {
     await requireScheduledFollowupRunner()(followupRun);
     expect(mockCallArgs(state.runEmbeddedAgentMock, "queued image drain")[0]).toMatchObject({
       images: [image],
+      modelHasVision: true,
+    });
+    expect(warning).toHaveBeenCalledWith("steering rejected; applying follow-up policy", {
+      reason: "source-operation-pending",
+      disposition: "followup-queued",
+      channel: "whatsapp",
+      sessionId: "session",
+      runId: undefined,
     });
   });
 
@@ -759,6 +976,13 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("replays a declined steer without dispatching its hook twice", async () => {
+    using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
@@ -766,6 +990,8 @@ describe("runReplyAgent active steering", () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(false);
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const { followupRun, run } = createMinimalRun({
+      activeBackendRunId: "active-run-1",
+      opts: { runId: "incoming-run-1" },
       isActive: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
@@ -782,21 +1008,30 @@ describe("runReplyAgent active steering", () => {
 
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith("steering rejected; applying follow-up policy", {
+      reason: "runtime_rejected",
+      disposition: "followup-policy",
+      channel: "discord",
+      sessionId: "session",
+      runId: "incoming-run-1",
+      activeRunId: "active-run-1",
+    });
     expect(parkedSteer.fallback).toHaveBeenCalledOnce();
     expect(parkedSteer.consume).not.toHaveBeenCalled();
+    active.complete();
     await requireScheduledFollowupRunner()(followupRun);
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
   });
 
-  it("runs normal reply hooks once after Gateway already attempted injection", async () => {
+  it("runs one normal fallback after Gateway rejects injection", async () => {
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
     state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const { run } = createMinimalRun({
-      opts: { messageInjectionAttempted: true },
+      opts: { messageInjectionDisposition: "rejected" },
       isActive: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
@@ -816,32 +1051,173 @@ describe("runReplyAgent active steering", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("carries the prepared user-turn recorder into the embedded queue", async () => {
-    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+  it("falls back visibly when the active CLI backend cannot accept injection", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    active.attachBackend({ kind: "cli", cancel: vi.fn() });
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+    const { followupRun, run } = createMinimalRun({
+      attachSteerBackend: false,
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(parkedSteer.fallback).toHaveBeenCalledOnce();
+    active.complete();
+    await requireScheduledFollowupRunner()(followupRun);
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("durably records an adopted steer once with the active run id for transcript projection", async () => {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
     const recorder = createUserTurnTranscriptRecorder({
       input: {
-        text: "visible group prompt",
+        text: "use the monochrome version instead",
+        idempotencyKey: "matrix:$explicit-steer",
         sender: { id: "user-42", name: "Ada" },
       },
-      target: createTestUserTurnTranscriptTarget(),
+      target: {
+        agentId: "main",
+        cwd: "/tmp",
+        sessionEntry,
+        sessionId: "session",
+        sessionKey: "main",
+        sessionStore,
+        storePath,
+      },
+    });
+    const events: string[] = [];
+    state.queueEmbeddedAgentMessageMock.mockImplementationOnce(
+      async (_sessionId: string, _prompt: string, options: unknown) => {
+        expect(requireRecord(options, "embedded queue options")).toMatchObject({
+          steeringMode: "all",
+          isInboundUserMessage: true,
+          waitForTranscriptCommit: true,
+          queueIdentity: expect.any(String),
+          userTurnTranscriptRecorder: recorder,
+        });
+        events.push("transcript-committed");
+        await recorder.persistApproved();
+        return true;
+      },
+    );
+    const onAdopted = vi.fn(() => {
+      events.push("adopted");
     });
     const { followupRun, run } = createMinimalRun({
+      activeBackendRunId: "active-run",
       isActive: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
+      sessionEntry,
+      sessionStore,
+      storePath,
+      opts: { turnAdoptionLifecycle: { onAdopted } },
     });
+    followupRun.prompt = "use the monochrome version instead";
     followupRun.userTurnTranscriptRecorder = recorder;
 
     await expect(run()).resolves.toBeUndefined();
 
-    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
-      "session",
-      "hello",
-      expect.objectContaining({
-        steeringMode: "all",
-        userTurnTranscriptRecorder: recorder,
-      }),
+    expect(events).toEqual(["transcript-committed", "adopted"]);
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(parkedSteer.consume).toHaveBeenCalledOnce();
+    expect(parkedSteer.fallback).not.toHaveBeenCalled();
+    const transcript = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: "session",
+      sessionKey: "main",
+      storePath,
+    });
+    const projectedUserRows = transcript.filter(
+      (entry): entry is { message: Record<string, unknown> } => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return false;
+        }
+        const message = (entry as { message?: unknown }).message;
+        return Boolean(
+          message &&
+          typeof message === "object" &&
+          !Array.isArray(message) &&
+          (message as { role?: unknown }).role === "user" &&
+          (message as { content?: unknown }).content === followupRun.prompt,
+        );
+      },
     );
+    expect(projectedUserRows).toHaveLength(1);
+    expect(projectedUserRows[0]?.message).toMatchObject({
+      __openclaw: {
+        senderId: "user-42",
+        senderName: "Ada",
+        steerTargetRunId: "active-run",
+      },
+    });
+    expect(recorder.getPersistedMessage?.()).toMatchObject({
+      __openclaw: { steerTargetRunId: "active-run" },
+    });
+    active.complete();
+  });
+
+  it("falls back once when the pre-resolved steer owner disappears before queue admission", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    active.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      messageInjection: { isAvailable: () => true, queueMessage: vi.fn() },
+    });
+    const commandCtx = {
+      CommandAuthorized: true,
+      CommandBody: "/steer finish with a table",
+      CommandSource: "text" as const,
+      CommandTurn: {
+        kind: "text-slash" as const,
+        source: "text" as const,
+        authorized: true,
+        commandName: "steer",
+        body: "/steer finish with a table",
+      },
+      SessionKey: "main",
+    };
+    expect(
+      resolveActiveExplicitSteerSessionKey({ cfg: {}, ctx: commandCtx, sessionKey: "main" }),
+    ).toBe("main");
+
+    active.complete();
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+    });
+    followupRun.prompt = "finish with a table";
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(parkedSteer.fallback).toHaveBeenCalledOnce();
+    expect(parkedSteer.consume).not.toHaveBeenCalled();
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    await requireScheduledFollowupRunner()(followupRun);
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
   it("steers against the session's registered run owner, not a source-keyed reservation", async () => {
@@ -880,6 +1256,12 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("waits for transcript commit and keeps a rejected adoption finalizer irrevocably adopted", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
     const finalizerError = new Error("dedupe finalizer failed");
     const events: string[] = [];
     state.queueEmbeddedAgentMessageMock.mockImplementationOnce(
@@ -909,6 +1291,7 @@ describe("runReplyAgent active steering", () => {
     expect(onAdopted).toHaveBeenCalledTimes(1);
     expect(parkedSteer.consume).toHaveBeenCalledOnce();
     expect(parkedSteer.fallback).not.toHaveBeenCalled();
+    active.complete();
     expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledTimes(1);
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -959,18 +1342,12 @@ describe("runReplyAgent active steering", () => {
     expect(parkedSteer.consume).not.toHaveBeenCalled();
   });
 
-  it("adopts and consumes unconfirmed steering without replay", async () => {
+  it("adopts and consumes non-handoff unconfirmed steering without replay", async () => {
     const runState: ReplyOperationRunState = {};
-    const cancel = vi.fn();
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "session",
       resetTriggered: false,
-    });
-    active.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => true,
     });
     active.setPhase("running");
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce({
@@ -996,13 +1373,61 @@ describe("runReplyAgent active steering", () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(onAdopted).toHaveBeenCalledOnce();
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(state.activeBackendCancelMock).toHaveBeenCalledOnce();
     expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
+    expect(runState.messageInjectionAborted).toBe(true);
     expect(parkedSteer.consume).toHaveBeenCalledOnce();
     expect(parkedSteer.fallback).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledOnce();
     active.complete();
+  });
+
+  it("unconfirmed steer commit aborts only the captured operation, never a same-key successor", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session-a",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    const activeAbortByUser = vi.spyOn(active, "abortByUser");
+    let successor: ReplyOperation | undefined;
+    let successorAbortByUser: MockInstance<ReplyOperation["abortByUser"]> | undefined;
+    state.queueEmbeddedAgentMessageMock.mockImplementationOnce(() => {
+      active.complete();
+      successor = createReplyOperation({
+        sessionKey: "main",
+        sessionId: "session-b",
+        resetTriggered: false,
+      });
+      successor.setPhase("running");
+      successorAbortByUser = vi.spyOn(successor, "abortByUser");
+      return {
+        queued: true,
+        sessionId: "session-a",
+        target: "embedded_run",
+        gatewayHealth: "live",
+        transcriptCommit: "unconfirmed",
+        errorMessage: "receipt unavailable",
+      };
+    });
+    const { run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+    if (!successor || !successorAbortByUser) {
+      throw new Error("expected same-key successor operation");
+    }
+    try {
+      expect(successorAbortByUser).not.toHaveBeenCalled();
+      expect(activeAbortByUser).toHaveBeenCalledOnce();
+    } finally {
+      successor.complete();
+    }
   });
 
   it("admits an ordinary rejected steering turn with durable recovery state", async () => {
@@ -1128,6 +1553,17 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(resolveReplyOperationAgentTurn(runState)).toBe("ok");
   });
 
+  it("kicks queued followups without handing them a heartbeat runner", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const { run } = createMinimalRun({ opts: { isHeartbeat: true } });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(vi.mocked(kickFollowupDrainIfIdle)).toHaveBeenCalledExactlyOnceWith("main");
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+  });
+
   it("records a failed heartbeat turn when a visible reply replaces its synthetic failure", async () => {
     const runState: ReplyOperationRunState = {};
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -1150,52 +1586,10 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
   });
 
-  it("runs visible turns with the session id returned by admission", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "pre-compact-session",
-      resetTriggered: false,
-    });
-    active.setPhase("preflight_compacting");
-    const sessionStore = {
-      main: {
-        sessionId: "pre-compact-session",
-        sessionFile: "main",
-        updatedAt: Date.now(),
-      },
-    };
-    const { run } = createMinimalRun({
-      runOverrides: { sessionId: "stale-session" },
-      sessionStore,
-    });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {
-        agentMeta: {
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 1, output: 1 },
-        },
-      },
-    });
-
-    const pending = run();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    active.updateSessionId("post-compact-session");
-    sessionStore.main = {
-      sessionId: "post-compact-session",
-      sessionFile: "main",
-      updatedAt: Date.now(),
-    };
-    active.complete();
-    await pending;
-
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
-    expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
-    expect((call as AgentRunParams).sessionFile).toBe("main");
+  registerReplyAdmissionCases({
+    createMinimalRun,
+    makeSessionFixture,
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
@@ -1285,6 +1679,26 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("releases reply admission and typing when the recovery read fails", async () => {
+    const failure = new Error("synthetic recovery read failure");
+    vi.spyOn(entryReads, "readSessionEntryInWorker").mockRejectedValueOnce(failure);
+    const ticket = reserveReplyAdmissionTicket(["main"]);
+    if (!ticket) {
+      throw new Error("expected a reply admission ticket");
+    }
+    const release = vi.spyOn(ticket, "release");
+    const { run, typing } = createMinimalRun({
+      opts: { [REPLY_ADMISSION_TICKET]: ticket },
+      storePath: "/tmp/synthetic-recovery-read.sqlite",
+    });
+
+    await expect(run()).rejects.toBe(failure);
+
+    expect(release).toHaveBeenCalledOnce();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -1382,9 +1796,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("drains followup queue when an unexpected exception escapes the run path", async () => {
-    const accounting = await import("./session-run-accounting.js");
+    const accounting = await import("./session-usage.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistRunSessionUsage")
+      .spyOn(accounting, "persistSessionUsageUpdate")
       .mockRejectedValueOnce(new Error("persist exploded"));
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -1419,9 +1833,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   ])(
     "preserves $label through terminal failure with block streaming disabled",
     async ({ callbackResult, sessionCtx }) => {
-      const accounting = await import("./session-run-accounting.js");
+      const accounting = await import("./session-usage.js");
       const persistSpy = vi
-        .spyOn(accounting, "persistRunSessionUsage")
+        .spyOn(accounting, "persistSessionUsageUpdate")
         .mockRejectedValueOnce(new Error("persist exploded"));
       const onPartialReply = vi.fn(async () => callbackResult);
       let observedCallbackResult: boolean | void = undefined;
@@ -1460,10 +1874,81 @@ describe("runReplyAgent heartbeat followup guard", () => {
     },
   );
 
+  it.each([
+    ["accepted answer", { text: "answer block" }],
+    ["in-flight answer", { text: "answer block" }],
+    ["queued answer", { text: "answer block" }],
+    ["aborted answer", { text: "answer block" }],
+    ["reasoning", { text: "internal reasoning", isReasoning: true }],
+    ["commentary", { text: "working on it", isCommentary: true }],
+    ["rejected answer", { text: "answer block" }],
+  ])("settles optional provider failure after %s block delivery", async (label, payload) => {
+    const runState: ReplyOperationRunState = {};
+    const replyOperation =
+      label === "aborted answer"
+        ? createReplyOperation({
+            sessionKey: "main",
+            sessionId: "session",
+            resetTriggered: false,
+          })
+        : undefined;
+    const deliveryStarted = createDeferred();
+    let blockFlush: Promise<void> | undefined;
+    const onBlockReply = vi.fn(async () => {
+      deliveryStarted.resolve();
+      if (label === "in-flight answer" || replyOperation) {
+        await setImmediate();
+        if (replyOperation) {
+          expect(replyOperation.abortByUser()).toBe(true);
+        }
+      }
+      if (label === "rejected answer") {
+        throw new Error("transport rejected the block");
+      }
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.(payload);
+      blockFlush = label === "queued answer" ? undefined : params.onBlockReplyFlush?.();
+      if (label !== "queued answer") {
+        await deliveryStarted.promise;
+      }
+      if (label !== "in-flight answer" && label !== "queued answer") {
+        await blockFlush;
+      }
+      throw new Error("model stream failed after block delivery");
+    });
+    const { run } = createMinimalRun({
+      replyOperation,
+      blockStreamingEnabled: true,
+      opts: {
+        onBlockReply,
+        reasoningPayloadsEnabled: true,
+        commentaryPayloadsEnabled: true,
+        [REPLY_OPERATION_RUN_STATE]: runState,
+      },
+      sessionCtx: { ChatType: "group" },
+      runOverrides: { terminalReplyExpectation: "optional" },
+    });
+
+    const result = await run();
+    await blockFlush;
+    const reply = Array.isArray(result) ? result[0] : result;
+
+    if (label === "aborted answer" || label === "rejected answer") {
+      expect(reply?.text).toBe("NO_REPLY");
+    } else {
+      expect(reply).toMatchObject({ isError: true, text: expect.any(String) });
+      expect(reply?.text).not.toBe("NO_REPLY");
+    }
+    if (label !== "aborted answer") {
+      expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
+    }
+  });
+
   it("rethrows after a delivered partial without visible content", async () => {
-    const accounting = await import("./session-run-accounting.js");
+    const accounting = await import("./session-usage.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistRunSessionUsage")
+      .spyOn(accounting, "persistSessionUsageUpdate")
       .mockRejectedValueOnce(new Error("persist exploded"));
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -1487,9 +1972,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("rethrows heartbeat failures after a delivered partial", async () => {
-    const accounting = await import("./session-run-accounting.js");
+    const accounting = await import("./session-usage.js");
     const persistSpy = vi
-      .spyOn(accounting, "persistRunSessionUsage")
+      .spyOn(accounting, "persistSessionUsageUpdate")
       .mockRejectedValueOnce(new Error("persist exploded"));
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -1536,13 +2021,14 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it.each(["reasoning", "commentary"] as const)(
-    "rethrows after %s-only block streaming",
+    "reports failure after visible %s-only block streaming",
     async (lane) => {
-      const accounting = await import("./session-run-accounting.js");
+      const accounting = await import("./session-usage.js");
       const persistSpy = vi
-        .spyOn(accounting, "persistRunSessionUsage")
+        .spyOn(accounting, "persistSessionUsageUpdate")
         .mockRejectedValueOnce(new Error("persist exploded"));
       const onBlockReply = vi.fn();
+      const runState: ReplyOperationRunState = {};
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         await params.onBlockReply?.({
           text: `internal ${lane}`,
@@ -1559,12 +2045,17 @@ describe("runReplyAgent heartbeat followup guard", () => {
           blockStreamingEnabled: true,
           opts: {
             onBlockReply,
+            [REPLY_OPERATION_RUN_STATE]: runState,
             reasoningPayloadsEnabled: lane === "reasoning",
             commentaryPayloadsEnabled: lane === "commentary",
           },
         });
 
-        await expect(run()).rejects.toThrow("persist exploded");
+        await expect(run()).resolves.toMatchObject({
+          text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+          isError: true,
+        });
+        expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
         expect(onBlockReply).toHaveBeenCalledWith(
           expect.objectContaining({ text: `internal ${lane}` }),
           expect.any(Object),
@@ -1577,13 +2068,13 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
-  it("delivers an authenticated channel reply through the configured default agent", async () => {
+  it("delivers an authenticated channel reply through the explicitly selected agent", async () => {
     const config = {
       agents: {
-        list: [{ id: "ops", default: true }, { id: "worker" }],
+        entries: { ops: {}, worker: {} },
         defaults: { compaction: { memoryFlush: {} } },
       },
-    };
+    } satisfies OpenClawConfig;
     const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
     const storePath = join(
@@ -1612,7 +2103,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const { followupRun, run, sourceTurnId } = createMinimalRun({
       sessionCtx,
       runOverrides: {
-        agentId: undefined,
+        agentId: "ops",
         config,
         messageProvider: "discord",
       },
@@ -1862,11 +2353,19 @@ describe("runReplyAgent pending final delivery capture", () => {
     const sessionKey = "agent:main:main";
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({}, sessionKey);
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      await applySessionEntryLifecycleMutation({
-        removals: [{ sessionKey }],
-        skipMaintenance: true,
-        storePath,
-      });
+      const operation = replyRunRegistry.get(sessionKey);
+      if (!operation) {
+        throw new Error("expected admitted reply operation");
+      }
+      // Match the dispatcher's initiating context so the injected deletion reaches
+      // final-delivery persistence instead of the competing-work guard.
+      await runWithReplyOperationLifecycleAdmission(operation, () =>
+        applySessionEntryLifecycleMutation({
+          removals: [{ sessionKey }],
+          skipMaintenance: true,
+          storePath,
+        }),
+      );
       return {
         payloads: [{ text: "final from deleted session" }],
         meta: {},
@@ -1978,6 +2477,93 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.restartRecoverySourceIngress).toBe("channel");
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("recovers a scoped Telegram topic and admits the next inbound turn", async () => {
+    const sessionKey = "agent:main:main:thread:1234:42";
+    const deliveryContext = {
+      channel: "telegram",
+      to: "telegram:1234",
+      accountId: "work",
+      threadId: 42,
+    };
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture(
+      {
+        delivery: normalizeSessionDeliveryState({
+          context: { ...deliveryContext, threadId: "42" },
+        }),
+      },
+      sessionKey,
+    );
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      const claimed = requireStoredSessionEntry(storePath, sessionKey);
+      expect(claimed.restartRecoveryDeliveryContext).toEqual(deliveryContext);
+      expect(typeof claimed.restartRecoveryDeliveryRunId).toBe("string");
+      expect(
+        buildCurrentRunRestartRecoveryClaim({
+          entry: claimed,
+          runId: claimed.restartRecoveryDeliveryRunId ?? "missing-recovery-run",
+          deliveryContext: { ...deliveryContext, threadId: "42" },
+        }),
+      ).toMatchObject({ restartRecoveryDeliveryContext: deliveryContext });
+      return { payloads: [{ text: "recovered topic reply" }], meta: {} };
+    });
+
+    const topicContext = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: deliveryContext.to,
+      AccountId: deliveryContext.accountId,
+      MessageThreadId: deliveryContext.threadId,
+      TransportThreadId: deliveryContext.threadId,
+      SessionKey: sessionKey,
+    } as const;
+    const interrupted = createMinimalRun({
+      sessionCtx: { ...topicContext, MessageSid: "telegram-topic-message-1" },
+      runOverrides: { messageProvider: "telegram" },
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun: interrupted.followupRun,
+      sessionEntry,
+      sessionStore,
+      sourceTurnId: interrupted.sourceTurnId,
+      storePath,
+      text: "recover this private topic",
+    });
+
+    await expect(interrupted.run()).resolves.toEqual(
+      expect.objectContaining({ text: "recovered topic reply" }),
+    );
+
+    const completed = requireStoredSessionEntry(storePath, sessionKey);
+    expect(completed.restartRecoveryDeliveryRunId).toBeUndefined();
+    const nextStore = { [sessionKey]: completed };
+    const followup = createMinimalRun({
+      sessionCtx: { ...topicContext, MessageSid: "telegram-topic-message-2" },
+      runOverrides: { messageProvider: "telegram" },
+      sessionEntry: completed,
+      sessionStore: nextStore,
+      sessionKey,
+      storePath,
+    });
+    attachSourceTurnRecorder({
+      followupRun: followup.followupRun,
+      sessionEntry: completed,
+      sessionStore: nextStore,
+      sourceTurnId: followup.sourceTurnId,
+      storePath,
+      text: "accept the next private-topic message",
+    });
+
+    await expect(followup.run()).resolves.toEqual(expect.objectContaining({ text: "final" }));
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(requireStoredSessionEntry(storePath, sessionKey).restartRecoveryDeliveryRunId).toBe(
+      undefined,
+    );
   });
 
   it("fails closed and retires an unknown terminal receipt when the live run returns", async () => {
@@ -2143,7 +2729,29 @@ describe("runReplyAgent pending final delivery capture", () => {
       text: "execute once",
     });
 
-    await expect(duplicate.run()).resolves.toBeUndefined();
+    // Retire the completed turn's automatic maintenance before observing cold redelivery.
+    const database = toDatabaseOptions(resolveSqliteScope({ storePath, sessionKey: "main" }));
+    await closeOpenClawAgentDatabaseByPathAsync(
+      resolveOpenClawAgentSqlitePath(database),
+      database.agentId,
+    );
+    const observer = observeParentSqlite();
+    try {
+      const calibration = openNodeSqliteDatabase(":memory:");
+      calibration.exec("CREATE TABLE calibration (value INTEGER)");
+      calibration.prepare("INSERT INTO calibration VALUES (?)").run(7);
+      const query = calibration.prepare("SELECT value FROM calibration");
+      expect(query.get()).toEqual({ value: 7 });
+      expect(query.all()).toEqual([{ value: 7 }]);
+      expect([...query.iterate()]).toEqual([{ value: 7 }]);
+      calibration.close();
+      sqliteMethods.forEach((method) => expect(observer.counts[method], method).toBeGreaterThan(0));
+      observer.reset();
+      await expect(duplicate.run()).resolves.toBeUndefined();
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+    }
 
     expect(onAdopted).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -2585,17 +3193,22 @@ describe("runReplyAgent pending final delivery capture", () => {
       storePath,
     });
 
-    await expect(run()).rejects.toThrow("restart recovery claim changed before agent adoption");
+    try {
+      await expect(run()).resolves.toBeDefined();
 
-    expect(onAdopted).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(await readStoredMainSession(storePath)).toMatchObject({
-      abortedLastRun: true,
-      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
-      restartRecoveryDeliveryRunId: "msg",
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
-      status: "running",
-    });
+      expect(onAdopted).not.toHaveBeenCalled();
+      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(await readStoredMainSession(storePath)).toMatchObject({
+        abortedLastRun: true,
+        restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+        restartRecoveryDeliveryRunId: "msg",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+        status: "running",
+      });
+    } finally {
+      // The rejected turn releases its durable recovery owner after run() settles.
+      await getSessionWorkAdmissionRelease({ scope: storePath, identities: ["main"] });
+    }
   });
 
   it("clears an adopted transcript-only claim after user cancellation", async () => {
@@ -2864,6 +3477,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("finalizes a hook-handled turn when source delivery is intentionally suppressed", async () => {
+    const receipt: ReplyOperationRunState = {};
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
@@ -2874,7 +3488,10 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const { followupRun, run, sourceTurnId } = createMinimalRun({
-      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      opts: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        [REPLY_OPERATION_RUN_STATE]: receipt,
+      },
       sessionCtx: {
         Provider: "discord",
         OriginatingChannel: "discord",
@@ -2897,6 +3514,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
 
     await expect(run()).resolves.toEqual(expect.objectContaining({ text: "private hook reply" }));
+    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
 
     expect(await readStoredMainSession(storePath)).toMatchObject({
       status: "done",
@@ -3169,6 +3787,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const { run, typing } = createMinimalRun({
         opts: { isHeartbeat: false, onPartialReply },
+        runOverrides: { terminalReplyExpectation: "optional" },
         typingMode: "message",
       });
       await run();
@@ -3218,54 +3837,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     ]);
   });
 
-  it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
-    const onPartialReply = vi.fn();
-    const onBlockReply = vi.fn();
-    const onReasoningStream = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      expect(params.silentExpected).toBe(true);
-      await params.onReasoningStream?.({ text: "Reasoning:\nI am trying to send NO_REPLY now." });
-      await params.onPartialReply?.({ text: "I am trying to send NO_REPLY now." });
-      await params.onBlockReply?.({ text: "I am trying to send NO_REPLY now." });
-      return { payloads: [{ text: "I am trying to send NO_REPLY now." }], meta: {} };
-    });
-
-    const { run } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
-      blockStreamingEnabled: true,
-      runOverrides: { silentExpected: true },
-    });
-    const res = await run();
-
-    expect(onReasoningStream).not.toHaveBeenCalled();
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(res).toBeUndefined();
-  });
-
-  it("suppresses bare NO_REPLY silent-turn payloads", async () => {
-    const onPartialReply = vi.fn();
-    const onBlockReply = vi.fn();
-    const onReasoningStream = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      expect(params.silentExpected).toBe(true);
-      await params.onReasoningStream?.({ text: "Reasoning:\nNO_REPLY" });
-      await params.onPartialReply?.({ text: "NO_REPLY" });
-      await params.onBlockReply?.({ text: "NO_REPLY" });
-      return { payloads: [{ text: "NO_REPLY" }], meta: { finalAssistantText: "NO_REPLY" } };
-    });
-
-    const { run } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
-      blockStreamingEnabled: true,
-      runOverrides: { silentExpected: true },
-    });
-    const res = await run();
-
-    expect(onReasoningStream).not.toHaveBeenCalled();
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(res).toBeUndefined();
+  registerRequiredReplyCompletionCases({
+    createMinimalRun,
+    state,
   });
 
   it("does not start typing on assistant message start without prior text in message mode", async () => {
@@ -3514,28 +4088,16 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(toolPayload.text).toBeUndefined();
   });
 
-  it("retries transient HTTP failures once with timer-driven backoff", async () => {
-    vi.useFakeTimers();
-    let calls = 0;
-    state.runEmbeddedAgentMock.mockImplementation(async () => {
-      calls += 1;
-      if (calls === 1) {
-        throw new Error("502 Bad Gateway");
-      }
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+  it("does not retry transient HTTP failures in the reply layer", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("502 Bad Gateway"));
 
-    const { run } = createMinimalRun({
-      typingMode: "message",
-    });
-    const runPromise = run();
+    const { run } = createMinimalRun({ typingMode: "message" });
+    const result = await run();
+    const payloads = Array.isArray(result) ? result : [result];
 
-    await vi.advanceTimersByTimeAsync(2_499);
-    expect(calls).toBe(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await runPromise;
-    expect(calls).toBe(2);
-    vi.useRealTimers();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(payloads.map((payload) => payload?.text)).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("The AI service is having trouble");
   });
 
   it("announces model fallback transitions across verbose levels", async () => {
@@ -3560,7 +4122,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         meta: { agentMeta: { usage: { input: 1, output: 1 } } },
       });
       vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
-        const { run, onFallbackStep } = args;
+        const { onFallbackStep } = args;
         expect(args.provider, testCase.name).toBe("openai");
         expect(args.model, testCase.name).toBe("gpt-5.6-sol");
         await onFallbackStep?.({
@@ -3572,7 +4134,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
         });
         return {
           outcome: "completed" as const,
-          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+          result: await runFallbackModelAttempt(
+            args,
+            "deepinfra",
+            "moonshotai/Kimi-K2.5",
+            "rate_limit",
+          ),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
           attempts: [
@@ -3665,7 +4232,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(
         async (args) => ({
           outcome: "exhausted",
-          result: await args.run("anthropic", "claude"),
+          result: await runInitialModelFallbackAttempt(args, "anthropic", "claude"),
           provider: "anthropic",
           model: "claude",
           attempts: [
@@ -3750,115 +4317,122 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
-  it.each([
-    { label: "empty output", payloads: [] },
-    { label: "reasoning-only output", payloads: [{ text: "internal", isReasoning: true }] },
-    { label: "commentary-only output", payloads: [{ text: "internal", isCommentary: true }] },
-    { label: "directive-only output", payloads: [{ text: "[[reply_to_current]]" }] },
-  ])("surfaces successful $label through normal reply delivery", async ({ payloads }) => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads, meta: {} });
-    const { run } = createMinimalRun({
-      runOverrides: { config: { channels: { whatsapp: { replyToMode: "first" } } } },
-    });
+  registerFollowupDrainCases({
+    createMinimalRun,
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
+    requireScheduledFollowupRunner,
+  });
 
-    const result = await run();
-    const payloadsResult = Array.isArray(result) ? result : [result];
-
-    expect(payloadsResult).toContainEqual(
-      expect.objectContaining({
-        text: expect.stringContaining("did not produce a visible reply"),
-        isError: true,
-        replyToId: "msg",
+  it("delivers a queued provider error after a private settled-tool completion", async () => {
+    const helperStarted = createDeferred();
+    const finishHelper = createDeferred();
+    const privatePartial = "Private unfinished work before the provider request failed.";
+    const providerFailure = "400 Synthetic provider failure for delivery proof.";
+    const failedAssistant = makeAssistantMessageFixture({
+      content: [],
+      errorMessage: providerFailure,
+      errorType: "invalid_request_error",
+      errorBody: JSON.stringify({
+        type: "invalid_request_error",
+        message: "Synthetic provider failure for delivery proof.",
       }),
-    );
-  });
-
-  it.each([
-    { lane: "reasoning", payload: { text: "internal", isReasoning: true } },
-    { lane: "commentary", payload: { text: "internal", isCommentary: true } },
-  ])("does not let streamed $lane suppress the empty-reply fallback", async ({ payload }) => {
-    const onBlockReply = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onBlockReply?.(payload);
-      return { payloads: [], meta: {} };
     });
-    const { run } = createMinimalRun({
-      blockStreamingEnabled: true,
-      opts: {
-        onBlockReply,
-        reasoningPayloadsEnabled: true,
-        commentaryPayloadsEnabled: true,
-      },
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      helperStarted.resolve();
+      await finishHelper.promise;
+      return {
+        payloads: [{ text: "The tool run finished, but no final summary was produced." }],
+        meta: { durationMs: 0, stopReason: "stop", intentionalTerminalCompletion: "tool-batch" },
+      } satisfies EmbeddedAgentRunResult;
     });
-
-    const result = await run();
-    const payloads = Array.isArray(result) ? result : [result];
-
-    expect(onBlockReply).toHaveBeenCalled();
-    expect(onBlockReply.mock.calls[0]?.[0]).toEqual(expect.objectContaining(payload));
-    expect(payloads).toContainEqual(
-      expect.objectContaining({
-        text: expect.stringContaining("did not produce a visible reply"),
-        isError: true,
-      }),
-    );
-  });
-
-  it.each([
-    {
-      label: "NO_REPLY",
-      pendingContinuation: false,
-      result: {
-        payloads: [{ text: "NO_REPLY" }],
-        meta: { finalAssistantVisibleText: "NO_REPLY" },
-      },
-    },
-    {
-      label: "accepted child spawn",
-      pendingContinuation: false,
-      result: {
-        payloads: [],
-        meta: {},
-        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
-      },
-    },
-    {
-      label: "yielded continuation",
-      pendingContinuation: true,
-      result: { payloads: [], meta: { yielded: true } },
-    },
-    {
-      label: "pending tool continuation",
-      pendingContinuation: true,
-      result: { payloads: [], meta: { pendingToolCalls: [{ name: "hosted_tool" }] } },
-    },
-  ])("keeps successful $label completions silent", async ({ result, pendingContinuation }) => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-    const onPendingContinuation = vi.fn();
-    const { run } = createMinimalRun({ opts: { onPendingContinuation } });
-
-    await expect(run()).resolves.toBeUndefined();
-    expect(onPendingContinuation).toHaveBeenCalledTimes(pendingContinuation ? 1 : 0);
-  });
-
-  it.each([
-    {
-      label: "room event",
-      params: { currentInboundEventKind: "room_event" as const },
-    },
-    {
-      label: "internal handoff",
-      params: {
-        runOverrides: {
-          inputProvenance: { kind: "internal_system" as const, sourceTool: "restart-sentinel" },
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      return {
+        payloads: buildEmbeddedRunPayloads({
+          assistantTexts: [privatePartial],
+          lastAssistant: failedAssistant,
+          currentAssistant: failedAssistant,
+          sourceReplyDeliveryMode: "message_tool_only",
+          sessionKey: "main",
+          isCronTrigger: false,
+          verboseLevel: "off",
+          reasoningLevel: "off",
+          toolResultFormat: "plain",
+        }),
+        meta: {
+          durationMs: 0,
+          error: {
+            kind: "incomplete_turn",
+            message: providerFailure,
+            fallbackSafe: false,
+            terminalPresentation: false,
+          },
+          finalAssistantVisibleText: privatePartial,
+          toolSummary: { calls: 1, tools: ["exec"] },
         },
+      } satisfies EmbeddedAgentRunResult;
+    });
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    const shared = {
+      opts: { sourceReplyDeliveryMode: "message_tool_only", onBlockReply },
+      sessionCtx: { Provider: "telegram", ChatType: "group" },
+      runOverrides: {
+        messageProvider: "telegram",
+        chatType: "group",
+        sourceReplyDeliveryMode: "message_tool_only",
+        config: { messages: { groupChat: { visibleReplies: "message_tool" } } },
       },
-    },
-  ])("keeps successful empty $label completions silent", async ({ params }) => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const { run } = createMinimalRun(params);
+    } satisfies NonNullable<Parameters<typeof createMinimalRun>[0]>;
+    const helper = createMinimalRun(shared).run();
+    await helperStarted.promise;
+    const queued = createMinimalRun({
+      ...shared,
+      sessionCtx: { ...shared.sessionCtx, MessageSid: "queued-message" },
+      isActive: true,
+      bindActiveAuthority: false,
+      isRunActive: () => true,
+      shouldFollowup: true,
+      resolvedQueueMode: "followup",
+    });
+    queued.followupRun.originatingChatType = "group";
+    try {
+      await queued.run();
+      expect(enqueueFollowupRun).toHaveBeenCalledOnce();
+      expect(scheduleFollowupDrain).not.toHaveBeenCalled();
+      finishHelper.resolve();
+      const helperReply = await helper;
+      const helperPayload = Array.isArray(helperReply) ? helperReply[0] : helperReply;
+      expect(helperPayload?.text).toBe("The tool run finished, but no final summary was produced.");
+      expect(
+        getReplyPayloadMetadata(helperPayload ?? {})?.deliverDespiteSourceReplySuppression,
+      ).not.toBe(true);
+      expect(onBlockReply).not.toHaveBeenCalled();
 
-    await expect(run()).resolves.toBeUndefined();
+      await requireScheduledFollowupRunner()(queued.followupRun);
+
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "LLM request rejected: Synthetic provider failure for delivery proof\\.",
+          isError: true,
+        }),
+      );
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    } finally {
+      finishHelper.resolve();
+      await helper;
+    }
+  });
+
+  registerImmediateFailurePolicyCases({ createMinimalRun, state });
+
+  registerReasoningFallbackTests({
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
+    createMinimalRun,
+  });
+
+  registerWaitingStatusCases({
+    createMinimalRun,
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
   });
 
   it.each([
@@ -3918,12 +4492,17 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it.each([
-    { label: "message-tool", delivery: { didSendViaMessagingTool: true } },
+    {
+      label: "coarse message-tool evidence",
+      delivery: { didSendViaMessagingTool: true },
+      sent: false,
+    },
     {
       label: "source-reply",
       delivery: { didDeliverSourceReplyViaMessageTool: true },
+      sent: true,
     },
-  ])("does not duplicate an empty terminal failure after $label delivery", async ({ delivery }) => {
+  ])("settles an empty terminal failure using $label", async ({ delivery, sent }) => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {
@@ -3938,7 +4517,34 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const { run } = createMinimalRun();
     const result = await run();
 
-    expect(result).toBeUndefined();
+    if (sent) {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toMatchObject({ isError: true });
+    }
+  });
+
+  it("does not duplicate an empty terminal failure after an accepted answer block", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "complete answer" });
+      return {
+        payloads: [],
+        meta: { error: { kind: "tool_result_mismatch", message: "terminal error after delivery" } },
+      };
+    });
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: true,
+      opts: { onBlockReply },
+      sessionCtx: { ChatType: "group" },
+    });
+
+    expect(await run()).toBeUndefined();
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "complete answer" }),
+      expect.any(Object),
+    );
   });
 
   it("does not persist active fallback state for internal subagent announce fallback", async () => {
@@ -3964,7 +4570,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         },
       });
       vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
-        const { run, onFallbackStep } = args;
+        const { onFallbackStep } = args;
         await onFallbackStep?.({
           fallbackStepType: "fallback_step",
           fallbackStepFromModel: "openai/gpt-5.5",
@@ -3974,7 +4580,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         });
         return {
           outcome: "completed" as const,
-          result: await run("google", "gemini-2.5-flash"),
+          result: await runFallbackModelAttempt(args, "google", "gemini-2.5-flash", "timeout"),
           provider: "google",
           model: "gemini-2.5-flash",
           attempts: [
@@ -4025,7 +4631,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("surfaces empty internal fallback failures without persisting visible fallback state", async () => {
+  it("keeps successful empty internal fallback silent without changing visible fallback state", async () => {
     const sessionEntry = makeSessionEntry({
       modelProvider: "openai",
       model: "gpt-5.5",
@@ -4036,7 +4642,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       meta: {},
     });
     vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
-      const { run, onFallbackStep } = args;
+      const { onFallbackStep } = args;
       await onFallbackStep?.({
         fallbackStepType: "fallback_step",
         fallbackStepFromModel: "openai/gpt-5.5",
@@ -4046,7 +4652,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
       return {
         outcome: "completed" as const,
-        result: await run("google", "gemini-2.5-flash"),
+        result: await runFallbackModelAttempt(args, "google", "gemini-2.5-flash", "timeout"),
         provider: "google",
         model: "gemini-2.5-flash",
         attempts: [
@@ -4075,9 +4681,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const res = await run();
 
-    const payload = Array.isArray(res) ? res[0] : res;
-    expect(payload?.isError).toBe(true);
-    expect(payload?.text).toContain("Fallback used google/gemini-2.5-flash");
+    expect(res).toBeUndefined();
     expect(sessionEntry.modelProvider).toBe("openai");
     expect(sessionEntry.model).toBe("gpt-5.5");
     expect(sessionEntry.providerOverride).toBeUndefined();
@@ -4209,6 +4813,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       streamed: false,
     },
   ])("surfaces a configured backend failure when fallback produces $label", async (testCase) => {
+    const onAgentRunTerminalOutcome = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       if (testCase.streamed) {
         await params.onBlockReply?.(testCase.payload);
@@ -4224,7 +4829,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     try {
       const { run } = createMinimalRun({
-        opts: testCase.opts,
+        opts: { ...testCase.opts, onAgentRunTerminalOutcome },
         blockStreamingEnabled: testCase.streamed,
         runOverrides: {
           provider: "lmstudio",
@@ -4243,6 +4848,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
       expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
       expect(payload?.text).toContain("no visible reply");
+      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -4276,6 +4882,52 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
       expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
       expect(payload?.text).toContain("no visible reply");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("delivers an explicit yield acknowledgment from a fallback model", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(makeCompletedFallbackRunner());
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          MessageSid: "1503645939964055592",
+        },
+      });
+      const result = await run();
+      const payloads = Array.isArray(result) ? result : result ? [result] : [];
+
+      expect(payloads).toContainEqual(
+        expect.objectContaining({
+          text: "Research started; results will follow.",
+          replyToId: "1503645939964055592",
+        }),
+      );
+      expect(payloads).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            isError: true,
+            text: expect.stringContaining("no visible reply"),
+          }),
+        ]),
+      );
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -4329,20 +4981,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
-      const { run } = createMinimalRun({
-        runOverrides: {
-          provider: "lmstudio",
-          model: "gemma-4-e4b-it",
-          messageProvider: "discord",
-        },
-        sessionCtx: {
-          Provider: "discord",
-          OriginatingChannel: "discord",
-          OriginatingTo: "channel:C1",
-          AccountId: "primary",
-          MessageSid: "1503645939964055592",
-        },
-      });
+      const { run } = createDiscordFallbackRun();
 
       const res = await run();
       const payload = Array.isArray(res) ? res[0] : res;
@@ -4355,35 +4994,29 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("does not report silent fallback failure after a did-send-only side effect", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      didSendViaMessagingTool: true,
-      meta: {},
-    });
+  it.each([
+    { label: "did-send-only evidence", result: { payloads: [], didSendViaMessagingTool: true } },
+    {
+      label: "target-only evidence",
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+        messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
+      },
+    },
+  ])("surfaces a missing required answer after fallback with $label", async ({ result }) => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ ...result, meta: {} });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
       .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
-      const { run } = createMinimalRun({
-        runOverrides: {
-          provider: "lmstudio",
-          model: "gemma-4-e4b-it",
-        },
-        sessionCtx: {
-          Provider: "discord",
-          OriginatingChannel: "discord",
-          MessageSid: "1503645939964055592",
-        },
-      });
+      const { run } = createDiscordFallbackRun();
 
       const res = await run();
       const payload = Array.isArray(res) ? res[0] : res;
 
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
+      expect(payload).toMatchObject({ isError: true, text: expect.any(String) });
+      expect(payload?.text).not.toContain("NO_REPLY");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -4405,20 +5038,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
-      const { run } = createMinimalRun({
-        runOverrides: {
-          provider: "lmstudio",
-          model: "gemma-4-e4b-it",
-          messageProvider: "discord",
-        },
-        sessionCtx: {
-          Provider: "discord",
-          OriginatingChannel: "discord",
-          OriginatingTo: "channel:C1",
-          AccountId: "primary",
-          MessageSid: "1503645939964055592",
-        },
-      });
+      const { run } = createDiscordFallbackRun();
       const res = await run();
       const payload = Array.isArray(res) ? res[0] : res;
 
@@ -4430,7 +5050,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("announces fallback without silence failure when fallback already completed a cron side effect", async () => {
+  it("surfaces a missing required answer after fallback completed only a cron side effect", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       successfulCronAdds: 1,
@@ -4441,64 +5061,13 @@ describe("runReplyAgent typing (heartbeat)", () => {
       .mockImplementationOnce(makeCompletedFallbackRunner());
 
     try {
-      const { run } = createMinimalRun({
-        runOverrides: {
-          provider: "lmstudio",
-          model: "gemma-4-e4b-it",
-          messageProvider: "discord",
-        },
-        sessionCtx: {
-          Provider: "discord",
-          OriginatingChannel: "discord",
-          OriginatingTo: "channel:C1",
-          AccountId: "primary",
-          MessageSid: "1503645939964055592",
-        },
-      });
+      const { run } = createDiscordFallbackRun();
 
       const res = await run();
       const payload = Array.isArray(res) ? res[0] : res;
 
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
-    } finally {
-      fallbackSpy.mockRestore();
-    }
-  });
-
-  it("announces fallback without silence failure when fallback committed target-only messaging delivery", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "NO_REPLY" }],
-      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
-      meta: {},
-    });
-    const fallbackSpy = vi
-      .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementationOnce(makeCompletedFallbackRunner());
-
-    try {
-      const { run } = createMinimalRun({
-        runOverrides: {
-          provider: "lmstudio",
-          model: "gemma-4-e4b-it",
-          messageProvider: "discord",
-        },
-        sessionCtx: {
-          Provider: "discord",
-          OriginatingChannel: "discord",
-          OriginatingTo: "channel:C1",
-          AccountId: "primary",
-          MessageSid: "1503645939964055592",
-        },
-      });
-
-      const res = await run();
-      const payload = Array.isArray(res) ? res[0] : res;
-
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
+      expect(payload).toMatchObject({ isError: true, text: expect.any(String) });
+      expect(payload?.text).not.toContain("NO_REPLY");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -4538,7 +5107,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("preserves intentional fallback silence when the turn permits silent replies", async () => {
+  it("preserves fallback silence for an explicitly optional turn", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       meta: {},
@@ -4552,7 +5121,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         runOverrides: {
           provider: "lmstudio",
           model: "gemma-4-e4b-it",
-          allowEmptyAssistantReplyAsSilent: true,
+          terminalReplyExpectation: "optional",
         },
         sessionCtx: {
           Provider: "discord",
@@ -4630,42 +5199,38 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementation(
-        async ({
-          provider,
-          model,
-          run,
-        }: {
-          provider: string;
-          model: string;
-          run: (provider: string, model: string) => Promise<unknown>;
-        }) => {
-          callCount += 1;
-          if (callCount === 2) {
-            return {
-              outcome: "completed" as const,
-              result: await run(provider, model),
-              provider,
-              model,
-              attempts: [],
-            };
-          }
+      .mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+        const { provider, model } = params;
+        callCount += 1;
+        if (callCount === 2) {
           return {
             outcome: "completed" as const,
-            result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
-            provider: "deepinfra",
-            model: "moonshotai/Kimi-K2.5",
-            attempts: [
-              {
-                provider: "fireworks",
-                model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-                error: "Provider fireworks is in cooldown (all profiles unavailable)",
-                reason: "rate_limit",
-              },
-            ],
+            result: await runInitialModelFallbackAttempt(params),
+            provider,
+            model,
+            attempts: [],
           };
-        },
-      );
+        }
+        return {
+          outcome: "completed" as const,
+          result: await runFallbackModelAttempt(
+            params,
+            "deepinfra",
+            "moonshotai/Kimi-K2.5",
+            "rate_limit",
+          ),
+          provider: "deepinfra",
+          model: "moonshotai/Kimi-K2.5",
+          attempts: [
+            {
+              provider: "fireworks",
+              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+              error: "Provider fireworks is in cooldown (all profiles unavailable)",
+              reason: "rate_limit",
+            },
+          ],
+        };
+      });
     try {
       const { run } = createMinimalRun({
         resolvedVerboseLevel: "on",
@@ -4688,32 +5253,34 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("announces fallback-cleared once when runtime returns to selected model", async () => {
-    const sessionEntry = makeSessionEntry();
-    const sessionStore = { main: sessionEntry };
-    let callCount = 0;
+  it.each([
+    { label: "direct chats", chatType: "direct" as const, noticeVisible: true },
+    { label: "group chats", chatType: "group" as const, noticeVisible: false },
+    { label: "channels", chatType: "channel" as const, noticeVisible: false },
+  ])(
+    "controls fallback notices for $label without changing state or lifecycle",
+    async ({ chatType, noticeVisible }) => {
+      const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
+      let callCount = 0;
 
-    state.runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-    const fallbackSpy = vi
-      .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementation(
-        async ({
-          provider,
-          model,
-          run,
-        }: {
-          provider: string;
-          model: string;
-          run: (provider: string, model: string) => Promise<unknown>;
-        }) => {
+      state.runEmbeddedAgentMock.mockResolvedValue({
+        payloads: [{ text: "final" }],
+        meta: {},
+      });
+      const fallbackSpy = vi
+        .spyOn(modelFallbackModule, "runWithModelFallback")
+        .mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+          const { provider, model } = params;
           callCount += 1;
           if (callCount === 1) {
             return {
               outcome: "completed" as const,
-              result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+              result: await runFallbackModelAttempt(
+                params,
+                "deepinfra",
+                "moonshotai/Kimi-K2.5",
+                "rate_limit",
+              ),
               provider: "deepinfra",
               model: "moonshotai/Kimi-K2.5",
               attempts: [
@@ -4728,42 +5295,274 @@ describe("runReplyAgent typing (heartbeat)", () => {
           }
           return {
             outcome: "completed" as const,
-            result: await run(provider, model),
+            result: await runInitialModelFallbackAttempt(params),
             provider,
             model,
             attempts: [],
           };
+        });
+      try {
+        const { run } = createMinimalRun({
+          resolvedVerboseLevel: "on",
+          sessionEntry,
+          sessionStore,
+          sessionKey: "main",
+          storePath,
+          sessionCtx: { ChatType: chatType },
+        });
+        const phases: string[] = [];
+        const off = onAgentEvent((evt) => {
+          const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+          if (evt.stream === "lifecycle" && phase) {
+            phases.push(phase);
+          }
+        });
+        const first = await run();
+        const activeFallback = {
+          kind: "active" as const,
+          selectedModel: "anthropic/claude",
+          activeModel: "deepinfra/moonshotai/Kimi-K2.5",
+          reason: "rate limit",
+        };
+        expect(sessionEntry.fallbackNotice).toEqual(activeFallback);
+        expect(requireStoredSessionEntry(storePath).fallbackNotice).toEqual(activeFallback);
+        const second = await run();
+        const third = await run();
+        off();
+
+        const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
+        const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
+        const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
+        expect(firstText?.includes("Model Fallback:")).toBe(noticeVisible);
+        expect(secondText?.includes("Model Fallback cleared:")).toBe(noticeVisible);
+        expect(thirdText).not.toContain("Model Fallback cleared:");
+        if (!noticeVisible) {
+          expect(firstText).toBe("final");
+          expect(secondText).toBe("final");
+        }
+        expect(phases.filter((phase) => phase === "fallback").length).toBe(1);
+        expect(phases.filter((phase) => phase === "fallback_cleared").length).toBe(1);
+        expect(sessionEntry.fallbackNotice).toBeUndefined();
+        expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
+      } finally {
+        fallbackSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    {
+      label: "direct chats",
+      chatType: "direct" as const,
+      retryProvider: "openai",
+      retryModel: "gpt-daybreak-blue-latest",
+      expectedNotice: "↪️ Retried on Daybreak",
+    },
+    {
+      label: "group chats",
+      chatType: "group" as const,
+      retryProvider: "openai",
+      retryModel: "gpt-daybreak-blue-latest",
+      expectedNotice: "↪️ Retried on Daybreak",
+    },
+    {
+      label: "channels",
+      chatType: "channel" as const,
+      retryProvider: "openai",
+      retryModel: "gpt-daybreak-blue-latest",
+      expectedNotice: "↪️ Retried on Daybreak",
+    },
+    {
+      label: "custom retry targets",
+      chatType: "direct" as const,
+      retryProvider: "anthropic",
+      retryModel: "claude-opus-4-7",
+      expectedNotice: "↪️ Retried on anthropic/claude-opus-4-7",
+    },
+  ])(
+    "delivers successful policy retry notices to $label",
+    async ({ chatType, retryProvider, retryModel, expectedNotice }) => {
+      const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+      });
+
+      state.runEmbeddedAgentMock.mockResolvedValue({
+        payloads: [{ text: "final" }],
+        meta: {
+          executionTrace: {
+            winnerProvider: retryProvider,
+            winnerModel: retryModel,
+            providerPolicyRetry: {
+              category: "cyber",
+              provider: retryProvider,
+              model: retryModel,
+            },
+          },
         },
-      );
+      });
+      const fallbackSpy = vi
+        .spyOn(modelFallbackModule, "runWithModelFallback")
+        .mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+          outcome: "completed" as const,
+          result: await runFallbackModelAttempt(params, retryProvider, retryModel, "unknown"),
+          provider: retryProvider,
+          model: retryModel,
+          attempts: [
+            {
+              provider: "openai",
+              model: "gpt-5.6-sol",
+              error: "OpenAI cyber policy refusal",
+              reason: "unknown",
+              code: "OPENAI_CYBER_POLICY_REFUSAL",
+            },
+          ],
+        }));
+      try {
+        const { run } = createMinimalRun({
+          resolvedVerboseLevel: "on",
+          sessionEntry,
+          sessionStore,
+          sessionKey: "main",
+          storePath,
+          sessionCtx: { ChatType: chatType },
+        });
+
+        const result = await run();
+        expect(result).toEqual([
+          expect.objectContaining({
+            text: expectedNotice,
+            isFallbackNotice: true,
+          }),
+          expect.objectContaining({ text: "final" }),
+        ]);
+      } finally {
+        fallbackSpy.mockRestore();
+      }
+    },
+  );
+
+  it("does not report an interrupted policy retry as successful", async () => {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+    });
+
+    state.runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "interrupted output" }],
+      meta: { aborted: true },
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+        outcome: "completed" as const,
+        result: await runFallbackModelAttempt(
+          params,
+          "openai",
+          "gpt-daybreak-blue-latest",
+          "unknown",
+        ),
+        provider: "openai",
+        model: "gpt-daybreak-blue-latest",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.6-sol",
+            error: "OpenAI cyber policy refusal",
+            reason: "unknown",
+            code: "OPENAI_CYBER_POLICY_REFUSAL",
+          },
+        ],
+      }));
     try {
       const { run } = createMinimalRun({
         resolvedVerboseLevel: "on",
         sessionEntry,
         sessionStore,
         sessionKey: "main",
+        storePath,
+        sessionCtx: { ChatType: "direct" },
       });
-      const phases: string[] = [];
-      const off = onAgentEvent((evt) => {
-        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
-        if (evt.stream === "lifecycle" && phase) {
-          phases.push(phase);
-        }
-      });
-      const first = await run();
-      const second = await run();
-      const third = await run();
-      off();
 
-      const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
-      const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
-      const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
-      expect(firstText).toContain("Model Fallback:");
-      expect(secondText).toContain("Model Fallback cleared:");
-      expect(thirdText).not.toContain("Model Fallback cleared:");
-      expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
-      expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
+      const result = await run();
+      const text = Array.isArray(result)
+        ? result.map((payload) => payload.text).join("\n")
+        : result?.text;
+      expect(text).not.toContain("Retried on");
     } finally {
       fallbackSpy.mockRestore();
+    }
+  });
+
+  it("clears native fallback state without attributing finalizer response usage to the native model", async () => {
+    const runtimeModelSelection = { provider: "openai", model: "gpt-5.6-sol" };
+    const response = { provider: "google", model: "gemini-2.5-flash" };
+    const selectedModelRef = `${runtimeModelSelection.provider}/${runtimeModelSelection.model}`;
+    const responseModelRef = `${response.provider}/${response.model}`;
+    const runId = "native-fallback-cleared";
+    const usage = { input: 120, output: 8 };
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
+      modelProvider: runtimeModelSelection.provider,
+      model: runtimeModelSelection.model,
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: selectedModelRef,
+        activeModel: responseModelRef,
+        reason: "timeout",
+      },
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "finalized answer" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session",
+          ...response,
+          agentHarnessId: "codex",
+          runtimeModelSelection,
+          usage,
+        },
+      },
+    });
+    const { run } = createMinimalRun({
+      opts: { runId },
+      sessionEntry,
+      sessionStore,
+      storePath,
+      runOverrides: runtimeModelSelection,
+      sessionCtx: { ChatType: "direct" },
+    });
+    const fallbackEvents: Array<Record<string, unknown>> = [];
+    const off = onAgentEvent((event) => {
+      if (
+        event.runId === runId &&
+        event.stream === "lifecycle" &&
+        (event.data.phase === "fallback" || event.data.phase === "fallback_cleared")
+      ) {
+        fallbackEvents.push(event.data);
+      }
+    });
+    try {
+      const result = await run();
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text ?? "")
+        .join("\n");
+
+      expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
+      expect(fallbackEvents).toEqual([
+        expect.objectContaining({
+          phase: "fallback_cleared",
+          selectedProvider: runtimeModelSelection.provider,
+          selectedModel: runtimeModelSelection.model,
+          activeProvider: runtimeModelSelection.provider,
+          activeModel: runtimeModelSelection.model,
+          previousActiveModel: responseModelRef,
+        }),
+      ]);
+      expect(text).toContain(`Model Fallback cleared: ${selectedModelRef}`);
+      expect(text).toContain("finalized answer");
+      expect(consumeReplyUsageState(runId)).toMatchObject({ ...response, usage });
+    } finally {
+      off();
     }
   });
 
@@ -4778,42 +5577,38 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
     const fallbackSpy = vi
       .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementation(
-        async ({
-          provider,
-          model,
-          run,
-        }: {
-          provider: string;
-          model: string;
-          run: (provider: string, model: string) => Promise<unknown>;
-        }) => {
-          callCount += 1;
-          if (callCount === 1) {
-            return {
-              outcome: "completed" as const,
-              result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
-              provider: "deepinfra",
-              model: "moonshotai/Kimi-K2.5",
-              attempts: [
-                {
-                  provider: "fireworks",
-                  model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-                  error: "Provider fireworks is in cooldown (all profiles unavailable)",
-                  reason: "rate_limit",
-                },
-              ],
-            };
-          }
+      .mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+        const { provider, model } = params;
+        callCount += 1;
+        if (callCount === 1) {
           return {
             outcome: "completed" as const,
-            result: await run(provider, model),
-            provider,
-            model,
-            attempts: [],
+            result: await runFallbackModelAttempt(
+              params,
+              "deepinfra",
+              "moonshotai/Kimi-K2.5",
+              "rate_limit",
+            ),
+            provider: "deepinfra",
+            model: "moonshotai/Kimi-K2.5",
+            attempts: [
+              {
+                provider: "fireworks",
+                model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+                error: "Provider fireworks is in cooldown (all profiles unavailable)",
+                reason: "rate_limit",
+              },
+            ],
           };
-        },
-      );
+        }
+        return {
+          outcome: "completed" as const,
+          result: await runInitialModelFallbackAttempt(params),
+          provider,
+          model,
+          attempts: [],
+        };
+      });
     try {
       const { run } = createMinimalRun({
         resolvedVerboseLevel: "off",
@@ -4836,8 +5631,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
       expect(firstText).toContain("Model Fallback:");
       expect(secondText).toContain("Model Fallback cleared:");
-      expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
-      expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
+      expect(phases.filter((phase) => phase === "fallback").length).toBe(1);
+      expect(phases.filter((phase) => phase === "fallback_cleared").length).toBe(1);
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -4881,22 +5676,25 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
       const fallbackSpy = vi
         .spyOn(modelFallbackModule, "runWithModelFallback")
-        .mockImplementation(
-          async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-            outcome: "completed" as const,
-            result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
-            provider: "deepinfra",
-            model: "moonshotai/Kimi-K2.5",
-            attempts: [
-              {
-                provider: "anthropic",
-                model: "claude",
-                error: "Provider anthropic is in cooldown (all profiles unavailable)",
-                reason: testCase.reportedReason,
-              },
-            ],
-          }),
-        );
+        .mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+          outcome: "completed" as const,
+          result: await runFallbackModelAttempt(
+            params,
+            "deepinfra",
+            "moonshotai/Kimi-K2.5",
+            testCase.reportedReason,
+          ),
+          provider: "deepinfra",
+          model: "moonshotai/Kimi-K2.5",
+          attempts: [
+            {
+              provider: "anthropic",
+              model: "claude",
+              error: "Provider anthropic is in cooldown (all profiles unavailable)",
+              reason: testCase.reportedReason,
+            },
+          ],
+        }));
       try {
         const { run } = createMinimalRun({
           resolvedVerboseLevel: "on",
@@ -4914,7 +5712,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("does not persist cumulative CLI usage as a fresh context snapshot", async () => {
+  it("marks prior context usage stale when CLI usage is only cumulative", async () => {
     const sessionEntry = makeSessionEntry({
       totalTokens: 42_000,
       totalTokensFresh: true,
@@ -4959,7 +5757,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(stored.fallbackNotice).toBeUndefined();
     expect(stored.modelProvider).toBe("claude-cli");
     expect(stored.model).toBe("claude-opus-4-7");
-    expect(stored.totalTokens).toBeUndefined();
+    expect(stored.totalTokens).toBe(42_000);
     expect(stored.totalTokensFresh).toBe(false);
   });
 
@@ -5037,9 +5835,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
     const payloads = Array.isArray(res) ? res : res ? [res] : [];
     expect(payloads.length).toBe(1);
-    expect(payloads[0]?.text).toContain("LLM connection failed");
-    expect(payloads[0]?.text).toContain("socket connection was closed unexpectedly");
-    expect(payloads[0]?.text).toContain("```");
+    expect(payloads[0]?.text).toContain("Lost the connection to the AI service");
+    expect(payloads[0]?.text).toContain("openclaw logs --follow");
+    expect(payloads[0]?.text).not.toContain("socket connection was closed unexpectedly");
   });
 });
 

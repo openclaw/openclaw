@@ -1,6 +1,6 @@
-// Control UI module implements activity model behavior.
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import { redactToolPayloadText } from "../../lib/browser-redact.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 
 const ACTIVITY_ENTRY_LIMIT = 100;
@@ -42,31 +42,6 @@ type ActivityEvent = {
   agentId?: string;
   data: Record<string, unknown>;
 };
-
-const SECRET_PATTERNS: Array<[RegExp, string]> = [
-  [/\b(Authorization|Cookie|Set-Cookie)\s*:\s*[^\n\r]+/gi, "$1: [redacted]"],
-  [/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]"],
-  [
-    /\b(api[_.-]?key|token|secret|password|passwd|authorization)\b(["'])(\s*:\s*)"(?:\\.|[^"\\\r\n])*"/gi,
-    '$1$2$3"[redacted]"',
-  ],
-  [
-    /\b(api[_.-]?key|token|secret|password|passwd|authorization)\b(["'])(\s*:\s*)'(?:\\.|[^'\\\r\n])*'/gi,
-    "$1$2$3'[redacted]'",
-  ],
-  [
-    /\b(api[_.-]?key|token|secret|password|passwd|authorization)\b(\s*[:=]\s*)["']?[^"',\s}]+/gi,
-    "$1$2[redacted]",
-  ],
-  [
-    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-    "[redacted private key]",
-  ],
-  [
-    /(^|[\s"'`=])(?:\/Users\/|\/home\/|\/var\/folders\/|[A-Za-z]:\\)[^\s"'`,;]+/g,
-    "$1[redacted path]",
-  ],
-];
 
 export function parseActivityEvent(
   payload: unknown,
@@ -136,21 +111,16 @@ function stringifyOutput(value: unknown): string | null {
   }
 }
 
-function redactSensitiveText(value: string): string {
-  return SECRET_PATTERNS.reduce(
-    (text, [pattern, replacement]) => text.replace(pattern, replacement),
-    value,
-  );
-}
-
 function buildOutputPreview(value: unknown): { text?: string; truncated: boolean } {
   const raw = stringifyOutput(value);
   if (!raw) {
     return { truncated: false };
   }
-  const redacted = redactSensitiveText(raw);
+  const redacted = redactToolPayloadText(raw);
   const truncated = truncateText(redacted, ACTIVITY_OUTPUT_PREVIEW_LIMIT);
-  return { text: truncated.text, truncated: truncated.truncated };
+  // A sliced preview can retain the whole output after the raw event is evicted.
+  // Copy its characters here so the bounded Activity entry owns only its preview.
+  return { text: Array.from(truncated.text).join(""), truncated: truncated.truncated };
 }
 
 function countArgumentFields(value: unknown): number {
@@ -191,99 +161,73 @@ function resolveStatus(data: Record<string, unknown>): ActivityStatus {
   return "done";
 }
 
-function statusLabel(status: ActivityStatus): string {
-  return ACTIVITY_STATUS_SUMMARY_LABELS[status];
-}
-
 function buildSummary(toolName: string, status: ActivityStatus, hiddenArgCount: number): string {
   const argText = `${hiddenArgCount} argument${hiddenArgCount === 1 ? "" : "s"} hidden`;
-  return `${toolName} ${statusLabel(status)}; ${argText}`;
+  return `${toolName} ${ACTIVITY_STATUS_SUMMARY_LABELS[status]}; ${argText}`;
 }
 
 export function updateToolActivity(
   entries: ActivityEntry[],
   payload: ActivityEvent,
 ): ActivityEntry[] {
-  const data = payload.data ?? {};
-  if (payload.stream === "item") {
-    return updateAnswerCandidateActivity(entries, payload);
-  }
-  const toolCallId = toTrimmedString(data.toolCallId);
-  if (!toolCallId) {
+  const data = payload.data;
+  const answerCandidate = payload.stream === "item";
+  const toolCallId = toTrimmedString(answerCandidate ? data.itemId : data.toolCallId);
+  const candidateStatus = answerCandidate ? readAnswerCandidateStatus(data.status) : null;
+  if (!toolCallId || (answerCandidate && !candidateStatus)) {
     return entries;
   }
-  const toolName = toTrimmedString(data.name) ?? "tool";
-  const id = `${payload.runId}:${toolCallId}`;
-  const now = payload.receivedAt;
-  const startedAt = typeof payload.ts === "number" ? payload.ts : now;
-  const status = resolveStatus(data);
-  const outputValue =
-    data.phase === "update" ? data.partialResult : data.phase === "result" ? data.result : null;
-  const preview = buildOutputPreview(outputValue);
+  const toolName = answerCandidate ? "answer_candidate" : (toTrimmedString(data.name) ?? "tool");
+  const id = answerCandidate
+    ? `${payload.runId}:answer_candidate:${toolCallId}`
+    : `${payload.runId}:${toolCallId}`;
   const existing = entries.find((entry) => entry.id === id);
-  const hiddenArgCount =
-    data.args !== undefined ? countArgumentFields(data.args) : (existing?.hiddenArgumentCount ?? 0);
-  const outputPreview = preview.text ?? existing?.outputPreview;
+  const now = payload.receivedAt;
+  const startedAt = existing?.startedAt ?? payload.ts;
+  const status = answerCandidate
+    ? candidateStatus === "candidate"
+      ? "running"
+      : "done"
+    : resolveStatus(data);
+  const outputValue = answerCandidate
+    ? data.progressText
+    : data.phase === "update"
+      ? data.partialResult
+      : data.phase === "result"
+        ? data.result
+        : null;
+  const preview = buildOutputPreview(outputValue);
+  const hiddenArgCount = answerCandidate
+    ? 0
+    : data.args !== undefined
+      ? countArgumentFields(data.args)
+      : (existing?.hiddenArgumentCount ?? 0);
+  const outputPreview = answerCandidate ? preview.text : (preview.text ?? existing?.outputPreview);
   const nextEntry: ActivityEntry = {
     id,
     toolCallId,
     runId: payload.runId,
     ...(payload.sessionKey ? { sessionKey: payload.sessionKey } : {}),
     toolName,
-    entryKind: "tool",
+    entryKind: answerCandidate ? "answer_candidate" : "tool",
+    ...(candidateStatus ? { itemId: toolCallId, candidateStatus } : {}),
     status,
-    startedAt: existing?.startedAt ?? startedAt,
+    startedAt,
     updatedAt: now,
-    durationMs: Math.max(0, now - (existing?.startedAt ?? startedAt)),
+    durationMs: Math.max(0, now - startedAt),
     outputTruncated: preview.truncated || existing?.outputTruncated === true,
-    summary: buildSummary(toolName, status, hiddenArgCount),
+    summary: answerCandidate
+      ? `answer_candidate.${candidateStatus}`
+      : buildSummary(toolName, status, hiddenArgCount),
     hiddenArgumentCount: hiddenArgCount,
     ...(outputPreview ? { outputPreview } : {}),
   };
   const next = existing
     ? entries.map((entry) => (entry.id === id ? nextEntry : entry))
     : [...entries, nextEntry];
-  return next.slice(-ACTIVITY_ENTRY_LIMIT);
+  return next.length > ACTIVITY_ENTRY_LIMIT ? next.slice(-ACTIVITY_ENTRY_LIMIT) : next;
 }
 
 function readAnswerCandidateStatus(value: unknown): "candidate" | "superseded" | "selected" | null {
   return value === "candidate" || value === "superseded" || value === "selected" ? value : null;
-}
-
-function updateAnswerCandidateActivity(
-  entries: ActivityEntry[],
-  payload: ActivityEvent,
-): ActivityEntry[] {
-  const itemId = toTrimmedString(payload.data.itemId);
-  const candidateStatus = readAnswerCandidateStatus(payload.data.status);
-  if (!itemId || !candidateStatus) {
-    return entries;
-  }
-  const id = `${payload.runId}:answer_candidate:${itemId}`;
-  const existing = entries.find((entry) => entry.id === id);
-  const now = payload.receivedAt;
-  const startedAt = existing?.startedAt ?? payload.ts;
-  const preview = buildOutputPreview(payload.data.progressText);
-  const nextEntry: ActivityEntry = {
-    id,
-    toolCallId: itemId,
-    itemId,
-    runId: payload.runId,
-    ...(payload.sessionKey ? { sessionKey: payload.sessionKey } : {}),
-    toolName: "answer_candidate",
-    entryKind: "answer_candidate",
-    candidateStatus,
-    status: candidateStatus === "candidate" ? "running" : "done",
-    startedAt,
-    updatedAt: now,
-    durationMs: Math.max(0, now - startedAt),
-    outputTruncated: preview.truncated || existing?.outputTruncated === true,
-    summary: `answer_candidate.${candidateStatus}`,
-    hiddenArgumentCount: 0,
-    ...(preview.text ? { outputPreview: preview.text } : {}),
-  };
-  const next = existing
-    ? entries.map((entry) => (entry.id === id ? nextEntry : entry))
-    : [...entries, nextEntry];
-  return next.slice(-ACTIVITY_ENTRY_LIMIT);
 }

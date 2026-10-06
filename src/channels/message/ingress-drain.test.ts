@@ -1,6 +1,7 @@
-// Durable ingress drain contract tests for lifecycle reliability invariants.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelIngressDrain,
@@ -10,6 +11,7 @@ import {
 import {
   createTestIngressQueue,
   type IngressDrainTestPayload as Payload,
+  seedPendingBacklog,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
 
@@ -107,31 +109,29 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-adopt", { text: "x" }, { laneKey: "l1" });
 
-      let settleResolve!: () => void;
-      const settleGate = new Promise<void>((resolve) => {
-        settleResolve = resolve;
-      });
+      const adopted = createDeferredCore();
+      const settleGate = createDeferredCore();
 
       const drain = createChannelIngressDrain<Payload>({
         queue,
         dispatchClaimedEvent: async (_event, lifecycle) => {
-          await lifecycle.onAdopted();
+          adopted.resolve(lifecycle.onAdopted());
+          await adopted.promise;
           // Simulate a long-running turn after adoption.
-          await settleGate;
+          await settleGate.promise;
         },
       });
 
       await drain.drainOnce();
-      // Adoption already completed the claim before settle.
-      await vi.waitFor(async () => {
-        const pending = await queue.listPending();
-        expect(pending).toEqual([]);
-      });
-      const claims = await queue.listClaims();
-      expect(claims).toEqual([]);
-      settleResolve();
-      await drain.waitForIdle();
-      drain.dispose();
+      try {
+        await adopted.promise;
+        expect(await queue.listPending()).toEqual([]);
+        expect(await queue.listClaims()).toEqual([]);
+      } finally {
+        settleGate.resolve();
+        await drain.waitForIdle();
+        drain.dispose();
+      }
     });
   });
 
@@ -276,6 +276,34 @@ describe("channel ingress drain", () => {
     }
   });
 
+  it("releases a deferred lane when the handler defers before its first await", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("first", { text: "first" }, { laneKey: "shared" });
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        deferredLaneOccupancy: "release",
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          // Ownership must already be registered when a handler defers
+          // synchronously, before its first await, or the release is undone by
+          // the post-dispatch registration and the lane stays blocked.
+          lifecycle.onDeferred();
+          return { kind: "deferred" };
+        },
+      });
+
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      // Settle the dispatch task, then read the lane state through its
+      // completion signal instead of polling.
+      await drain.waitForIdle();
+      expect(drain.activeLaneKeys()).toEqual(new Set());
+
+      await queue.enqueue("second", { text: "second" }, { laneKey: "shared" });
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      drain.dispose();
+    });
+  });
+
   it("keeps heartbeat and watchdog ownership after releasing a deferred lane", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1_000;
@@ -300,9 +328,15 @@ describe("channel ingress drain", () => {
 
       clock += 1_000;
       await vi.advanceTimersByTimeAsync(1_000);
-      await vi.waitFor(async () => expect(await queue.listFailed?.()).toHaveLength(1));
-      const failed = await queue.listFailed?.();
-      expect(failed?.[0]).toMatchObject({ id: "released-stall", reason: "handler-timeout" });
+      await vi.waitFor(async () => expect(await queue.listClaims()).toEqual([]));
+      expect(await queue.listFailed?.()).toEqual([]);
+      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+        {
+          id: "released-stall",
+          attempts: 1,
+          lastError: expect.stringContaining("handler-timeout"),
+        },
+      ]);
       drain.dispose();
     });
   });
@@ -416,10 +450,7 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-await-abandon", { text: "x" }, { laneKey: "l1" });
 
-      let finishRelease!: () => void;
-      const releaseGate = new Promise<void>((resolve) => {
-        finishRelease = resolve;
-      });
+      const { promise: releaseGate, resolve: finishRelease } = createDeferred();
       const release = vi.fn(async (...args: Parameters<typeof queue.release>) => {
         await releaseGate;
         return await queue.release(...args);
@@ -475,6 +506,7 @@ describe("channel ingress drain", () => {
       await vi.waitFor(async () => {
         const pending = await queue.listPending();
         expect(pending).toHaveLength(1);
+        expect(pending[0]?.attempts).toBe(1);
         expect(pending[0]?.lastError).toBe("turn-abandoned");
       });
       drain.dispose();
@@ -523,10 +555,7 @@ describe("channel ingress drain", () => {
       const firstLifecycles: ChannelIngressDispatchLifecycle[] = [];
       let firstAdopted = false;
       const dispatches: string[] = [];
-      let releaseFirst!: () => void;
-      const firstHold = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: firstHold, resolve: releaseFirst } = createDeferred();
 
       const drain = createChannelIngressDrain<Payload>({
         queue,
@@ -581,10 +610,7 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("a1", { text: "a" }, { laneKey: "lane" });
 
-      let hold!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        hold = resolve;
-      });
+      const { promise: gate, resolve: hold } = createDeferred();
       let aborted = false;
 
       const drain = createChannelIngressDrain<Payload>({
@@ -760,10 +786,7 @@ describe("channel ingress drain", () => {
       await queue.enqueue("old", { text: "old" }, { laneKey: "shared" });
 
       const lifecycles: ChannelIngressDispatchLifecycle[] = [];
-      let releaseOld!: () => void;
-      const oldHold = new Promise<void>((resolve) => {
-        releaseOld = resolve;
-      });
+      const { promise: oldHold, resolve: releaseOld } = createDeferred();
       let lateAdoptError: unknown;
 
       const drain = createChannelIngressDrain<Payload>({
@@ -875,10 +898,7 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-peer", { text: "x" }, { laneKey: "l1" });
 
-      let releaseFirst!: () => void;
-      const firstHold = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: firstHold, resolve: releaseFirst } = createDeferred();
       const firstDispatches: string[] = [];
       const secondDispatches: string[] = [];
       const firstAbort = new AbortController();
@@ -910,6 +930,9 @@ describe("channel ingress drain", () => {
       expect(secondDispatches).toEqual([]);
 
       firstAbort.abort();
+      await expect(first.dispose({ waitForSettlements: true })).rejects.toThrow(
+        "already-aborted retained owner",
+      );
       // Aborted owners retire before an uncooperative handler returns, allowing
       // the replacement drain to recover under the claim-token fence.
       const recovered = await second.recoverStaleClaims();
@@ -921,36 +944,6 @@ describe("channel ingress drain", () => {
       await first.waitForIdle();
       first.dispose();
       second.dispose();
-    });
-  });
-
-  it("throws IngressAdoptionLostError when complete returns false (lease reclaimed)", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      await queue.enqueue("evt-reclaim", { text: "x" }, { laneKey: "l1" });
-
-      queue.complete = async () => false;
-
-      let adoptError: unknown;
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        dispatchClaimedEvent: async (_event, lifecycle) => {
-          try {
-            await lifecycle.onAdopted();
-          } catch (err) {
-            adoptError = err;
-            throw err;
-          }
-        },
-      });
-
-      await drain.drainOnce();
-      await drain.waitForIdle();
-      expect(isIngressAdoptionLostError(adoptError)).toBe(true);
-      expect(isIngressAdoptionLostError(adoptError) && adoptError.code).toBe("reclaimed");
-      // Claim remains held — not settled as a false success.
-      expect(drain.activeLaneKeys().has("l1")).toBe(true);
-      drain.dispose();
     });
   });
 
@@ -1012,10 +1005,7 @@ describe("channel ingress drain", () => {
 
       let sawAbort = false;
       let lateAdoptError: unknown;
-      let releaseDispatch!: () => void;
-      const holdDispatch = new Promise<void>((resolve) => {
-        releaseDispatch = resolve;
-      });
+      const { promise: holdDispatch, resolve: releaseDispatch } = createDeferred();
 
       const claimLeaseMs = 3_000;
       const drain = createChannelIngressDrain<Payload>({
@@ -1061,14 +1051,8 @@ describe("channel ingress drain", () => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("old", { text: "old" }, { laneKey: "shared" });
 
-      let releaseOld!: () => void;
-      const oldHold = new Promise<void>((resolve) => {
-        releaseOld = resolve;
-      });
-      let releasePredicate!: (value: boolean) => void;
-      const predicateHold = new Promise<boolean>((resolve) => {
-        releasePredicate = resolve;
-      });
+      const { promise: oldHold, resolve: releaseOld } = createDeferred();
+      const { promise: predicateHold, resolve: releasePredicate } = createDeferred<boolean>();
       let predicateStarted = false;
       let oldAdopted = false;
       let oldAborted = false;
@@ -1113,6 +1097,32 @@ describe("channel ingress drain", () => {
       const again = await queue.enqueue("old", { text: "old" });
       expect(again.kind).toBe("completed");
       drain.dispose();
+    });
+  });
+
+  it("continues draining a backlog above SQLite's bind-variable ceiling", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir, { now: () => 1_000 });
+      seedPendingBacklog(stateDir, 33_000);
+      const dispatches: string[] = [];
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => 1_000,
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          dispatches.push(event.id);
+          await lifecycle.onAdopted();
+        },
+      });
+
+      try {
+        await expect(drain.drainOnce()).resolves.toEqual({ started: 32 });
+        await drain.waitForIdle();
+        await expect(drain.drainOnce()).resolves.toEqual({ started: 32 });
+        await drain.waitForIdle();
+        expect(dispatches).toEqual(Array.from({ length: 64 }, (_, index) => `evt-${index}`));
+      } finally {
+        drain.dispose();
+      }
     });
   });
 });

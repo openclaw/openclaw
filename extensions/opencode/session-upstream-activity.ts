@@ -1,3 +1,4 @@
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   isExternalUserText,
   normalizeUserText,
@@ -7,7 +8,12 @@ import {
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENCODE_SESSION_ID_PATTERN } from "./session-catalog-shared.js";
-import { exportOpenCodeSession, queryOpenCodeDatabase } from "./session-catalog.js";
+import {
+  exportOpenCodeSession,
+  isOpenCodeV2,
+  queryOpenCodeDatabase,
+  runOpenCodeApi,
+} from "./session-catalog.js";
 
 type OpenCodeIndicator = {
   threadId: string;
@@ -41,24 +47,6 @@ type OpenCodeMarker = {
 const OPENCODE_EXPORT_CONCURRENCY = 4;
 const OPENCODE_REPLAY_LOOKBACK_USER_MESSAGES = 50;
 const OPENCODE_SHELL_SENTINEL = "The following tool was executed by the user";
-
-async function mapConcurrent<T, R>(
-  values: T[],
-  limit: number,
-  mapper: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  results.length = values.length;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(limit, values.length) }, async () => {
-    while (nextIndex < values.length) {
-      const index = nextIndex++;
-      results[index] = await mapper(values[index]!);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
 
 function sqlString(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
@@ -95,6 +83,57 @@ function readMarker(probe: SessionUpstreamProbe): OpenCodeMarker | undefined {
 async function readIndicators(threadIds: string[]): Promise<Map<string, OpenCodeIndicator>> {
   if (threadIds.length === 0) {
     return new Map();
+  }
+  if (await isOpenCodeV2()) {
+    const { results } = await runTasksWithConcurrency({
+      tasks: threadIds.map((threadId) => async (): Promise<OpenCodeIndicator | undefined> => {
+        let output: string;
+        try {
+          output = await runOpenCodeApi("session.log", [
+            `sessionID=${threadId}`,
+            "follow=false",
+            // log.synced carries the current head even when no events follow this cursor.
+            `after=${Number.MAX_SAFE_INTEGER}`,
+          ]);
+        } catch (error) {
+          if (error instanceof Error && typeof error.cause === "string") {
+            let response: unknown;
+            try {
+              response = JSON.parse(error.cause);
+            } catch {
+              throw error;
+            }
+            if (
+              isRecord(response) &&
+              response["_tag"] === "SessionNotFoundError" &&
+              response.sessionID === threadId
+            ) {
+              return undefined;
+            }
+          }
+          throw error;
+        }
+        for (const line of output.split("\n")) {
+          if (!line.startsWith("data: ")) {
+            continue;
+          }
+          const event: unknown = JSON.parse(line.slice(6));
+          if (isRecord(event) && event.type === "log.synced" && event.aggregateID === threadId) {
+            // Released v2 omits seq when the captured log watermark is empty.
+            const seq = event.seq === undefined ? 0 : event.seq;
+            if (Number.isSafeInteger(seq) && Number(seq) >= 0) {
+              return { threadId, seq: Number(seq) };
+            }
+          }
+        }
+        throw new Error("OpenCode returned invalid upstream indicators");
+      }),
+      limit: OPENCODE_EXPORT_CONCURRENCY,
+      throwOnError: true,
+    });
+    return new Map(
+      results.flatMap((indicator) => (indicator ? [[indicator.threadId, indicator] as const] : [])),
+    );
   }
   const query = [
     "SELECT s.id AS id, es.seq AS seq",
@@ -409,10 +448,8 @@ export async function checkOpenCodeUpstreamActivity(
     // A failed batch read confirms nothing about whether any thread still exists.
     return [];
   }
-  const outcomes = await mapConcurrent(
-    eligible,
-    OPENCODE_EXPORT_CONCURRENCY,
-    async (probe): Promise<SessionUpstreamActivity | undefined> => {
+  const { results: outcomes } = await runTasksWithConcurrency({
+    tasks: eligible.map((probe) => async (): Promise<SessionUpstreamActivity | undefined> => {
       const indicator = indicators.get(probe.threadId);
       if (!indicator) {
         return { kind: "missing", sessionKey: probe.sessionKey };
@@ -423,7 +460,9 @@ export async function checkOpenCodeUpstreamActivity(
         // Export failures are transient reads, not evidence that a thread was deleted.
         return undefined;
       }
-    },
-  );
+    }),
+    limit: OPENCODE_EXPORT_CONCURRENCY,
+    throwOnError: true,
+  });
   return outcomes.filter((outcome): outcome is SessionUpstreamActivity => outcome !== undefined);
 }

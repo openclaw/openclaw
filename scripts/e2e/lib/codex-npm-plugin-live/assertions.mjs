@@ -1,8 +1,14 @@
 // Assertions for Codex npm plugin live E2E scenarios.
-import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadBytesSql,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import {
   assertPathInside,
@@ -15,6 +21,8 @@ import {
   realPathMaybe,
   stateDir,
 } from "../codex-install-utils.mjs";
+import { assertCodexReleasePackageContract } from "../codex-release-package-assertions.mjs";
+import { inspectCodexAudit } from "./audit-inspection.mjs";
 
 const command = process.argv[2];
 const allowBetaCompatDiagnostics =
@@ -217,7 +225,7 @@ function readSessionEntry(sessionId) {
       const transcriptSummary = db
         .prepare(
           `SELECT COUNT(*) AS event_count,
-                  COALESCE(SUM(length(CAST(event_json AS BLOB))), 0) AS transcript_bytes
+                  COALESCE(SUM(${sqliteTranscriptPayloadBytesSql(db)}), 0) AS transcript_bytes
              FROM transcript_events
             WHERE session_id = ?`,
         )
@@ -241,7 +249,7 @@ function readSessionEntry(sessionId) {
       }
       const transcriptRows = db
         .prepare(
-          `SELECT event_json
+          `SELECT ${sqliteTranscriptPayloadColumns(db)}
              FROM transcript_events
             WHERE session_id = ?
             ORDER BY seq`,
@@ -249,16 +257,14 @@ function readSessionEntry(sessionId) {
         .all(sessionId);
       let transcriptBytes = 0;
       const transcriptEvents = transcriptRows.map((transcriptRow) => {
-        if (typeof transcriptRow.event_json !== "string") {
-          throw new Error(`invalid OpenClaw transcript event for ${sessionId}`);
-        }
-        transcriptBytes += Buffer.byteLength(transcriptRow.event_json);
+        const eventJson = readSqliteTranscriptPayload(transcriptRow);
+        transcriptBytes += Buffer.byteLength(eventJson);
         if (transcriptBytes > MAX_TRANSCRIPT_SCAN_BYTES) {
           throw new Error(
             `OpenClaw transcript exceeded ${MAX_TRANSCRIPT_SCAN_BYTES} bytes for ${sessionId}`,
           );
         }
-        return JSON.parse(transcriptRow.event_json);
+        return JSON.parse(eventJson);
       });
       const entry = JSON.parse(row.entry_json);
       return {
@@ -285,6 +291,19 @@ function configure() {
   const state = stateDir();
   const cfgPath = configPath();
   const cfg = fs.existsSync(cfgPath) ? readJson(cfgPath) : {};
+  if (process.env.OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY === "1") {
+    cfg.logging = {
+      ...cfg.logging,
+      audit: { ...cfg.logging?.audit, enabled: true, executionIdentity: true },
+    };
+    cfg.gateway = {
+      ...cfg.gateway,
+      mode: "local",
+      bind: "loopback",
+      port: 18789,
+      auth: { mode: "token", token: randomUUID() },
+    };
+  }
   cfg.plugins = {
     ...cfg.plugins,
     enabled: true,
@@ -447,7 +466,7 @@ function findCodexPackageJson(packageName) {
   return findPackageJson(packageName, [projectRoot, codexInstallPath(), managedNpmRoot()]);
 }
 
-function assertNpmDeps() {
+function assertNpmDeps(options = {}) {
   const npmRoot = managedNpmRoot();
   const installPath = codexInstallPath();
   const pluginPackageJson = path.join(installPath, "package.json");
@@ -466,13 +485,14 @@ function assertNpmDeps() {
   if (!openAiCodexPackageJson) {
     throw new Error("missing @openai/codex dependency under .openclaw/npm");
   }
-  assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
 
-  const bin = resolveCodexBin();
-  if (!fs.existsSync(bin)) {
-    throw new Error(`missing managed Codex binary: ${bin}`);
-  }
-  assertPathInside(npmRoot, bin, "managed Codex binary");
+  assertCodexReleasePackageContract({
+    pluginPackageJson,
+    codexPackageJson: openAiCodexPackageJson,
+    packageRoots: [codexNpmProjectRoot(), installPath, npmRoot],
+    managedRoot: npmRoot,
+    recordEvidence: options.recordEvidence,
+  });
 }
 
 function resolveCodexBin() {
@@ -505,7 +525,7 @@ function resolveCodexBin() {
 }
 
 function printCodexBin() {
-  assertNpmDeps();
+  assertNpmDeps({ recordEvidence: false });
   process.stdout.write(`${resolveCodexBin()}\n`);
 }
 
@@ -662,9 +682,9 @@ function assertFollowthroughTranscript({ transcriptEvents, progressMarker, compl
         call.text !== expected[index] ||
         call.args.action !== "send" ||
         // Extended-stable candidates can predate this optional Codex control.
-        // A successful ordered completion send is valid evidence; `false` is not.
+        // Current progress sends use `false`; completion may omit it or use `true`.
         (index === 0
-          ? call.args.final !== undefined
+          ? call.args.final !== undefined && call.args.final !== false
           : call.args.final !== undefined && call.args.final !== true),
     )
   ) {
@@ -814,6 +834,47 @@ function assertAgentTurn() {
   });
 }
 
+function assertAudit() {
+  const marker = process.argv[3];
+  if (!marker) {
+    throw new Error("assert-audit requires a private reply marker");
+  }
+  const cliPath = process.env.OPENCLAW_E2E_CLI_BIN;
+  if (!cliPath) {
+    throw new Error("assert-audit requires the installed OPENCLAW_E2E_CLI_BIN");
+  }
+  // CLI runs mint independent run ids. This fresh state contains exactly the three
+  // completed local turns; select retained identity keys, never session/route guesses.
+  const database = new DatabaseSync(path.join(stateDir(), "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  let selectors;
+  try {
+    selectors = database
+      .prepare(
+        "SELECT run_id AS runId, execution_id AS executionId, context_id AS contextId FROM execution_identity_contexts ORDER BY created_at, execution_id LIMIT 4",
+      )
+      .all();
+  } finally {
+    database.close();
+  }
+  const result = inspectCodexAudit({
+    selectors,
+    expectedExecutions: 3,
+    privateValues: [marker],
+    query: (args) =>
+      JSON.parse(
+        execFileSync(process.execPath, [cliPath, "audit", ...args, "--json"], {
+          encoding: "utf8",
+          timeout: 120_000,
+          maxBuffer: MAX_TEXT_FILE_BYTES,
+          stdio: ["ignore", "pipe", "pipe"],
+        }),
+      ),
+  });
+  console.log(`codex_audit_identity: ${JSON.stringify(result)}`);
+}
+
 function assertFollowthrough() {
   const progressMarker = process.argv[3];
   const completeMarker = process.argv[4];
@@ -906,9 +967,11 @@ function assertAgentError() {
     : "";
   const combined = `${stdout}\n${stderr}`;
   const expectedErrors = [
+    'Agent harness runtime "codex" is unavailable. (reason=owner-plugin-not-activatable, ownerPluginId=codex)',
     'Requested agent harness "codex" is not registered',
     "Unknown model: codex/",
     'Agent harness runtime "codex" is not present in the prepared registry.',
+    'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run.',
   ];
   if (!expectedErrors.some((message) => combined.includes(message))) {
     throw new Error(`unexpected post-uninstall agent error:\nstdout=${stdout}\nstderr=${stderr}`);
@@ -922,6 +985,7 @@ const commands = {
   "print-codex-bin": printCodexBin,
   "assert-preflight": assertPreflight,
   "assert-agent-turn": assertAgentTurn,
+  "assert-audit": assertAudit,
   "assert-followthrough": assertFollowthrough,
   "assert-uninstalled": assertUninstalled,
   "assert-agent-error": assertAgentError,

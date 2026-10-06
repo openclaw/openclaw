@@ -3,26 +3,46 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../../config/sessions/legacy-sqlite-marker.js";
+import { resolveSqliteSessionKey } from "../../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import {
-  listSessionEntriesCore,
-  loadSessionEntry,
-} from "../../../config/sessions/session-accessor.js";
+  readSessionEntrySummariesInWorker,
+  withSessionEntryReadOnlyInWorker,
+} from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
-type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 
-export function applyEmbeddedAttemptSessionIdentity(params: {
+export async function applyEmbeddedAttemptSessionIdentity(params: {
   sessionPromptState: Pick<
     SessionPromptState,
     "adoptSessionId" | "sessionFile" | "sessionId" | "sessionTarget"
   >;
   sessionFileUsed?: string;
   sessionIdUsed: string;
-}): void {
+  assertCurrent: () => void;
+}): Promise<void> {
   const { sessionPromptState, sessionFileUsed, sessionIdUsed } = params;
   const previousSessionId = sessionPromptState.sessionId;
+  const previousSessionFile = sessionPromptState.sessionFile;
+  const previousTarget = sessionPromptState.sessionTarget
+    ? { ...sessionPromptState.sessionTarget }
+    : undefined;
+  const assertCurrent = () => {
+    params.assertCurrent();
+    if (
+      sessionPromptState.sessionId !== previousSessionId ||
+      sessionPromptState.sessionFile !== previousSessionFile ||
+      sessionPromptState.sessionTarget?.agentId !== previousTarget?.agentId ||
+      sessionPromptState.sessionTarget?.sessionId !== previousTarget?.sessionId ||
+      sessionPromptState.sessionTarget?.sessionKey !== previousTarget?.sessionKey ||
+      sessionPromptState.sessionTarget?.storePath !== previousTarget?.storePath
+    ) {
+      throw new Error("Legacy context-engine successor target changed the active session binding");
+    }
+  };
+  assertCurrent();
   let adoptedSessionId = sessionIdUsed;
   const sessionFileChanged = Boolean(
     sessionFileUsed && sessionFileUsed !== sessionPromptState.sessionFile,
@@ -32,17 +52,18 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
     const marker = parseSqliteSessionFileMarker(sessionFileUsed);
     if (marker) {
       const retainedSessionKey = sessionPromptState.sessionTarget?.sessionKey;
-      const retainedEntry = retainedSessionKey
-        ? loadSessionEntry({
-            agentId: marker.agentId,
-            sessionKey: retainedSessionKey,
-            storePath: marker.storePath,
-          })
-        : undefined;
-      const markerMatches = listSessionEntriesCore({
+      const entries = await readSessionEntrySummariesInWorker({
         agentId: marker.agentId,
         storePath: marker.storePath,
-      }).filter(({ entry }) => entry.sessionId === marker.sessionId);
+      });
+      assertCurrent();
+      const retainedLookupKey = retainedSessionKey
+        ? resolveSqliteSessionKey(retainedSessionKey, marker.agentId)
+        : undefined;
+      const retainedEntry = entries.find(
+        ({ sessionKey }) => sessionKey === retainedLookupKey,
+      )?.entry;
+      const markerMatches = entries.filter(({ entry }) => entry.sessionId === marker.sessionId);
       const preferredMarkerSessionKey = resolvePreferredSessionKeyForSessionIdMatches(
         markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
         marker.sessionId,
@@ -74,11 +95,21 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
       sessionPromptState.sessionTarget &&
       resolveAgentIdFromSessionKey(sessionFileUsed) === sessionPromptState.sessionTarget.agentId
     ) {
-      const keyedEntry = loadSessionEntry({
-        agentId: sessionPromptState.sessionTarget.agentId,
-        sessionKey: sessionFileUsed,
-        storePath: sessionPromptState.sessionTarget.storePath,
-      });
+      const keyedEntry = await withSessionEntryReadOnlyInWorker(
+        {
+          agentId: sessionPromptState.sessionTarget.agentId,
+          sessionKey: sessionFileUsed,
+          storePath: sessionPromptState.sessionTarget.storePath,
+        },
+        assertCurrent,
+        async (read) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return read.value;
+        },
+      );
+      assertCurrent();
       if (!keyedEntry?.sessionId || keyedEntry.sessionId !== sessionIdUsed) {
         throw new Error("Legacy context-engine successor identity is inconsistent");
       }
@@ -114,6 +145,7 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
   ) {
     throw new Error("Legacy context-engine successor target changed the active session binding");
   }
+  assertCurrent();
   sessionPromptState.adoptSessionId(adoptedSessionId);
   if (sessionFileUsed && sessionFileChanged) {
     sessionPromptState.sessionFile = sessionFileUsed;

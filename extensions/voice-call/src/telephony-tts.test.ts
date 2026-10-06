@@ -35,7 +35,71 @@ function createRuntime(
   return { prepareTtsRequest, textToSpeechTelephony };
 }
 
+const createSynthesis = () =>
+  vi.fn(async () => ({
+    success: true,
+    audioBuffer: Buffer.alloc(2),
+    sampleRate: 8000,
+  }));
+
 describe("createTelephonyTtsProvider", () => {
+  it.each([
+    ["Azure", "raw-8khz-8bit-mono-mulaw"],
+    ["Gradium", "ulaw_8000"],
+  ])("passes through %s 8 kHz mu-law output", async (providerName, outputFormat) => {
+    const audioBuffer = Buffer.from([0x00, 0x7f, 0xff]);
+    const provider = await createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: createRuntime(async () => ({
+        success: true,
+        audioBuffer,
+        outputFormat,
+        sampleRate: 8_000,
+        provider: providerName.toLowerCase(),
+      })),
+    });
+
+    await expect(provider.synthesizeForTelephony("hello")).resolves.toBe(audioBuffer);
+  });
+
+  it("converts provider PCM output to 8 kHz mu-law", async () => {
+    const provider = await createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: createRuntime(async () => ({
+        success: true,
+        audioBuffer: Buffer.alloc(480 * 2),
+        outputFormat: "pcm",
+        sampleRate: 24_000,
+        provider: "openai",
+      })),
+    });
+
+    await expect(provider.synthesizeForTelephony("hello")).resolves.toEqual(
+      Buffer.alloc(160, 0xff),
+    );
+  });
+
+  it("rejects container output with provider context", async () => {
+    const outputFormat = "riff-8khz-8bit-mono-mulaw";
+    const sampleRate = 8_000;
+    const provider = await createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: createRuntime(async () => ({
+        success: true,
+        audioBuffer: Buffer.from("container"),
+        outputFormat,
+        sampleRate,
+        provider: "example-provider",
+      })),
+    });
+
+    const synthesis = provider.synthesizeForTelephony("hello");
+    await expect(synthesis).rejects.toMatchObject({
+      name: "UnsupportedTelephonyTtsOutputFormatError",
+      message: `Unsupported telephony TTS output format "${outputFormat}" from provider "example-provider"`,
+    });
+  });
+
   it("uses shared preparation for the surface override and request text", async () => {
     const effectiveConfig: OpenClawConfig = {
       tts: { provider: "openai", timeoutMs: 15_000 },
@@ -51,11 +115,7 @@ describe("createTelephonyTtsProvider", () => {
         },
       }),
     );
-    const textToSpeechTelephony = vi.fn(async () => ({
-      success: true,
-      audioBuffer: Buffer.alloc(2),
-      sampleRate: 8000,
-    }));
+    const textToSpeechTelephony = createSynthesis();
     const override: VoiceCallTtsConfig = { timeoutMs: 15_000 };
     const provider = await createTelephonyTtsProvider({
       coreConfig: createCoreConfig(),
@@ -104,11 +164,7 @@ describe("createTelephonyTtsProvider", () => {
   });
 
   it("uses prepared directive-stripped text for synthesis", async () => {
-    const textToSpeechTelephony = vi.fn(async () => ({
-      success: true,
-      audioBuffer: Buffer.alloc(2),
-      sampleRate: 8000,
-    }));
+    const textToSpeechTelephony = createSynthesis();
     const provider = await createTelephonyTtsProvider({
       coreConfig: createCoreConfig(),
       runtime: createRuntime(textToSpeechTelephony, async ({ cfg, text }) => ({
@@ -130,11 +186,7 @@ describe("createTelephonyTtsProvider", () => {
   });
 
   it("uses prepared hidden directive text and overrides for synthesis", async () => {
-    const textToSpeechTelephony = vi.fn(async () => ({
-      success: true,
-      audioBuffer: Buffer.alloc(2),
-      sampleRate: 8000,
-    }));
+    const textToSpeechTelephony = createSynthesis();
     const provider = await createTelephonyTtsProvider({
       coreConfig: createCoreConfig(),
       runtime: createRuntime(textToSpeechTelephony, async ({ cfg, text }) => ({
@@ -161,29 +213,12 @@ describe("createTelephonyTtsProvider", () => {
     );
   });
 
-  it("exposes configured timeoutMs as synthesisTimeoutMs", async () => {
-    const provider = await createTelephonyTtsProvider({
-      coreConfig: { tts: { provider: "openai", timeoutMs: 15000 } },
-      runtime: createRuntime(async () => ({
-        success: true,
-        audioBuffer: Buffer.alloc(2),
-        sampleRate: 8000,
-      })),
-    });
-
-    expect(provider.synthesisTimeoutMs).toBe(15000);
-  });
-
   it("clamps oversized configured timeoutMs", async () => {
     const provider = await createTelephonyTtsProvider({
       coreConfig: {
         tts: { provider: "openai", timeoutMs: Number.MAX_SAFE_INTEGER },
       },
-      runtime: createRuntime(async () => ({
-        success: true,
-        audioBuffer: Buffer.alloc(2),
-        sampleRate: 8000,
-      })),
+      runtime: createRuntime(createSynthesis()),
     });
 
     expect(provider.synthesisTimeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
@@ -192,11 +227,7 @@ describe("createTelephonyTtsProvider", () => {
   it("keeps the telephony timeout default when timeoutMs is not configured", async () => {
     const provider = await createTelephonyTtsProvider({
       coreConfig: createCoreConfig(),
-      runtime: createRuntime(async () => ({
-        success: true,
-        audioBuffer: Buffer.alloc(2),
-        sampleRate: 8000,
-      })),
+      runtime: createRuntime(createSynthesis()),
     });
 
     expect(provider.synthesisTimeoutMs).toBe(8000);

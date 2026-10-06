@@ -1,3 +1,6 @@
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
+import type { ThinkingLevelMap } from "../llm/types.js";
+
 /**
  * Provider-owned thinking policy input.
  *
@@ -12,7 +15,9 @@ export type ProviderThinkingPolicyContext = {
 
 type ProviderThinkingModelCompat = {
   thinkingFormat?: string;
+  supportsReasoningEffort?: boolean;
   supportedReasoningEfforts?: readonly string[] | null;
+  reasoningEffortMap?: Record<string, string>;
 };
 
 /**
@@ -31,21 +36,16 @@ export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext
   agentRuntime?: string | null;
   /** API adapter id from the selected catalog route, when known. */
   api?: string | null;
+  /** Base URL from the selected catalog route, when known. */
+  baseUrl?: string | null;
   reasoning?: boolean;
+  /** Thinking-to-wire mapping from the selected model route. */
+  thinkingLevelMap?: ThinkingLevelMap;
   params?: Record<string, unknown>;
   compat?: ProviderThinkingModelCompat | null;
 };
 
-type ProviderThinkingLevelId =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max"
-  | "ultra";
+type ProviderThinkingLevelId = ThinkLevel;
 
 type ProviderThinkingLevel = {
   id: ProviderThinkingLevelId;
@@ -72,3 +72,22 @@ export type ProviderThinkingProfile = {
    */
   preserveWhenCatalogReasoningFalse?: boolean;
 };
+
+/** Prepared provider policy ownership, without the broader Gateway registry contract. */
+export type ProviderThinkingRegistry = {
+  providers: ReadonlyArray<{
+    provider: {
+      id: string;
+      aliases?: string[];
+      hookAliases?: string[];
+      resolveThinkingProfile?: (
+        context: ProviderDefaultThinkingPolicyContext,
+      ) => ProviderThinkingProfile | null | undefined;
+    };
+  }>;
+};
+
+export type ProviderThinkingPolicySource =
+  | "active"
+  | "active-or-bundled"
+  | ProviderThinkingRegistry;

@@ -11,20 +11,24 @@ describe("plugin tool hook matchers", () => {
       "apply_patch",
       "exec",
     ]);
+    expect(normalizePluginToolMatcher(["read", "write", "edit"])).toEqual([
+      "edit",
+      "read",
+      "write",
+    ]);
     expect(pluginToolMatcherCoversTool(["exec"], "exec")).toBe(true);
     expect(pluginToolMatcherCoversTool(["exec"], "Bash")).toBe(false);
     expect(pluginToolMatcherCoversTool(["apply_patch"], "Write")).toBe(false);
+    expect(pluginToolMatcherCoversTool(["write"], "write")).toBe(true);
+    expect(pluginToolMatcherCoversTool(["edit"], "edit")).toBe(true);
     expect(pluginToolMatcherCoversTool(["spawn_agent"], "Agent")).toBe(false);
   });
 
-  it.each(["Bash", "exec_command", "apply-patch", "Write", "Edit", "Agent"])(
-    "rejects non-canonical provider spelling %s",
-    (toolName) => {
-      expect(() => normalizePluginToolMatcher([toolName])).toThrow(
-        "tool hook matcher entries must use canonical OpenClaw tool ids",
-      );
-    },
-  );
+  it.each(["Bash", "Write"])("rejects non-canonical provider spelling %s", (toolName) => {
+    expect(() => normalizePluginToolMatcher([toolName])).toThrow(
+      "tool hook matcher entries must use canonical OpenClaw tool ids",
+    );
+  });
 
   it("keeps only an omitted matcher as match-all", () => {
     expect(pluginToolMatcherCoversTool(undefined, "web_search")).toBe(true);

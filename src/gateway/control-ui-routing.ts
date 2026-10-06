@@ -1,4 +1,4 @@
-// Control UI route classifier for base-path and root-mounted SPA serving.
+import { resolvePluginDiscoveryIdentity } from "../plugins/catalog-discovery.js";
 import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-http-utils.js";
 import {
   classifyGatewayProbePath,
@@ -62,30 +62,26 @@ export function classifyControlUiRequest(params: {
     if (pathname === "/ui" || pathname.startsWith("/ui/")) {
       return { kind: "not-found" };
     }
-    // Keep probe namespaces outside the root SPA: exact paths reach the probe
-    // handler, while malformed variants must not look healthy by serving HTML.
-    if (classifyGatewayProbePath(pathname) !== "outside") {
+    // Reserve each owner's entire namespace, including malformed descendants,
+    // so the SPA cannot turn a failed probe, transfer, or upgrade into successful HTML.
+    if (
+      classifyGatewayProbePath(pathname) !== "outside" ||
+      classifyMcpAppStandalonePath(pathname) !== "outside" ||
+      classifyWorkerGatewayPath(pathname) !== "outside" ||
+      classifyNodeWorkspaceTransferPath(pathname) !== "outside"
+    ) {
       return { kind: "not-control-ui" };
     }
-    // The standalone host owns this namespace when enabled. When disabled or
-    // malformed, plugins may still claim it before the final Gateway 404.
-    if (classifyMcpAppStandalonePath(pathname) !== "outside") {
-      return { kind: "not-control-ui" };
-    }
-    // Worker admission is upgrade-only; never let the root SPA turn a plain GET
-    // or a malformed descendant into an apparently successful HTML response.
-    if (classifyWorkerGatewayPath(pathname) !== "outside") {
-      return { kind: "not-control-ui" };
-    }
-    // Node workspace transfers are authenticated core routes. Reserve malformed
-    // descendants too, so the SPA never turns a transfer failure into HTML.
-    if (classifyNodeWorkspaceTransferPath(pathname) !== "outside") {
-      return { kind: "not-control-ui" };
-    }
-    // Keep plugin-owned HTTP routes outside the root-mounted Control UI SPA
-    // fallback so untrusted plugins cannot claim arbitrary UI paths.
+    // Marketplace documents own the catalogue root and canonical generated catalog IDs.
+    // Other descendants and non-document requests remain plugin HTTP routes.
     if (pathname === "/plugins" || pathname.startsWith("/plugins/")) {
-      return { kind: "not-control-ui" };
+      const marketplaceDocument =
+        pathname === "/plugins" ||
+        pathname === "/plugins/" ||
+        resolvePluginDiscoveryIdentity(pathname.slice("/plugins/".length)) !== undefined;
+      if (!marketplaceDocument || !isReadHttpMethod(method) || !spaFallback) {
+        return { kind: "not-control-ui" };
+      }
     }
     if (pathname === "/api" || pathname.startsWith("/api/")) {
       return { kind: "not-control-ui" };

@@ -9,8 +9,11 @@ import {
 } from "../media-understanding/shared.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import { readProviderJsonResponse } from "./provider-http-errors.js";
-import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
+import {
+  createProviderErrorTextRedactor,
+  readProviderJsonResponse,
+} from "./provider-http-errors.js";
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
 import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
 
 type MinimaxBaseResp = {
@@ -36,13 +39,11 @@ export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
   return isMinimaxVlmProvider(provider) && modelId.trim() === "MiniMax-VL-01";
 }
 
-function isMinimaxCnProvider(provider: string | undefined): boolean {
-  const normalized = provider?.trim().toLowerCase();
-  return normalized === "minimax-cn" || normalized === "minimax-portal-cn";
-}
-
 function resolveDefaultApiHost(provider: string | undefined): string {
-  return isMinimaxCnProvider(provider) ? "https://api.minimaxi.com" : "https://api.minimax.io";
+  const normalized = provider?.trim().toLowerCase();
+  return normalized === "minimax-cn" || normalized === "minimax-portal-cn"
+    ? "https://api.minimaxi.com"
+    : "https://api.minimax.io";
 }
 
 function coerceApiHost(params: {
@@ -59,29 +60,16 @@ function coerceApiHost(params: {
     params.modelBaseUrl?.trim() ||
     defaultHost;
 
-  try {
-    const url = new URL(raw);
+  const url = URL.parse(raw);
+  if (url) {
     return url.origin;
-  } catch {
-    // Bare hosts are retried with https:// below; malformed absolute URLs fall
-    // back to provider defaults instead of sending requests to invalid endpoints.
   }
-
+  // Retry bare hosts only; malformed absolute URLs use the provider default.
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
     return defaultHost;
   }
 
-  try {
-    const url = new URL(`https://${raw}`);
-    return url.origin;
-  } catch {
-    return defaultHost;
-  }
-}
-
-function pickString(rec: Record<string, unknown>, key: string): string {
-  const v = rec[key];
-  return typeof v === "string" ? v : "";
+  return URL.parse(`https://${raw}`)?.origin ?? defaultHost;
 }
 
 export async function minimaxUnderstandImage(params: {
@@ -161,17 +149,26 @@ export async function minimaxUnderstandImage(params: {
     auditContext: "minimax-vlm",
   });
   const res = guarded.response;
+  const redactErrorText = createProviderErrorTextRedactor({
+    headers,
+    request: params.request,
+    defaultAuthHeader: "Authorization",
+    defaultAuthPrefix: "Bearer ",
+  });
 
   try {
-    const traceId = res.headers.get("Trace-Id") ?? "";
+    // All response fields below are provider-controlled and may reflect the
+    // authenticated request, so sanitize them before any error branch uses them.
+    const traceId = redactErrorText(res.headers.get("Trace-Id") ?? "");
     if (!res.ok) {
       const body = await readResponseBodySnippet(res, {
         maxBytes: MINIMAX_VLM_ERROR_BODY_MAX_BYTES,
         maxChars: MINIMAX_VLM_ERROR_BODY_MAX_CHARS,
+        redact: redactErrorText,
       });
       const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(
-        `MiniMax VLM request failed (${res.status} ${res.statusText}).${trace}${
+        `MiniMax VLM request failed (${res.status} ${redactErrorText(res.statusText)}).${trace}${
           body ? ` Body: ${body}` : ""
         }`,
       );
@@ -189,12 +186,12 @@ export async function minimaxUnderstandImage(params: {
     const baseResp = isRecord(json.base_resp) ? (json.base_resp as MinimaxBaseResp) : {};
     const code = typeof baseResp.status_code === "number" ? baseResp.status_code : -1;
     if (code !== 0) {
-      const msg = (baseResp.status_msg ?? "").trim();
+      const msg = redactErrorText((baseResp.status_msg ?? "").trim());
       const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(`MiniMax VLM API error (${code})${msg ? `: ${msg}` : ""}.${trace}`);
     }
 
-    const content = pickString(json, "content").trim();
+    const content = typeof json.content === "string" ? json.content.trim() : "";
     if (!content) {
       const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(`MiniMax VLM returned no content.${trace}`);

@@ -1,12 +1,9 @@
-// Diffs plugin module implements plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import {
-  resolvePreferredOpenClawTmpDir,
-  type OpenClawConfig,
-  type OpenClawPluginApi,
-} from "../api.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
@@ -25,6 +22,11 @@ const DIFF_ARTIFACT_MAX_BYTES_PER_ENTRY = 32 * 1024 * 1024;
 const DIFF_ARTIFACT_MAX_BYTES_PER_NAMESPACE = 256 * 1024 * 1024;
 
 export function registerDiffsPlugin(api: OpenClawPluginApi): void {
+  // CLI metadata has no runtime state, and this plugin exposes no CLI commands.
+  if (api.registrationMode === "cli-metadata") {
+    return;
+  }
+
   const store = new DiffArtifactStore({
     rootDir: path.join(resolvePreferredOpenClawTmpDir(), "openclaw-diffs"),
     blobStore: api.runtime.state.openBlobStore<DiffArtifactBlobMetadata>({
@@ -35,6 +37,11 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
       overflowPolicy: "reject-new",
     }),
     logger: api.logger,
+  });
+  api.registerService({
+    id: "diffs-artifact-cleanup",
+    start: () => store.startCleanup(),
+    stop: () => store.stopCleanup(),
   });
   const resolveCurrentPluginConfig = () =>
     resolveLivePluginConfigObject(
@@ -53,13 +60,16 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
       allowRealIpFallback: currentConfig.gateway?.allowRealIpFallback === true,
     };
   };
-  const initialAccessConfig = resolveCurrentAccessConfig();
 
   api.registerTool(
     (ctx) => {
       const pluginConfig = resolveCurrentPluginConfig();
       return createDiffsTool({
-        api,
+        getConfig: () =>
+          (ctx.getRuntimeConfig?.() ??
+            ctx.runtimeConfig ??
+            ctx.config ??
+            api.runtime.config.current()) as OpenClawConfig, // SAFETY: The tool only reads this immutable runtime snapshot.
         store,
         defaults: resolveDiffsPluginDefaults(pluginConfig),
         viewerBaseUrl: resolveDiffsPluginViewerBaseUrl(pluginConfig),
@@ -78,9 +88,6 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     handler: createDiffsHttpHandler({
       store,
       logger: api.logger,
-      allowRemoteViewer: initialAccessConfig.allowRemoteViewer,
-      trustedProxies: initialAccessConfig.trustedProxies,
-      allowRealIpFallback: initialAccessConfig.allowRealIpFallback,
       resolveAccessConfig: resolveCurrentAccessConfig,
     }),
   });

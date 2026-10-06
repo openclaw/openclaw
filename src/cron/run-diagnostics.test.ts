@@ -209,6 +209,145 @@ describe("cron run diagnostics", () => {
     });
   });
 
+  it("warns on an unresolved exec call even when the assistant replied normally", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "RESULT: the command did not run" }],
+        meta: {
+          toolSummary: {
+            calls: 1,
+            tools: ["exec"],
+            failures: 1,
+            unresolvedError: { toolName: "exec" },
+          },
+        },
+      },
+      { nowMs: () => 123, finalStatus: "ok" },
+    );
+
+    expect(diagnostics).toEqual({
+      summary: "exec tool failed",
+      entries: [
+        {
+          ts: 123,
+          source: "exec",
+          severity: "warn",
+          message: "exec tool failed",
+          toolName: "exec",
+        },
+      ],
+    });
+  });
+
+  it("does not duplicate a recorded exec error or report unrelated tools", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "exec parameter invalid", isError: true, toolName: "exec" }],
+        meta: {
+          toolSummary: { unresolvedError: { toolName: "exec" } },
+        },
+      },
+      { nowMs: () => 123, finalStatus: "ok" },
+    );
+    expect(diagnostics?.entries).toHaveLength(1);
+    expect(
+      createCronRunDiagnosticsFromAgentResult({
+        meta: { toolSummary: { unresolvedError: { toolName: "read" } } },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("prefers a terminal tool failure over a generic failed-tool payload", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "⚠️ Exec failed", isError: true, toolName: "exec" }],
+        meta: {
+          terminalToolFailure: {
+            source: "tool",
+            toolName: "exec",
+            code: "UNKNOWN_TOOL_ID",
+          },
+        },
+      },
+      { nowMs: () => 123 },
+    );
+
+    expect(diagnostics?.summary).toBe("Code Mode could not resolve a configured MCP tool.");
+    expect(diagnostics?.entries).toEqual([
+      {
+        ts: 123,
+        source: "tool",
+        severity: "error",
+        message: "⚠️ Exec failed",
+        toolName: "exec",
+      },
+      {
+        ts: 123,
+        source: "tool",
+        severity: "error",
+        message: "Code Mode could not resolve a configured MCP tool.",
+        toolName: "exec",
+      },
+    ]);
+  });
+
+  it("downgrades a recovered terminal tool failure to a warning", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        meta: {
+          terminalToolFailure: {
+            source: "tool",
+            toolName: "exec",
+            code: "UNKNOWN_TOOL_ID",
+          },
+        },
+      },
+      { nowMs: () => 123, finalStatus: "ok" },
+    );
+
+    expect(diagnostics).toEqual({
+      summary: "Code Mode could not resolve a configured MCP tool.",
+      entries: [
+        {
+          ts: 123,
+          source: "tool",
+          severity: "warn",
+          message: "Code Mode could not resolve a configured MCP tool.",
+          toolName: "exec",
+        },
+      ],
+    });
+  });
+
+  it("reconstructs a safe diagnostic from terminal tool metadata", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        meta: {
+          terminalToolFailure: {
+            source: "tool",
+            toolName: "exec",
+            code: "UNKNOWN_TOOL_ID",
+            message: "private-path /home/operator/.config/token",
+          },
+        },
+      },
+      { nowMs: () => 123 },
+    );
+
+    expect(diagnostics).toEqual({
+      summary: "Code Mode could not resolve a configured MCP tool.",
+      entries: [
+        {
+          ts: 123,
+          source: "tool",
+          severity: "error",
+          message: "Code Mode could not resolve a configured MCP tool.",
+          toolName: "exec",
+        },
+      ],
+    });
+  });
+
   it("keeps failed exec output tails valid at UTF-16 boundaries", () => {
     const diagnostics = createCronRunDiagnosticsFromAgentResult(
       {

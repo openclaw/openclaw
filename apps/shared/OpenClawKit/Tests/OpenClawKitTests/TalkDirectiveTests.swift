@@ -1,7 +1,36 @@
+import Foundation
 import XCTest
 @testable import OpenClawKit
 
 final class TalkDirectiveTests: XCTestCase {
+    func testResolvesNormalizedVoiceAliases() {
+        let aliases = TalkVoiceAliases.normalizedMap(AnyCodable([
+            " Reader ": " Short-ID ", "longalias1": "mapped", "zero": "0",
+            "blank": " ", " ": "ignored", "bool": false,
+            "number": NSNumber(value: 0), "null": NSNull(),
+        ]))
+
+        XCTAssertEqual(aliases, ["reader": "Short-ID", "longalias1": "mapped", "zero": "0"])
+        XCTAssertEqual(TalkVoiceAliases.resolve(" READER ", aliases: aliases), "Short-ID")
+        XCTAssertEqual(TalkVoiceAliases.resolve("short-id", aliases: aliases), "short-id")
+        XCTAssertEqual(TalkVoiceAliases.resolve("longalias1", aliases: aliases), "mapped")
+        XCTAssertEqual(TalkVoiceAliases.resolve("abcdefghij", aliases: aliases), "abcdefghij")
+        XCTAssertNil(TalkVoiceAliases.resolve("unknown", aliases: aliases))
+        XCTAssertNil(TalkVoiceAliases.resolve(nil, aliases: aliases))
+    }
+
+    func testVoiceIDsPreserveUnicodeCharacterSemantics() {
+        for voice in [
+            "声声声声声声声声声声", "١٢٣٤٥٦٧٨٩٠", "abc_def-01",
+            String(repeating: "e\u{301}", count: 10),
+        ] {
+            XCTAssertEqual(TalkVoiceAliases.resolve(voice, aliases: [:]), voice)
+        }
+        for voice in ["abcdefghi", String(repeating: "e\u{301}", count: 9), "abc def012", "😀😀😀😀😀😀😀😀😀😀"] {
+            XCTAssertNil(TalkVoiceAliases.resolve(voice, aliases: [:]))
+        }
+    }
+
     func testParsesDirectiveAndStripsLine() {
         let text = """
         {"voice":"abc123","once":true}
@@ -60,6 +89,19 @@ final class TalkDirectiveTests: XCTestCase {
         let result = TalkDirectiveParser.parse(text)
         XCTAssertEqual(result.directive?.voiceId, "abc123")
         XCTAssertEqual(result.stripped, "Hello there.")
+    }
+
+    func testIntegerOptionsIgnoreOverflowAndPreserveTruncation() {
+        for number in ["1e100", "-1e100"] {
+            let result = TalkDirectiveParser.parse(
+                "{\"voice\":\"abc123\",\"seed\":\(number),\"rate\":\(number),\"latency\":\(number)}\nHello.")
+            XCTAssertEqual(result.directive, TalkDirective(voiceId: "abc123"))
+            XCTAssertEqual(result.stripped, "Hello.")
+        }
+
+        let result = TalkDirectiveParser.parse("{\"seed\":-123.9,\"rate\":200.9,\"latency\":1.9}\nHello.")
+        XCTAssertEqual(result.directive, TalkDirective(rateWPM: 200, seed: -123, latencyTier: 1))
+        XCTAssertEqual(result.stripped, "Hello.")
     }
 
     func testTracksUnknownKeys() {

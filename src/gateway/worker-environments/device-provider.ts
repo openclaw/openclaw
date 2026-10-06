@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { hasEffectivePairedDeviceRole } from "../../infra/device-pairing.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
+  formatNodeRunnerInventoryIssue,
+  type NodeRunnerInventoryIssue,
+} from "../../infra/node-runner-inventory.js";
+import {
   WorkerProviderError,
   type WorkerProfile,
   type WorkerProvider,
@@ -10,9 +14,11 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { workerInferencePlacement } from "./inference-placement.js";
 import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
 
-export const DEVICE_WORKER_PROVIDER_ID = "device";
+export { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 const DEVICE_WORKER_DORMANCY_MS = 14 * 24 * 60 * 60 * 1_000;
 
 type DeviceWorkerRuntimeOptions = {
@@ -20,24 +26,48 @@ type DeviceWorkerRuntimeOptions = {
   now?: () => number;
 };
 
-type DeviceWorkerAvailability = (deviceId: string) => Promise<boolean>;
+export type DeviceWorkerAvailability = {
+  available: boolean;
+  node?: NodeWorkerSupervisorNodeProof;
+  issue?: NodeRunnerInventoryIssue;
+  unavailableReason?: "unpaired" | "disconnected" | "hosting-unavailable" | "at-capacity";
+};
+type DeviceWorkerAvailabilityResolver = (deviceId: string) => Promise<DeviceWorkerAvailability>;
 type DeviceWorkerReconciliation = (deviceId: string) => Promise<readonly string[]>;
-const DEVICE_WORKER_AVAILABILITY = new WeakMap<object, DeviceWorkerAvailability>();
+const DEVICE_WORKER_AVAILABILITY = new WeakMap<object, DeviceWorkerAvailabilityResolver>();
 const DEVICE_WORKER_RECONCILIATION = new WeakMap<object, DeviceWorkerReconciliation>();
 
 export function bindDeviceWorkerAvailability(
   service: object,
-  isAvailable: DeviceWorkerAvailability,
+  resolveAvailability: DeviceWorkerAvailabilityResolver,
 ): void {
-  DEVICE_WORKER_AVAILABILITY.set(service, isAvailable);
+  DEVICE_WORKER_AVAILABILITY.set(service, resolveAvailability);
 }
 
-export async function isDeviceWorkerAvailable(
+export async function resolveDeviceWorkerAvailability(
   service: object | undefined,
   deviceId: string,
-): Promise<boolean> {
-  const isAvailable = service ? DEVICE_WORKER_AVAILABILITY.get(service) : undefined;
-  return isAvailable ? await isAvailable(deviceId) : false;
+): Promise<DeviceWorkerAvailability> {
+  const resolveAvailability = service ? DEVICE_WORKER_AVAILABILITY.get(service) : undefined;
+  return resolveAvailability ? await resolveAvailability(deviceId) : { available: false };
+}
+
+export function deviceUnavailableText(deviceId: string, availability: DeviceWorkerAvailability) {
+  if (availability.issue) {
+    return formatNodeRunnerInventoryIssue(deviceId, availability.issue);
+  }
+  switch (availability.unavailableReason) {
+    case "unpaired":
+      return `device worker is not a paired node host: ${deviceId}`;
+    case "disconnected":
+      return `device worker node is not connected: ${deviceId}; reconnect it before retrying`;
+    case "hosting-unavailable":
+      return `device node ${deviceId} is connected but cannot host sessions; enable session hosting (nodeHost.workerRuns.enabled), update the node if needed, then reconnect it`;
+    case "at-capacity":
+      return `device worker is at capacity (all worker slots in use): ${deviceId}; stop an existing worker environment or retry when a slot is free`;
+    default:
+      return `device worker availability is unknown: ${deviceId}; verify the node host is paired and connected, then retry`;
+  }
 }
 
 export function bindDeviceWorkerReconciliation(
@@ -56,15 +86,15 @@ export async function reconcileDeviceWorker(
 }
 
 function requireDeviceId(profile: WorkerProfile): string {
+  workerInferencePlacement({
+    providerId: DEVICE_WORKER_PROVIDER_ID,
+    profileSnapshot: { settings: profile },
+  });
   const deviceId = profile.device;
   if (typeof deviceId !== "string" || !deviceId.trim()) {
     throw new WorkerProviderError("device worker profile requires a device setting");
   }
   return deviceId.trim();
-}
-
-function isSessionCapableNode(node: NodeWorkerSupervisorNodeProof): boolean {
-  return node.workerRuns !== undefined;
 }
 
 function hasPairedNodeRole(device: PairedDevice | null): device is PairedDevice {
@@ -89,33 +119,54 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
   const now = options.now ?? Date.now;
   let nodeTransport: NodeWorkerSupervisorTransport | undefined;
   const launchAdapter = createNodeWorkerLaunchAdapter({ getTransport: () => nodeTransport });
-  const findConnectedNode = async (deviceId: string) =>
-    (await nodeTransport?.listCurrentNodes())?.find((node) => node.nodeId === deviceId);
-  const findAvailableNode = async (deviceId: string) => {
-    const node = await findConnectedNode(deviceId);
-    return node && isSessionCapableNode(node) ? node : undefined;
-  };
-  const isAvailable = async (deviceId: string) => {
+  const resolveAvailability = async (deviceId: string): Promise<DeviceWorkerAvailability> => {
     const [paired, connected] = await Promise.all([
       options.getPairedDevice(deviceId),
-      findAvailableNode(deviceId),
+      nodeTransport?.getCurrentNode(deviceId),
     ]);
-    return hasPairedNodeRole(paired) && Boolean(connected);
+    const current = connected && nodeTransport?.isCurrent(connected) ? connected : undefined;
+    // Transport availability is runtime-neutral; only worker-turn placement consumes a slot.
+    const unavailableReason = !hasPairedNodeRole(paired)
+      ? "unpaired"
+      : !current
+        ? nodeTransport?.isConnected?.(deviceId)
+          ? "hosting-unavailable"
+          : "disconnected"
+        : undefined;
+    const issue = nodeTransport?.getIssue?.(deviceId);
+    return {
+      available: unavailableReason === undefined,
+      ...(unavailableReason === undefined && current ? { node: current } : {}),
+      ...(issue ? { issue } : {}),
+      ...(unavailableReason ? { unavailableReason } : {}),
+    };
   };
   const provider: WorkerProvider = {
     id: DEVICE_WORKER_PROVIDER_ID,
+    supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
-    provision: async (profile, operationId) => {
-      const deviceId = requireDeviceId(profile);
-      if (!(await isAvailable(deviceId))) {
+    resolveAllocation: async (profile, operationId) => ({
+      leaseId: deviceLeaseId(requireDeviceId(profile), operationId),
+      sharedHost: true,
+    }),
+    provision: async (profile, operationId, provisionOptions) => {
+      if (!provisionOptions?.assertCurrent) {
         throw new WorkerProviderError(
-          `device worker is not a connected session-capable paired node: ${deviceId}`,
+          "Device provisioning requires current Gateway allocation authority",
         );
       }
+      provisionOptions.assertCurrent();
+      const deviceId = requireDeviceId(profile);
+      const availability = await resolveAvailability(deviceId);
+      provisionOptions.assertCurrent();
+      if (!availability.available) {
+        throw new WorkerProviderError(deviceUnavailableText(deviceId, availability));
+      }
+      const allocation = await provider.resolveAllocation(profile, operationId);
+      provisionOptions.assertCurrent();
       return {
-        leaseId: deviceLeaseId(deviceId, operationId),
+        ...allocation,
         node: { deviceId },
-        sharedHost: true,
       };
     },
     inspect: async ({ profile }) => {
@@ -124,7 +175,7 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       if (!hasPairedNodeRole(paired)) {
         return { status: "unknown" };
       }
-      const connected = await findConnectedNode(deviceId);
+      const connected = await nodeTransport?.getCurrentNode(deviceId);
       if (connected) {
         return { status: "active", sharedHost: true };
       }
@@ -135,13 +186,9 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
 
   return {
     provider,
-    isAvailable,
+    resolveAvailability,
     launchNodeWorker: launchAdapter.launch,
     getNodeTransport: () => nodeTransport,
-    // Provisioning reads the node-advertised local-install build through the
-    // runtime so node lookups keep one owner; absent means not connected or
-    // not session-capable, and the caller fails provisioning closed.
-    resolveWorkerBuild: async (deviceId: string) => (await findAvailableNode(deviceId))?.workerRuns,
     bindNodeTransport: (transport: NodeWorkerSupervisorTransport) => {
       nodeTransport = transport;
     },

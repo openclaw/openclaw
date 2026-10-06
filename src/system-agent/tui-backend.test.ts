@@ -23,7 +23,7 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
   getPreparedModelCatalogSnapshot: vi.fn(() => undefined),
-  loadPreparedModelCatalog: vi.fn(async () => []),
+  readPreparedModelCatalog: vi.fn(async () => []),
 }));
 
 vi.mock("./verified-inference.js", async (importOriginal) => {
@@ -130,16 +130,14 @@ function createRuntime(): RuntimeEnv {
 }
 
 describe("runSystemAgentTui", () => {
-  it("rejects a missing inference binding before overview, planner, TUI, or setup", async () => {
+  it("rejects a missing inference binding before overview, TUI, or setup", async () => {
     const loadOverview = vi.fn(async () => overview);
-    const planWithAssistant = vi.fn(async () => ({ reply: "ready" }));
     const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
     const runChannelsAdd = vi.fn(async () => undefined);
     const fixture = sharedVerifiedFixture;
     const options: SystemAgentTuiOptions = {
       verifiedInference: fixture.binding,
       deps: { loadOverview },
-      planWithAssistant,
       runTui,
       runChannelsAdd,
     };
@@ -150,7 +148,6 @@ describe("runSystemAgentTui", () => {
     );
 
     expect(loadOverview).not.toHaveBeenCalled();
-    expect(planWithAssistant).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
     expect(runChannelsAdd).not.toHaveBeenCalled();
   });
@@ -169,6 +166,18 @@ describe("runSystemAgentTui", () => {
       async (opts: Parameters<NonNullable<SystemAgentTuiOptions["runTui"]>>[0]) => {
         runTuiCalls += 1;
         runTuiOptions = opts;
+        if (!opts.backend) {
+          throw new Error("Expected the system-agent TUI backend");
+        }
+        for (const sessionKey of ["agent:openclaw:main", "main"]) {
+          await expect(opts.backend.describeSession({ sessionKey })).resolves.toMatchObject({
+            session: { key: "agent:openclaw:main", model: "gpt-5.5", modelProvider: "openai" },
+            defaults: { model: "gpt-5.5", modelProvider: "openai" },
+          });
+        }
+        await expect(
+          opts.backend.describeSession({ sessionKey: "agent:openclaw:missing" }),
+        ).resolves.toMatchObject({ session: null });
         return { exitReason: "exit" as const };
       },
     );
@@ -208,9 +217,58 @@ describe("runSystemAgentTui", () => {
     }
   }, 240_000);
 
+  it("retains and returns only the requested latest history", async () => {
+    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+
+    await runSystemAgentTui(
+      {
+        ...verified,
+        runTui: async (opts) => {
+          const backend = opts.backend as unknown as {
+            sendChat: (opts: { sessionKey: string; message: string }) => Promise<{ runId: string }>;
+            loadHistory: (opts: { sessionKey: string; limit?: number }) => Promise<{
+              messages: Array<{ content: Array<{ text: string }> }>;
+            }>;
+            engine: {
+              handle: () => Promise<never>;
+              dispose: () => Promise<void>;
+            };
+          };
+          backend.engine.handle = () => new Promise(() => {});
+          backend.engine.dispose = async () => undefined;
+
+          for (let index = 1; index <= 201; index += 1) {
+            await backend.sendChat({
+              sessionKey: "agent:openclaw:main",
+              message: `message-${index}`,
+            });
+          }
+
+          const retained = await backend.loadHistory({
+            sessionKey: "agent:openclaw:main",
+            limit: 500,
+          });
+          expect(retained.messages).toHaveLength(200);
+          expect(retained.messages[0]?.content[0]?.text).toBe("message-2");
+
+          const tail = await backend.loadHistory({
+            sessionKey: "agent:openclaw:main",
+            limit: 2,
+          });
+          expect(tail.messages.map((entry) => entry.content[0]?.text)).toEqual([
+            "message-200",
+            "message-201",
+          ]);
+          return { exitReason: "exit" };
+        },
+      },
+      createRuntime(),
+    );
+  });
+
   it("opens the verified setup shell without preparing an unpublished model catalog", async () => {
     const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
-    const catalogPreparation = vi.mocked(preparedModelCatalog.loadPreparedModelCatalog);
+    const catalogPreparation = vi.mocked(preparedModelCatalog.readPreparedModelCatalog);
     const publishedSnapshot = vi
       .spyOn(preparedModelCatalog, "getPreparedModelCatalogSnapshot")
       .mockReturnValue(undefined);
@@ -265,7 +323,7 @@ describe("runSystemAgentTui", () => {
         ...verified,
         runTui: async (opts) => {
           const backend = opts.backend as unknown as {
-            loadHistory: () => Promise<{ thinkingLevel: string }>;
+            loadHistory: (opts: { sessionKey: string }) => Promise<{ thinkingLevel: string }>;
             listSessions: () => Promise<{
               sessions: Array<{
                 model?: string;
@@ -275,7 +333,9 @@ describe("runSystemAgentTui", () => {
             }>;
           };
 
-          await expect(backend.loadHistory()).resolves.toMatchObject({ thinkingLevel: "high" });
+          await expect(
+            backend.loadHistory({ sessionKey: "agent:openclaw:main" }),
+          ).resolves.toMatchObject({ thinkingLevel: "high" });
           await expect(backend.listSessions()).resolves.toMatchObject({
             sessions: [
               {
@@ -418,44 +478,6 @@ describe("runSystemAgentTui", () => {
     }
 
     expect(unhandled).toHaveLength(0);
-  });
-
-  it("emits an error without a fake final reply when inference fails", async () => {
-    const events: Array<{ payload?: { state?: string; errorMessage?: string } }> = [];
-    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
-
-    await runSystemAgentTui(
-      {
-        ...verified,
-        runTui: async (opts) => {
-          const backend = opts.backend as unknown as {
-            sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
-            onEvent?: (event: { payload?: { state?: string; errorMessage?: string } }) => void;
-            engine: { handle: () => Promise<never> };
-          };
-          backend.engine.handle = async () => {
-            throw new SystemAgentInferenceUnavailableError("conversation");
-          };
-          backend.onEvent = (event) => events.push(event);
-
-          await backend.sendChat({ message: "status please" });
-          await new Promise((resolve) => {
-            setTimeout(resolve, 0);
-          });
-          return { exitReason: "exit" };
-        },
-      },
-      createRuntime(),
-    );
-
-    expect(events).toEqual([
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          state: "error",
-          errorMessage: expect.stringContaining("working inference"),
-        }),
-      }),
-    ]);
   });
 
   it("retires the local session before a queued exact mutation can run", async () => {

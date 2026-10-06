@@ -1,4 +1,3 @@
-// Stores active plugin channel registry state for the current runtime.
 import type { ActivePluginChannelRegistry } from "./channel-registry-state.types.js";
 import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 
@@ -37,9 +36,4 @@ export function getActivePluginChannelRegistrySnapshotFromState(): ActivePluginC
 /** Returns the active plugin channel registry from global runtime state. */
 export function getActivePluginChannelRegistryFromState(): ActivePluginChannelRegistry | null {
   return getActivePluginChannelRegistrySnapshotFromState().registry;
-}
-
-/** Returns the active plugin channel registry version from global runtime state. */
-export function getActivePluginChannelRegistryVersionFromState(): number {
-  return getActivePluginChannelRegistrySnapshotFromState().version;
 }

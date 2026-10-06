@@ -89,8 +89,14 @@ internal fun isLocalCleartextGatewayHost(
 
   val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return false
   return when {
-    address.isLinkLocalAddress -> true
-    address.isSiteLocalAddress -> true
+    address.isLinkLocalAddress -> {
+      true
+    }
+
+    address.isSiteLocalAddress -> {
+      true
+    }
+
     else -> {
       val bytes = address.address
       bytes.size == 16 && (bytes[0].toInt() and 0xfe) == 0xfc
@@ -134,11 +140,10 @@ private fun isMdnsLocalHostname(host: String): Boolean {
   if (host.length > 253) return false
   if (!host.endsWith(".local")) return false
   val labels = host.split('.')
-  if (labels.size < 2 || labels.last() != "local") return false
   return labels.dropLast(1).all(::isDnsHostnameLabel)
 }
 
-private fun isDnsHostnameLabel(label: String): Boolean {
+internal fun isDnsHostnameLabel(label: String): Boolean {
   if (label.isEmpty() || label.length > 63) return false
   if (label.first() == '-' || label.last() == '-') return false
   return label.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }

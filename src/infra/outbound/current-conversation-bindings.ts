@@ -2,208 +2,172 @@
 // session links for plugin channels without a custom binding adapter.
 import {
   asDateTimestampMs,
-  isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeConversationText } from "../../acp/conversation-id.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
-import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import {
+  getActivePluginChannelRegistryFromState,
+  getActivePluginChannelRegistrySnapshotFromState,
+} from "../../plugins/runtime-channel-state.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
-import { normalizeConversationRef } from "./session-binding-normalization.js";
+import { createSqliteWorkerWriteAdmission } from "../sqlite-worker-store.js";
+import {
+  CURRENT_BINDINGS_ID_PREFIX,
+  buildBindingId,
+  bindingRowsToRecords,
+  isBindingExpired,
+  deleteCurrentConversationBindingRow,
+  listCurrentConversationBindingRowsBySession,
+  readCurrentConversationBindingListInDatabase,
+  pruneCurrentConversationBindingListInTransaction,
+  updateCurrentConversationBindingRecordInDatabase,
+  inspectCurrentConversationBindingRecordInDatabase,
+  readCurrentConversationBindingResolutionInDatabase,
+  type CurrentConversationBindingScope,
+} from "./current-conversation-bindings.kernel.js";
+import type { CurrentConversationBindingTouch } from "./current-conversation-bindings.worker-contract.js";
+import { SessionBindingError } from "./session-binding-errors.js";
+import {
+  buildChannelAccountKey,
+  captureConversationRef,
+  normalizeConversationRef,
+} from "./session-binding-normalization.js";
 import type {
   ConversationRef,
   SessionBindingBindInput,
   SessionBindingCapabilities,
   SessionBindingRecord,
+  SessionBindingScope,
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
-const CURRENT_BINDINGS_ID_PREFIX = "generic:";
-const CURRENT_BINDING_CONVERSATION_KIND = "current";
-
-type CurrentConversationBindingDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "current_conversation_bindings"
->;
-
-type CurrentConversationBindingsState = {
-  loaded: boolean;
-  byConversationKey: Map<string, SessionBindingRecord>;
-};
-
-const currentConversationBindingsState = resolveGlobalSingleton<CurrentConversationBindingsState>(
-  Symbol.for("openclaw.currentConversationBindings"),
-  () => ({ loaded: false, byConversationKey: new Map() }),
-  (state) => {
-    state.loaded = false;
-    state.byConversationKey.clear();
-  },
-);
-
-function buildConversationKey(ref: ConversationRef): string {
-  const normalized = normalizeConversationRef(ref);
-  return [
-    normalized.channel,
-    normalized.accountId,
-    normalized.parentConversationId ?? "",
-    normalized.conversationId,
-  ].join("\u241f");
-}
-
-function buildBindingId(ref: ConversationRef): string {
-  return `${CURRENT_BINDINGS_ID_PREFIX}${buildConversationKey(ref)}`;
-}
-
-function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boolean {
-  if (record.expiresAt === undefined) {
-    return false;
-  }
-  const expiresAt = asDateTimestampMs(record.expiresAt);
-  if (expiresAt === undefined) {
-    return true;
-  }
-  const nowMs = asDateTimestampMs(now);
-  return nowMs !== undefined && !isFutureDateTimestampMs(expiresAt, { nowMs });
-}
-
-function normalizePersistedBindingRecord(
-  record: SessionBindingRecord,
-): SessionBindingRecord | null {
-  if (!record?.bindingId || !record?.conversation?.conversationId || isBindingExpired(record)) {
-    return null;
-  }
-  const conversation = normalizeConversationRef(record.conversation);
-  const targetSessionKey = record.targetSessionKey?.trim() ?? "";
-  if (!targetSessionKey) {
-    return null;
-  }
-  return {
-    ...record,
-    bindingId: buildBindingId(conversation),
-    targetSessionKey,
-    conversation,
-  };
-}
-
-function openBindingDatabase() {
-  return openOpenClawStateDatabase();
-}
-
-function bindingRowsToRecords(rows: Array<{ record_json: string }>): SessionBindingRecord[] {
-  return rows.flatMap((row) => {
-    try {
-      const parsed = JSON.parse(row.record_json) as SessionBindingRecord;
-      const normalized = normalizePersistedBindingRecord(parsed);
-      return normalized ? [normalized] : [];
-    } catch {
-      return [];
-    }
-  });
-}
-
-function readPersistedBindings(): SessionBindingRecord[] {
-  const database = openBindingDatabase();
-  const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(database.db);
-  const now = Date.now();
-  executeSqliteQuerySync(
-    database.db,
-    bindingDb
-      .deleteFrom("current_conversation_bindings")
-      .where("expires_at", "is not", null)
-      .where("expires_at", "<=", now),
+/** Updates one binding from its currently committed row in one synchronous transaction. */
+export function updateCurrentConversationBindingRecord(
+  ref: ConversationRef,
+  update: (current: SessionBindingRecord | null) => SessionBindingRecord | null,
+): { previous: SessionBindingRecord | null; current: SessionBindingRecord | null } {
+  const conversation = normalizeConversationRef(ref);
+  return runOpenClawStateWriteTransaction(({ db }) =>
+    updateCurrentConversationBindingRecordInDatabase(db, conversation, update),
   );
-  const rows = executeSqliteQuerySync(
-    database.db,
-    bindingDb
-      .selectFrom("current_conversation_bindings")
-      .select(["record_json"])
-      .orderBy("binding_id", "asc"),
-  ).rows;
-  return bindingRowsToRecords(rows);
 }
 
-function targetAgentIdForSessionKey(targetSessionKey: string): string {
-  return resolveAgentIdFromSessionKey(targetSessionKey);
+/** Selects the current row without pruning expiry or rewriting legacy keys. */
+export function inspectCurrentConversationBindingRecord(
+  ref: ConversationRef,
+): SessionBindingRecord | null {
+  const conversation = normalizeConversationRef(ref);
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
+      inspectCurrentConversationBindingRecordInDatabase(db, conversation),
+    ) ?? null
+  );
 }
 
-function writePersistedBindings(nextBindings: ReadonlyMap<string, SessionBindingRecord>): void {
-  const records = [...nextBindings.values()]
-    .filter((record) => !isBindingExpired(record))
-    .toSorted((a, b) => a.bindingId.localeCompare(b.bindingId));
-  const updatedAt = Date.now();
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
-    executeSqliteQuerySync(db, bindingDb.deleteFrom("current_conversation_bindings"));
-    if (records.length === 0) {
-      return;
-    }
-    executeSqliteQuerySync(
+/** Reads the latest durable binding and prunes only the exact expired conversation row. */
+export function resolveCurrentConversationBindingRecord(
+  ref: ConversationRef,
+): SessionBindingRecord | null {
+  const { db } = openOpenClawStateDatabase();
+  const conversation = normalizeConversationRef(ref);
+  const result = readCurrentConversationBindingResolutionInDatabase(db, conversation);
+  return result.repair
+    ? updateCurrentConversationBindingRecord(conversation, (current) => current).current
+    : result.record;
+}
+
+/** Lists latest durable bindings using the exact target key and optional account scope. */
+export function listCurrentConversationBindingRecordsBySession(
+  targetSessionKey: string,
+  scope?: CurrentConversationBindingScope,
+): SessionBindingRecord[] {
+  const { db } = openOpenClawStateDatabase();
+  const prepared = readCurrentConversationBindingListInDatabase(db, targetSessionKey, scope);
+  return prepared.requiresPrune
+    ? runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
+        pruneCurrentConversationBindingListInTransaction(transactionDb, targetSessionKey, scope),
+      )
+    : prepared.records;
+}
+
+/** Awaited listing retains the existing create-on-first-use and expiry-prune behavior. */
+export async function listCurrentConversationBindingRecordsBySessionAsync(
+  targetSessionKey: string,
+  scope?: CurrentConversationBindingScope,
+  assertCurrent?: () => void,
+): Promise<SessionBindingRecord[]> {
+  const capturedScope = scope ? { channel: scope.channel, accountId: scope.accountId } : undefined;
+  const context = captureOpenClawStateWorkerContext();
+  const records = await runOpenClawStateWorkerOperation(
+    context,
+    (worker) =>
+      worker.execute({
+        type: "conversationBindings.listBySession",
+        input: { targetSessionKey, ...(capturedScope ? { scope: capturedScope } : {}) },
+      }),
+    {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(() => {
+        context.admission.assertCurrent();
+        assertCurrent?.();
+      }, [context.admission.databasePath]),
+    },
+  );
+  context.admission.assertCurrent();
+  assertCurrent?.();
+  return records;
+}
+
+/** Deletes exact account-owned or generic session rows without disturbing sibling owners. */
+export function deleteCurrentConversationBindingRecordsBySession(
+  targetSessionKey: string,
+  scope?: CurrentConversationBindingScope,
+  genericOnly = !scope,
+): SessionBindingRecord[] {
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const rows = listCurrentConversationBindingRowsBySession(
       db,
-      bindingDb.insertInto("current_conversation_bindings").values(
-        records.map((record) => {
-          const conversation = normalizeConversationRef(record.conversation);
-          return {
-            binding_key: buildConversationKey(conversation),
-            binding_id: record.bindingId,
-            target_agent_id: targetAgentIdForSessionKey(record.targetSessionKey),
-            target_session_id: null,
-            target_session_key: record.targetSessionKey,
-            channel: conversation.channel,
-            account_id: conversation.accountId,
-            conversation_kind: CURRENT_BINDING_CONVERSATION_KIND,
-            parent_conversation_id: conversation.parentConversationId ?? null,
-            conversation_id: conversation.conversationId,
-            target_kind: record.targetKind,
-            status: record.status,
-            bound_at: record.boundAt,
-            expires_at: record.expiresAt ?? null,
-            metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
-            record_json: JSON.stringify(record),
-            updated_at: updatedAt,
-          };
-        }),
-      ),
+      targetSessionKey,
+      scope,
+      genericOnly,
     );
+    const removed: SessionBindingRecord[] = [];
+    for (const row of rows) {
+      const record = bindingRowsToRecords([row])[0];
+      if (genericOnly && !record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
+        continue;
+      }
+      deleteCurrentConversationBindingRow(db, row.binding_key);
+      if (record && !isBindingExpired(record)) {
+        removed.push(record);
+      }
+    }
+    return removed;
   });
 }
 
-function commitBindings(nextBindings: Map<string, SessionBindingRecord>): void {
-  // SQLite is canonical: publish the prepared map only after its transaction
-  // commits, so a storage error cannot leave runtime routing ahead of disk.
-  writePersistedBindings(nextBindings);
-  currentConversationBindingsState.byConversationKey = nextBindings;
-}
-
-function loadBindingsIntoMemory(): void {
-  if (currentConversationBindingsState.loaded) {
-    return;
-  }
-  const nextBindings = new Map<string, SessionBindingRecord>();
-  for (const record of readPersistedBindings()) {
-    nextBindings.set(buildConversationKey(record.conversation), record);
-  }
-  currentConversationBindingsState.byConversationKey = nextBindings;
-  currentConversationBindingsState.loaded = true;
-}
-
-function resolveChannelSupportsCurrentConversationBinding(params: {
-  channel: string;
-  accountId: string;
-}): boolean {
+function resolveChannelConversationBindingSupport(params: SessionBindingScope) {
   const normalized =
     normalizeAnyChannelId(params.channel) ??
-    normalizeOptionalLowercaseString(normalizeConversationText(params.channel));
+    normalizeStringifiedOptionalString(params.channel)?.toLowerCase();
   if (!normalized) {
-    return false;
+    return undefined;
   }
   const matchesPluginId = (plugin: {
     id?: string | null;
@@ -219,19 +183,16 @@ function resolveChannelSupportsCurrentConversationBinding(params: {
   const plugin = (getActivePluginChannelRegistryFromState()?.channels ?? []).find((entry) =>
     matchesPluginId(entry.plugin),
   )?.plugin;
-  const bindingSupport = plugin?.conversationBindings;
-  if (bindingSupport?.supportsCurrentConversationBinding !== true) {
-    return false;
-  }
-  return (
-    bindingSupport.isCurrentConversationBindingSupported?.({ accountId: params.accountId }) ?? true
-  );
+  return plugin?.conversationBindings;
 }
 
-function supportsGenericCurrentConversationBinding(ref: {
-  channel: string;
-  accountId: string;
-}): boolean {
+/** True when an active channel lifecycle owns bindings through a registered adapter. */
+export function requiresRegisteredSessionBindingAdapter(params: SessionBindingScope): boolean {
+  const support = resolveChannelConversationBindingSupport(params);
+  return support?.bindingStore === "adapter" || typeof support?.createManager === "function";
+}
+
+function supportsGenericCurrentConversationBinding(ref: SessionBindingScope): boolean {
   const normalized = normalizeConversationRef({
     ...ref,
     conversationId: "capability-check",
@@ -239,27 +200,45 @@ function supportsGenericCurrentConversationBinding(ref: {
   if (normalized.channel === INTERNAL_MESSAGE_CHANNEL) {
     return true;
   }
-  return resolveChannelSupportsCurrentConversationBinding({
-    channel: normalized.channel,
-    accountId: normalized.accountId,
-  });
+  const bindingSupport = resolveChannelConversationBindingSupport(normalized);
+  if (
+    bindingSupport?.supportsCurrentConversationBinding !== true ||
+    bindingSupport.bindingStore === "adapter" ||
+    typeof bindingSupport.createManager === "function"
+  ) {
+    return false;
+  }
+  return (
+    bindingSupport.isCurrentConversationBindingSupported?.({ accountId: normalized.accountId }) ??
+    true
+  );
 }
 
-function bindingRefFromId(bindingId: string): { channel: string; accountId: string } | null {
+function bindingRefFromId(bindingId: string, scope?: SessionBindingScope): ConversationRef | null {
   if (!bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
     return null;
   }
-  const [channel, accountId] = bindingId
+  const [channel, accountId, parentConversationId, conversationId] = bindingId
     .slice(CURRENT_BINDINGS_ID_PREFIX.length)
-    .split("\u241f", 2);
-  return channel && accountId ? { channel, accountId } : null;
+    .split("\u241f");
+  if (!channel || !accountId || !conversationId) {
+    return null;
+  }
+  if (scope && buildChannelAccountKey({ channel, accountId }) !== buildChannelAccountKey(scope)) {
+    return null;
+  }
+  return {
+    channel,
+    accountId,
+    conversationId,
+    ...(parentConversationId ? { parentConversationId } : {}),
+  };
 }
 
 /** Reports generic current-conversation binding support for plugin-owned channels. */
-export function getGenericCurrentConversationBindingCapabilities(params: {
-  channel: string;
-  accountId: string;
-}): SessionBindingCapabilities | null {
+export function getGenericCurrentConversationBindingCapabilities(
+  params: SessionBindingScope,
+): SessionBindingCapabilities | null {
   if (!supportsGenericCurrentConversationBinding(params)) {
     return null;
   }
@@ -275,6 +254,7 @@ export function getGenericCurrentConversationBindingCapabilities(params: {
 export async function bindGenericCurrentConversation(
   input: SessionBindingBindInput,
 ): Promise<SessionBindingRecord | null> {
+  const assertCurrent = input.assertCurrent;
   const conversation = normalizeConversationRef(input.conversation);
   const targetSessionKey = input.targetSessionKey.trim();
   if (
@@ -285,7 +265,6 @@ export async function bindGenericCurrentConversation(
   ) {
     return null;
   }
-  loadBindingsIntoMemory();
   const rawNow = Date.now();
   const now = asDateTimestampMs(rawNow);
   if (now === undefined) {
@@ -304,27 +283,37 @@ export async function bindGenericCurrentConversation(
   if (ttlMs !== undefined && expiresAt === undefined) {
     return null;
   }
-  const key = buildConversationKey(conversation);
-  const existing = currentConversationBindingsState.byConversationKey.get(key);
-  const activeExisting = existing && !isBindingExpired(existing) ? existing : undefined;
-  const record: SessionBindingRecord = {
-    bindingId: buildBindingId(conversation),
-    targetSessionKey,
-    targetKind: input.targetKind,
-    conversation,
-    status: "active",
-    boundAt: now,
-    ...(expiresAt !== undefined ? { expiresAt } : {}),
-    metadata: {
-      ...activeExisting?.metadata,
-      ...input.metadata,
-      lastActivityAt: now,
-    },
-  };
-  const nextBindings = new Map(currentConversationBindingsState.byConversationKey);
-  nextBindings.set(key, record);
-  commitBindings(nextBindings);
-  return record;
+  return updateCurrentConversationBindingRecord(conversation, (existing) => {
+    assertCurrent?.();
+    return {
+      bindingId: buildBindingId(conversation),
+      targetSessionKey,
+      targetKind: input.targetKind,
+      conversation,
+      status: "active",
+      boundAt: now,
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+      metadata: {
+        ...(existing?.targetSessionKey === targetSessionKey &&
+        existing.targetKind === input.targetKind
+          ? existing.metadata
+          : undefined),
+        ...input.metadata,
+        lastActivityAt: now,
+      },
+    };
+  }).current;
+}
+
+/** Inspects generic ownership without extending activity or cleaning stored rows. */
+export function inspectGenericCurrentConversationBinding(
+  ref: ConversationRef,
+): SessionBindingRecord | null {
+  if (!supportsGenericCurrentConversationBinding(ref)) {
+    return null;
+  }
+  const record = inspectCurrentConversationBindingRecord(ref);
+  return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
 }
 
 /** Resolves a current-conversation binding and prunes it if its TTL has expired. */
@@ -334,137 +323,319 @@ export function resolveGenericCurrentConversationBinding(
   if (!supportsGenericCurrentConversationBinding(ref)) {
     return null;
   }
-  loadBindingsIntoMemory();
-  const key = buildConversationKey(ref);
-  const record = currentConversationBindingsState.byConversationKey.get(key) ?? null;
-  if (!record || !isBindingExpired(record)) {
-    return record;
-  }
-  const nextBindings = new Map(currentConversationBindingsState.byConversationKey);
-  nextBindings.delete(key);
-  commitBindings(nextBindings);
-  return null;
+  const record = resolveCurrentConversationBindingRecord(ref);
+  return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
 }
 
 /** Lists non-expired current-conversation bindings owned by one target session. */
 export function listGenericCurrentConversationBindingsBySession(
   targetSessionKey: string,
 ): SessionBindingRecord[] {
-  loadBindingsIntoMemory();
-  const results: SessionBindingRecord[] = [];
-  let nextBindings: Map<string, SessionBindingRecord> | undefined;
-  for (const [key, record] of currentConversationBindingsState.byConversationKey) {
-    if (isBindingExpired(record)) {
-      nextBindings ??= new Map(currentConversationBindingsState.byConversationKey);
-      nextBindings.delete(key);
-      continue;
-    }
-    if (
-      record.targetSessionKey !== targetSessionKey ||
-      !supportsGenericCurrentConversationBinding(record.conversation)
-    ) {
-      continue;
-    }
-    results.push(record);
-  }
-  if (nextBindings) {
-    commitBindings(nextBindings);
-  }
-  return results;
+  return listCurrentConversationBindingRecordsBySession(targetSessionKey).filter(
+    (record) =>
+      record.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) &&
+      supportsGenericCurrentConversationBinding(record.conversation),
+  );
 }
 
 /** Persists last-activity metadata for an existing generic current-conversation binding. */
-export function touchGenericCurrentConversationBinding(bindingId: string, at = Date.now()): void {
-  const bindingRef = bindingRefFromId(bindingId);
-  if (!bindingRef || !supportsGenericCurrentConversationBinding(bindingRef)) {
+export function touchGenericCurrentConversationBinding(
+  bindingId: string,
+  at = Date.now(),
+  scope?: SessionBindingScope,
+): void {
+  const conversation = bindingRefFromId(bindingId, scope);
+  if (!conversation || !supportsGenericCurrentConversationBinding(conversation)) {
     return;
   }
-  loadBindingsIntoMemory();
-  const key = bindingId.slice(CURRENT_BINDINGS_ID_PREFIX.length);
-  const record = currentConversationBindingsState.byConversationKey.get(key);
-  if (!record) {
-    return;
+  updateCurrentConversationBindingRecord(conversation, (current) =>
+    current?.bindingId === bindingId
+      ? {
+          ...current,
+          metadata: {
+            ...current.metadata,
+            lastActivityAt: at,
+          },
+        }
+      : current,
+  );
+}
+
+function unbindCurrentConversationBindingById(
+  bindingId: string,
+  scope?: SessionBindingScope,
+): SessionBindingRecord[] {
+  const conversation = bindingRefFromId(bindingId, scope);
+  if (!conversation || !supportsGenericCurrentConversationBinding(conversation)) {
+    return [];
   }
-  const nextBindings = new Map(currentConversationBindingsState.byConversationKey);
-  if (isBindingExpired(record)) {
-    nextBindings.delete(key);
-  } else {
-    nextBindings.set(key, {
-      ...record,
-      metadata: {
-        ...record.metadata,
-        lastActivityAt: at,
-      },
-    });
-  }
-  commitBindings(nextBindings);
+  const { previous, current } = updateCurrentConversationBindingRecord(conversation, (latest) =>
+    latest?.bindingId === bindingId ? null : latest,
+  );
+  return previous && !current ? [previous] : [];
 }
 
 /** Removes generic current-conversation bindings by binding id or target session key. */
 export async function unbindGenericCurrentConversationBindings(
   input: SessionBindingUnbindInput,
 ): Promise<SessionBindingRecord[]> {
-  const removed: SessionBindingRecord[] = [];
   const normalizedBindingId = input.bindingId?.trim();
-  const normalizedTargetSessionKey = input.targetSessionKey?.trim();
   if (normalizedBindingId?.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
-    const bindingRef = bindingRefFromId(normalizedBindingId);
-    if (!bindingRef || !supportsGenericCurrentConversationBinding(bindingRef)) {
-      return removed;
-    }
-    loadBindingsIntoMemory();
-    const key = normalizedBindingId.slice(CURRENT_BINDINGS_ID_PREFIX.length);
-    const record = currentConversationBindingsState.byConversationKey.get(key);
-    if (record) {
-      const nextBindings = new Map(currentConversationBindingsState.byConversationKey);
-      nextBindings.delete(key);
-      if (!isBindingExpired(record)) {
-        removed.push(record);
-      }
-      commitBindings(nextBindings);
-    }
-    return removed;
+    return unbindCurrentConversationBindingById(normalizedBindingId, input.scope);
   }
-  if (!normalizedTargetSessionKey) {
-    return removed;
+  const normalizedTargetSessionKey = input.targetSessionKey?.trim();
+  return normalizedTargetSessionKey
+    ? deleteCurrentConversationBindingRecordsBySession(
+        normalizedTargetSessionKey,
+        input.scope,
+        true,
+      )
+    : [];
+}
+
+/** Reads committed state without creating the store, pruning expiry, or repairing rows. */
+export async function inspectCurrentConversationBindingRecordAsync(
+  ref: ConversationRef,
+): Promise<SessionBindingRecord | null> {
+  const conversation = captureConversationRef(ref);
+  const result = await executeExistingOpenClawStateRead(
+    {},
+    { type: "conversationBindings.inspect", conversation },
+  );
+  if (!result) {
+    return null;
   }
-  loadBindingsIntoMemory();
-  const nextBindings = new Map(currentConversationBindingsState.byConversationKey);
-  for (const [key, record] of currentConversationBindingsState.byConversationKey) {
-    if (isBindingExpired(record)) {
-      nextBindings.delete(key);
-      continue;
+  if (!result.ok || result.type !== "conversationBindings.inspect") {
+    throw new Error("Unexpected current conversation binding inspection result");
+  }
+  return result.record;
+}
+
+export async function resolveCurrentConversationBindingRecordAsync(
+  ref: ConversationRef,
+  assertCurrent?: () => void,
+): Promise<SessionBindingRecord | null> {
+  const conversation = captureConversationRef(ref);
+  const context = captureOpenClawStateWorkerContext();
+  const result = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "conversationBindings.resolve", input: conversation }),
+    {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(() => {
+        context.admission.assertCurrent();
+        assertCurrent?.();
+      }, [context.admission.databasePath]),
+    },
+  );
+  context.admission.assertCurrent();
+  assertCurrent?.();
+  return result;
+}
+
+/** Reads one live ordered selection without repairing rows or inheriting discovery snapshots. */
+export async function readCurrentConversationBindingSelectionAsync(
+  refs: readonly ConversationRef[],
+  assertCurrent?: () => void,
+): Promise<ReadonlyArray<SessionBindingRecord | null>> {
+  const conversations = refs.map(captureConversationRef);
+  const context = captureOpenClawStateWorkerContext();
+  const result = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "conversationBindings.readSelection", input: conversations }),
+    { assertCurrent, existingOnly: true },
+  );
+  context.admission.assertCurrent();
+  assertCurrent?.();
+  return result ?? conversations.map(() => null);
+}
+
+/** Domain input only crosses IPC; read/modify/write predicates execute in one worker transaction. */
+export async function touchCurrentConversationBindingRecordAsync(
+  input: CurrentConversationBindingTouch,
+  assertCurrent?: () => void,
+) {
+  const captured: CurrentConversationBindingTouch = {
+    conversation: captureConversationRef(input.conversation),
+    bindingId: input.bindingId,
+    at: input.at,
+    ...(input.accountPolicy
+      ? {
+          accountPolicy: {
+            idleTimeoutMs: input.accountPolicy.idleTimeoutMs,
+            maxAgeMs: input.accountPolicy.maxAgeMs,
+            targetKinds: {
+              subagent: input.accountPolicy.targetKinds.subagent,
+              session: input.accountPolicy.targetKinds.session,
+            },
+          },
+        }
+      : {}),
+  };
+  const context = captureOpenClawStateWorkerContext();
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "conversationBindings.touch", input: captured }),
+    {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(() => {
+        context.admission.assertCurrent();
+        assertCurrent?.();
+      }, [context.admission.databasePath]),
+    },
+  );
+}
+
+/** Eligibility callbacks run before IPC; native grants only revalidate recorded ownership. */
+function captureGenericBindingSupport(ref: ConversationRef) {
+  const registry = getActivePluginChannelRegistrySnapshotFromState();
+  const support = resolveChannelConversationBindingSupport(ref);
+  const supportsCurrentConversationBinding = support?.supportsCurrentConversationBinding;
+  const bindingStore = support?.bindingStore;
+  const createManager = support?.createManager;
+  const eligibility = support?.isCurrentConversationBindingSupported;
+  const supported = supportsGenericCurrentConversationBinding(ref);
+  const assertCurrent = () => {
+    if (ref.channel === INTERNAL_MESSAGE_CHANNEL) {
+      return;
     }
     if (
-      record.targetSessionKey !== normalizedTargetSessionKey ||
-      !supportsGenericCurrentConversationBinding(record.conversation)
+      getActivePluginChannelRegistrySnapshotFromState() !== registry ||
+      resolveChannelConversationBindingSupport(ref) !== support ||
+      support?.supportsCurrentConversationBinding !== supportsCurrentConversationBinding ||
+      support?.bindingStore !== bindingStore ||
+      support?.createManager !== createManager ||
+      support?.isCurrentConversationBindingSupported !== eligibility
     ) {
-      continue;
+      throw new SessionBindingError(
+        "BINDING_ADAPTER_UNAVAILABLE",
+        "Generic conversation binding owner is no longer available",
+        { channel: ref.channel, accountId: ref.accountId },
+      );
     }
-    nextBindings.delete(key);
-    removed.push(record);
+  };
+  assertCurrent();
+  return { supported, assertCurrent };
+}
+
+export async function inspectGenericCurrentConversationBindingAsync(
+  ref: ConversationRef,
+): Promise<SessionBindingRecord | null> {
+  const conversation = captureConversationRef(ref);
+  const captured = captureGenericBindingSupport(conversation);
+  if (!captured.supported) {
+    return null;
   }
-  if (nextBindings.size !== currentConversationBindingsState.byConversationKey.size) {
-    commitBindings(nextBindings);
+  const record = await inspectCurrentConversationBindingRecordAsync(conversation);
+  captured.assertCurrent();
+  return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
+}
+
+export async function resolveGenericCurrentConversationBindingAsync(
+  ref: ConversationRef,
+  options?: { assertCurrent?: () => void },
+): Promise<SessionBindingRecord | null> {
+  const conversation = captureConversationRef(ref);
+  const captured = captureGenericBindingSupport(conversation);
+  if (!captured.supported) {
+    return null;
   }
-  return removed;
+  const record = await resolveCurrentConversationBindingRecordAsync(conversation, () => {
+    options?.assertCurrent?.();
+    captured.assertCurrent();
+  });
+  return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
+}
+
+export async function readGenericCurrentConversationBindingSelectionAsync(
+  refs: readonly ConversationRef[],
+  options?: { assertCurrent?: () => void },
+): Promise<ReadonlyArray<SessionBindingRecord | null>> {
+  const conversations = refs.map(captureConversationRef);
+  const captured = conversations.map(captureGenericBindingSupport);
+  const assertCurrent = () => {
+    options?.assertCurrent?.();
+    for (const support of captured) {
+      support.assertCurrent();
+    }
+  };
+  const eligible = conversations.filter((_, index) => captured[index]?.supported);
+  assertCurrent();
+  const records = await readCurrentConversationBindingSelectionAsync(eligible, assertCurrent);
+  assertCurrent();
+  let index = 0;
+  return captured.map((support) => {
+    const record = support.supported ? records[index++] : null;
+    return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
+  });
+}
+
+/** Plugin eligibility is evaluated only after native listing has settled. */
+export async function listGenericCurrentConversationBindingsBySessionAsync(
+  targetSessionKey: string,
+  options?: { assertCurrent?: () => void },
+): Promise<SessionBindingRecord[]> {
+  const registry = getActivePluginChannelRegistrySnapshotFromState();
+  const assertCurrent = () => {
+    options?.assertCurrent?.();
+    if (getActivePluginChannelRegistrySnapshotFromState() !== registry) {
+      throw new SessionBindingError(
+        "BINDING_ADAPTER_UNAVAILABLE",
+        "Generic conversation binding owners changed during destination listing",
+      );
+    }
+  };
+  assertCurrent();
+  const records = await listCurrentConversationBindingRecordsBySessionAsync(
+    targetSessionKey,
+    undefined,
+    assertCurrent,
+  );
+  assertCurrent();
+  const supports: ReturnType<typeof captureGenericBindingSupport>[] = [];
+  const selected = records.filter((record) => {
+    if (!record.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
+      return false;
+    }
+    const support = captureGenericBindingSupport(record.conversation);
+    supports.push(support);
+    assertCurrent();
+    return support.supported;
+  });
+  assertCurrent();
+  for (const support of supports) {
+    support.assertCurrent();
+  }
+  return selected;
+}
+
+export async function touchGenericCurrentConversationBindingAsync(
+  bindingId: string,
+  at = Date.now(),
+  scope?: SessionBindingScope,
+  options?: { assertCurrent?: (ref: ConversationRef) => void },
+): Promise<void> {
+  const ref = bindingRefFromId(bindingId, scope);
+  if (!ref) {
+    return;
+  }
+  const conversation = captureConversationRef(ref);
+  const captured = captureGenericBindingSupport(conversation);
+  if (!captured.supported) {
+    return;
+  }
+  await touchCurrentConversationBindingRecordAsync({ conversation, bindingId, at }, () => {
+    options?.assertCurrent?.(conversation);
+    captured.assertCurrent();
+  });
 }
 
 export const testing = {
-  resetCurrentConversationBindingsForTests(params?: {
-    deletePersistedFile?: boolean;
-    env?: NodeJS.ProcessEnv;
-  }) {
-    currentConversationBindingsState.loaded = false;
-    currentConversationBindingsState.byConversationKey.clear();
-    if (params?.deletePersistedFile) {
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
-          executeSqliteQuerySync(db, bindingDb.deleteFrom("current_conversation_bindings"));
-        },
-        params.env ? { env: params.env } : undefined,
-      );
-    }
+  clearPersistedCurrentConversationBindingsForTests() {
+    runOpenClawStateWriteTransaction(({ db }) => {
+      const bindingDb =
+        getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "current_conversation_bindings">>(db);
+      executeSqliteQuerySync(db, bindingDb.deleteFrom("current_conversation_bindings"));
+    });
   },
 };

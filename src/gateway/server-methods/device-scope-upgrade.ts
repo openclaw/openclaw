@@ -8,6 +8,7 @@ import {
 import { getPairedDevice, requestDevicePairing } from "../../infra/device-pairing.js";
 import { normalizeDeviceAuthScopes } from "../../shared/device-auth.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { isOperatorScope } from "../operator-scopes.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -62,7 +63,7 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       respondDeviceRequired(respond);
       return;
     }
-    const requestedScopes = normalizeDeviceAuthScopes((params as { scopes: string[] }).scopes);
+    const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
     if (!requestedScopes.every(isOperatorScope)) {
       respond(
         false,
@@ -70,6 +71,25 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
         errorShape(
           ErrorCodes.INVALID_REQUEST,
           "requested scopes contain an unknown operator scope",
+        ),
+      );
+      return;
+    }
+    const rolePolicy = resolveOperatorRolePolicy(client, context.getRuntimeConfig());
+    if (
+      rolePolicy &&
+      !roleScopesAllow({
+        role: "operator",
+        requestedScopes,
+        allowedScopes: rolePolicy.scopes,
+      })
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "requested scopes exceed your assigned operator role; ask a gateway administrator to change your role",
         ),
       );
       return;
@@ -160,8 +180,7 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       respondDeviceRequired(respond);
       return;
     }
-    const requestId = (params as { requestId: string }).requestId;
-    const result = await context.scopeUpgradeCoordinator?.wait(requestId, owner);
+    const result = await context.scopeUpgradeCoordinator?.wait(params.requestId, owner);
     if (!result) {
       respond(
         false,
@@ -169,6 +188,39 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
         errorShape(ErrorCodes.INVALID_REQUEST, "scope upgrade expired or not found"),
       );
       return;
+    }
+    if (result.status === "insufficient-scopes") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Pairing was approved, but this browser's previously narrowed token still lacks the requested access. Run openclaw dashboard --json on the Gateway host for a fresh one-time owner pairing link. Open its browserUrl in this browser using the same Control UI address and Gateway URL to restore administrator access.",
+        ),
+      );
+      return;
+    }
+    if (result.status === "approved") {
+      // Approval may outlive a role change; use the current ceiling before releasing the token.
+      const rolePolicy = resolveOperatorRolePolicy(client, context.getRuntimeConfig());
+      if (
+        rolePolicy &&
+        !roleScopesAllow({
+          role: "operator",
+          requestedScopes: result.scopes,
+          allowedScopes: rolePolicy.scopes,
+        })
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "approved scopes exceed your assigned operator role; ask a gateway administrator to change your role",
+          ),
+        );
+        return;
+      }
     }
     respond(true, result, undefined);
   },

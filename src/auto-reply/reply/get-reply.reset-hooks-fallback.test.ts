@@ -1,14 +1,16 @@
 // Tests reset hook fallback behavior inside the get-reply directive pipeline.
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildNativeResetContext,
   createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
+  registerGetReplyBaselineBypass,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
+
+registerGetReplyBaselineBypass();
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
@@ -81,23 +83,13 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     await getReplyFromConfig(buildNativeResetContext(), { onObservedReplyDelivery }, {});
 
     expect(mocks.emitResetCommandHooks).toHaveBeenCalledTimes(1);
-    const [hookParams] = expectDefined(
-      (
-        mocks.emitResetCommandHooks.mock.calls as unknown as Array<
-          [
-            {
-              action?: string;
-              onObservedReplyDelivery?: () => Promise<void> | void;
-              sessionKey?: string;
-            },
-          ]
-        >
-      )[0],
-      "reset hook params",
+    expect(mocks.emitResetCommandHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "new",
+        onObservedReplyDelivery,
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
     );
-    expect(hookParams.action).toBe("new");
-    expect(hookParams.onObservedReplyDelivery).toBe(onObservedReplyDelivery);
-    expect(hookParams.sessionKey).toBe("agent:main:telegram:direct:123");
   });
 
   it("does not emit fallback hooks when resetHookTriggered is already set", async () => {

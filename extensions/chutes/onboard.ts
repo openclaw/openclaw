@@ -10,13 +10,16 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 export const CHUTES_DEFAULT_MODEL_ID = manifest.modelCatalog.providers.chutes.defaultModel;
 export const CHUTES_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "chutes")!;
 
-const chutesPresetAppliers = createModelCatalogPresetAppliers({
+export const { applyProviderConfig: applyChutesProviderConfig } = createModelCatalogPresetAppliers<
+  []
+>({
   primaryModelRef: CHUTES_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => ({
+  resolveParams: (cfg: OpenClawConfig) => ({
     providerId: "chutes",
     api: "openai-completions",
     baseUrl: CHUTES_BASE_URL,
-    catalogModels: structuredClone(CHUTES_MODEL_CATALOG),
+    // Replace mode skips discovery; merge mode must not persist generated pricing as authored pins.
+    catalogModels: cfg.models?.mode === "replace" ? structuredClone(CHUTES_MODEL_CATALOG) : [],
     aliases: [
       ...CHUTES_MODEL_CATALOG.map((model) => `chutes/${model.id}`),
       {
@@ -27,10 +30,6 @@ const chutesPresetAppliers = createModelCatalogPresetAppliers({
     ],
   }),
 });
-
-export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return chutesPresetAppliers.applyProviderConfig(cfg);
-}
 
 export function applyChutesConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyChutesProviderConfig(cfg);

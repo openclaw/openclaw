@@ -3,273 +3,322 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
-import { loadSettings } from "../../app/settings.ts";
-import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import "../../components/tooltip.ts";
-import "../../components/web-awesome-popover.ts";
+import { LazyCustomElementRequestController } from "../../app/lazy-custom-element.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import "../../styles/new-session-attachment-panel.css";
+import { renderLazyViewError } from "../../components/lazy-view-error.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
-import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { createIdleImport } from "../../lib/idle-import.ts";
+import "../../components/web-awesome-popover.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import "../../styles/chat.css";
-import "../../styles/new-session.css";
+import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
+import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
+import "../../styles/chat/composer.css";
+import "../../styles/chat/composer-surface.css";
+import "../../styles/new-session.css";
+import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
+import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
+import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
-import type { SubmissionOutcomeReason } from "./cloud-recovery-state.ts";
-import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
-import { renderConnectMachineDialog } from "./connect-machine-dialog.ts";
-import { isWorktreeNameValid } from "./create-params.ts";
-import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
-import { DraftGatewayState } from "./draft-gateway-state.ts";
-import { restoreDraft, retainDraft } from "./draft-navigation-handoff.ts";
-import { DraftPlaceBrowser } from "./draft-place-browser.ts";
-import { DraftPlaceState } from "./draft-place-state.ts";
-import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
-import type { NewSessionRouteData } from "./location.ts";
+import { NewSessionDictationControl } from "./composer-dictation-control.ts";
+import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import { renderNewSessionBody } from "./draft-body.ts";
+import { renderNewSessionDraftComposer, renderNewSessionDraftErrors } from "./draft-composer.ts";
+import { NewSessionDraftController } from "./draft-controller.ts";
+import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
-  closeAgentPicker,
-  closeSessionMenus,
-  createControllerHost,
-  handleSessionPickerEvent,
-  isPlaceTopologyEvent,
-  presenceStateSignature,
-  readPresenceEntries,
-} from "./new-session-runtime.ts";
-import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
-import { renderAgentSelect } from "./target-controls.ts";
-import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
+  activateDraft,
+  restoreDraft,
+  restoreDraftOwner,
+  retainDraft,
+} from "./draft-navigation-handoff.ts";
+import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
+import type { DraftPlaceState } from "./draft-place-state.ts";
+import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import { NewSessionTitleController } from "./draft-title.ts";
+import {
+  renderNewSessionIncognitoControl,
+  renderNewSessionIncognitoNotice,
+} from "./incognito-control.ts";
+import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import { closeAgentPicker, closeSessionMenus } from "./new-session-runtime.ts";
+import { renderAgentSelect, renderNewSessionPlaceControls } from "./target-controls.ts";
 
-class NewSessionPage extends OpenClawLightDomElement {
+registerNewSessionSetupEnglish();
+
+const attachmentPanelElement = {
+  tagName: "openclaw-chat-detail-panel",
+  get label() {
+    return t("chat.attachments.pastedText");
+  },
+  loadModule: async () => {
+    await import("../../styles/chat/sidebar.css");
+    await import("../chat/components/chat-detail-panel.ts");
+  },
+};
+
+export class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
 
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
+  private retainedForHandoff: object | null = null;
   private openedFor: string | null = null;
+  private readonly critterImport = createIdleImport(
+    () => import("../../components/lobster-pet.runtime.ts"),
+  );
   private openedGroupDefaults = "";
   private openedAgentId = "";
   private messageOwnerKey = "";
-  private presenceSignature = "";
-  private connectMachineOpen = false;
-  private connectMachineLoading = false;
-  private connectMachineError: string | null = null;
-  private connectMachineSetup: DevicePairSetup | null = null;
-  private connectMachineRequestId = 0;
+  private readonly connectMachine: ConnectMachineSetupState;
+  @state() private attachmentPanel: {
+    content: Extract<SidebarContent, { kind: "attachment" }>;
+    ownerKey: string;
+    agentId: string;
+  } | null = null;
+  private readonly attachmentPanelLoader = new LazyCustomElementRequestController(this);
+  private readonly closeAttachmentPanel = () => {
+    this.attachmentPanel = null;
+  };
+  private readonly openAttachmentPanel = (content: SidebarContent) => {
+    if (content.kind === "attachment") {
+      this.attachmentPanel = {
+        content,
+        ownerKey: this.routeOwnerKey(),
+        agentId: this.place.agentId,
+      };
+    }
+  };
   @state() private imageLightbox: ImageLightboxItem | null = null;
+  @state() private agentPickerOpen = false;
   private readonly groupRouteRevalidation = new catalog.GroupRouteRevalidation(
     () => this.data,
     () => this.context?.revalidate("new-session"),
   );
+  private readonly draft: NewSessionDraftController;
   private readonly gateway: DraftGatewayState;
   private readonly browser: DraftPlaceBrowser;
   private readonly place: DraftPlaceState;
   private readonly submission: DraftSubmissionFlow;
+  private readonly dictation: NewSessionDictationControl;
   private readonly subscriptions: SubscriptionsController;
+  private readonly titlePreparation = new NewSessionTitleController(this, () => ({
+    context: this.context,
+    data: this.data,
+    place: this.place,
+    submission: this.submission,
+    dictating: this.dictation.active,
+  }));
+  private readonly flushDraft = () => this.submission.draftPersistence.persistNow();
+  private readonly setImageLightbox = (item: ImageLightboxItem | null) => {
+    this.imageLightbox = item;
+  };
 
   constructor() {
     super();
-    const host = createControllerHost(this);
-    this.gateway = new DraftGatewayState(
-      host,
-      () => ({
-        context: this.context,
-        data: this.data,
-        isConnected: this.isConnected,
-        isAdmin: this.place?.isAdmin() ?? false,
-        canStartAsDraft: this.submission?.canStartAsDraft() ?? false,
-        visibility: this.submission?.visibility ?? "normal",
-        cloudProfileId: this.place?.cloudProfileId ?? "",
-        pendingCloud: this.submission?.pendingCloud ?? {
-          sessionKey: "",
-          gatewayUrl: "",
-          recoveryScope: "",
-        },
-        agentsHydrated: this.place?.agentsHydrated ?? false,
-      }),
-      {
-        requestUpdate: () => this.requestUpdate(),
-        updateComplete: () => this.updateComplete,
-        onInvalidate: (resetHostSelection, outcome) =>
-          this.invalidateGatewayDiscovery(resetHostSelection, outcome),
-        onVisibilityRetired: () => this.submission.setVisibility("normal"),
-        onCloudProfileCleared: () => this.place.clearCloudProfile(),
-        onCloudState: (error) => this.submission.setError(error),
-        onPendingCloudReset: () => this.submission.resetPendingCloudWithoutClearingStorage(),
-        onRecoveryReady: (gatewayUrl, recoveryScope) =>
-          this.submission.restorePendingCloudRecovery(gatewayUrl, recoveryScope),
-        onAdoptAgentDefaults: () =>
-          this.place.adoptAgentDefaults({
-            preserveSelectedAgent: true,
-            preserveSelectedFolder: true,
-          }),
-      },
-    );
-    this.browser = new DraftPlaceBrowser(
-      host,
-      this.gateway,
-      () => ({
-        context: this.context,
-        nodes: this.place?.nodes ?? [],
-        folder: this.place?.folder ?? "",
-        execNode: this.place?.execNode ?? "",
-        isAdmin: this.place?.isAdmin() ?? false,
-      }),
-      {
-        requestUpdate: () => this.requestUpdate(),
-        onProjectMissing: () => this.place.clearProjectSelection(),
-        onSelectProject: (projectId) => this.place.selectProjectId(projectId),
-        onApprovedListing: (listing) => this.place.recordGatewayApprovedListing(listing),
-        querySelector: (selector) => this.querySelector(selector),
-        activeElement: () => this.ownerDocument.activeElement,
-        body: () => this.ownerDocument.body,
-      },
-    );
-    this.place = new DraftPlaceState(
-      this.gateway,
-      this.browser,
-      () => ({
-        context: this.context,
-        data: this.data,
-        submitting: this.submission?.submitting ?? false,
-        pendingCloudSessionKey: this.submission?.pendingCloud.sessionKey ?? "",
-      }),
-      {
-        requestUpdate: () => this.requestUpdate(),
-        onError: (error) =>
-          error === null ? this.submission.clearError() : this.submission.setError(error),
-        onClearError: (error) => this.submission.clearErrorIf(error),
-      },
-    );
-    this.submission = new DraftSubmissionFlow(
-      this.gateway,
-      this.place,
+    this.draft = new NewSessionDraftController(
+      this,
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
         requestUpdate: () => this.requestUpdate(),
-        closeTransientUi: () => closeSessionMenus(this),
+        querySelector: (selector) => this.querySelector(selector),
+        activeElement: () => this.ownerDocument.activeElement,
+        body: () => this.ownerDocument.body,
+        onInvalidate: () => {
+          this.closeAttachmentPanel();
+          this.connectMachine?.close();
+        },
+        onRecoveryReady: (gatewayUrl, recoveryScope) =>
+          restoreDraftOwner(this.submission, gatewayUrl, recoveryScope),
+        closeTransientUi: () => {
+          this.closeAttachmentPanel();
+          closeSessionMenus(this);
+        },
+        takePreparedTitle: () => this.titlePreparation.takePreparedTitle(),
+        retainForHandoff: () => {
+          if (!this.data || !this.isConnected) {
+            return undefined;
+          }
+          const retention = {};
+          this.retainedForHandoff = retention;
+          return {
+            page: this,
+            data: this.data,
+            synchronizeGateway: () => {
+              if (this.context) {
+                this.gateway.synchronize(this.context.gateway);
+              }
+            },
+            release: () => {
+              if (this.retainedForHandoff !== retention) {
+                return;
+              }
+              this.retainedForHandoff = null;
+              if (!this.isConnected) {
+                this.disposeDraft();
+              }
+            },
+          };
+        },
       },
     );
+    this.gateway = this.draft.gateway;
+    this.browser = this.draft.browser;
+    this.place = this.draft.place;
+    this.submission = this.draft.submission;
+    this.connectMachine = new ConnectMachineSetupState(
+      () => ({ client: this.gateway.client, connected: this.gateway.connected }),
+      () => this.requestUpdate(),
+    );
+    this.dictation = new NewSessionDictationControl({
+      textarea: this.submission.composerTextarea,
+      getClient: () => this.gateway.client,
+      isConnected: () => this.gateway.connected,
+      canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
+      onMessage: (message) => this.setMessageFromUser(message),
+      onError: (message) => this.submission.setError(message),
+      onSubmit: () => void this.submission.submit(),
+      requestUpdate: () => this.requestUpdate(),
+    });
     this.subscriptions = new SubscriptionsController(this)
-      .watch(
-        () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
-        (gateway) => this.gateway.synchronize(gateway),
-      )
-      .effect(
-        () => this.context?.gateway,
-        (gateway) => {
-          this.presenceSignature = presenceStateSignature(
-            readPresenceEntries(gateway.snapshot.hello?.snapshot) ?? [],
-          );
-          return gateway.subscribeEvents((event) => {
-            if (this.context?.gateway !== gateway) {
-              return;
-            }
-            if (isPlaceTopologyEvent(event.event)) {
-              this.refreshPlaceTopology();
-              return;
-            }
-            const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
-            if (!presence) {
-              return;
-            }
-            const signature = presenceStateSignature(presence);
-            if (signature !== this.presenceSignature) {
-              this.presenceSignature = signature;
-              this.refreshPlaceTopology();
-            }
-          });
-        },
-      )
-      .watch(
-        () => this.context?.agents,
-        (agents, notify) => agents.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentIdentity,
-        (agentIdentity, notify) => agentIdentity.subscribe(notify),
-      )
-      .watch(
+      .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
+      .watchStore(() => this.context?.theme)
+      .watchStore(() => this.context?.agents)
+      .watchStore(() => this.context?.agentIdentity)
+      .watchStore(
         () => this.context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
         (sessions) => this.groupRouteRevalidation.synchronize(sessions),
       )
+      .watchStore(() => this.context?.placementStartup)
+      .watchStore(() => this.context?.runtimeConfig)
       .watch(
         () => this.context?.config,
         (config, notify) => config.subscribe(() => notify()),
       );
   }
 
-  // Device visibility intersects both catalogs, so topology changes must refresh them together.
-  private refreshPlaceTopology() {
-    void this.place.refreshNodes();
-    void this.gateway.refreshCloudProfiles();
+  handleEvent(event: Event) {
+    if (event instanceof KeyboardEvent) {
+      focusChatComposerFromPrintableKeydown(this, event);
+    }
   }
 
-  handleEvent(event: Event) {
-    handleSessionPickerEvent(this, event);
+  focusComposer(): void {
+    const context = this.context;
+    const owner = this.routeOwnerKey();
+    const previousFocus = document.activeElement;
+    void this.updateComplete.then(() => {
+      if (
+        this.isConnected &&
+        !this.retainedForHandoff &&
+        this.context === context &&
+        this.routeOwnerKey() === owner &&
+        // A later interaction owns focus even if this draft is still mounted.
+        (document.activeElement === previousFocus || document.activeElement === document.body) &&
+        !document.openClawModalLayers?.size
+      ) {
+        this.submission.composerTextarea.getTextarea()?.focus({ preventScroll: true });
+      }
+    });
   }
 
   override connectedCallback() {
     super.connectedCallback();
+    this.submission.draftPersistence.connect();
+    this.critterImport.schedule();
     document.addEventListener("keydown", this, true);
-    document.addEventListener("pointerdown", this, true);
+    window.addEventListener("beforeunload", this.flushDraft);
   }
 
   override disconnectedCallback() {
+    this.closeAttachmentPanel();
+    this.attachmentPanelLoader.requestWhileActive(attachmentPanelElement, false);
+    this.critterImport.dispose();
     document.removeEventListener("keydown", this, true);
-    document.removeEventListener("pointerdown", this, true);
-    retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
+    window.removeEventListener("beforeunload", this.flushDraft);
     this.subscriptions.clear();
-    this.gateway.invalidateDiscovery(
-      true,
-      this.submission.pendingCloud.sessionKey ? "cloud-interrupted" : "gateway-changed",
-    );
-    this.gateway.disconnect();
-    this.browser.disconnect();
-    this.submission.disconnect();
-    this.closeConnectMachine();
+    this.dictation.dispose();
+    this.connectMachine.close();
+    if (!this.retainedForHandoff) {
+      this.disposeDraft();
+    }
     super.disconnectedCallback();
   }
 
+  private disposeDraft() {
+    forgetInstantThreadPage(this.data, this);
+    retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
+    this.draft.disconnect();
+  }
+
+  override willUpdate() {
+    const panel = this.attachmentPanel;
+    if (
+      panel &&
+      (panel.ownerKey !== this.routeOwnerKey() ||
+        panel.agentId !== this.place.agentId ||
+        this.submission.submitting ||
+        Boolean(this.submission.pendingPlacement.sessionKey) ||
+        !this.submission.attachmentDraft.attachments.some(
+          (attachment) => attachment.id === panel.content.sourceIdentity,
+        ))
+    ) {
+      this.attachmentPanel = null;
+    }
+    this.attachmentPanelLoader.requestWhileActive(
+      attachmentPanelElement,
+      this.attachmentPanel !== null,
+    );
+  }
+
   override updated() {
-    if (this.connectMachineOpen && !this.place.isAdmin()) {
-      this.closeConnectMachine();
+    if (this.connectMachine.open && !this.place.isAdmin()) {
+      this.connectMachine.close();
     }
     this.gateway.retryPendingCatalogTarget();
-    void this.context?.agentIdentity.ensure(this.place.agents().map((agent) => agent.id));
+    void this.context?.agentIdentity.ensure(
+      this.agentPickerOpen ? this.place.agents().map((agent) => agent.id) : [this.place.agentId],
+    );
+    const agentsReady = this.draft.agentsReady();
     this.place.modelControl.loadCatalogTargets(
       this.context,
-      this.place.agentId,
+      agentsReady && this.place.agentId ? (this.place.selectedAgent()?.id ?? "") : "",
       this.context?.config.current.cliAgentsEnabled === true && !catalog.isTarget(this.data),
     );
-    const agentState = this.context?.agents.state;
-    const agentsReady = Boolean(
-      this.gateway.connected &&
-      this.gateway.client &&
-      agentState?.connected &&
-      agentState.client === this.gateway.client &&
-      this.place.agents().length > 0,
-    );
-    const openKey = this.data
-      ? catalog.routeKey(this.data)
-      : catalog.routeKeyFromSearch(window.location.search);
+    const openKey = this.routeOwnerKey();
     const resolvedAgentId = this.data?.agentId ?? "";
     const groupDefaults = catalog.groupDefaultsKey(this.data);
     if (this.openedFor !== openKey) {
+      // Ordinary drafts release previews on reset and restore through durable storage.
+      if (this.openedFor !== null && this.submission.visibility === "incognito") {
+        retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
+      }
       const ownedMessage = this.messageOwnerKey === openKey ? this.submission.message : "";
+      const ownedMentions = this.messageOwnerKey === openKey ? this.submission.mentions : undefined;
       this.openedFor = openKey;
       this.openedGroupDefaults = groupDefaults;
       this.openedAgentId = resolvedAgentId;
       this.place.setAgentsHydrated(agentsReady);
       this.resetDraft();
-      this.messageOwnerKey = restoreDraft(this.context, this.submission, openKey, ownedMessage);
+      this.messageOwnerKey = restoreDraft(
+        this.context,
+        this.submission,
+        openKey,
+        ownedMessage,
+        ownedMentions,
+      );
+      this.focusComposer();
       return;
     }
     if (this.openedGroupDefaults !== groupDefaults) {
@@ -280,30 +329,9 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.openedAgentId = resolvedAgentId;
       this.place.setAgentsHydrated(false);
     }
-    if (!this.place.agentsHydrated && agentsReady) {
-      this.place.setAgentsHydrated(true);
-      this.place.adoptAgentDefaults({
-        preserveSelectedAgent: true,
-        preserveSelectedFolder: true,
-      });
-    }
-    this.place.restorePreferenceSelections();
-  }
-
-  private invalidateGatewayDiscovery(
-    resetHostSelection: boolean,
-    submissionOutcome: SubmissionOutcomeReason,
-  ) {
-    this.place.invalidateGatewayDiscovery(resetHostSelection);
-    this.submission.attachmentDraft.abortReads();
-    this.submission.invalidate(submissionOutcome);
-    if (resetHostSelection && this.submission.pendingCloud.sessionKey) {
-      this.submission.markPendingCloudUnavailable(submissionOutcome);
-    }
-    if (resetHostSelection) {
-      this.submission.clearError();
-    }
-    this.closeConnectMachine();
+    this.draft.synchronizeSelections();
+    activateDraft(this.submission, openKey);
+    this.submission.resumeInterruptedSubmission();
   }
 
   private resetDraft() {
@@ -313,30 +341,21 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browser.clearPopoverHiding();
     closeAgentPicker(this);
     this.browser.close();
-    this.closeConnectMachine();
+    this.connectMachine.close();
     this.place.adoptAgentDefaults();
-    void this.updateComplete.then(() => {
-      this.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.focus();
-    });
   }
 
-  private setMessage(message: string, ownerKey = catalog.routeKey(this.data)) {
-    this.submission.setMessage(message);
-    this.messageOwnerKey = ownerKey;
+  private routeOwnerKey(): string {
+    return this.data
+      ? catalog.routeKey(this.data)
+      : catalog.routeKeyFromSearch(window.location.search);
   }
 
-  private setMessageFromUser(message: string) {
-    this.setMessage(message, catalog.routeKeyFromSearch(window.location.search));
-  }
-
-  private renderAgentSelect() {
-    return renderAgentSelect({
-      agents: this.place.agents(),
-      agentId: this.place.agentId,
-      agentIdentity: this.context?.agentIdentity,
-      disabled: this.submission.submitting || Boolean(this.submission.pendingCloud.sessionKey),
-      onSelect: (agentId) => this.place.selectAgentId(agentId),
-    });
+  private setMessageFromUser(message: string, mentions?: readonly HumanMention[]) {
+    if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
+      this.submission.setMessage(message, mentions);
+      this.messageOwnerKey = catalog.routeKeyFromSearch(window.location.search);
+    }
   }
 
   private renderTargetBar() {
@@ -345,8 +364,33 @@ class NewSessionPage extends OpenClawLightDomElement {
     return catalog.renderBar({
       data: this.data,
       groupPending: catalog.isGroupRoutePending(this.data, sessions),
-      agentSelect: agents.length > 1 ? this.renderAgentSelect() : nothing,
-      placeSelect: this.renderPlaceChips(),
+      agentSelect:
+        agents.length > 1
+          ? renderAgentSelect({
+              agents,
+              agentId: this.place.agentId,
+              agentIdentity: this.context?.agentIdentity,
+              disabled:
+                this.submission.submitting || Boolean(this.submission.pendingPlacement.sessionKey),
+              onSelect: (agentId) => this.place.selectAgentId(agentId),
+              onOpenChange: (open) => {
+                this.agentPickerOpen = open;
+              },
+            })
+          : nothing,
+      placeSelect: renderNewSessionPlaceControls({
+        context: this.context,
+        data: this.data,
+        gateway: this.gateway,
+        place: this.place,
+        submitting: this.submission.submitting,
+        pendingPlacement: Boolean(this.submission.pendingPlacement.sessionKey),
+        onConnectMachine: () => this.openConnectMachine(),
+        onNavigate: (route, options) => this.context?.navigate(route, options),
+        onFocusComposer: () =>
+          this.submission.composerTextarea.getTextarea()?.focus({ preventScroll: true }),
+        requestUpdate: () => this.requestUpdate(),
+      }),
       retrying:
         this.gateway.catalogRetrying ||
         Boolean(this.data?.group && sessions?.groupsStatus() === "loading"),
@@ -354,277 +398,106 @@ class NewSessionPage extends OpenClawLightDomElement {
     });
   }
 
-  private renderPlaceChips() {
-    const execNodes = this.place.execNodes();
-    const executionNodes = this.place.executionNodes();
-    const cloudProfiles = catalog.isTarget(this.data) ? [] : this.gateway.cloudProfiles;
-    const branches = this.place.repository.kind === "git" ? this.place.repository : null;
-    const projects = catalog.isTarget(this.data) ? [] : this.browser.projects;
-    const recents = catalog.isTarget(this.data)
-      ? []
-      : this.browser.resolveProjectRecents({
-          sessions: this.context?.sessions.state.result?.sessions ?? [],
-          workspace: this.place.workspacePath(),
-          workspaceRoots: this.place.knownWorkspaceRoots(),
-          execNodes,
-          isAdmin: this.place.isAdmin(),
-        });
-    const whereState = resolveWhereChip({
-      execNodes: this.place.isAdmin() ? executionNodes : [],
-      environments: this.place.isAdmin() ? this.gateway.environments : [],
-      cloudProfiles: this.place.isAdmin() ? cloudProfiles : [],
-      cloudProfileId: this.place.cloudProfileId,
-      execNode: this.place.execNode,
-    });
-    const projectState = resolveProjectChip({
-      folder: this.place.folder,
-      workspace: this.place.workspacePath(),
-      projectId: this.browser.projectId,
-      selectedRemoteProject: this.browser.remoteProject,
-      projects,
-      recents,
-      projectQuery: this.browser.projectQuery,
-      execNode: this.place.execNode,
-    });
-    const detailState = resolveDetailChip({
-      execNode: this.place.execNode,
-      cloudProfileId: this.place.cloudProfileId,
-      worktree: this.place.worktree,
-      repository: this.place.repository,
-    });
-    const gatewayLabel = this.gateway.gatewayName
-      ? t("newSession.gatewayNamed", { name: this.gateway.gatewayName })
-      : t("newSession.gateway");
-    const commonPopover = (kind: "where" | "project" | "detail") => ({
-      popoverOpen: this.browser.popoverOpen(kind),
-      popoverHiding: this.browser.popoverHiding(kind),
-      onGuardTransition: (event: MouseEvent) => this.browser.guardPopoverTransition(event, kind),
-      onPopoverShow: () => this.browser.onPopoverShow(kind),
-      onPopoverHide: () => this.browser.onPopoverHide(kind),
-      onPopoverAfterHide: () => this.browser.onPopoverAfterHide(kind),
-    });
-    const submitting = this.submission.submitting;
-    const pendingCloud = Boolean(this.submission.pendingCloud.sessionKey);
-    return html`${renderWhereChip({
-      state: whereState,
-      gatewayName: this.gateway.gatewayName,
-      cloudProfileId: this.place.cloudProfileId,
-      execNode: this.place.execNode,
-      worktreeAvailable: this.place.worktreeAvailable(),
-      cloudDisabledReason: this.submission.cloudDisabledReason(),
-      submitting,
-      pendingCloud,
-      isAdmin: this.place.isAdmin(),
-      ...commonPopover("where"),
-      onSelectExecNode: (nodeId) => this.place.selectExecNode(nodeId),
-      onSelectCloudProfile: (profileId) => this.place.selectCloudProfile(profileId),
-      onConnectMachine: () => this.openConnectMachine(),
-    })}${renderProjectChip({
-      state: projectState,
-      browseAvailable: this.place.browseAvailable(),
-      isAdmin: this.place.isAdmin(),
-      canWrite: this.place.canWrite(),
-      folder: this.place.folder,
-      workspace: this.place.workspacePath(),
-      projects,
-      projectQuery: this.browser.projectQuery,
-      projectSearchAvailable: canCallGatewayMethod(
-        this.context?.gateway.snapshot,
-        "projects.searchRemote",
-        "operator.read",
-      ),
-      projectAddAvailable: canCallGatewayMethod(
-        this.context?.gateway.snapshot,
-        "projects.add",
-        "operator.write",
-      ),
-      remoteProjects: this.browser.projectSearchResult?.projects ?? [],
-      selectedRemoteProject: this.browser.remoteProject,
-      projectSearchCredentialMissing: this.browser.projectSearchResult?.credential === "missing",
-      projectSearchLoading: this.browser.projectSearchLoading,
-      projectSearchError: this.browser.projectSearchError,
-      projectId: this.browser.projectId,
-      execNodes,
-      gatewayLabel,
-      execNode: this.place.execNode,
-      submitting,
-      pendingCloud,
-      ...commonPopover("project"),
-      browserTarget: this.browser.browserTarget,
-      browserListing: this.browser.browserListing,
-      browserLoading: this.browser.browserLoading,
-      browserError: this.browser.browserError,
-      browserPathDraft: this.browser.browserPathDraft,
-      usableBrowserPath: this.browser.usableBrowserPath(),
-      registerProjectPath: this.browser.browserProjectPath,
-      registeringProject: this.browser.browserRegistering,
-      onSelectProject: (projectId) => this.place.selectProjectId(projectId),
-      onProjectQueryInput: (query) => this.browser.changeProjectQuery(query),
-      onSelectRemoteProject: (project) => this.place.selectRemoteProject(project),
-      onApplyFolder: (folder, execNode) =>
-        this.place.applyFolder(
-          folder,
-          execNode,
-          !execNode && this.browser.browserListing?.path === folder,
-        ),
-      onBrowse: (target) => this.browser.selectBrowserTarget(target),
-      onBrowserPathDraftChange: (value) => {
-        this.browser.browserPathDraft = value;
-      },
-      onBrowserNavigate: (path) => this.browser.loadBrowser(path),
-      onBrowserBack: () => this.browser.showRoot(),
-      onRegisterProject: (path) => void this.browser.registerBrowserProject(path),
-      onClose: () => this.browser.close(),
-    })}${renderDetailChip({
-      state: detailState,
-      syncLabel: projectState.label,
-      folder: this.place.folder,
-      execNode: this.place.execNode,
-      worktree: this.place.worktree,
-      worktreeAvailable: this.place.worktreeAvailable(),
-      worktreeDisabledReason:
-        this.place.repository.kind === "checking"
-          ? t("newSession.checkingGit")
-          : this.place.repository.kind === "unavailable"
-            ? t("newSession.gitCheckUnavailable")
-            : undefined,
-      branches,
-      branchesLoading: this.place.repository.kind === "checking",
-      baseRef: this.place.baseRef,
-      worktreeName: this.place.worktreeName,
-      submitting,
-      pendingCloud,
-      ...commonPopover("detail"),
-      onToggleWorktree: () => this.place.toggleWorktree(),
-      onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
-      onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
-      onNodeFolderInput: (folder, execNode) => this.place.applyFolder(folder, execNode),
-    })}`;
-  }
-
   private openConnectMachine() {
     if (!this.place.isAdmin()) {
       return;
     }
     this.browser.close();
-    this.connectMachineOpen = true;
-    this.connectMachineError = null;
-    this.connectMachineSetup = null;
-    this.requestUpdate();
-    void this.refreshConnectMachine();
-  }
-
-  private async refreshConnectMachine() {
-    if (!this.connectMachineOpen || this.connectMachineLoading) {
-      return;
-    }
-    const client = this.gateway.connected ? this.gateway.client : null;
-    if (!client) {
-      this.connectMachineError = t("newSession.connectMachineUnavailable");
-      this.requestUpdate();
-      return;
-    }
-    const requestId = ++this.connectMachineRequestId;
-    this.connectMachineLoading = true;
-    this.connectMachineError = null;
-    this.requestUpdate();
-    try {
-      const setup = await requestDevicePairJoinSetup(client);
-      if (
-        requestId !== this.connectMachineRequestId ||
-        client !== this.gateway.client ||
-        !this.gateway.connected ||
-        !this.connectMachineOpen
-      ) {
-        return;
-      }
-      if (!setup.joinUrl?.trim()) {
-        this.connectMachineSetup = null;
-        this.connectMachineError = t("newSession.connectMachineMissingUrl");
-        return;
-      }
-      this.connectMachineSetup = setup;
-    } catch (error) {
-      if (
-        requestId === this.connectMachineRequestId &&
-        client === this.gateway.client &&
-        this.gateway.connected &&
-        this.connectMachineOpen
-      ) {
-        this.connectMachineError = error instanceof Error ? error.message : String(error);
-      }
-    } finally {
-      if (requestId === this.connectMachineRequestId) {
-        this.connectMachineLoading = false;
-        this.requestUpdate();
-      }
-    }
-  }
-
-  private closeConnectMachine() {
-    this.connectMachineRequestId += 1;
-    this.connectMachineOpen = false;
-    this.connectMachineLoading = false;
-    this.connectMachineError = null;
-    this.connectMachineSetup = null;
+    this.connectMachine.start();
   }
 
   private renderDraftBlock() {
-    const worktreeNameInvalid =
-      this.place.worktree && !isWorktreeNameValid(this.place.worktreeName);
+    const { context, gateway, place, submission, dictation, titlePreparation } = this;
+    const draftOwnerKey = this.routeOwnerKey();
+    const isCatalogTarget = catalog.isTarget(this.data);
+    const capabilities = submission.capabilities;
+    const preferences = context?.theme.settings;
+    const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
+    const dictationLocked = dictation.active;
     return html`
-      <div class="new-session-page__draft" aria-busy=${String(this.submission.submitting)}>
-        ${this.renderTargetBar()}
-        ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
-        ${this.submission.error ? renderDraftError(this.submission.error) : nothing}
-        ${this.submission.submissionOutcomeUnknown
-          ? renderDraftError(
-              t(
-                this.submission.submissionOutcomeUnknown === "gateway-changed"
-                  ? "newSession.createOutcomeUnknown"
-                  : "newSession.cloudSetupInterrupted",
-              ),
-            )
-          : nothing}
+      <div
+        class="new-session-page__draft"
+        aria-busy=${String(submission.submitting)}
+        @compositionstart=${() => {
+          titlePreparation.setComposing(true);
+        }}
+        @compositionend=${() => {
+          titlePreparation.setComposing(false);
+        }}
+        @focusout=${() => {
+          // Browsers can drop compositionend on blur/detach mid-IME; a stuck
+          // composing flag would silently disable naming for the mounted page.
+          titlePreparation.setComposing(false);
+        }}
+      >
+        ${this.renderTargetBar()} ${renderNewSessionDraftErrors(place, submission, isCatalogTarget)}
         ${renderNewSessionDraftComposer({
-          agent: this.place.selectedAgent(),
-          agentId: this.place.agentId,
-          attachmentDraft: this.submission.attachmentDraft,
-          canSubmit: this.submission.canSubmit(),
-          submitDisabledReason: this.submission.submitDisabledReason(),
-          context: this.context,
-          isCatalogTarget: catalog.isTarget(this.data),
-          message: this.submission.message,
-          visibility: this.submission.visibility,
-          draftAvailable: this.submission.canStartAsDraft(),
-          modelControl: this.place.modelControl,
-          requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
-          submitting: this.submission.submitting,
-          textareaController: this.submission.composerTextarea,
-          messageLocked: Boolean(this.submission.pendingCloud.sessionKey),
-          incognitoDisabledReason: this.submission.incognitoDisabledReason(),
-          terminalAction: this.submission.showStartInTerminal()
-            ? {
-                canStart: this.submission.canSubmit("terminal"),
-                disabledReason: this.submission.terminalStartDisabledReason(),
-                onStart: () => void this.submission.startInTerminal(),
-              }
-            : undefined,
-          onInput: (message) => {
-            if (!this.submission.submitting && !this.submission.pendingCloud.sessionKey) {
-              this.setMessageFromUser(message);
-            }
+          agent: place.selectedAgent(),
+          agentId: place.agentId,
+          attachmentDraft: submission.attachmentDraft,
+          canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
+          submitDisabledReason: submission.submitDisabledReason(),
+          blockedSubmitNotice: submission.blockedSubmitNotice(),
+          get dictationActive() {
+            return dictation.active;
           },
-          onOpenImage: (item) => {
-            this.imageLightbox = item;
+          dictationPreview: dictation.previewDraft(),
+          dictationStatus: dictation.renderStatus(),
+          context,
+          isCatalogTarget,
+          draftOwnerKey,
+          get message() {
+            return submission.message;
           },
+          mentions: submission.mentions,
+          getMentions: () => submission.mentions,
+          visibility: submission.visibility,
+          draftAvailable: capabilities.canStartAsDraft(context),
+          ...capabilities.composerProps(context, gateway, place.agentId),
+          modelControl: place.modelControl,
+          permissionControl: isCatalogTarget
+            ? undefined
+            : renderChatPermissionPicker({
+                canSelectFull: place.isAdmin(),
+                defaultMode: place.selectedAgent()?.defaultPermissionMode,
+                disabled: submission.submitting || Boolean(submission.pendingPlacement.sessionKey),
+                disabledReason: submission.submitting ? t("newSession.starting") : undefined,
+                mode: submission.permissionMode,
+                onSelect: (permissionMode) =>
+                  submission.setPermissionMode(permissionMode ?? undefined),
+              }),
+          requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
+          requestUpdate: () => this.requestUpdate(),
+          get submitting() {
+            return submission.submitting;
+          },
+          textareaController: submission.composerTextarea,
+          voiceControl,
+          get messageLocked() {
+            return Boolean(submission.pendingPlacement.sessionKey);
+          },
+          nativeTerminal: isCatalogTarget,
+          onUnsupportedAttachment: () =>
+            submission.setError(t("newSession.terminalAttachmentsUnsupported")),
+          onInput: (message, mentions) => this.setMessageFromUser(message, mentions),
+          onOpenImage: this.setImageLightbox,
+          onOpenSidebar: this.openAttachmentPanel,
           onVisibilityChange: (visibility) => {
-            if (!this.submission.submitting && !this.submission.pendingCloud.sessionKey) {
-              this.submission.setVisibility(visibility);
+            if (!submission.submitting && !submission.pendingPlacement.sessionKey) {
+              submission.setVisibility(visibility);
             }
           },
-          onSubmit: () => void this.submission.submit(),
+          onSubmit: () => void submission.submit(),
+          onBackgroundSubmit:
+            submission.visibility === "draft" || isCatalogTarget
+              ? undefined
+              : () => void submission.submit(undefined, true),
         })}
+        ${
+          !isCatalogTarget
+            ? renderNewSessionIncognitoNotice(submission.visibility === "incognito")
+            : nothing
+        }
       </div>
     `;
   }
@@ -634,11 +507,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     const identity = this.context?.agentIdentity.get(this.place.agentId);
     const gateway = this.context?.gateway.snapshot;
     return renderWelcomeState({
+      currentAgentId: this.place.agentId,
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
-      assistantAvatar: agent?.identity?.avatar ?? agent?.identity?.emoji ?? null,
-      assistantAvatarUrl: agent?.identity?.avatarUrl ?? null,
-      hint: t("newSession.hint"),
+      assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
+      assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),
+      hint: t(catalog.isTarget(this.data) ? "newSession.nativeTerminalHint" : "newSession.hint"),
       composer: this.renderDraftBlock(),
+      hideSecondaryContent: this.submission.visibility === "incognito",
+      fadeSecondaryContent: this.submission.message.trim().length > 0,
       modelSetupRequired: this.submission.requiresModelSetup(),
       onModelSetup: () => this.context?.navigate("model-setup"),
       sessions: this.context?.sessions.state.result,
@@ -651,18 +527,11 @@ class NewSessionPage extends OpenClawLightDomElement {
         agentsList: this.context?.agents.state.agentsList ?? null,
         hello: gateway?.hello ?? null,
       },
-      onDraftChange: (next) => {
-        if (!this.submission.submitting && !this.submission.pendingCloud.sessionKey) {
-          this.setMessageFromUser(next);
-        }
-      },
+      onDraftChange: (next) => this.setMessageFromUser(next),
       onSend: () => void this.submission.submit(),
       onOpenSession: (sessionKey) => {
-        if (this.submission.submitting || this.submission.pendingCloud.sessionKey) {
-          return;
-        }
-        const context = this.context;
-        if (!context) {
+        const { context, submission } = this;
+        if (!context || submission.submitting || submission.pendingPlacement.sessionKey) {
           return;
         }
         selectApplicationSession({
@@ -680,42 +549,78 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   override render() {
+    const pendingMessage = this.submission.pendingMessage;
+    const completed = this.submission.completedSubmission;
+    const startup = completed ? this.context?.placementStartup.get(completed.key) : null;
+    const identity = this.context?.gateway.snapshot.selfUser?.identity;
+    const incognito = this.submission.visibility === "incognito";
+    const panelLoad = this.attachmentPanelLoader.visibleState;
     return html`
-      <div class="new-session-page">
-        <div
-          class="new-session-page__scroll"
-          ?inert=${this.submission.submitting}
-          aria-busy=${String(this.submission.submitting)}
-          @mousedown=${beginNativeWindowDragFromTopInset}
-        >
-          ${this.renderWelcome()}
-        </div>
-        ${renderConnectMachineDialog({
-          open: this.connectMachineOpen && this.place.isAdmin(),
-          loading: this.connectMachineLoading,
-          error: this.connectMachineError,
-          setup: this.connectMachineSetup,
-          onRefresh: () => void this.refreshConnectMachine(),
-          onClose: () => {
-            this.closeConnectMachine();
-            this.requestUpdate();
-          },
-          onManageDevices: () => {
-            this.closeConnectMachine();
-            this.context?.navigate("devices");
-          },
+      <div
+        class="new-session-page ${pendingMessage ? "chat" : ""} ${
+          incognito ? "new-session-page--incognito" : ""
+        }"
+      >
+        ${
+          catalog.isTarget(this.data)
+            ? nothing
+            : renderNewSessionIncognitoControl(
+                this.submission,
+                this.submission.capabilities.canStartAsDraft(this.context),
+              )
+        }
+        ${renderNewSessionBody({
+          error: this.submission.error,
+          pendingMessage,
+          userId: identity?.type === "profile" ? identity.id : null,
+          submitting: this.submission.submitting,
+          statusLabel:
+            this.context?.gateway.snapshot.phase === "connected"
+              ? undefined
+              : t("connection.reconnecting"),
+          completion: completed
+            ? {
+                label:
+                  completed.error ??
+                  startup?.error ??
+                  chatStartupStatusLabel(null, startup) ??
+                  t("newSession.created"),
+                onOpen: () => void this.submission.openSubmittedSession(),
+                disabled: this.context?.gateway.snapshot.phase !== "connected",
+              }
+            : undefined,
+          showDraft: Boolean(completed),
+          renderDraft: () => (completed ? this.renderDraftBlock() : this.renderWelcome()),
+          onOpenImage: this.setImageLightbox,
         })}
-        ${renderChatImageLightbox(this.imageLightbox, () => {
-          this.imageLightbox = null;
+        ${this.connectMachine.render(this.place.isAdmin(), () => {
+          this.connectMachine.close();
+          this.context?.navigate("devices");
         })}
+        ${renderChatImageLightbox(this.imageLightbox, () => this.setImageLightbox(null))}
       </div>
+      ${
+        this.attachmentPanel
+          ? html`<aside class="new-session-attachment-panel">
+              ${
+                panelLoad?.status === "error"
+                  ? renderLazyViewError({
+                      error: panelLoad.error,
+                      stale: panelLoad.stale,
+                      onRetry: () => this.attachmentPanelLoader.retry(),
+                      onClose: this.closeAttachmentPanel,
+                    })
+                  : panelLoad
+                    ? html`<div role="status">${t("common.loading")}</div>`
+                    : nothing
+              }
+              <openclaw-chat-detail-panel
+                .content=${{ ...this.attachmentPanel.content }}
+                @chat-detail-panel-close=${this.closeAttachmentPanel}
+              ></openclaw-chat-detail-panel>
+            </aside>`
+          : nothing
+      }
     `;
   }
 }
-
-if (!customElements.get("openclaw-new-session-page")) {
-  customElements.define("openclaw-new-session-page", NewSessionPage);
-}
-
-export const render = (data: unknown) =>
-  html`<openclaw-new-session-page .data=${data}></openclaw-new-session-page>`;

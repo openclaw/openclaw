@@ -1,15 +1,8 @@
-import { normalizeRouteBasePath } from "@openclaw/uirouter";
 import { html } from "lit";
 import { property, state } from "lit/decorators.js";
-import { CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX } from "../../../src/gateway/control-ui-contract.js";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
-
-/** Same-origin Gateway route serving the project icon of a session's workspace. */
-export function workspaceIconRouteUrl(basePath: string, sessionKey: string): string {
-  return `${normalizeRouteBasePath(basePath)}${CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX}/${encodeURIComponent(sessionKey)}`;
-}
 
 /**
  * Workspace identity mark: the project's own icon when the Gateway found one in
@@ -22,21 +15,13 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
   /** Ordered credential candidates; a stale saved token falls through to the session password. */
   @property({ attribute: false }) authTokens: readonly string[] = [];
   @property({ attribute: false }) authReady = false;
+  /** Accepted Gateway connection identity, stable across ordinary header updates. */
+  @property({ attribute: false }) connectionId: string | undefined;
   /** Route whose bytes the browser refused to decode; keyed so a new session retries. */
   @state() private undecodableRouteUrl: string | null = null;
-  private readonly loader = new AuthenticatedAvatarRouteLoader(
-    () => {
-      if (this.isConnected) {
-        this.requestUpdate();
-      }
-    },
-    { cacheNotFound: true },
-  );
-
-  override disconnectedCallback() {
-    this.loader.reset();
-    super.disconnectedCallback();
-  }
+  private readonly loader = new AuthenticatedAvatarRouteLoader(this, {
+    retryUnavailable: true,
+  });
 
   override render() {
     return this.loader.withActiveRoutes(() => this.renderContent());
@@ -46,10 +31,10 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
     const routeUrl = this.routeUrl;
     const blobUrl =
       routeUrl && this.authReady && this.undecodableRouteUrl !== routeUrl
-        ? this.loader.resolve(routeUrl, this.authTokens)
+        ? this.loader.resolve(routeUrl, this.authTokens, this.connectionId)
         : null;
     if (!blobUrl) {
-      return icons.folder;
+      return html`<span class="workspace-icon-fallback" aria-hidden="true">${icons.folder}</span>`;
     }
     // <img> never executes script, which is what keeps SVG project icons safe
     // to paint; the route's sandbox policy covers direct navigation to them.

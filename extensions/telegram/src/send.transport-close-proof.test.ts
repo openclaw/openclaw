@@ -1,43 +1,58 @@
 // E2E proof for the transport cache-eviction lifecycle: no module mocks — real
-// grammY Bot, real undici agents, production-mode cache, against a local HTTP
+// grammY Bot, real undici agents, and the shared cache against a local HTTP
 // server standing in for the Telegram Bot API. Observes actual TCP sockets.
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import type { Socket } from "node:net";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-
-let sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
-let resetTelegramClientOptionsCacheForTests: typeof import("./send.js").resetTelegramClientOptionsCacheForTests;
+import type { AddressInfo, Socket } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  editMessageTelegram,
+  resetTelegramClientOptionsCacheForTests,
+  sendMessageTelegram,
+} from "./send.js";
 
 describe("telegram transport cache eviction over real sockets", () => {
   let server: Server;
   let apiRoot: string;
   const liveSockets = new Set<Socket>();
-  const sockets = { opened: 0, closed: 0 };
+  const requestSockets = new Map<string, Socket>();
   let sendMessageCalls = 0;
-  let slowMode = false;
-  let slowRequestReceived: () => void = () => {};
-  let releaseSlowResponse: (() => void) | undefined;
+  let slowResponse: ReturnType<typeof createDeferred<() => void>> | undefined;
+
+  beforeEach(() => {
+    // This fixture owns its loopback sockets, not the operator's proxy route.
+    for (const key of [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "NO_PROXY",
+      "no_proxy",
+      "OPENCLAW_PROXY_URL",
+      "OPENCLAW_PROXY_ACTIVE",
+      "OPENCLAW_DEBUG_PROXY_ENABLED",
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
+  });
 
   beforeAll(async () => {
     server = createServer((req, res) => {
-      let body = "";
-      req.on("data", (chunk: Buffer) => {
-        body += chunk.toString("utf8");
-      });
       req.on("end", () => {
         const url = req.url ?? "";
         const respond = (result: unknown) => {
           res.setHeader("content-type", "application/json");
           res.end(JSON.stringify({ ok: true, result }));
         };
-        if (url.includes("/sendMessage")) {
+        if (url.includes("/sendMessage") || url.includes("/editMessageText")) {
+          requestSockets.set(url.slice(0, url.lastIndexOf("/")), req.socket);
           sendMessageCalls += 1;
-          if (slowMode) {
-            slowRequestReceived();
-            releaseSlowResponse = () => {
+          if (slowResponse) {
+            slowResponse.resolve(() => {
               respond({ message_id: sendMessageCalls, chat: { id: 123 } });
-            };
+            });
             return;
           }
           respond({ message_id: sendMessageCalls, chat: { id: 123 } });
@@ -49,20 +64,19 @@ describe("telegram transport cache eviction over real sockets", () => {
         }
         respond(true);
       });
+      req.resume();
     });
+    // Omit the peer idle deadline so the unchanged client 30s idle policy cannot
+    // satisfy the 3s eviction checks. Idle peer closure is injected explicitly below.
+    server.keepAliveTimeout = 0;
     server.on("connection", (socket) => {
-      sockets.opened += 1;
       liveSockets.add(socket);
-      socket.on("close", () => {
-        sockets.closed += 1;
-        liveSockets.delete(socket);
-      });
+      socket.on("close", () => liveSockets.delete(socket));
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
     });
     apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    ({ sendMessageTelegram, resetTelegramClientOptionsCacheForTests } = await import("./send.js"));
   });
 
   afterAll(async () => {
@@ -76,10 +90,7 @@ describe("telegram transport cache eviction over real sockets", () => {
     });
   });
 
-  it("closes evicted transports, deferring close for an in-flight send", async () => {
-    // The cache is disabled under test env; force the production path.
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
+  it("closes retired transports only after their active sends finish", async () => {
     resetTelegramClientOptionsCacheForTests();
 
     const ACCOUNTS = 70;
@@ -95,64 +106,92 @@ describe("telegram transport cache eviction over real sockets", () => {
         },
       },
     };
-
-    // Fill the cache to its 64-entry cap: one real agent + socket per account.
-    for (let i = 0; i < 64; i += 1) {
-      const result = await sendMessageTelegram("123", `hello ${i}`, {
-        cfg,
-        accountId: `acct-${i}`,
-      });
+    const socketForAccount = (account: number) => {
+      const socket = requestSockets.get(`/bot10${account}:e2e-token-${account}`);
+      if (!socket) {
+        throw new Error(`Telegram socket for acct-${account} was not captured`);
+      }
+      return socket;
+    };
+    // Edits retain idle pooling; new messages deliberately do not. Exercise both
+    // through the same cached account transport and its active-operation lease.
+    const send = async (account: number, text: string, create = false) => {
+      const opts = { cfg, accountId: `acct-${account}` };
+      const result = create
+        ? await sendMessageTelegram("123", text, opts)
+        : await editMessageTelegram("123", 1, text, opts);
       expect(result.messageId).toBeTruthy();
-    }
-    expect(sockets.opened).toBe(64);
-    // Keep-alive is 30s; nothing may have closed yet.
-    expect(sockets.closed).toBe(0);
+      return socketForAccount(account);
+    };
 
-    // Put acct-0 (the oldest cache entry) mid-flight, then evict it.
-    slowMode = true;
-    const inFlight = new Promise<void>((resolve) => {
-      slowRequestReceived = resolve;
+    // Fill the cache to its 64-entry cap, then let the peer retire an idle socket.
+    for (let i = 0; i < 64; i += 1) {
+      await send(i, `hello ${i}`);
+    }
+    expect(requestSockets.size).toBe(64);
+    const peerSocket = await send(0, "refresh before peer close");
+    const peerClosed = new Promise<void>((resolve) => {
+      peerSocket.once("close", resolve);
     });
-    const slowSend = sendMessageTelegram("123", "slow", { cfg, accountId: "acct-0" });
-    await inFlight;
-    slowMode = false;
+    peerSocket.end();
+    await peerClosed;
+    expect(liveSockets.has(peerSocket)).toBe(false);
 
-    const releaseResponse = releaseSlowResponse;
-    if (!releaseResponse) {
-      throw new Error("slow Telegram response was not captured");
-    }
+    // Put acct-0 (the oldest cache entry) mid-flight on its replacement socket.
+    const inFlight = createDeferred<() => void>();
+    slowResponse = inFlight;
+    const slowSend = send(0, "slow", true);
+    const releaseResponse = await inFlight.promise;
+    slowResponse = undefined;
+    const activeSocket = socketForAccount(0);
+
     try {
-      // New cache key -> evicts acct-0 while its send holds the lease.
-      const evictor = await sendMessageTelegram("123", "evictor", {
-        cfg,
-        accountId: "acct-64",
-      });
-      expect(evictor.messageId).toBeTruthy();
-      // Deferred close: the evicted transport must NOT be closed mid-request.
-      expect(sockets.closed).toBe(0);
+      expect(activeSocket).not.toBe(peerSocket);
+      // New cache key retires acct-0, but its exact socket must survive the lease.
+      await send(64, "evictor");
+      expect(liveSockets.has(activeSocket)).toBe(true);
     } finally {
-      releaseSlowResponse = undefined;
       releaseResponse();
       await slowSend.catch(() => undefined);
     }
-    const slow = await slowSend;
-    expect(slow.messageId).toBeTruthy();
-    // Lease released -> the retired acct-0 transport closes its real socket.
-    await vi.waitFor(() => expect(sockets.closed).toBeGreaterThanOrEqual(1), { timeout: 3000 });
+    expect(await slowSend).toBe(activeSocket);
+    await vi.waitFor(() => expect(liveSockets.has(activeSocket)).toBe(false), { timeout: 3000 });
 
-    // Five more evictions against idle entries (acct-1..acct-5) close immediately.
+    // Refresh each idle entry before eviction so an earlier peer close cannot
+    // stand in for closing the transport's current socket.
     for (let i = 65; i < ACCOUNTS; i += 1) {
-      const result = await sendMessageTelegram("123", `hello ${i}`, {
-        cfg,
-        accountId: `acct-${i}`,
-      });
-      expect(result.messageId).toBeTruthy();
+      const idleSocket = await send(i - 64, "refresh before eviction");
+      expect(liveSockets.has(idleSocket)).toBe(true);
+      await send(i, `hello ${i}`);
+      await vi.waitFor(() => expect(liveSockets.has(idleSocket)).toBe(false), { timeout: 3000 });
     }
-    await vi.waitFor(() => expect(sockets.closed).toBe(6), { timeout: 3000 });
 
-    // All sends succeeded; retained cache entries keep their sockets open.
-    expect(sendMessageCalls).toBe(ACCOUNTS + 1);
-    expect(sockets.opened).toBe(ACCOUNTS);
-    expect(liveSockets.size).toBe(ACCOUNTS - 6);
+    // Retained transports still deliver after an unrelated idle peer close.
+    await send(6, "retained");
+    expect(sendMessageCalls).toBe(ACCOUNTS + 8);
+    expect(requestSockets.size).toBe(ACCOUNTS);
+
+    const idleBeforeReset = await send(7, "idle before reset");
+    const resetInFlight = createDeferred<() => void>();
+    slowResponse = resetInFlight;
+    const resetSend = send(6, "active during reset", true);
+    const releaseResetResponse = await resetInFlight.promise;
+    slowResponse = undefined;
+    const activeBeforeReset = socketForAccount(6);
+    try {
+      resetTelegramClientOptionsCacheForTests();
+      expect(liveSockets.has(activeBeforeReset)).toBe(true);
+      await vi.waitFor(() => expect(liveSockets.has(idleBeforeReset)).toBe(false), {
+        timeout: 3000,
+      });
+    } finally {
+      releaseResetResponse();
+      await resetSend.catch(() => undefined);
+    }
+    expect(await resetSend).toBe(activeBeforeReset);
+    await vi.waitFor(() => expect(liveSockets.has(activeBeforeReset)).toBe(false), {
+      timeout: 3000,
+    });
+    expect(await send(6, "fresh after reset")).not.toBe(activeBeforeReset);
   });
 });

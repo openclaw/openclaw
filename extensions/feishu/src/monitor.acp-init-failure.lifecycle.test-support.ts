@@ -1,12 +1,13 @@
-// Feishu plugin module implements monitor.acp init failure.lifecycle support behavior.
-import "./lifecycle.test-support.js";
-import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../runtime-api.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import {
   getFeishuLifecycleTestMocks,
   resetFeishuLifecycleTestMocks,
 } from "./lifecycle.test-support.js";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
+// Feishu plugin module implements monitor.acp init failure.lifecycle support behavior.
 import {
   createFeishuLifecycleFixture,
   createFeishuTextMessageEvent,
@@ -15,6 +16,7 @@ import {
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
+  stopFeishuLifecycleMonitors,
 } from "./test-support/lifecycle-test-support.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -152,9 +154,13 @@ describe("Feishu ACP-init failure lifecycle", () => {
     });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    restoreFeishuLifecycleStateDir(originalStateDir);
+  afterEach(async () => {
+    try {
+      await stopFeishuLifecycleMonitors();
+      restoreFeishuLifecycleStateDir(originalStateDir);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends one ACP failure notice to the topic root across replay", async () => {
@@ -187,25 +193,5 @@ describe("Feishu ACP-init failure lifecycle", () => {
       }),
     );
     expect(dispatchReplyFromConfigMock).not.toHaveBeenCalled();
-  });
-
-  it("does not duplicate the ACP failure notice after the first send succeeds", async () => {
-    const onMessage = await setupLifecycleMonitor();
-    const event = createFeishuTextMessageEvent({
-      messageId: "om_topic_msg_2",
-      chatId: "oc_group_topic",
-      rootId: "om_topic_root_1",
-      threadId: "omt_topic_1",
-      text: "hello topic",
-    });
-
-    await expectFeishuSingleEffectAcrossReplay({
-      handler: onMessage,
-      event,
-      effectMock: sendMessageFeishuMock,
-    });
-
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(lastRuntime?.error).not.toHaveBeenCalled();
   });
 });

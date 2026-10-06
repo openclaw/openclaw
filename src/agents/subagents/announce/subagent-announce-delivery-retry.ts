@@ -1,13 +1,14 @@
-/**
- * Retry and error policy for subagent announcement delivery.
- */
+import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveDeliveryNotSentRetryability } from "../../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
-import { isOutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
+import { isPlatformMessageRejectedError } from "../../../infra/outbound/deliver-types.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isFailoverError } from "../../failover-error.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 
@@ -16,17 +17,6 @@ export class SourceOwnerChangedError extends Error {
     super("subagent source lifecycle changed before completion delivery");
     this.name = "SourceOwnerChangedError";
   }
-}
-
-export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
-  return {
-    delivered: false,
-    path: "none",
-    reason: "source_owner_changed",
-    error: "subagent source lifecycle changed before completion delivery",
-    terminal: true,
-    disposition: "intentional_non_delivery",
-  };
 }
 
 export function resolveSubagentAnnounceTimeoutMs(cfg: OpenClawConfig): number {
@@ -78,7 +68,7 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   WRITER_CLAIM_REBOUND_ANNOUNCE_RE,
 ];
 
-export function isWriterClaimReboundAnnounceError(error: unknown): boolean {
+function isWriterClaimReboundAnnounceError(error: unknown): boolean {
   return Boolean(
     (error &&
       typeof error === "object" &&
@@ -87,90 +77,77 @@ export function isWriterClaimReboundAnnounceError(error: unknown): boolean {
   );
 }
 
-const ANNOUNCE_ERROR_CHAIN_KEYS = ["cause", "error", "reason"] as const;
-type AnnounceErrorChainKey = (typeof ANNOUNCE_ERROR_CHAIN_KEYS)[number];
-type AnnounceErrorRecord = Partial<Record<AnnounceErrorChainKey, unknown>> & {
-  sentBeforeError?: unknown;
-  visibleReplySent?: unknown;
-};
-
-function isAnnounceErrorRecord(error: unknown): error is AnnounceErrorRecord {
-  return Boolean(error && typeof error === "object");
+function hasAnnounceErrorMatch(error: unknown, matches: (candidate: unknown) => boolean): boolean {
+  return collectErrorGraphCandidates(error, (candidate) => [
+    candidate.cause,
+    candidate.error,
+    candidate.reason,
+  ]).some(matches);
 }
 
-function hasAnnounceErrorMatch(
-  error: unknown,
-  matches: (candidate: unknown) => boolean,
-  seen: Set<object> = new Set(),
-): boolean {
-  if (matches(error)) {
-    return true;
-  }
-  if (!isAnnounceErrorRecord(error)) {
-    return false;
-  }
-  if (seen.has(error)) {
-    return false;
-  }
-  seen.add(error);
-
-  return ANNOUNCE_ERROR_CHAIN_KEYS.some((key) => hasAnnounceErrorMatch(error[key], matches, seen));
-}
-
-export function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
+function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
   return hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError);
 }
 
-function isTransientFailoverAnnounceError(error: unknown): boolean {
-  return (
-    isFailoverError(error) && (error.reason === "overloaded" || (error.attempts?.length ?? 0) > 0)
+function isPermanentNonWriterAnnounceError(error: unknown): boolean {
+  return hasAnnounceErrorMatch(
+    error,
+    (candidate) =>
+      isPlatformMessageRejectedError(candidate) ||
+      isSessionTranscriptTurnMismatchErrorMessage(summarizeDeliveryError(candidate)) ||
+      (!isWriterClaimReboundAnnounceError(candidate) &&
+        PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
+          pattern.test(summarizeDeliveryError(candidate)),
+        )),
   );
 }
 
 function isTransientAnnounceDeliveryError(error: unknown): boolean {
-  const message = summarizeDeliveryError(error);
-  const topLevelPermanent = Boolean(
-    message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
-  );
-  if (topLevelPermanent && !isWriterClaimReboundAnnounceError(error)) {
+  // Any committed platform send makes another attempt a possible duplicate;
+  // permanent owner rejections also override transient-looking wrapped causes.
+  if (hasAnnounceSendEvidence(error)) {
     return false;
   }
 
-  const writerClaimRebound = hasWriterClaimReboundAnnounceError(error);
-  if (writerClaimRebound) {
-    return !hasAnnounceSendEvidence(error);
+  const typedRetryability = resolveDeliveryNotSentRetryability(error);
+  if (typedRetryability !== undefined) {
+    return typedRetryability;
   }
 
-  if (
-    hasAnnounceErrorMatch(
-      error,
-      (candidate) =>
-        Boolean(candidate && typeof candidate === "object") &&
-        (candidate as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
-        /cron run continuation/i.test(summarizeDeliveryError(candidate)),
-    )
-  ) {
+  if (isPermanentNonWriterAnnounceError(error)) {
+    return false;
+  }
+
+  if (hasWriterClaimReboundAnnounceError(error)) {
     return true;
   }
 
-  if (!message) {
-    return false;
-  }
-  if (topLevelPermanent) {
-    return false;
-  }
-  return (
-    hasAnnounceErrorMatch(error, isTransientFailoverAnnounceError) ||
-    TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))
-  );
+  return hasAnnounceErrorMatch(error, (candidate) => {
+    if (
+      isFailoverError(candidate) &&
+      (candidate.reason === "overloaded" || (candidate.attempts?.length ?? 0) > 0)
+    ) {
+      return true;
+    }
+    const message = summarizeDeliveryError(candidate);
+    if (
+      candidate &&
+      typeof candidate === "object" &&
+      (candidate as { gatewayCode?: unknown }).gatewayCode === "UNAVAILABLE" &&
+      /cron run continuation/i.test(message)
+    ) {
+      return true;
+    }
+    return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+  });
 }
 
 export function isPermanentAnnounceDeliveryError(error: unknown): boolean {
-  const message = summarizeDeliveryError(error);
-  return (
-    (message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) ||
-    hasWriterClaimReboundAnnounceError(error)
-  );
+  const typedRetryability = resolveDeliveryNotSentRetryability(error);
+  if (typedRetryability !== undefined) {
+    return !typedRetryability;
+  }
+  return isPermanentNonWriterAnnounceError(error) || hasWriterClaimReboundAnnounceError(error);
 }
 
 export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
@@ -178,59 +155,38 @@ export function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
   return /(?:incomplete terminal response|code=incomplete_result)\b/i.test(message);
 }
 
-function hasDirectAnnounceSendEvidence(error: unknown): boolean {
-  if (isOutboundDeliveryError(error) && error.sentBeforeError) {
-    return true;
-  }
-  if (!isAnnounceErrorRecord(error)) {
-    return false;
-  }
-  return error.sentBeforeError === true || error.visibleReplySent === true;
-}
-
 export function hasAnnounceSendEvidence(error: unknown): boolean {
-  return hasAnnounceErrorMatch(error, hasDirectAnnounceSendEvidence);
-}
-
-export async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) {
-    return;
-  }
-  if (!signal) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, ms);
-    });
-    return;
-  }
-  if (signal.aborted) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
+  return hasAnnounceErrorMatch(error, (candidate) => {
+    const record = asOptionalObjectRecord(candidate);
+    return record?.sentBeforeError === true || record?.visibleReplySent === true;
   });
 }
 
-function resolveDirectAnnounceTransientRetryDelaysMs() {
-  return isFastTestRuntimeEnv() ? ([8, 16, 32] as const) : ([5_000, 10_000, 20_000] as const);
+export async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  try {
+    await sleepWithAbort(ms, signal);
+  } catch (error) {
+    // Cancellation settles the backoff; its caller owns the aborted-delivery outcome.
+    if (!signal?.aborted) {
+      throw error;
+    }
+  }
 }
 
 export async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
+  prepareAttempt?: () => Promise<boolean>;
   isAttemptAllowed?: () => boolean;
   run: () => Promise<T>;
 }): Promise<T> {
-  const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
+  const retryDelaysMs = isFastTestRuntimeEnv()
+    ? ([8, 16, 32] as const)
+    : ([5_000, 10_000, 20_000] as const);
   for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
+    if (params.prepareAttempt && !(await params.prepareAttempt())) {
+      throw new SourceOwnerChangedError();
+    }
     if (params.isAttemptAllowed?.() === false) {
       throw new SourceOwnerChangedError();
     }
@@ -253,6 +209,9 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
       );
       await waitForAnnounceRetryDelay(delayMs, params.signal);
     }
+  }
+  if (params.prepareAttempt && !(await params.prepareAttempt())) {
+    throw new SourceOwnerChangedError();
   }
   if (params.signal?.aborted) {
     throw new Error("announce delivery aborted");

@@ -1,12 +1,7 @@
-// QA Lab Slack Web API and stored-message observations.
 import { isDeepStrictEqual } from "node:util";
-import { createSlackWebClient, sendSlackMessage } from "@openclaw/slack/api.js";
-import type { WebClient } from "@slack/web-api";
-import {
-  asPlainRecord,
-  countSlackNativeDataBlocks,
-  instrumentSlackPostMessage,
-} from "./slack-live.config.js";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { countSlackNativeDataBlocks, instrumentSlackPostMessage } from "./slack-live.config.js";
 import {
   SLACK_QA_NATIVE_CHART,
   SLACK_QA_NATIVE_TABLE,
@@ -21,12 +16,18 @@ import {
   slackAuthTestSchema,
   slackPostMessageSchema,
   type SlackMessage,
+  type SlackObservedMessage,
   slackHistorySchema,
   slackRepliesSchema,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
+
+const SLACK_QA_CHANNEL_HISTORY_LIMIT = 50;
 
 export async function getSlackIdentity(token: string): Promise<SlackAuthIdentity> {
+  const { createSlackWebClient } = loadSlackQaRuntime();
   const client = createSlackWebClient(token, { timeout: SLACK_QA_WEB_API_TIMEOUT_MS });
   const auth = slackAuthTestSchema.parse(await client.auth.test());
   if (!auth.user_id) {
@@ -70,7 +71,7 @@ export async function listSlackMessages(params: {
     await params.client.conversations.history({
       channel: params.channelId,
       inclusive: true,
-      limit: 50,
+      limit: SLACK_QA_CHANNEL_HISTORY_LIMIT,
       oldest: params.oldestTs,
     }),
   );
@@ -123,6 +124,32 @@ export function collectSlackBlockText(blocks?: unknown[]) {
 
 export function collectSlackActionValues(blocks?: unknown[]) {
   return collectSlackBlockStringFields(blocks ?? [], "value");
+}
+
+export function recordSlackObservedMessage(params: {
+  channelId: string;
+  matchedScenario: boolean;
+  message: SlackMessage;
+  observedMessages: SlackObservedMessage[];
+  scenarioId: string;
+  scenarioTitle: string;
+}) {
+  if (!params.message.ts) {
+    return;
+  }
+  params.observedMessages.push({
+    actionValues: collectSlackActionValues(params.message.blocks),
+    blockText: collectSlackBlockText(params.message.blocks),
+    botId: params.message.bot_id,
+    channelId: params.channelId,
+    matchedScenario: params.matchedScenario,
+    scenarioId: params.scenarioId,
+    scenarioTitle: params.scenarioTitle,
+    text: params.message.text ?? "",
+    threadTs: params.message.thread_ts,
+    ts: params.message.ts,
+    userId: params.message.user,
+  });
 }
 
 export function parseSlackNativeApprovalAction(value: string) {
@@ -240,7 +267,7 @@ export function isExpectedSlackNativeChartMessage(
     return false;
   }
   return (message.blocks ?? []).some((value) => {
-    const block = asPlainRecord(value);
+    const block = asNonArrayRecord(value);
     return isDeepStrictEqual(
       { type: block.type, title: block.title, chart: block.chart },
       SLACK_QA_NATIVE_CHART,
@@ -253,20 +280,26 @@ export async function waitForSlackStoredMessage(params: {
   client: WebClient;
   description: string;
   matchesMessage: (message: SlackMessage) => boolean;
-  oldestTs: string;
+  messageId: string;
   sutIdentity: SlackAuthIdentity;
   timeoutMs: number;
 }) {
   const startedAt = Date.now();
   while (true) {
-    const messages = await listSlackMessages({
-      channelId: params.channelId,
-      client: params.client,
-      oldestTs: params.oldestTs,
-    });
+    // The capture owner supplies the successful post timestamp. Querying that exact
+    // boundary keeps concurrent shared-channel traffic from evicting the evidence.
+    const history = slackHistorySchema.parse(
+      await params.client.conversations.history({
+        channel: params.channelId,
+        inclusive: true,
+        latest: params.messageId,
+        limit: 1,
+      }),
+    );
+    const messages = history.messages ?? [];
     const message = messages.find(
       (entry) =>
-        entry.ts !== params.oldestTs &&
+        entry.ts === params.messageId &&
         isSutSlackMessage(entry, params.sutIdentity) &&
         params.matchesMessage(entry),
     );
@@ -277,9 +310,7 @@ export async function waitForSlackStoredMessage(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.min(1_000, remainingMs));
-    });
+    await sleep(Math.min(1_000, remainingMs));
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
 }
@@ -295,11 +326,7 @@ async function waitForSlackStoredMessages(params: {
 }) {
   const startedAt = Date.now();
   while (true) {
-    const messages = await listSlackMessages({
-      channelId: params.channelId,
-      client: params.client,
-      oldestTs: params.oldestTs,
-    });
+    const messages = await listSlackMessages(params);
     const messagesById = new Map(
       messages
         .filter((message) => message.ts && isSutSlackMessage(message, params.sutIdentity))
@@ -312,9 +339,7 @@ async function waitForSlackStoredMessages(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.min(1_000, remainingMs));
-    });
+    await sleep(Math.min(1_000, remainingMs));
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
 }
@@ -330,7 +355,7 @@ export function isExpectedSlackNativeTableMessage(
     return false;
   }
   return (message.blocks ?? []).some((value) => {
-    const block = asPlainRecord(value);
+    const block = asNonArrayRecord(value);
     return isDeepStrictEqual(
       {
         type: block.type,
@@ -346,6 +371,7 @@ export function isExpectedSlackNativeTableMessage(
 export async function runSlackTableInvalidBlocksFallbackScenario(
   context: SlackQaDirectTransportScenarioContext,
 ): Promise<SlackQaDirectTransportScenarioResult> {
+  const { sendSlackMessage } = loadSlackQaRuntime();
   const probe = buildSlackInvalidBlocksTableProbe();
   const oldestTs = ((Date.now() - 5_000) / 1_000).toFixed(6);
   const originalPostMessage = context.sutWriteClient.chat.postMessage;

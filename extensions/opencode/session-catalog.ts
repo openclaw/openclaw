@@ -1,33 +1,37 @@
-import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import path from "node:path";
 import process from "node:process";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import type {
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
+import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog";
 import {
   isRecord,
   normalizeBoundedOptionalString as optionalOpenCodeString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
+import {
+  OPENCODE_SESSION_CATALOG_MAX_PAGE_LIMIT,
+  OPENCODE_SESSION_ID_PATTERN,
+} from "./session-catalog-shared.js";
 
 const LOCAL_HOST_ID = "gateway";
-const DEFAULT_PAGE_LIMIT = 20;
-const MAX_PAGE_LIMIT = 100;
 const MAX_SEARCH_LENGTH = 500;
-const MAX_CURSOR_LENGTH = 128;
 const MAX_CLI_LIST_SESSIONS = 10_000;
 const MAX_CLI_OUTPUT_BYTES = 32 * 1024 * 1024;
-const MAX_TRANSCRIPT_ITEM_BYTES = 512 * 1024;
-const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const CLI_TIMEOUT_MS = 30_000;
 const OPENCODE_QUERY_CACHE_TTL_MS = 32_000;
 const OPENCODE_QUERY_CACHE_MAX_ENTRIES = 32;
-const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 const SAFE_ENV_KEYS = [
   "APPDATA",
   "COMSPEC",
@@ -68,6 +72,28 @@ const openCodeConfigIdentities = new WeakMap<object, number>();
 // The bounded map prevents pagination variants from growing while avoiding a subprocess every poll.
 const openCodeQueryCache = new Map<string, OpenCodeQueryCacheEntry>();
 let nextOpenCodeConfigIdentity = 1;
+const log = createSubsystemLogger("opencode/session-catalog");
+let cliVersion: { key: string; expiresAt: number; result: Promise<boolean> } | undefined;
+
+export async function isOpenCodeV2(): Promise<boolean> {
+  const key = SAFE_ENV_KEYS.map((name) => process.env[name] ?? "").join("\0");
+  if (!cliVersion || cliVersion.key !== key || cliVersion.expiresAt <= Date.now()) {
+    const result = runOpenCode(["--version"]).then((output) => {
+      const major = /^(?:opencode v)?(\d+)\./.exec(output.trim())?.[1];
+      if (major !== "1" && major !== "2") {
+        throw new Error("Unsupported OpenCode CLI version");
+      }
+      return major === "2";
+    });
+    cliVersion = { key, expiresAt: Date.now() + OPENCODE_QUERY_CACHE_TTL_MS, result };
+    result.catch(() => {
+      if (cliVersion?.result === result) {
+        cliVersion = undefined;
+      }
+    });
+  }
+  return cliVersion.result;
+}
 
 function openCodeQueryCacheKey(query: string, configIdentity: object): string {
   let identity = openCodeConfigIdentities.get(configIdentity);
@@ -79,252 +105,96 @@ function openCodeQueryCacheKey(query: string, configIdentity: object): string {
   return `${String(identity)}\0${environment}\0${query}`;
 }
 
-export type OpenCodeSessionPage = {
+type OpenCodeSessionPage = {
   sessions: SessionCatalogSession[];
   nextCursor?: string;
 };
 
-type OpenCodeListParams = {
-  searchTerm?: string;
-  limit?: number;
-  cursor?: string;
+export const isExactOpenCodeSessionCursor = sessionCatalogPaging.isExactCursor;
+
+const OPENCODE_PARAMETER_MESSAGES = {
+  listNotObject: "OpenCode session list parameters must be an object",
+  unknownListParameter: (key: string) => `unknown OpenCode session list parameter: ${key}`,
+  invalidSearchTerm: "searchTerm is invalid",
+  readNotObject: "OpenCode session read parameters must be an object",
+  unknownReadParameter: (key: string) => `unknown OpenCode session read parameter: ${key}`,
+  invalidThreadId: "threadId is invalid",
 };
 
-type OpenCodeReadParams = {
-  threadId: string;
-  limit?: number;
-  cursor?: string;
-};
-
-function boundedLimit(value: unknown, fallback = DEFAULT_PAGE_LIMIT): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > MAX_PAGE_LIMIT) {
-    throw new Error(`limit must be an integer between 1 and ${String(MAX_PAGE_LIMIT)}`);
-  }
-  return Number(value);
-}
-
-function encodeCursor(offset: number): string {
-  return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
-}
-
-function optionalRawCursor(value: unknown): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string" || value.length === 0 || value.length > MAX_CURSOR_LENGTH) {
-    throw new Error("cursor is invalid");
-  }
-  return value;
-}
-
-function decodeCursor(value: unknown): number {
-  const cursor = optionalRawCursor(value);
-  if (cursor === undefined) {
-    return 0;
-  }
+async function runOpenCode(args: string[], timeoutMs = CLI_TIMEOUT_MS): Promise<string> {
+  const configDirectory = args.includes("--standalone")
+    ? await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "opencode-config-"))
+    : undefined;
   try {
-    const bytes = Buffer.from(cursor, "base64url");
-    if (bytes.toString("base64url") !== cursor) {
-      throw new Error("non-canonical base64url");
+    if (timeoutMs <= 0) {
+      throw new Error("OpenCode session scan exceeded the time limit");
     }
-    const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
-    if (!isRecord(parsed) || !Number.isSafeInteger(parsed.offset) || Number(parsed.offset) < 0) {
-      throw new Error("invalid offset");
-    }
-    const offset = Number(parsed.offset);
-    if (encodeCursor(offset) !== cursor) {
-      throw new Error("non-canonical cursor payload");
-    }
-    return offset;
+    return await executeOpenCode(args, timeoutMs, configDirectory);
   } catch (error) {
-    throw new Error("cursor is invalid", { cause: error });
-  }
-}
-
-export function isExactOpenCodeSessionCursor(value: unknown): value is string {
-  if (typeof value !== "string") {
-    return false;
-  }
-  try {
-    decodeCursor(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function truncateUtf8(text: string, maxBytes: number): string {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
-    return text;
-  }
-  let low = 0;
-  let high = text.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (Buffer.byteLength(text.slice(0, middle), "utf8") <= maxBytes - 3) {
-      low = middle;
-    } else {
-      high = middle - 1;
+    log.warn(`OpenCode catalog CLI failed: ${String(error)}`);
+    throw error;
+  } finally {
+    if (configDirectory) {
+      await rm(configDirectory, { recursive: true, force: true });
     }
   }
-  const end = low > 0 && /[\uD800-\uDBFF]/u.test(text.charAt(low - 1)) ? low - 1 : low;
-  return `${text.slice(0, end)}…`;
 }
 
-function transcriptPage(
-  items: SessionCatalogTranscriptItem[],
-  limit: number,
-  offset: number,
-): { items: SessionCatalogTranscriptItem[]; nextCursor?: string } {
-  const end = Math.max(0, items.length - offset);
-  const start = Math.max(0, end - limit);
-  const page: SessionCatalogTranscriptItem[] = [];
-  let pageBytes = 2;
-  for (let index = end - 1; index >= start; index -= 1) {
-    const item = items[index];
-    if (!item) {
-      continue;
-    }
-    const bounded: SessionCatalogTranscriptItem = {
-      ...item,
-      text: truncateUtf8(item.text ?? "", MAX_TRANSCRIPT_ITEM_BYTES),
-    };
-    const itemBytes = Buffer.byteLength(JSON.stringify(bounded), "utf8") + 1;
-    if (page.length > 0 && pageBytes + itemBytes > MAX_TRANSCRIPT_PAGE_BYTES) {
-      break;
-    }
-    page.unshift(bounded);
-    pageBytes += itemBytes;
-  }
-  const consumed = offset + page.length;
-  return {
-    items: page,
-    ...(consumed < items.length ? { nextCursor: encodeCursor(consumed) } : {}),
-  };
-}
-
-function parseListParams(
-  value: unknown,
-): Required<Pick<OpenCodeListParams, "limit">> & OpenCodeListParams {
-  if (value === undefined || value === null) {
-    return { limit: DEFAULT_PAGE_LIMIT };
-  }
-  if (!isRecord(value)) {
-    throw new Error("OpenCode session list parameters must be an object");
-  }
-  const unknown = Object.keys(value).find(
-    (key) => !["searchTerm", "limit", "cursor"].includes(key),
+async function executeOpenCode(
+  args: string[],
+  timeoutMs: number,
+  configDirectory?: string,
+): Promise<string> {
+  const invocation = materializeWindowsSpawnProgram(
+    resolveWindowsSpawnProgram({
+      command: "opencode",
+      platform: process.platform,
+      env: process.env,
+      execPath: process.execPath,
+      packageName: "opencode-ai",
+    }),
+    args,
   );
-  if (unknown) {
-    throw new Error(`unknown OpenCode session list parameter: ${unknown}`);
-  }
-  const searchTerm = optionalOpenCodeString(value.searchTerm, MAX_SEARCH_LENGTH);
-  if (value.searchTerm !== undefined && !searchTerm) {
-    throw new Error("searchTerm is invalid");
-  }
-  const cursor = optionalRawCursor(value.cursor);
-  return {
-    limit: boundedLimit(value.limit),
-    ...(searchTerm ? { searchTerm } : {}),
-    ...(cursor ? { cursor } : {}),
-  };
-}
-
-function parseReadParams(
-  value: unknown,
-): Required<Pick<OpenCodeReadParams, "threadId" | "limit">> & OpenCodeReadParams {
-  if (!isRecord(value)) {
-    throw new Error("OpenCode session read parameters must be an object");
-  }
-  const unknown = Object.keys(value).find((key) => !["threadId", "limit", "cursor"].includes(key));
-  if (unknown) {
-    throw new Error(`unknown OpenCode session read parameter: ${unknown}`);
-  }
-  const threadId = optionalOpenCodeString(value.threadId, 256);
-  if (!threadId || !SESSION_ID_PATTERN.test(threadId)) {
-    throw new Error("threadId is invalid");
-  }
-  const cursor = optionalRawCursor(value.cursor);
-  return {
-    threadId,
-    limit: boundedLimit(value.limit),
-    ...(cursor ? { cursor } : {}),
-  };
-}
-
-function resolveSpawnInvocation(args: string[]): {
-  command: string;
-  argv: string[];
-  shell?: boolean;
-  windowsHide?: boolean;
-} {
-  const program = resolveWindowsSpawnProgram({
-    command: "opencode",
-    platform: process.platform,
-    env: process.env,
-    execPath: process.execPath,
-    packageName: "opencode-ai",
-  });
-  return materializeWindowsSpawnProgram(program, args);
-}
-
-async function runOpenCode(args: string[]): Promise<string> {
-  const invocation = resolveSpawnInvocation(args);
   const env: NodeJS.ProcessEnv = { OPENCODE_PURE: "1", NO_COLOR: "1" };
   for (const key of SAFE_ENV_KEYS) {
     if (process.env[key] !== undefined) {
       env[key] = process.env[key];
     }
   }
-  const child = spawn(invocation.command, invocation.argv, {
+  if (configDirectory) {
+    // v2 removed --pure. A private server and empty config root avoid executing
+    // user plugins; project configuration must also be disabled when exporting.
+    env.OPENCODE_CONFIG_DIR = configDirectory;
+    env.OPENCODE_CONFIG_PROJECT_DISABLE = "1";
+  }
+  const result = await runCommandBuffered([invocation.command, ...invocation.argv], {
+    baseEnv: {},
     env,
-    shell: invocation.shell,
-    windowsHide: invocation.windowsHide,
-    stdio: ["ignore", "pipe", "pipe"],
+    input: "",
+    maxCombinedOutputBytes: MAX_CLI_OUTPUT_BYTES,
+    maxOutputBytes: MAX_CLI_OUTPUT_BYTES,
+    terminateOnOutputError: true,
+    timeoutMs,
   });
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  let bytes = 0;
-  let overflow = false;
-  const timeout = setTimeout(() => child.kill("SIGKILL"), CLI_TIMEOUT_MS);
-  timeout.unref?.();
-  let outputError: Error | undefined;
-  const failFromOutputError = (source: "stdout" | "stderr", error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    outputError ??= new Error(`OpenCode ${source} stream failed: ${message}`, { cause: error });
-    child.kill("SIGKILL");
-  };
-  const collect = (target: Buffer[], chunk: Buffer) => {
-    bytes += chunk.length;
-    if (bytes > MAX_CLI_OUTPUT_BYTES) {
-      overflow = true;
-      child.kill("SIGKILL");
-      return;
-    }
-    target.push(chunk);
-  };
-  child.stdout.once("error", (error) => failFromOutputError("stdout", error));
-  child.stderr.once("error", (error) => failFromOutputError("stderr", error));
-  child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
-  child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", resolve);
-  }).finally(() => clearTimeout(timeout));
-  if (overflow) {
+  if (result.termination === "output-limit") {
     throw new Error("OpenCode session output exceeded the safety limit");
   }
-  if (outputError) {
-    throw outputError;
+  if (result.errorStream) {
+    const message = result.error?.message ?? "unknown error";
+    throw new Error(`OpenCode ${result.errorStream} stream failed: ${message}`, {
+      cause: result.error,
+    });
   }
-  if (exitCode !== 0) {
-    const detail = Buffer.concat(stderr).toString("utf8").trim();
-    throw new Error(detail || `OpenCode exited with code ${String(exitCode)}`);
+  if (result.termination === "error" && result.error) {
+    throw result.error;
   }
-  return Buffer.concat(stdout).toString("utf8");
+  if (result.code !== 0) {
+    const detail = result.stderr.toString("utf8").trim();
+    throw new Error(detail || `OpenCode exited with code ${String(result.code)}`, {
+      cause: result.stdout.toString("utf8"),
+    });
+  }
+  return result.stdout.toString("utf8");
 }
 
 export async function queryOpenCodeDatabase(query: string): Promise<unknown> {
@@ -332,8 +202,69 @@ export async function queryOpenCodeDatabase(query: string): Promise<unknown> {
   return output.trim() ? (JSON.parse(output) as unknown) : [];
 }
 
+export async function runOpenCodeApi(
+  operation: string,
+  params: string[],
+  timeoutMs = CLI_TIMEOUT_MS,
+): Promise<string> {
+  return runOpenCode(
+    ["api", "--standalone", operation, ...params.flatMap((param) => ["--param", param])],
+    timeoutMs,
+  );
+}
+
+async function queryOpenCodeSessions(query: string, count: number): Promise<unknown> {
+  if (!(await isOpenCodeV2())) {
+    return queryOpenCodeDatabase(query);
+  }
+  const sessions: unknown[] = [];
+  let cursor: string | undefined;
+  const deadline = Date.now() + CLI_TIMEOUT_MS;
+  while (sessions.length < count) {
+    const limit = Math.max(OPENCODE_SESSION_CATALOG_MAX_PAGE_LIMIT, count - sessions.length);
+    const parsed: unknown = JSON.parse(
+      await runOpenCodeApi(
+        "session.list",
+        [`limit=${limit}`, ...(cursor ? [`cursor=${cursor}`] : ["order=desc", "parentID=null"])],
+        deadline - Date.now(),
+      ),
+    );
+    if (!isRecord(parsed) || !Array.isArray(parsed.data) || parsed.data.length > limit) {
+      throw new Error("OpenCode returned an invalid session list");
+    }
+    for (const session of parsed.data) {
+      if (!isRecord(session) || !isRecord(session.time) || !isRecord(session.location)) {
+        throw new Error("OpenCode returned an invalid session");
+      }
+      if (session.time.archived === undefined) {
+        sessions.push({
+          id: session.id,
+          title: session.title,
+          directory: session.location.directory,
+          created: session.time.created,
+          updated: session.time.updated,
+        });
+        if (sessions.length === count) {
+          break;
+        }
+      }
+    }
+    // The API applies its limit before archived rows are removed.
+    if (parsed.data.length < limit || sessions.length >= count) {
+      break;
+    }
+    const next = isRecord(parsed.cursor) ? parsed.cursor.next : undefined;
+    if (typeof next !== "string" || !next || next === cursor) {
+      throw new Error("OpenCode returned an invalid session cursor");
+    }
+    cursor = next;
+  }
+  return sessions;
+}
+
 async function queryCachedOpenCodeSessions(
   query: string,
+  count: number,
   options: OpenCodeQueryCacheOptions,
 ): Promise<unknown> {
   const key = openCodeQueryCacheKey(query, options.configIdentity ?? process.env);
@@ -346,19 +277,13 @@ async function queryCachedOpenCodeSessions(
   if (cached) {
     openCodeQueryCache.delete(key);
   }
-  const result = queryOpenCodeDatabase(query);
+  const result = queryOpenCodeSessions(query, count);
   const entry: OpenCodeQueryCacheEntry = {
     expiresAt: Date.now() + OPENCODE_QUERY_CACHE_TTL_MS,
     result,
   };
   openCodeQueryCache.set(key, entry);
-  while (openCodeQueryCache.size > OPENCODE_QUERY_CACHE_MAX_ENTRIES) {
-    const oldest = openCodeQueryCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    openCodeQueryCache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(openCodeQueryCache, OPENCODE_QUERY_CACHE_MAX_ENTRIES);
   try {
     const value = await result;
     entry.resolved = true;
@@ -376,8 +301,70 @@ async function queryCachedOpenCodeSessions(
 }
 
 export async function exportOpenCodeSession(threadId: string): Promise<unknown> {
-  const output = await runOpenCode(["--pure", "export", threadId]);
-  return JSON.parse(output) as unknown;
+  if (!(await isOpenCodeV2())) {
+    return JSON.parse(await runOpenCode(["--pure", "export", threadId])) as unknown;
+  }
+  const exported: unknown = JSON.parse(
+    await runOpenCode(["session", "export", "--standalone", threadId]),
+  );
+  if (!isRecord(exported) || !Array.isArray(exported.messages)) {
+    throw new Error("OpenCode returned an invalid session export");
+  }
+  return {
+    ...exported,
+    messages: exported.messages.flatMap((message) => {
+      if (!isRecord(message)) {
+        return [];
+      }
+      const model = isRecord(message.model) ? message.model : {};
+      const parts =
+        message.type === "assistant" && Array.isArray(message.content)
+          ? message.content.map((part) => {
+              if (!isRecord(part) || part.type !== "tool" || !isRecord(part.state)) {
+                return part;
+              }
+              return {
+                ...part,
+                tool: part.name,
+                state: {
+                  ...part.state,
+                  output: Array.isArray(part.state.content)
+                    ? part.state.content
+                        .flatMap((content) =>
+                          isRecord(content) &&
+                          content.type === "text" &&
+                          typeof content.text === "string"
+                            ? [content.text]
+                            : [],
+                        )
+                        .join("\n")
+                    : undefined,
+                  error: isRecord(part.state.error) ? jsonText(part.state.error) : part.state.error,
+                },
+              };
+            })
+          : typeof message.text === "string"
+            ? [{ type: "text", text: message.text, synthetic: message.type !== "user" }]
+            : [];
+      if (message.type === "user" && Array.isArray(message.files)) {
+        parts.push(
+          ...message.files.flatMap((file) => (isRecord(file) ? [{ ...file, type: "file" }] : [])),
+        );
+      }
+      return [
+        {
+          info: {
+            id: message.id,
+            role: message.type === "user" ? "user" : "assistant",
+            time: message.time,
+            model,
+            ...model,
+          },
+          parts,
+        },
+      ];
+    }),
+  };
 }
 
 function parseOpenCodeSession(value: unknown): SessionCatalogSession | undefined {
@@ -385,7 +372,7 @@ function parseOpenCodeSession(value: unknown): SessionCatalogSession | undefined
     return undefined;
   }
   const threadId = optionalOpenCodeString(value.id, 256);
-  if (!threadId || !SESSION_ID_PATTERN.test(threadId)) {
+  if (!threadId || !OPENCODE_SESSION_ID_PATTERN.test(threadId)) {
     return undefined;
   }
   const name = optionalOpenCodeString(value.title, 1_000);
@@ -413,8 +400,11 @@ export async function listLocalOpenCodeSessionPage(
   value?: unknown,
   options: OpenCodeQueryCacheOptions = {},
 ): Promise<OpenCodeSessionPage> {
-  const params = parseListParams(value);
-  const offset = decodeCursor(params.cursor);
+  const params = sessionCatalogPaging.parseListParams(value, {
+    searchMaxLength: MAX_SEARCH_LENGTH,
+    messages: OPENCODE_PARAMETER_MESSAGES,
+  });
+  const offset = sessionCatalogPaging.decodeCursor(params.cursor);
   const requestedCount = params.searchTerm
     ? MAX_CLI_LIST_SESSIONS
     : Math.min(MAX_CLI_LIST_SESSIONS, offset + params.limit + 1);
@@ -424,7 +414,7 @@ export async function listLocalOpenCodeSessionPage(
     "WHERE parent_id IS NULL AND time_archived IS NULL",
     `ORDER BY time_updated DESC, id DESC LIMIT ${String(requestedCount)}`,
   ].join(" ");
-  const parsed = await queryCachedOpenCodeSessions(query, options);
+  const parsed = await queryCachedOpenCodeSessions(query, requestedCount, options);
   if (!Array.isArray(parsed) || parsed.length > MAX_CLI_LIST_SESSIONS) {
     throw new Error("OpenCode returned an invalid session list");
   }
@@ -446,9 +436,23 @@ export async function listLocalOpenCodeSessionPage(
   return {
     sessions: page,
     ...(offset + page.length < sessions.length
-      ? { nextCursor: encodeCursor(offset + page.length) }
+      ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + page.length) }
       : {}),
   };
+}
+
+export async function requireLocalOpenCodeSession(
+  threadId: string,
+): Promise<SessionCatalogSession> {
+  const page = await listLocalOpenCodeSessionPage({
+    searchTerm: threadId,
+    limit: OPENCODE_SESSION_CATALOG_MAX_PAGE_LIMIT,
+  });
+  const session = page.sessions.find((candidate) => candidate.threadId === threadId);
+  if (!session) {
+    throw new Error("OpenCode session is unavailable");
+  }
+  return session;
 }
 
 function jsonText(value: unknown, maxLength = 20_000): string | undefined {
@@ -556,10 +560,14 @@ function openCodeTranscriptItems(value: unknown): SessionCatalogTranscriptItem[]
 export async function readLocalOpenCodeTranscriptPage(
   value: unknown,
 ): Promise<SessionsCatalogReadResult> {
-  const params = parseReadParams(value);
-  const offset = decodeCursor(params.cursor);
+  const params = sessionCatalogPaging.parseReadParams(value, {
+    threadIdMaxLength: 256,
+    threadIdPattern: OPENCODE_SESSION_ID_PATTERN,
+    messages: OPENCODE_PARAMETER_MESSAGES,
+  });
+  const offset = sessionCatalogPaging.decodeCursor(params.cursor);
   const items = openCodeTranscriptItems(await exportOpenCodeSession(params.threadId));
-  const page = transcriptPage(items, params.limit, offset);
+  const page = sessionCatalogPaging.boundTranscriptPage(items, params.limit, offset);
   return {
     hostId: LOCAL_HOST_ID,
     label: "Local OpenCode",

@@ -1,6 +1,5 @@
 // Verifies config IO warning caches stay bounded across process lifetime.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isInvalidConfigError, throwInvalidConfig } from "./io.invalid-config.js";
 import {
   loggedConfigWarningFingerprints,
   loggedInvalidConfigs,
@@ -20,38 +19,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function recordInvalidConfig(configPath: string, logger: Pick<typeof console, "error">): void {
-  try {
-    throwInvalidConfig({
-      configPath,
-      issues: [{ path: "root", message: "invalid" }],
-      logger,
-      loggedConfigPaths: loggedInvalidConfigs,
-    });
-  } catch (error) {
-    if (isInvalidConfigError(error)) {
-      return;
-    }
-    throw error;
-  }
-  throw new Error("expected invalid config error");
-}
-
 describe("config IO state caches", () => {
-  it("keeps hot invalid-config paths while evicted paths re-warn", () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    for (let i = 0; i < CACHE_MAX_SIZE; i++) {
-      recordInvalidConfig(`/config-${i}.json`, console);
-    }
-
-    recordInvalidConfig("/config-0.json", console);
-    recordInvalidConfig("/overflow.json", console);
-    recordInvalidConfig("/config-1.json", console);
-
-    expect(loggedInvalidConfigs.size()).toBe(CACHE_MAX_SIZE);
-    expect(errorSpy).toHaveBeenCalledTimes(CACHE_MAX_SIZE + 2);
-  });
-
   it("keeps hot future versions while evicted versions re-warn", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const warnVersion = (version: string) =>
@@ -91,5 +59,21 @@ describe("config IO state caches", () => {
     warnPath("/config-1.json");
     expect(loggedConfigWarningFingerprints.size).toBe(CACHE_MAX_SIZE);
     expect(warnSpy).toHaveBeenCalledTimes(CACHE_MAX_SIZE + 2);
+  });
+
+  it("emits each config warning record on one physical line", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    logConfigWarningsOnce({
+      configPath: "/config.json",
+      warnings: [
+        { path: "root", message: "first line\ncontinuation" },
+        { path: "nested.value", message: "second warning" },
+      ],
+      logger: console,
+    });
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(String(warnSpy.mock.calls[0]?.[0])).not.toContain("\n");
   });
 });

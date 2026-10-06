@@ -3,43 +3,47 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import {
+  collectStreamEvents,
+  createFakeStream,
+  type FakeWrappedStream,
+} from "./attempt-stream.test-helpers.js";
 import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-text-promotion.js";
-
-type FakeWrappedStream = {
-  result: () => Promise<unknown>;
-  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-};
-
-function createFakeStream(params: {
-  events: unknown[];
-  resultMessage: unknown;
-}): FakeWrappedStream {
-  return {
-    async result() {
-      return params.resultMessage;
-    },
-    [Symbol.asyncIterator]() {
-      return (async function* () {
-        for (const event of params.events) {
-          yield event;
-        }
-      })();
-    },
-  };
-}
-
-async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unknown[]> {
-  // Drain streams to inspect generated tool-call events after wrapper mutation.
-  const events: unknown[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
-}
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
 describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
+  it("supports writable non-configurable stream iterators", async () => {
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "plain response" }],
+      stopReason: "stop",
+    };
+    const baseStream = createFakeStream({
+      events: [{ type: "done", reason: "stop", message: resultMessage }],
+      resultMessage,
+    });
+    const iterator = baseStream[Symbol.asyncIterator];
+    Object.defineProperty(baseStream, Symbol.asyncIterator, {
+      configurable: false,
+      value: iterator,
+      writable: true,
+    });
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(
+      (() => baseStream) as never,
+      new Set(["exec"]),
+    );
+
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    await expect(collectStreamEvents(stream)).resolves.toEqual([
+      { type: "done", reason: "stop", message: resultMessage },
+    ]);
+    await expect(stream.result()).resolves.toEqual(resultMessage);
+  });
+
   it("preserves a fenced allowed-tool example in live and terminal output", async () => {
     const parts = ["`", "``json\n", "[re", 'ad]\n{"path":"example.txt"}\n[/read]\n', "```"];
     const rawText = parts.join("");

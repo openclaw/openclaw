@@ -1,3 +1,4 @@
+import { readOpenAIResponsesCompactionWindow } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type TranscriptReplayRoute = {
@@ -14,57 +15,34 @@ type TranscriptReplaySanitizerHelpers = {
   isOpenAIResponsesRoute: (route: TranscriptReplayRoute | undefined) => boolean;
   isPlainTranscriptObject: (value: object) => value is Record<string, unknown>;
   isStructurallyValidOpaqueReplayToken: (value: string) => boolean;
+  redactTranscriptStructuredValue: (value: unknown, cfg?: OpenClawConfig) => unknown;
   redactTranscriptText: (value: string, cfg?: OpenClawConfig) => string;
 };
 
-type TranscriptReplayDescriptor = {
-  replayType: string;
-  suppressionType: string;
-  matchesRoute: (
-    route: TranscriptReplayRoute | undefined,
-    helpers: TranscriptReplaySanitizerHelpers,
-  ) => boolean;
-  matchesApi: (
-    api: unknown,
-    route: TranscriptReplayRoute | undefined,
-    helpers: TranscriptReplaySanitizerHelpers,
-  ) => boolean;
-  sanitizeData: (
-    data: string,
-    cfg: OpenClawConfig | undefined,
-    helpers: TranscriptReplaySanitizerHelpers,
-  ) => string | undefined;
-  readId?: (
-    value: Record<string, unknown>,
-    route: TranscriptReplayRoute | undefined,
-    helpers: TranscriptReplaySanitizerHelpers,
-  ) => string | undefined;
-};
-
-const OPENAI_REPLAY_DESCRIPTOR: TranscriptReplayDescriptor = {
-  replayType: "openai-responses-compaction",
-  suppressionType: "openai-responses-compaction-suppression",
-  matchesRoute: (route, helpers) => helpers.isOpenAIResponsesRoute(route),
-  matchesApi: (api, _route, helpers) =>
-    typeof api === "string" && helpers.isOpenAIResponsesApi(api),
-  sanitizeData: (data, _cfg, helpers) =>
-    helpers.isStructurallyValidOpaqueReplayToken(data) ? data : undefined,
-  readId: (value, route, helpers) =>
-    typeof value.id === "string" && helpers.isOpenAIResponseItemId(value.id, route)
-      ? value.id
-      : undefined,
-};
-
-const ANTHROPIC_REPLAY_DESCRIPTOR: TranscriptReplayDescriptor = {
-  replayType: "anthropic-compaction",
-  suppressionType: "anthropic-compaction-suppression",
-  matchesRoute: (route, helpers) => helpers.isAnthropicReasoningRoute(route),
-  matchesApi: (api, route) => api === route?.api,
-  sanitizeData: (data, cfg, helpers) =>
-    data.length > 0 ? helpers.redactTranscriptText(data, cfg) : undefined,
-};
-
-const REPLAY_DESCRIPTORS = [OPENAI_REPLAY_DESCRIPTOR, ANTHROPIC_REPLAY_DESCRIPTOR];
+function sanitizeCompactedWindow(
+  replay: { data: string; id?: string; compactedWindow?: unknown },
+  cfg: OpenClawConfig | undefined,
+  helpers: TranscriptReplaySanitizerHelpers,
+) {
+  const window = replay.compactedWindow;
+  const output = readOpenAIResponsesCompactionWindow(replay);
+  const unchanged = output?.every((item) => {
+    if (item.type !== "compaction") {
+      return helpers.redactTranscriptStructuredValue(item, cfg) === item;
+    }
+    // Only the encrypted token is opaque; optional provider fields still pass
+    // through the same plaintext policy as the retained messages.
+    const { encrypted_content: _encrypted, ...plaintext } = item;
+    return helpers.redactTranscriptStructuredValue(plaintext, cfg) === plaintext;
+  });
+  return unchanged &&
+    window &&
+    typeof window === "object" &&
+    helpers.isPlainTranscriptObject(window) &&
+    typeof window.output === "string"
+    ? { state: "ready", output: window.output }
+    : { state: "refresh-required" };
+}
 
 export function sanitizeCompactionReplayState(
   value: unknown,
@@ -75,22 +53,31 @@ export function sanitizeCompactionReplayState(
   if (!value || typeof value !== "object" || !helpers.isPlainTranscriptObject(value)) {
     return undefined;
   }
-  const descriptor = REPLAY_DESCRIPTORS.find(
-    ({ replayType, suppressionType }) =>
-      value.type === replayType || value.type === suppressionType,
-  );
-  const isSuppression = value.type === descriptor?.suppressionType;
+  const replayType = typeof value.type === "string" ? value.type : "";
+  const openAISuppression = replayType === "openai-responses-compaction-suppression";
+  const anthropicSuppression = replayType === "anthropic-compaction-suppression";
+  const isOpenAI =
+    openAISuppression ||
+    replayType === "openai-responses-compaction" ||
+    replayType === "openai-responses-retained-compaction";
+  const isAnthropic = anthropicSuppression || replayType === "anthropic-compaction";
+  const isSuppression = openAISuppression || anthropicSuppression;
   if (
-    !descriptor ||
-    !descriptor.matchesRoute(route, helpers) ||
+    (!isOpenAI && !isAnthropic) ||
+    !(isOpenAI
+      ? helpers.isOpenAIResponsesRoute(route)
+      : helpers.isAnthropicReasoningRoute(route)) ||
     value.v !== 1 ||
     typeof value.data !== "string" ||
+    (value.type === "openai-responses-retained-compaction" && value.replayIndex !== undefined) ||
     (value.replayIndex !== undefined &&
       (isSuppression ||
         !Number.isSafeInteger(value.replayIndex) ||
         (value.replayIndex as number) < 0)) ||
     value.provider !== route?.provider ||
-    !descriptor.matchesApi(value.api, route, helpers) ||
+    !(isOpenAI
+      ? typeof value.api === "string" && helpers.isOpenAIResponsesApi(value.api)
+      : value.api === route?.api) ||
     value.model !== route?.model ||
     !helpers.isOpenAIReplayContextHash(value.baseUrlHash) ||
     (value.sessionHash !== undefined && !helpers.isOpenAIReplayContextHash(value.sessionHash)) ||
@@ -103,16 +90,38 @@ export function sanitizeCompactionReplayState(
     ? value.data === "rejected"
       ? value.data
       : undefined
-    : descriptor.sanitizeData(value.data, cfg, helpers);
+    : isOpenAI
+      ? helpers.isStructurallyValidOpaqueReplayToken(value.data)
+        ? value.data
+        : undefined
+      : value.data.length > 0
+        ? helpers.redactTranscriptText(value.data, cfg)
+        : undefined;
   if (data === undefined) {
     return undefined;
   }
-  const replayId = isSuppression ? undefined : descriptor.readId?.(value, route, helpers);
+  const encryptedContent = !isSuppression && isAnthropic ? value.encryptedContent : undefined;
+  if (
+    encryptedContent !== undefined &&
+    encryptedContent !== null &&
+    (typeof encryptedContent !== "string" ||
+      !helpers.isStructurallyValidOpaqueReplayToken(encryptedContent))
+  ) {
+    return undefined;
+  }
+  const replayId =
+    !isSuppression &&
+    isOpenAI &&
+    typeof value.id === "string" &&
+    helpers.isOpenAIResponseItemId(value.id, route)
+      ? value.id
+      : undefined;
   return {
     v: 1,
     type: value.type,
     ...(replayId !== undefined ? { id: replayId } : {}),
     data,
+    ...(encryptedContent !== undefined ? { encryptedContent } : {}),
     ...(value.replayIndex !== undefined ? { replayIndex: value.replayIndex } : {}),
     provider: value.provider,
     api: value.api,
@@ -120,5 +129,16 @@ export function sanitizeCompactionReplayState(
     baseUrlHash: value.baseUrlHash,
     ...(value.sessionHash !== undefined ? { sessionHash: value.sessionHash } : {}),
     ...(value.authProfileHash !== undefined ? { authProfileHash: value.authProfileHash } : {}),
+    ...(!isSuppression && isOpenAI && value.compactedWindow !== undefined
+      ? {
+          // Keep the newest fenced barrier when its canonical plaintext cannot
+          // survive redaction; dropping it could expose an older checkpoint.
+          compactedWindow: sanitizeCompactedWindow(
+            { data, id: replayId, compactedWindow: value.compactedWindow },
+            cfg,
+            helpers,
+          ),
+        }
+      : {}),
   };
 }

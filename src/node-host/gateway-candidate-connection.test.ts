@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     request: ReturnType<typeof vi.fn>;
     start: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
+    stopAndWait: ReturnType<typeof vi.fn<() => Promise<void>>>;
     updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
 }));
@@ -18,6 +19,7 @@ vi.mock("../gateway/client.js", () => ({
       request: vi.fn(async () => ({ url: options.url })),
       start: vi.fn(),
       stop: vi.fn(),
+      stopAndWait: vi.fn(async () => {}),
       updateNodeManifest: vi.fn(),
     };
     mocks.options.push(options);
@@ -31,7 +33,11 @@ const candidates = [
   { host: "gateway.tailnet.example", port: 443, tls: true },
 ];
 
-function createConnection() {
+function createConnection(
+  cloudflareAccessByCandidate?: Parameters<
+    typeof createNodeHostGatewayCandidateConnection
+  >[0]["cloudflareAccessByCandidate"],
+) {
   const callbacks = {
     onEvent: vi.fn(),
     onHelloOk: vi.fn(),
@@ -45,6 +51,7 @@ function createConnection() {
     connection: createNodeHostGatewayCandidateConnection({
       candidates,
       clientOptions: {},
+      cloudflareAccessByCandidate,
       ...callbacks,
     }),
   };
@@ -171,9 +178,58 @@ describe("gateway candidate connection", () => {
       connectRequestSent: false,
       transientPreHelloCleanClose: false,
     });
-    connection.stop();
+    await connection.stop();
     await Promise.resolve();
 
     expect(mocks.clients).toHaveLength(1);
+  });
+
+  it("does not start a connection when readiness completes after stop", async () => {
+    const { connection } = createConnection();
+
+    await connection.stop();
+    connection.start();
+
+    expect(mocks.clients[0]?.start).not.toHaveBeenCalled();
+  });
+
+  it("preserves a retired candidate's drain failure during shutdown", async () => {
+    const { connection } = createConnection();
+    mocks.options[0]?.onClose?.(1006, "transport unavailable", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      connectRequestSent: false,
+      transientPreHelloCleanClose: false,
+    });
+    await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
+    const retiredFailure = new Error("retired candidate storage failed");
+    mocks.clients[0]?.stopAndWait.mockRejectedValueOnce(retiredFailure);
+
+    await expect(Promise.resolve(connection.stop())).rejects.toBe(retiredFailure);
+    await expect(connection.stop()).rejects.toBe(retiredFailure);
+    expect(mocks.clients[0]?.stopAndWait).toHaveBeenCalledOnce();
+    expect(mocks.clients[1]?.stopAndWait).toHaveBeenCalledOnce();
+  });
+
+  it("never carries origin-bound Access credentials to another candidate host", async () => {
+    const credentials = { clientId: "test-key", clientSecret: "test-secret" };
+    createConnection(new Map([[candidates[0]!, credentials]]));
+
+    expect(mocks.options[0]?.edgeAuthHeaders).toEqual({
+      "CF-Access-Client-Id": credentials.clientId,
+      "CF-Access-Client-Secret": credentials.clientSecret,
+    });
+    mocks.options[0]?.onClose?.(1006, "transport unavailable", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      connectRequestSent: false,
+      transientPreHelloCleanClose: false,
+    });
+    await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
+
+    expect(mocks.options[1]?.url).toBe("wss://gateway.tailnet.example:443");
+    expect(mocks.options[1]?.edgeAuthHeaders).toBeUndefined();
   });
 });

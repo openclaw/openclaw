@@ -1,167 +1,165 @@
-// Codex tests cover conversation turn input plugin behavior.
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import {
+  deriveInboundMessageHookContext,
+  toPluginMessageReceivedEvent,
+} from "openclaw/plugin-sdk/hook-runtime";
+import type { PluginHookMediaFact } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
+import type { CodexUserInput } from "./app-server/protocol.js";
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 
+function expectImages(
+  media: PluginHookMediaFact[],
+  images: CodexUserInput[],
+  overrides: Partial<ReturnType<typeof deriveInboundMessageHookContext>> = {},
+) {
+  const canonical = {
+    ...deriveInboundMessageHookContext({
+      Body: "look",
+      From: "user",
+      Provider: "webchat",
+      CommandAuthorized: false,
+      media,
+    }),
+    ...overrides,
+  };
+  expect(
+    buildCodexConversationTurnInput({
+      prompt: "look",
+      event: {
+        ...toPluginMessageReceivedEvent(canonical),
+        channel: canonical.channelId,
+        isGroup: canonical.isGroup,
+      },
+    }),
+  ).toEqual([{ type: "text", text: "look", text_elements: [] }, ...images]);
+}
+
 describe("codex conversation turn input", () => {
-  it("forwards inbound image attachments to Codex app-server", () => {
-    expect(
-      buildCodexConversationTurnInput({
-        prompt: "what is this?",
-        event: {
-          content: "what is this?",
-          channel: "telegram",
-          isGroup: false,
-          metadata: {
-            mediaPaths: ["/tmp/photo.png", "/tmp/readme.txt"],
-            mediaUrls: ["https://example.test/photo.png"],
-            mediaTypes: ["image/png", "text/plain"],
-          },
-        },
-      }),
-    ).toEqual([
-      { type: "text", text: "what is this?", text_elements: [] },
-      { type: "localImage", path: "/tmp/photo.png" },
-    ]);
+  it("forwards a projected image once despite scalar and plural metadata aliases", () => {
+    expectImages(
+      [{ path: "/tmp/photo.png", url: "https://example.test/photo.png", contentType: "image/png" }],
+      [{ type: "localImage", path: "/tmp/photo.png" }],
+    );
   });
 
-  it("uses staged remote-cache paths for remote iMessage image attachments", () => {
+  it("preserves sparse mixed media associations and source order", () => {
+    const inlineImage = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+    expectImages(
+      [
+        { url: "https://example.test/first.webp" },
+        {},
+        { path: "/tmp/voice", contentType: "audio/ogg" },
+        { path: "/tmp/photo", contentType: "image/png" },
+        { url: inlineImage, contentType: "image/gif" },
+      ],
+      [
+        { type: "image", url: "https://example.test/first.webp" },
+        { type: "localImage", path: "/tmp/photo" },
+        { type: "image", url: inlineImage },
+      ],
+    );
+  });
+
+  it("preserves separately attached copies of the same image", () => {
+    expectImages(
+      [
+        { path: "/tmp/photo.png", contentType: "image/png" },
+        { path: "/tmp/photo.png", contentType: "image/png" },
+      ],
+      [
+        { type: "localImage", path: "/tmp/photo.png" },
+        { type: "localImage", path: "/tmp/photo.png" },
+      ],
+    );
+  });
+
+  it("uses staged remote-cache paths instead of original iMessage attachment paths", () => {
     const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
     const stagedPath = "/tmp/openclaw-proof/.openclaw/media/remote-cache/imessage/photo.jpg";
-
-    const input = buildCodexConversationTurnInput({
-      prompt: "what is this?",
-      event: {
-        content: "what is this?",
-        channel: "imessage",
-        isGroup: false,
-        metadata: {
-          mediaPaths: [stagedPath],
-          mediaTypes: ["image/jpeg"],
-          originalMediaPaths: [rawPath],
-        },
-      },
-    });
-
-    expect(input).toEqual([
-      { type: "text", text: "what is this?", text_elements: [] },
-      { type: "localImage", path: stagedPath },
-    ]);
-    expect(input).not.toContainEqual({ type: "localImage", path: rawPath });
+    expectImages(
+      [{ path: stagedPath, contentType: "image/jpeg" }],
+      [{ type: "localImage", path: stagedPath }],
+      { channelId: "imessage", originalMedia: [{ path: rawPath, contentType: "image/jpeg" }] },
+    );
   });
 
-  it("uses remote image urls when no local path is available", () => {
-    expect(
-      buildCodexConversationTurnInput({
-        prompt: "look",
-        event: {
-          content: "look",
-          channel: "webchat",
-          isGroup: false,
-          metadata: {
-            mediaUrl: "https://example.test/photo.webp?sig=1",
+  it("withholds attachments while remote staging is pending", () => {
+    expectImages(
+      [{ path: "/Users/demo/Library/Messages/Attachments/photo.jpg", contentType: "image/jpeg" }],
+      [],
+      { channelId: "imessage", mediaStagingPending: true },
+    );
+  });
+
+  it.each([
+    {
+      media: { path: "/tmp/photo", kind: "image" },
+      image: { type: "localImage", path: "/tmp/photo" },
+      label: "image kind without MIME type or extension",
+    },
+    {
+      media: { url: "//cdn.example.test/photo.webp" },
+      image: { type: "image", url: "//cdn.example.test/photo.webp" },
+      label: "protocol-relative remote URL",
+    },
+    {
+      media: { url: "C:\\OpenClaw QA\\photo.png", contentType: "image/png" },
+      image: { type: "localImage", path: "C:\\OpenClaw QA\\photo.png" },
+      label: "Windows local path",
+    },
+  ] satisfies { media: PluginHookMediaFact; image: CodexUserInput; label: string }[])(
+    "recognizes $label",
+    ({ media, image }) => {
+      expectImages([media], [image]);
+    },
+  );
+
+  it.each(["path", "url"] as const)(
+    "decodes mixed-case file URLs from %s for local images",
+    (field) => {
+      const imagePath = path.resolve("OpenClaw QA", "photo #1?.png");
+      expectImages(
+        [
+          {
+            [field]: pathToFileURL(imagePath).href.replace(/^file:/, "FiLe:"),
+            contentType: "image/png",
           },
-        },
-      }),
-    ).toEqual([
-      { type: "text", text: "look", text_elements: [] },
-      { type: "image", url: "https://example.test/photo.webp?sig=1" },
-    ]);
+        ],
+        [{ type: "localImage", path: imagePath }],
+      );
+    },
+  );
+
+  it.each([
+    { label: "malformed encoding", url: "FiLe:///tmp/%zz/photo.png" },
+    { label: "encoded separators", url: "FiLe:///tmp/hidden%2Fphoto.png" },
+  ])("rejects file URLs with $label", ({ url }) => {
+    expectImages([{ url, contentType: "image/png" }], []);
   });
 
-  it("keeps protocol-relative image urls remote", () => {
-    expect(
-      buildCodexConversationTurnInput({
-        prompt: "look",
-        event: {
-          content: "look",
-          channel: "webchat",
-          isGroup: false,
-          metadata: {
-            mediaUrl: "//cdn.example.test/photo.webp",
-          },
-        },
-      }),
-    ).toEqual([
-      { type: "text", text: "look", text_elements: [] },
-      { type: "image", url: "//cdn.example.test/photo.webp" },
-    ]);
-  });
-
-  it("decodes local file URLs for Codex local image input", () => {
-    expect(
-      buildCodexConversationTurnInput({
-        prompt: "look",
-        event: {
-          content: "look",
-          channel: "webchat",
-          isGroup: false,
-          metadata: {
-            mediaPath: "file:///tmp/OpenClaw%20QA/photo.png",
-            mediaType: "image/png",
-          },
-        },
-      }),
-    ).toEqual([
-      { type: "text", text: "look", text_elements: [] },
-      { type: "localImage", path: "/tmp/OpenClaw QA/photo.png" },
-    ]);
-  });
-
-  it("drops malformed local file URLs instead of throwing", () => {
-    expect(
-      buildCodexConversationTurnInput({
-        prompt: "look",
-        event: {
-          content: "look",
-          channel: "webchat",
-          isGroup: false,
-          metadata: {
-            mediaPath: "file:///tmp/%zz/photo.png",
-            mediaType: "image/png",
-          },
-        },
-      }),
-    ).toEqual([{ type: "text", text: "look", text_elements: [] }]);
-  });
+  it.skipIf(process.platform === "win32")(
+    "preserves POSIX backslash filenames in file URLs",
+    () => {
+      expectImages(
+        [{ url: "FiLe:///tmp/photo%5Cname.png", contentType: "image/png" }],
+        [{ type: "localImage", path: "/tmp/photo\\name.png" }],
+      );
+    },
+  );
 
   it("treats local media URLs as Codex local image input", () => {
-    expect(
-      buildCodexConversationTurnInput({
-        prompt: "look",
-        event: {
-          content: "look",
-          channel: "webchat",
-          isGroup: false,
-          metadata: {
-            mediaUrls: ["/tmp/staged-photo.png", "file:///tmp/OpenClaw%20QA/second.jpg"],
-            mediaTypes: ["image/png", "image/jpeg"],
-          },
-        },
-      }),
-    ).toEqual([
-      { type: "text", text: "look", text_elements: [] },
-      { type: "localImage", path: "/tmp/staged-photo.png" },
-      { type: "localImage", path: "/tmp/OpenClaw QA/second.jpg" },
-    ]);
-  });
-
-  it("treats Windows media paths as Codex local image input", () => {
-    expect(
-      buildCodexConversationTurnInput({
-        prompt: "look",
-        event: {
-          content: "look",
-          channel: "webchat",
-          isGroup: false,
-          metadata: {
-            mediaUrl: "C:\\OpenClaw QA\\photo.png",
-            mediaType: "image/png",
-          },
-        },
-      }),
-    ).toEqual([
-      { type: "text", text: "look", text_elements: [] },
-      { type: "localImage", path: "C:\\OpenClaw QA\\photo.png" },
-    ]);
+    const secondImagePath = path.resolve("OpenClaw QA", "second.jpg");
+    expectImages(
+      [
+        { url: "/tmp/staged-photo.png", contentType: "image/png" },
+        { url: pathToFileURL(secondImagePath).href, contentType: "image/jpeg" },
+      ],
+      [
+        { type: "localImage", path: "/tmp/staged-photo.png" },
+        { type: "localImage", path: secondImagePath },
+      ],
+    );
   });
 });

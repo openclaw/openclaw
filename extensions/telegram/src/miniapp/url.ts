@@ -9,7 +9,7 @@ import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 
 export const TELEGRAM_MINIAPP_PATH_PREFIX = "/__openclaw_tg_miniapp/";
 export const TELEGRAM_MINIAPP_URL_ERROR =
-  "Mini App needs an HTTPS gateway URL. Set `gateway.tailscale.mode: serve` or `funnel`, then retry.";
+  "Mini App needs an HTTPS gateway URL. Set `gateway.tailscale.mode: serve` or `funnel`, then retry /controlui.";
 
 type TelegramMiniAppUrls = {
   pageUrl: string;
@@ -32,7 +32,6 @@ export async function resolveTelegramMiniAppUrls(params: {
   const publishedHost = resolveTailscalePublishedHost({
     tailscaleMode: mode,
     tailnetHost,
-    serviceName: params.cfg.gateway?.tailscale?.serviceName,
   });
   if (!publishedHost) {
     throw new Error(TELEGRAM_MINIAPP_URL_ERROR);

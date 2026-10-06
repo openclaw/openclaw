@@ -72,15 +72,13 @@ ten recent candidates, so clients can ask you for a longer prefix without
 guessing. See [Control UI URLs](/web/urls) for the complete literal encoding and
 stability contract.
 
-### Current and older Gateways
+### Gateway version requirement
 
-Current Gateways resolve short references at the session store owner. The
-Control UI and CLI then use the returned canonical key.
-
-An older Gateway may reject the additive `shortId` selector. The Control UI can
-fall back to its older bounded list search, scanning at most five pages. The CLI
-does not recreate that paging policy: it tells you to copy the full session key
-from that Gateway's Control UI or upgrade the Gateway.
+The Gateway resolves short references at the session store owner, and the
+Control UI and CLI use the returned canonical key and owning agent, including
+global sessions reached through a stale URL. Short links require a current
+Gateway. If an older or custom Gateway rejects the `shortId` selector, upgrade
+it or use a full session key.
 
 ## Choose how to continue
 
@@ -196,7 +194,7 @@ session was deleted after the command was copied, return to the Control UI and
 copy a command from an available session.
 
 Revoke or remove the device from the same Gateway's **Devices** page when that
-client should no longer connect. Tokens do not cross origins. Read-only probes
+client should no longer connect. Tokens do not cross origins. Read-only checks
 through an SSH tunnel also suppress stored device auth because the loopback
 transport does not identify the remote origin; explicit credentials still work.
 

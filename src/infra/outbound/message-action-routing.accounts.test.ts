@@ -1,5 +1,6 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
+import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
@@ -7,7 +8,9 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import {
+  messageActionRunnerMocks as mocks,
   resetMessageActionRunnerMocks,
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
@@ -26,7 +29,9 @@ describe("runMessageAction plugin dispatch", () => {
     resetMessageActionRunnerMocks();
   });
   describe("accountId defaults", () => {
-    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+    const handleAction = vi.fn<NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>>(
+      async () => jsonResult({ ok: true }),
+    );
     const listGroupsLive = vi.fn(async () => [
       { id: "channel:resolved", name: "resolved", kind: "group" as const },
     ]);
@@ -139,6 +144,69 @@ describe("runMessageAction plugin dispatch", () => {
       expect(ctx.params.accountId).toBe(expectedAccountId);
     });
 
+    it("uses the authoritative default without enumerating accounts for each local send", async () => {
+      const accounts = Object.fromEntries(
+        Array.from({ length: 1_000 }, (_, index) => [`account-${index}`, { enabled: true }]),
+      );
+      const defaultAccountId = vi.fn(() => "account-999");
+      const plugin: ChannelPlugin = {
+        ...accountPlugin,
+        config: {
+          ...accountPlugin.config,
+          listAccountIds: () => Object.keys(accounts),
+          defaultAccountId,
+        },
+      };
+      setTestPlugin(plugin, "accountchat");
+      const cfg: OpenClawConfig = { channels: { accountchat: { accounts } } };
+      const sends = Array.from({ length: 64 }, (_, index) => ({
+        channel: "accountchat",
+        target: `channel:${index}`,
+        message: `message ${index}`,
+      }));
+      const before = structuredClone({ cfg, sends });
+      const enumeration = vi.spyOn(plugin.config, "listAccountIds");
+      try {
+        const results = [];
+        for (const params of sends) {
+          results.push(await runMessageAction({ cfg, action: "send", params }));
+        }
+        expect(results).toStrictEqual(
+          sends.map(({ target }) => ({
+            kind: "send",
+            channel: "accountchat",
+            action: "send",
+            to: target,
+            handledBy: "plugin",
+            payload: { ok: true },
+            toolResult: {
+              content: [{ type: "text", text: '{\n  "ok": true\n}' }],
+              details: { ok: true },
+            },
+            sendResult: undefined,
+            dryRun: false,
+          })),
+        );
+        expect(handleAction).toHaveBeenCalledTimes(sends.length);
+        for (const [index, call] of handleAction.mock.calls.entries()) {
+          const sent = expectDefined(sends[index], "expected send at matching call index");
+          const context = requireRecord(call[0]);
+          expect(context.cfg).toBe(cfg);
+          expect(context.accountId).toBe("account-999");
+          expect(requireRecord(context.params)).toMatchObject({
+            accountId: "account-999",
+            to: sent.target,
+            message: sent.message,
+          });
+        }
+        expect({ cfg, sends }).toEqual(before);
+        expect(defaultAccountId).toHaveBeenCalledTimes(sends.length);
+        expect(enumeration).toHaveBeenCalledTimes(0);
+      } finally {
+        enumeration.mockRestore();
+      }
+    });
+
     it("allows an explicitly selected configured account", async () => {
       await runMessageAction({
         cfg: {} as OpenClawConfig,
@@ -154,6 +222,50 @@ describe("runMessageAction plugin dispatch", () => {
       expect(handleAction).toHaveBeenCalledOnce();
       expect(readFirstPluginCall(handleAction).accountId).toBe("ops");
     });
+
+    it("leaves an omitted account absent when delegating an action to the Gateway", async () => {
+      setTestPlugin(
+        {
+          ...accountPlugin,
+          config: { ...accountPlugin.config, defaultAccountId: () => "ops" },
+          actions: { ...accountPlugin.actions, resolveExecutionMode: () => "gateway" },
+        },
+        "accountchat",
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+      await runMessageAction({
+        cfg: {},
+        action: "send",
+        params: { channel: "accountchat", target: "channel:123", message: "hi" },
+        gateway: { clientName: GATEWAY_CLIENT_NAMES.CLI, mode: GATEWAY_CLIENT_MODES.CLI },
+      });
+      expect(handleAction).not.toHaveBeenCalled();
+      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledOnce();
+      const rpc = requireRecord(readFirstPluginCall(mocks.callGatewayLeastPrivilege).params);
+      expect(rpc.accountId).toBeUndefined();
+      expect(requireRecord(rpc.params).accountId).toBeUndefined();
+    });
+
+    it.each([false, true])(
+      "leaves omitted outbound Gateway account selection remote (dryRun=%s)",
+      async (dryRun) => {
+        setTestPlugin(
+          {
+            ...accountPlugin,
+            config: { ...accountPlugin.config, defaultAccountId: () => "ops" },
+            outbound: { deliveryMode: "gateway" },
+          },
+          "accountchat",
+        );
+        const { prepareMessageRoute } = await import("./message-action-routing.js");
+        const route = await prepareMessageRoute({
+          input: { cfg: {}, action: "send", params: {}, dryRun },
+          actionParams: { channel: "accountchat", target: "channel:123", message: "hi" },
+        });
+        expect(route.accountId).toBeUndefined();
+        expect(route.params).not.toHaveProperty("accountId");
+      },
+    );
 
     it.each([
       { name: "malformed", accountId: "!!!", error: "Invalid account ID" },

@@ -1,10 +1,12 @@
-// Slack plugin module implements system event context behavior.
 import type { AllMiddlewareArgs } from "@slack/bolt";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
-import { resolveSlackEventScope, type SlackEventScope } from "../event-scope.js";
+import {
+  resolveSlackListenerEventScope as resolveListenerEventScope,
+  type SlackEventScope,
+} from "../event-scope.js";
 
 type SlackAuthorizedSystemEventContext = {
   channelLabel: string;
@@ -16,10 +18,12 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   senderId?: string;
   channelId?: string;
   channelType?: string | null;
+  threadTs?: string;
   eventKind: string;
   eventScope?: SlackEventScope;
 }): Promise<SlackAuthorizedSystemEventContext | undefined> {
-  const { ctx, senderId, channelId, channelType, eventKind } = params;
+  const { senderId, channelId, channelType, eventKind } = params;
+  const ctx = await params.ctx.readRuntimeContext();
   const auth = await authorizeSlackSystemEventSender({
     ctx,
     senderId,
@@ -43,6 +47,7 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
     channelId,
     channelType: auth.channelType,
     senderId,
+    threadTs: auth.channelType === "im" ? undefined : params.threadTs,
     eventScope: params.eventScope,
   });
   return {
@@ -57,16 +62,12 @@ export function resolveSlackListenerEventScope(params: {
   context: AllMiddlewareArgs["context"] | undefined;
   client: AllMiddlewareArgs["client"] | undefined;
 }): SlackEventScope | null | undefined {
-  const resolved = resolveSlackEventScope({
+  return resolveListenerEventScope({
     identity: params.ctx.installationIdentity,
     body: params.body,
     context: params.context,
     client: params.client,
     clientOptions: params.ctx.app.webClientOptions,
+    onDrop: (reason) => logVerbose(`slack: drop listener event (${reason})`),
   });
-  if (!resolved.ok) {
-    logVerbose(`slack: drop listener event (${resolved.reason})`);
-    return null;
-  }
-  return resolved.scope;
 }

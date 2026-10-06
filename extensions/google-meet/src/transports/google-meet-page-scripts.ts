@@ -1,8 +1,24 @@
 // Google Meet owns its DOM selectors and in-page automation scripts.
+import {
+  createMeetingBrowserAudioCaptureSource,
+  type MeetingBrowserAudioCaptureRequest,
+} from "openclaw/plugin-sdk/meeting-page-script-runtime";
+import { GOOGLE_MEET_CAPTION_OBSERVER_SOURCE } from "./google-meet-caption-observer-source.js";
 import { normalizeMeetUrlForReuse } from "./google-meet-urls.js";
-import { GOOGLE_MEET_TRANSCRIPT_MAX_LINES } from "./types.js";
 
-const GOOGLE_MEET_CAPTION_SETTLE_MS = 1_000;
+export function meetAudioCaptureScript(params: MeetingBrowserAudioCaptureRequest): string {
+  return createMeetingBrowserAudioCaptureSource({
+    ...params,
+    ownershipSource: `
+      const expectedUrl = ${JSON.stringify(normalizeMeetUrlForReuse(params.meetingUrl))};
+      const currentUrl = new URL(location.href);
+      return Boolean(expectedUrl && window.__openclawMeetAudioSession === sessionId &&
+        currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/[/]$/, "") === expectedUrl &&
+        [...document.querySelectorAll("button")].some((button) =>
+          /leave call/i.test(button.getAttribute("aria-label") || button.textContent || "")));
+    `,
+  });
+}
 
 export function meetStatusScript(params: {
   allowMicrophone: boolean;
@@ -258,7 +274,21 @@ export function meetStatusScript(params: {
     : null;
   if (join) join.click();
   const inCall = buttons().some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button)));
+  if (!readOnly && inCall && captionSessionId) {
+    const activeCapture = window.__openclawMeetingRemoteAudio;
+    if (activeCapture && activeCapture.sessionId !== captionSessionId) {
+      return JSON.stringify({ inCall: false, manualAction: manualActionFor("meet-session-conflict", "This Meet tab belongs to another active audio session."), url: location.href, notes });
+    }
+    window.__openclawMeetAudioSession = captionSessionId;
+  }
   const routeMeetAudioOutput = async () => {
+    const remoteCapture = window.__openclawMeetingRemoteAudio;
+    if (remoteCapture && remoteCapture.sessionId === captionSessionId && remoteCapture.isCurrent()) {
+      if (!readOnly) remoteCapture.scan();
+      audioOutputRouted = remoteCapture.isCurrent();
+      audioOutputDeviceLabel = "Isolated browser playback";
+      return;
+    }
     if (
       !allowMicrophone ||
       typeof navigator === 'undefined' ||
@@ -312,179 +342,7 @@ export function meetStatusScript(params: {
   if (inCall) {
     await routeMeetAudioOutput();
   }
-  let captioning = false;
-  let captionsEnabledAttempted = false;
-  let transcriptLines = 0;
-  let lastCaptionAt;
-  let lastCaptionSpeaker;
-  let lastCaptionText;
-  let recentTranscript = [];
-  const captionSelector = '[role="region"][aria-label*="aption" i], [aria-live="polite"][role="region"], div[aria-live="polite"]';
-  const captionState = (() => {
-    if (!captureCaptions) return undefined;
-    const w = window;
-    if (!inCall && !w.__openclawMeetCaptions) return undefined;
-    // A reused tab starts a fresh logical transcript for each OpenClaw session.
-    // Status refreshes omit the id, so they preserve the active page-owned buffer.
-    if (!w.__openclawMeetCaptions || (captionSessionId && w.__openclawMeetCaptions.sessionId !== captionSessionId)) {
-      if (w.__openclawMeetCaptions?.settleTimer !== undefined) {
-        clearTimeout(w.__openclawMeetCaptions.settleTimer);
-      }
-      w.__openclawMeetCaptions?.observer?.disconnect?.();
-      w.__openclawMeetCaptions = {
-        sessionId: captionSessionId,
-        // Epochs cross document lifetimes in the runtime transcript cursor.
-        // Strong UUIDs keep a reloaded page distinct from its prior buffer.
-        epoch: crypto.randomUUID(),
-        enabledAttempted: false,
-        observerInstalled: false,
-        observer: undefined,
-        droppedLines: 0,
-        lines: [],
-        settleTimer: undefined,
-        visible: []
-      };
-    }
-    return w.__openclawMeetCaptions;
-  })();
-  const normalizeCaption = (speaker, captionText) => {
-    if (!captionState) return;
-    const clean = String(captionText || "").replace(/\\s+/g, " ").trim();
-    const cleanSpeaker = String(speaker || "").replace(/\\s+/g, " ").trim();
-    if (!clean || clean.length < 2) return undefined;
-    if (/^(turn on captions|turn off captions|captions)$/i.test(clean)) return undefined;
-    return { speaker: cleanSpeaker || undefined, text: clean };
-  };
-  const commitLines = (state, entries) => {
-    state.lines.push(...entries.map((entry) => ({
-      at: entry.at,
-      speaker: entry.speaker,
-      text: entry.text
-    })));
-    const excess = state.lines.length - ${GOOGLE_MEET_TRANSCRIPT_MAX_LINES};
-    if (excess > 0) {
-      state.lines.splice(0, excess);
-      state.droppedLines = (state.droppedLines || 0) + excess;
-    }
-  };
-  const scrapeCaptions = () => {
-    if (!captionState) return;
-    const regions = [...document.querySelectorAll(captionSelector)];
-    const rows = [];
-    for (const region of regions) {
-      const raw = text(region);
-      if (!raw) continue;
-      const pieces = raw.split(/\\n+/).map((part) => part.trim()).filter(Boolean);
-      const row = pieces.length >= 2
-        ? normalizeCaption(pieces[0], pieces.slice(1).join(" "))
-        : normalizeCaption("", pieces[0] || raw);
-      if (row) rows.push({ ...row, node: region });
-    }
-    if (rows.length === 0) {
-      // Meet briefly removes caption rows while rerendering. Keep them mutable
-      // for one settle window so a DOM gap cannot fabricate a repeated line.
-      if (captionState.visible.length > 0 && captionState.settleTimer === undefined) {
-        const pendingState = captionState;
-        pendingState.settleTimer = setTimeout(() => {
-          if (window.__openclawMeetCaptions !== pendingState) return;
-          commitLines(pendingState, pendingState.visible);
-          pendingState.visible = [];
-          pendingState.settleTimer = undefined;
-        }, ${GOOGLE_MEET_CAPTION_SETTLE_MS});
-      }
-      return;
-    }
-    if (captionState.settleTimer !== undefined) {
-      clearTimeout(captionState.settleTimer);
-      captionState.settleTimer = undefined;
-    }
-    const previous = Array.isArray(captionState.visible) ? captionState.visible : [];
-    const unmatchedPrevious = [...previous];
-    const nextVisible = [];
-    const now = Date.now();
-    for (let index = 0; index < rows.length; index += 1) {
-      const row = rows[index];
-      const priorIndex = unmatchedPrevious.findIndex((candidate) => {
-        const sameTextLifecycle =
-          candidate.text === row.text ||
-          row.text.startsWith(candidate.text) ||
-          candidate.text.startsWith(row.text);
-        const sameDomLifecycle =
-          candidate.node === row.node || now - candidate.seenAt <= ${GOOGLE_MEET_CAPTION_SETTLE_MS};
-        return candidate.speaker === row.speaker && sameTextLifecycle && sameDomLifecycle;
-      });
-      const prior = priorIndex >= 0 ? unmatchedPrevious.splice(priorIndex, 1)[0] : undefined;
-      const sameSpeaker = Boolean(prior) && prior.speaker === row.speaker;
-      if (sameSpeaker && prior.text === row.text) {
-        prior.node = row.node;
-        prior.seenAt = now;
-        nextVisible.push(prior);
-        continue;
-      }
-      if (sameSpeaker && row.text.startsWith(prior.text)) {
-        prior.text = row.text;
-        prior.node = row.node;
-        prior.seenAt = now;
-        nextVisible.push(prior);
-        continue;
-      }
-      if (sameSpeaker && prior.text.startsWith(row.text)) {
-        prior.node = row.node;
-        prior.seenAt = now;
-        nextVisible.push(prior);
-        continue;
-      }
-      const entry = {
-        at: new Date().toISOString(),
-        node: row.node,
-        seenAt: now,
-        speaker: row.speaker,
-        text: row.text
-      };
-      nextVisible.push(entry);
-    }
-    commitLines(captionState, unmatchedPrevious);
-    captionState.visible = nextVisible;
-  };
-  if (captionState) {
-    if (!readOnly && inCall && !captionState.enabledAttempted) {
-      const captionButton = findButton(/turn on captions|show captions|captions/i);
-      const captionLabel = captionButton ? (captionButton.getAttribute("aria-label") || captionButton.getAttribute("data-tooltip") || text(captionButton)) : "";
-      if (captionButton) {
-        captionState.enabledAttempted = true;
-        captionsEnabledAttempted = true;
-        if (!/turn off captions|hide captions/i.test(captionLabel)) {
-          captionButton.click();
-          notes.push("Attempted to enable Meet captions for observe-only transcript health.");
-        }
-      }
-    } else if (captionState.enabledAttempted) {
-      captionsEnabledAttempted = true;
-    }
-    if (inCall && !captionState.observerInstalled) {
-      captionState.observerInstalled = true;
-      captionState.observer = new MutationObserver(scrapeCaptions);
-      captionState.observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        characterData: true
-      });
-      notes.push("Installed Meet caption observer for observe-only transcript health.");
-    }
-    if (inCall) {
-      scrapeCaptions();
-    }
-    const committedLines = Array.isArray(captionState.lines) ? captionState.lines : [];
-    const visibleLines = Array.isArray(captionState.visible) ? captionState.visible : [];
-    const lines = [...committedLines, ...visibleLines];
-    const last = lines[lines.length - 1];
-    captioning = document.querySelector(captionSelector) !== null || lines.length > 0;
-    transcriptLines = (captionState.droppedLines || 0) + lines.length;
-    lastCaptionAt = last?.at;
-    lastCaptionSpeaker = last?.speaker;
-    lastCaptionText = last?.text;
-    recentTranscript = lines.slice(-5);
-  }
+  ${GOOGLE_MEET_CAPTION_OBSERVER_SOURCE}
   const lobbyWaiting = !inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText);
   const leaveReason = !inCall && /you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i.test(pageText)
     ? pageText.match(/you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i)?.[0]
@@ -530,60 +388,6 @@ export function meetStatusScript(params: {
     title: document.title,
     url: pageUrl,
     notes
-  });
-}`;
-}
-
-export function meetTranscriptScript(
-  meetingUrl: string,
-  meetingSessionId: string,
-  finalize: boolean,
-) {
-  const expectedMeetingUrl = normalizeMeetUrlForReuse(meetingUrl);
-  return `() => {
-  const expectedMeetingUrl = ${JSON.stringify(expectedMeetingUrl)};
-  const expectedSessionId = ${JSON.stringify(meetingSessionId)};
-  let currentMeetingUrl;
-  try {
-    const currentUrl = new URL(location.href);
-    currentMeetingUrl = currentUrl.origin + currentUrl.pathname.toLowerCase().replace(/\\/$/, "");
-  } catch {
-    return JSON.stringify({ urlMatched: false });
-  }
-  if (!expectedMeetingUrl || currentMeetingUrl !== expectedMeetingUrl) {
-    return JSON.stringify({ urlMatched: false });
-  }
-  const state = window.__openclawMeetCaptions;
-  if (state?.sessionId && state.sessionId !== expectedSessionId) {
-    return JSON.stringify({ urlMatched: true, sessionMatched: false });
-  }
-  if (${JSON.stringify(finalize)} && Array.isArray(state?.visible) && state.visible.length > 0) {
-    if (state.settleTimer !== undefined) clearTimeout(state.settleTimer);
-    state.settleTimer = undefined;
-    state.lines = Array.isArray(state.lines) ? state.lines : [];
-    state.lines.push(...state.visible.map((entry) => ({
-      at: entry.at,
-      speaker: entry.speaker,
-      text: entry.text
-    })));
-    state.visible = [];
-    const excess = state.lines.length - ${GOOGLE_MEET_TRANSCRIPT_MAX_LINES};
-    if (excess > 0) {
-      state.lines.splice(0, excess);
-      state.droppedLines = (state.droppedLines || 0) + excess;
-    }
-  }
-  const lines = Array.isArray(state?.lines) ? state.lines : [];
-  return JSON.stringify({
-    urlMatched: true,
-    sessionMatched: true,
-    epoch: typeof state?.epoch === "string" ? state.epoch : undefined,
-    droppedLines: Number.isFinite(state?.droppedLines) ? Math.max(0, Math.trunc(state.droppedLines)) : 0,
-    lines: lines.map((line) => ({
-      at: typeof line?.at === "string" ? line.at : undefined,
-      speaker: typeof line?.speaker === "string" ? line.speaker : undefined,
-      text: typeof line?.text === "string" ? line.text : ""
-    })).filter((line) => line.text)
   });
 }`;
 }

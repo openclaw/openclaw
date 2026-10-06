@@ -1,6 +1,8 @@
+import { isPluginApprovalRequest, type ChannelApprovalKind } from "../infra/approval-types.js";
 // Approval delivery helpers format approval prompts and results for channel plugins.
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequest } from "../infra/system-agent-approvals.js";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -10,19 +12,16 @@ import {
   type NativeApprovalTarget,
 } from "./approval-native-helpers.js";
 import type { ChannelApprovalCapability } from "./channel-contract.js";
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 import { normalizeMessageChannel } from "./routing.js";
 import { normalizeOptionalString } from "./string-coerce-runtime.js";
 
-type ApprovalKind = "exec" | "plugin";
 type NativeApprovalDeliveryMode = "dm" | "channel" | "both";
-type NativeApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type NativeApprovalRequest =
+  | ExecApprovalRequest
+  | PluginApprovalRequest
+  | SystemAgentApprovalRequest;
 type NativeApprovalSurface = "origin" | "approver-dm";
-type ChannelApprovalCapabilitySurfaces = Pick<
-  ChannelApprovalCapability,
-  "delivery" | "nativeRuntime" | "render" | "native"
->;
-
 type ApprovalAdapterParams = {
   /** Full config used to inspect channel approval settings. */
   cfg: OpenClawConfig;
@@ -36,7 +35,7 @@ type DeliverySuppressionParams = {
   /** Full config used to inspect native approval delivery settings. */
   cfg: OpenClawConfig;
   /** Approval kind being delivered. */
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   /** Forwarding fallback target under consideration. */
   target: { channel: string; accountId?: string | null };
   /** Approval request metadata, including original turn source when available. */
@@ -64,7 +63,9 @@ type ApproverRestrictedNativeApprovalFlatParams = {
   /** Whether a sender can approve exec approvals for this account. */
   isExecAuthorizedSender: (params: ApprovalAdapterParams) => boolean;
   /** Optional plugin approval authorization hook; defaults to exec authorization. */
-  isPluginAuthorizedSender?: (params: ApprovalAdapterParams) => boolean;
+  isPluginAuthorizedSender?: (
+    params: ApprovalAdapterParams & { request?: PluginApprovalRequest },
+  ) => boolean;
   /** Whether native approval delivery is enabled for an account. */
   isNativeDeliveryEnabled: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
   /** Native delivery target preference for an account. */
@@ -80,14 +81,14 @@ type ApproverRestrictedNativeApprovalFlatParams = {
   resolveOriginTarget?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: NativeApprovalRequest;
   }) => NativeApprovalTarget | null | Promise<NativeApprovalTarget | null>;
   /** Resolves approver DM targets for native approval delivery. */
   resolveApproverDmTargets?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     request: NativeApprovalRequest;
   }) => NativeApprovalTarget[] | Promise<NativeApprovalTarget[]>;
   /** Whether DM-only native delivery should also notify the origin channel. */
@@ -142,7 +143,7 @@ type StandardNativeApprovalRoutingParams = {
   isOriginTargetAllowed?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-    approvalKind?: ApprovalKind;
+    approvalKind?: ChannelApprovalKind;
     request: NativeApprovalRequest;
     target: NativeApprovalTarget;
   }) => boolean;
@@ -265,8 +266,8 @@ function createStandardNativeApprovalRouting(
   };
 }
 
-/** Build the canonical approval capability for channels that restrict approvals to configured approvers. */
-function buildApproverRestrictedNativeApprovalCapability(
+/** Build the canonical approval capability for approver-restricted native delivery channels. */
+export function createApproverRestrictedNativeApprovalCapability(
   params: ApproverRestrictedNativeApprovalCommonParams & ApproverRestrictedNativeApprovalFlatParams,
 ): ChannelApprovalCapability {
   const pluginSenderAuth = params.isPluginAuthorizedSender ?? params.isExecAuthorizedSender;
@@ -276,13 +277,6 @@ function buildApproverRestrictedNativeApprovalCapability(
     mode: NativeApprovalDeliveryMode,
   ): NativeApprovalSurface | "both" =>
     mode === "channel" ? "origin" : mode === "dm" ? "approver-dm" : "both";
-  const hasConfiguredApprovers = ({
-    cfg,
-    accountId,
-  }: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => params.hasApprovers({ cfg, accountId });
   const isExecInitiatingSurfaceEnabled = ({
     cfg,
     accountId,
@@ -290,33 +284,23 @@ function buildApproverRestrictedNativeApprovalCapability(
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) =>
-    hasConfiguredApprovers({ cfg, accountId }) &&
-    params.isNativeDeliveryEnabled({ cfg, accountId });
-  const resolveExecInitiatingSurfaceState = ({
-    cfg,
-    accountId,
-  }: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    action: "approve";
-  }) => availabilityState(isExecInitiatingSurfaceEnabled({ cfg, accountId }));
+    params.hasApprovers({ cfg, accountId }) && params.isNativeDeliveryEnabled({ cfg, accountId });
 
   return createChannelApprovalCapability({
-    authorizeActorAction: ({
-      cfg,
-      accountId,
-      senderId,
-      approvalKind,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string | null;
-      senderId?: string | null;
-      action: "approve";
-      approvalKind: ApprovalKind;
-    }) => {
+    authorizeActorAction: ({ cfg, accountId, senderId, approvalKind, request }) => {
+      const pluginRequest =
+        approvalKind === "plugin" && request && isPluginApprovalRequest(request)
+          ? request
+          : undefined;
       const authorized =
         approvalKind === "plugin"
-          ? pluginSenderAuth({ cfg, accountId, senderId })
+          ? (!request || pluginRequest !== undefined) &&
+            pluginSenderAuth({
+              cfg,
+              accountId,
+              senderId,
+              request: pluginRequest,
+            })
           : params.isExecAuthorizedSender({ cfg, accountId, senderId });
       return authorized
         ? { authorized: true }
@@ -325,22 +309,16 @@ function buildApproverRestrictedNativeApprovalCapability(
             reason: `❌ You are not authorized to approve ${approvalKind} requests on ${params.channelLabel}.`,
           };
     },
-    getActionAvailabilityState: ({
-      cfg,
-      accountId,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string | null;
-      action: "approve";
-      approvalKind?: ApprovalKind;
-    }) => availabilityState(hasConfiguredApprovers({ cfg, accountId })),
-    getExecInitiatingSurfaceState: resolveExecInitiatingSurfaceState,
+    getActionAvailabilityState: ({ cfg, accountId }) =>
+      availabilityState(params.hasApprovers({ cfg, accountId })),
+    getExecInitiatingSurfaceState: ({ cfg, accountId }) =>
+      availabilityState(isExecInitiatingSurfaceEnabled({ cfg, accountId })),
     describeExecApprovalSetup: params.describeExecApprovalSetup,
     describePluginApprovalSetup: params.describePluginApprovalSetup,
     delivery: {
-      hasConfiguredDmRoute: ({ cfg }: { cfg: OpenClawConfig }) =>
+      hasConfiguredDmRoute: ({ cfg }) =>
         params.listAccountIds(cfg).some((accountId) => {
-          if (!hasConfiguredApprovers({ cfg, accountId })) {
+          if (!params.hasApprovers({ cfg, accountId })) {
             return false;
           }
           if (!params.isNativeDeliveryEnabled({ cfg, accountId })) {
@@ -375,15 +353,7 @@ function buildApproverRestrictedNativeApprovalCapability(
     native:
       params.resolveOriginTarget || params.resolveApproverDmTargets
         ? {
-            describeDeliveryCapabilities: ({
-              cfg,
-              accountId,
-            }: {
-              cfg: OpenClawConfig;
-              accountId?: string | null;
-              approvalKind: ApprovalKind;
-              request: NativeApprovalRequest;
-            }) => ({
+            describeDeliveryCapabilities: ({ cfg, accountId }) => ({
               enabled: isExecInitiatingSurfaceEnabled({ cfg, accountId }),
               preferredSurface: normalizePreferredSurface(
                 params.resolveNativeDeliveryMode({ cfg, accountId }),
@@ -404,7 +374,7 @@ function buildApproverRestrictedNativeApprovalCapability(
 export function createApproverRestrictedNativeApprovalAdapter(
   params: ApproverRestrictedNativeApprovalCommonParams & ApproverRestrictedNativeApprovalFlatParams,
 ) {
-  return splitChannelApprovalCapability(buildApproverRestrictedNativeApprovalCapability(params));
+  return splitChannelApprovalCapability(createApproverRestrictedNativeApprovalCapability(params));
 }
 
 /** Assemble a channel approval capability from its auth, delivery, render, and native surfaces. */
@@ -430,12 +400,7 @@ export function createChannelApprovalCapability(params: {
   /** Native target/capability discovery hooks. */
   native?: ChannelApprovalCapability["native"];
 }): ChannelApprovalCapability {
-  const surfaces: ChannelApprovalCapabilitySurfaces = {
-    delivery: params.delivery,
-    nativeRuntime: params.nativeRuntime,
-    render: params.render,
-    native: params.native,
-  };
+  const { delivery, nativeRuntime, render, native } = params;
   return {
     authorizeActorAction: params.authorizeActorAction,
     getActionAvailabilityState: params.getActionAvailabilityState,
@@ -443,10 +408,10 @@ export function createChannelApprovalCapability(params: {
     resolveApproveCommandBehavior: params.resolveApproveCommandBehavior,
     describeExecApprovalSetup: params.describeExecApprovalSetup,
     describePluginApprovalSetup: params.describePluginApprovalSetup,
-    delivery: surfaces.delivery,
-    nativeRuntime: surfaces.nativeRuntime,
-    render: surfaces.render,
-    native: surfaces.native,
+    delivery,
+    nativeRuntime,
+    render,
+    native,
   };
 }
 
@@ -479,13 +444,6 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
     describeExecApprovalSetup: capability.describeExecApprovalSetup,
     describePluginApprovalSetup: capability.describePluginApprovalSetup,
   };
-}
-
-/** Build the canonical approval capability for approver-restricted native delivery channels. */
-export function createApproverRestrictedNativeApprovalCapability(
-  params: ApproverRestrictedNativeApprovalCommonParams & ApproverRestrictedNativeApprovalFlatParams,
-): ChannelApprovalCapability {
-  return buildApproverRestrictedNativeApprovalCapability(params);
 }
 
 /** Build a forwarding-routed capability and expose its shared route gates to the owning channel. */

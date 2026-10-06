@@ -31,6 +31,9 @@ export type ConversationRef = {
   parentConversationId?: string;
 };
 
+/** Channel/account owner of an adapter-local binding id. */
+export type SessionBindingScope = Pick<ConversationRef, "channel" | "accountId">;
+
 /**
  * Persistable record that connects one conversation to one target session.
  */
@@ -55,6 +58,8 @@ export type SessionBindingBindInput = {
   placement?: SessionBindingPlacement;
   metadata?: Record<string, unknown>;
   ttlMs?: number;
+  /** Host admission authority; current-placement adapters recheck before committing a binding. */
+  assertCurrent?: () => void;
 };
 
 /**
@@ -63,6 +68,8 @@ export type SessionBindingBindInput = {
 export type SessionBindingUnbindInput = {
   bindingId?: string;
   targetSessionKey?: string;
+  /** Restrict removal to this owner; omit only for intentional cross-channel cleanup. */
+  scope?: SessionBindingScope;
   reason: string;
 };
 

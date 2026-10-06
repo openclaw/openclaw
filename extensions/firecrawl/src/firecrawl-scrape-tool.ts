@@ -1,4 +1,3 @@
-// Firecrawl plugin module implements firecrawl scrape tool behavior.
 import { optionalStringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -57,7 +56,7 @@ export function createFirecrawlScrapeTool(api: OpenClawPluginApi) {
     label: "Firecrawl Scrape",
     resultContentSource: "network" as const,
     description:
-      "Scrape a page using Firecrawl v2/scrape. Useful for JS-heavy or bot-protected pages where plain web_fetch is weak.",
+      "Scrape a page using Firecrawl v2/scrape. Useful for JS-heavy or bot-protected pages where a plain URL fetch is weak.",
     parameters: FirecrawlScrapeToolSchema,
     execute: async (
       _toolCallId: string,

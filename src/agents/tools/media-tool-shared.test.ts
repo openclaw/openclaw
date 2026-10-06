@@ -1,19 +1,28 @@
 // Shared media tool tests cover root separation, provider availability, and
 // model-registry normalization for generation/understanding tools.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getMediaDir } from "../../media/store.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createSandboxFsBridge } from "../sandbox/fs-bridge.js";
+import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
+import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import {
   hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
-  readBooleanToolParam,
+  loadMediaToolReferences,
+  resolveGenerateAction,
   resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolReferenceAccess,
-  resolveModelFromRegistry,
+  resolveMediaToolSandboxConfig,
 } from "./media-tool-shared.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Keep media-tool-shared tests focused on root separation; channel-inbound
 // tests cover the real bundled contract loader.
@@ -44,31 +53,83 @@ function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
 }
 
-function createModelRegistryStub(resolve: (provider: string, modelId: string) => unknown): {
-  calls: Array<[string, string]>;
-  registry: { find: (provider: string, modelId: string) => unknown };
-} {
-  const calls: Array<[string, string]> = [];
-  return {
-    calls,
-    registry: {
-      find(provider, modelId) {
-        calls.push([provider, modelId]);
-        return resolve(provider, modelId);
-      },
-    },
-  };
-}
-
-describe("readBooleanToolParam", () => {
-  it("parses booleans and true/false string tokens", () => {
-    expect(readBooleanToolParam({ audio: true }, "audio")).toBe(true);
-    expect(readBooleanToolParam({ audio: " FALSE " }, "audio")).toBe(false);
-    expect(readBooleanToolParam({ audio: "yes" }, "audio")).toBeUndefined();
+describe("resolveGenerateAction", () => {
+  it.each([
+    [{}, "generate"],
+    [{ action: "   " }, "generate"],
+    [{ action: 1 }, "generate"],
+    [{ action: "generate" }, "generate"],
+    [{ action: " STATUS " }, "status"],
+    [{ action: "list" }, "list"],
+    [{ action: "invalid" }, /^action must be "generate", "status", or "list"$/],
+  ] as const)("resolves or rejects %j", (args, expected) => {
+    if (typeof expected === "string") {
+      expect(resolveGenerateAction(args)).toBe(expected);
+    } else {
+      expect(() => resolveGenerateAction(args)).toThrowError(expected);
+    }
   });
 });
 
 describe("resolveMediaToolLocalRoots", () => {
+  it.each([true, false])(
+    "adds host-owned attachment roots (workspaceOnly=%s)",
+    async (workspaceOnly) => {
+      const workspaceDir = path.join("/tmp", "openclaw-media-workspace");
+      const attachmentRoot = path.join("/tmp", "openclaw-subagent-attachments");
+      const { localRoots } = await resolveMediaToolReferenceAccess({
+        input: path.join(attachmentRoot, "receipt.png"),
+        isDataUrl: false,
+        workspaceDir,
+        fsPolicy: { workspaceOnly, readOnlyRoots: [attachmentRoot] },
+      });
+      if (workspaceOnly) {
+        expect(localRoots.map(normalizeHostPath)).toEqual(
+          [getMediaDir(), workspaceDir, attachmentRoot].map(normalizeHostPath),
+        );
+      } else {
+        expect(localRoots.map(normalizeHostPath)).toContain(normalizeHostPath(attachmentRoot));
+      }
+    },
+  );
+
+  it("admits only the declared attachment mount in workspace-only sandboxes", async () => {
+    const root = path.join("/tmp", "openclaw-media-workspace");
+    const hostPath = path.join("/tmp", "openclaw-subagent-attachments");
+    const mount = { hostPath, containerPath: "/openclaw/attachments" };
+    const sandbox = resolveMediaToolSandboxConfig(
+      {
+        root,
+        bridge: createSandboxFsBridge({
+          sandbox: {
+            ...createSandboxTestContext({
+              overrides: {
+                workspaceDir: root,
+                agentWorkspaceDir: root,
+                readOnlyResourceMounts: [mount],
+              },
+            }),
+            backend: {
+              runShellCommand: async () => {
+                throw new Error("Path resolution must not execute backend commands");
+              },
+            },
+          },
+        }),
+        readOnlyResourceMounts: [mount],
+      },
+      true,
+    );
+
+    await expect(
+      resolveMediaToolReferenceAccess({
+        input: "/openclaw/attachments/receipt.png",
+        isDataUrl: false,
+        sandbox,
+      }),
+    ).resolves.toMatchObject({ resolvedPath: path.join(hostPath, "receipt.png") });
+  });
+
   it("does not widen default local roots from media sources", async () => {
     const stateDir = path.join("/tmp", "openclaw-media-tool-roots-state");
     const picturesDir =
@@ -107,30 +168,13 @@ describe("resolveMediaToolLocalRoots", () => {
       },
     };
 
-    const withoutChannel = await resolveMediaToolReferenceAccess({
+    const { localRoots } = await resolveMediaToolReferenceAccess({
       input: "relative/reference.png",
       isDataUrl: false,
-      rootOptions: { cfg },
     });
-    expect(withoutChannel.localRoots.map(normalizeHostPath)).not.toContain(
-      normalizeHostPath(accountRoot),
-    );
-    expect(withoutChannel.localRoots.map(normalizeHostPath)).not.toContain(
-      normalizeHostPath(sharedRoot),
-    );
+    expect(localRoots.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
+    expect(localRoots.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
     expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
-
-    const withImessage = await resolveMediaToolReferenceAccess({
-      input: "relative/reference.png",
-      isDataUrl: false,
-      rootOptions: { cfg, channelId: "imessage", accountId: "work" },
-    });
-    expect(withImessage.localRoots.map(normalizeHostPath)).not.toContain(
-      normalizeHostPath(accountRoot),
-    );
-    expect(withImessage.localRoots.map(normalizeHostPath)).not.toContain(
-      normalizeHostPath(sharedRoot),
-    );
     expect(
       resolveMediaToolInboundRoots({
         cfg,
@@ -144,220 +188,160 @@ describe("resolveMediaToolLocalRoots", () => {
 });
 
 describe("resolveMediaToolReferenceAccess", () => {
-  it("decodes a host-local file URL with Unicode and spaces", async () => {
-    const filePath = path.join(process.cwd(), "café reference image.png");
-
-    await expect(
-      resolveMediaToolReferenceAccess({
-        input: pathToFileURL(filePath).href,
-        isDataUrl: false,
-        workspaceDir: process.cwd(),
-      }),
-    ).resolves.toMatchObject({ resolvedPath: filePath });
+  const filePath = path.join(process.cwd(), "café reference image.png");
+  it.each<{
+    input: string;
+    isDataUrl?: boolean;
+    expected?: string | null;
+    error?: RegExp | typeof URIError;
+  }>([
+    { input: pathToFileURL(filePath).href, expected: filePath },
+    { input: "https://example.com/reference.png", expected: "https://example.com/reference.png" },
+    { input: "media://inbound/a.png", expected: "media://inbound/a.png" },
+    { input: "data:image/png;base64,cG5n", isDataUrl: true, expected: null },
+    { input: "file://attacker/share.png", error: /remote hosts/i },
+    { input: "file:///tmp/encoded%2Fseparator.png", error: /encode path separators/i },
+    { input: "file:///tmp/malformed%ZZ.png", error: URIError },
+  ])("resolves or rejects $input", async ({ input, isDataUrl = false, expected, error }) => {
+    const result = resolveMediaToolReferenceAccess({
+      input,
+      isDataUrl,
+      workspaceDir: process.cwd(),
+    });
+    if (error) {
+      await expect(result).rejects.toThrow(error);
+    } else {
+      await expect(result).resolves.toMatchObject({ resolvedPath: expected });
+    }
   });
 
-  it.each(["relative/reference.png", "https://example.com/reference.png", "media://inbound/a.png"])(
-    "preserves non-file reference %s",
-    async (input) => {
-      await expect(
-        resolveMediaToolReferenceAccess({
-          input,
-          isDataUrl: false,
-          workspaceDir: process.cwd(),
-        }),
-      ).resolves.toMatchObject({ resolvedPath: input });
+  it.each(["image_generate", "music_generate"] as const)(
+    "loads a producer-staged bare handle for %s references",
+    async (toolName) => {
+      const root = tempDirs.make("openclaw-media-tool-staged-");
+      const stagedPath = "media/inbound/openclaw-staged-proof/input-file_upload.png";
+      const fullPath = path.join(root, stagedPath);
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await fs.writeFile(
+        fullPath,
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
+          "base64",
+        ),
+      );
+      const sandbox = resolveMediaToolSandboxConfig(
+        {
+          root,
+          bridge: createHostSandboxFsBridge(root),
+          stagedMediaPaths: new Map([["file_upload", stagedPath]]),
+        },
+        true,
+      );
+
+      const loaded = await loadMediaToolReferences({
+        inputs: ["file_upload"],
+        toolName,
+        expectedKind: "image",
+        sandbox,
+        workspaceDir: root,
+        maxBytes: 1024,
+        mapMedia: (media) => media.buffer,
+      });
+
+      expect(loaded).toMatchObject([
+        { resolvedInput: "file_upload", rewrittenFrom: "file_upload" },
+      ]);
     },
   );
-
-  it("keeps data URLs out of filesystem resolution", async () => {
-    await expect(
-      resolveMediaToolReferenceAccess({
-        input: "data:image/png;base64,cG5n",
-        isDataUrl: true,
-        workspaceDir: process.cwd(),
-      }),
-    ).resolves.toMatchObject({ resolvedPath: null });
-  });
-
-  it.each([
-    ["file://attacker/share.png", /remote hosts/i],
-    ["file:///tmp/encoded%2Fseparator.png", /encode path separators/i],
-    ["file:///tmp/malformed%ZZ.png", /invalid|malformed/i],
-  ])("rejects unsafe or malformed file URL %s", async (input, expected) => {
-    await expect(
-      resolveMediaToolReferenceAccess({
-        input,
-        isDataUrl: false,
-        workspaceDir: process.cwd(),
-      }),
-    ).rejects.toThrow(expected);
-  });
 });
 
-describe("resolveModelFromRegistry", () => {
-  it("normalizes provider and model refs before registry lookup", () => {
-    const foundModel = { provider: "ollama", id: "qwen3.5:397b-cloud" };
-    const { calls, registry } = createModelRegistryStub(() => foundModel);
-
-    const result = resolveModelFromRegistry({
-      modelRegistry: registry,
-      provider: " OLLAMA ",
-      modelId: " qwen3.5:397b-cloud ",
+describe("resolveCapabilityModelConfigForTool", () => {
+  it("uses explicit model config for selection and availability without loading providers", () => {
+    const providers = vi.fn(() => {
+      throw new Error("runtime provider list should not run for explicit model config");
     });
-
-    expect(calls).toEqual([["ollama", "qwen3.5:397b-cloud"]]);
-    expect(result).toBe(foundModel);
-  });
-
-  it("reports the normalized ref when the registry lookup misses", () => {
-    const { registry } = createModelRegistryStub(() => null);
-
-    expect(() =>
-      resolveModelFromRegistry({
-        modelRegistry: registry,
-        provider: " OLLAMA ",
-        modelId: " qwen3.5:397b-cloud ",
-      }),
-    ).toThrow("Unknown model: ollama/qwen3.5:397b-cloud");
-  });
-
-  it("falls back to provider-prefixed custom model IDs", () => {
-    // Custom providers can store ids with provider prefixes; try both forms so
-    // callers can pass the short local model id.
-    const foundModel = { provider: "kimchi", id: "kimchi/claude-opus-4-6" };
-    const { calls, registry } = createModelRegistryStub((_, modelId) =>
-      modelId === "kimchi/claude-opus-4-6" ? foundModel : null,
-    );
-
-    const result = resolveModelFromRegistry({
-      modelRegistry: registry,
-      provider: "kimchi",
-      modelId: "claude-opus-4-6",
-    });
-
-    expect(calls).toEqual([
-      ["kimchi", "claude-opus-4-6"],
-      ["kimchi", "kimchi/claude-opus-4-6"],
-    ]);
-    expect(result).toBe(foundModel);
-  }, 180_000);
-});
-
-describe("hasGenerationToolAvailability", () => {
-  it("accepts config-backed custom provider auth for generation providers", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "custom-image": {
-            baseUrl: "https://example.com/v1",
-            apiKey: "sk-configured", // pragma: allowlist secret
-            models: [],
-          },
-        },
-      },
-    };
-
+    const modelConfig = { primary: "qwen/wan2.6-t2v" };
+    expect(resolveCapabilityModelConfigForTool({ modelConfig, providers })).toEqual(modelConfig);
     expect(
       hasGenerationToolAvailability({
         providerKey: "imageGenerationProviders",
-        cfg,
-        providers: [{ id: "custom-image", defaultModel: "workflow" }],
+        modelConfig,
+        providers,
       }),
     ).toBe(true);
+    expect(providers).not.toHaveBeenCalled();
   });
 
-  it("preserves a provider-specific not-configured result over generic config auth", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "workflow-image": {
-            baseUrl: "https://example.com/v1",
-            apiKey: "sk-configured", // pragma: allowlist secret
-            models: [],
-          },
-        },
-      },
-    };
-    const provider = {
-      id: "workflow-image",
-      defaultModel: "workflow",
-      isConfigured: () => false,
-    };
-
-    expect(
-      isCapabilityProviderConfigured({
-        providers: [provider],
-        provider,
-        cfg,
-      }),
-    ).toBe(false);
+  it("orders auto-detected provider defaults by canonical aliases", () => {
     expect(
       resolveCapabilityModelConfigForTool({
-        cfg,
-        providers: [provider],
-      }),
-    ).toBeNull();
-  });
-
-  it("allows generation tools for runtime providers configured without auth", () => {
-    expect(
-      hasGenerationToolAvailability({
-        providerKey: "imageGenerationProviders",
+        cfg: {
+          agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } },
+        },
         providers: [
           {
-            id: "local-image",
-            defaultModel: "workflow",
+            id: "fal",
+            defaultModel: "fal-ai/minimax/video-01-live",
+            isConfigured: () => true,
+          },
+          {
+            id: "openai",
+            aliases: ["media-alias"],
+            defaultModel: "sora-2",
             isConfigured: () => true,
           },
         ],
       }),
-    ).toBe(true);
+    ).toEqual({
+      primary: "openai/sora-2",
+      fallbacks: ["fal/fal-ai/minimax/video-01-live"],
+    });
   });
+});
 
-  it("omits generation tools when runtime providers are not configured", () => {
-    expect(
-      hasGenerationToolAvailability({
-        providerKey: "imageGenerationProviders",
-        providers: [
-          {
-            id: "local-image",
-            defaultModel: "workflow",
-            isConfigured: () => false,
-          },
-        ],
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps explicit model config sufficient for generation tool registration", () => {
-    const loadProviders = vi.fn(() => []);
-
-    expect(
-      hasGenerationToolAvailability({
-        providerKey: "imageGenerationProviders",
-        modelConfig: { primary: "local-image/workflow" },
-        providers: loadProviders,
-      }),
-    ).toBe(true);
-    expect(loadProviders).not.toHaveBeenCalled();
-  });
-
-  it("checks configured runtime providers against the supplied auth store", () => {
-    expect(
-      hasGenerationToolAvailability({
-        providerKey: "imageGenerationProviders",
-        authStore: {
-          version: 1,
-          profiles: {
-            "local-image:default": {
-              provider: "local-image",
-              type: "api_key",
-              key: "test",
-            },
-          },
+describe("hasGenerationToolAvailability", () => {
+  const configuredCredentials: OpenClawConfig = {
+    models: {
+      providers: {
+        "local-image": { baseUrl: "https://example.com/v1", apiKey: "sk-configured", models: [] }, // pragma: allowlist secret
+      },
+    },
+  };
+  it.each<{
+    name: string;
+    cfg?: OpenClawConfig;
+    isConfigured?: () => boolean;
+    authStore?: Parameters<typeof hasGenerationToolAvailability>[0]["authStore"];
+    expected: boolean;
+  }>([
+    { name: "config-backed auth", cfg: configuredCredentials, expected: true },
+    {
+      name: "provider denial overrides config auth",
+      cfg: configuredCredentials,
+      isConfigured: () => false,
+      expected: false,
+    },
+    { name: "auth-free configured provider", isConfigured: () => true, expected: true },
+    { name: "unconfigured provider", isConfigured: () => false, expected: false },
+    {
+      name: "supplied auth store",
+      expected: true,
+      authStore: {
+        version: 1,
+        profiles: {
+          "local-image:default": { provider: "local-image", type: "api_key", key: "test" },
         },
-        providers: [{ id: "local-image", defaultModel: "workflow" }],
-      }),
-    ).toBe(true);
+      },
+    },
+  ])("honors $name", ({ cfg, isConfigured, authStore, expected }) => {
+    const provider = { id: "local-image", defaultModel: "workflow", isConfigured };
+    const params = { cfg, authStore, providers: [provider] };
+    expect(
+      hasGenerationToolAvailability({ ...params, providerKey: "imageGenerationProviders" }),
+    ).toBe(expected);
+    if (cfg && isConfigured) {
+      expect(isCapabilityProviderConfigured({ ...params, provider })).toBe(false);
+      expect(resolveCapabilityModelConfigForTool(params)).toBeNull();
+    }
   });
 });

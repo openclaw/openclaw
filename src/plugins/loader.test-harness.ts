@@ -6,7 +6,6 @@ import { expect } from "vitest";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   getRegisteredEmbeddingProvider,
@@ -66,49 +65,64 @@ export function expectGlobalHookRunner(
   return runner;
 }
 
-export function createDetachedTaskRuntimeStub(id: string): DetachedTaskLifecycleRuntime {
-  const fail = (name: string): never => {
-    throw new Error(`detached runtime ${id} should not execute ${name} in this test`);
-  };
-  return {
-    createQueuedTaskRun: () => fail("createQueuedTaskRun"),
-    createRunningTaskRun: () => fail("createRunningTaskRun"),
-    startTaskRunByRunId: () => fail("startTaskRunByRunId"),
-    recordTaskRunProgressByRunId: () => fail("recordTaskRunProgressByRunId"),
-    finalizeTaskRunByRunId: () => fail("finalizeTaskRunByRunId"),
-    completeTaskRunByRunId: () => fail("completeTaskRunByRunId"),
-    failTaskRunByRunId: () => fail("failTaskRunByRunId"),
-    setDetachedTaskDeliveryStatusByRunId: () => fail("setDetachedTaskDeliveryStatusByRunId"),
-    cancelDetachedTaskRunById: async () => ({
-      found: true,
-      cancelled: true,
-    }),
-  };
+export function writeFixtureText(rootDir: string, relativePath: string, body: string) {
+  const filePath = path.join(rootDir, relativePath);
+  mkdirSafe(path.dirname(filePath));
+  fs.writeFileSync(filePath, body, "utf-8");
 }
 
-const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
-  id: "telegram",
-  register(api) {
+export function writeFixtureJson(rootDir: string, relativePath: string, value: unknown) {
+  writeFixtureText(rootDir, relativePath, JSON.stringify(value, null, 2));
+}
+
+export function pluginManifest(id: string, channels?: string[]) {
+  return { id, configSchema: EMPTY_PLUGIN_SCHEMA, ...(channels ? { channels } : {}) };
+}
+
+export function channelPluginSource(params: {
+  pluginId: string;
+  channelId?: string;
+  label: string;
+  docsPath: string;
+  blurb: string;
+  configured?: boolean;
+  resolveAccount?: false;
+}) {
+  const channelId = params.channelId ?? params.pluginId;
+  const resolveAccount =
+    params.resolveAccount === false
+      ? "undefined"
+      : params.configured
+        ? '({ accountId: "default", token: "configured" })'
+        : '({ accountId: "default" })';
+  return `module.exports = { id: ${JSON.stringify(params.pluginId)}, register(api) {
     api.registerChannel({
       plugin: {
-        id: "telegram",
+        id: ${JSON.stringify(channelId)},
         meta: {
-          id: "telegram",
-          label: "Telegram",
-          selectionLabel: "Telegram",
-          docsPath: "/channels/telegram",
-          blurb: "telegram channel",
+          id: ${JSON.stringify(channelId)},
+          label: ${JSON.stringify(params.label)},
+          selectionLabel: ${JSON.stringify(params.label)},
+          docsPath: ${JSON.stringify(params.docsPath)},
+          blurb: ${JSON.stringify(params.blurb)},
         },
         capabilities: { chatTypes: ["direct"] },
         config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" }),
+          listAccountIds: () => ${params.configured ? '["default"]' : "[]"},
+          resolveAccount: () => ${resolveAccount},
         },
         outbound: { deliveryMode: "direct" },
       },
     });
-  },
-};`;
+  } };`;
+}
+
+const BUNDLED_TELEGRAM_PLUGIN_BODY = channelPluginSource({
+  pluginId: "telegram",
+  label: "Telegram",
+  docsPath: "/channels/telegram",
+  blurb: "telegram channel",
+});
 
 export function simplePluginBody(id: string) {
   return `module.exports = { id: ${JSON.stringify(id)}, register() {} };`;
@@ -154,27 +168,10 @@ export function setupBundledDreamingMemoryPlugins(params?: {
         : memoryPluginBody(selectedId),
   });
   const openSchema = { type: "object", additionalProperties: true };
-  fs.writeFileSync(
-    path.join(memoryCoreDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(selectedMemoryDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: selectedId,
-        kind: params?.selectedKind ?? "memory",
-        configSchema: openSchema,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
+  updatePluginManifest({ dir: memoryCoreDir }, { kind: "memory" });
+  updatePluginManifest(
+    { dir: selectedMemoryDir },
+    { kind: params?.selectedKind ?? "memory", configSchema: openSchema },
   );
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
   return { bundledDir, selectedId };
@@ -206,6 +203,7 @@ export function writeBundledPlugin(params: {
 export function makeOpenClawDevSourceRoot() {
   const root = makePluginLoaderTempDir();
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: [extensions/*]\n");
   mkdirSafe(path.join(root, "src"));
   mkdirSafe(path.join(root, "extensions"));
   return root;
@@ -495,7 +493,7 @@ export function expectPluginSourcePrecedence(
     expectedDisabledOrigin: string;
     label: string;
     expectedDisabledError?: string;
-    expectDuplicateWarning?: boolean;
+    expectedDuplicateLevel?: "warn" | "info" | null;
   },
 ) {
   const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
@@ -503,16 +501,16 @@ export function expectPluginSourcePrecedence(
   const loaded = entries[0];
   expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
   expect(loaded?.status, scenario.label).toBe("loaded");
-  const expectedWarning =
+  const expectedMessage =
     scenario.expectedDisabledError ??
     `${scenario.expectedDisabledOrigin} plugin will be overridden by ${scenario.expectedLoadedOrigin} plugin`;
-  const hasDuplicateWarning = registry.diagnostics.some(
+  const hasDuplicateDiagnostic = registry.diagnostics.some(
     (diag) =>
-      diag.level === "warn" &&
+      diag.level === (scenario.expectedDuplicateLevel ?? "warn") &&
       diag.pluginId === scenario.pluginId &&
-      diag.message.includes(expectedWarning),
+      diag.message.includes(expectedMessage),
   );
-  expect(hasDuplicateWarning, scenario.label).toBe(scenario.expectDuplicateWarning ?? true);
+  expect(hasDuplicateDiagnostic, scenario.label).toBe(scenario.expectedDuplicateLevel !== null);
 }
 
 export function expectPluginOriginAndStatus(params: {
@@ -684,34 +682,11 @@ export function createSetupEntryChannelPluginFixture(params: {
     ? '({ accountId: "default", token: "configured" })'
     : '({ accountId: "default" })';
 
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify(
-      {
-        name: params.packageName,
-        openclaw: {
-          extensions: ["./index.cjs"],
-          setupEntry: "./setup-entry.cjs",
-        },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: params.id,
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-        channels: [params.id],
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  writeFixtureJson(pluginDir, "package.json", {
+    name: params.packageName,
+    openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup-entry.cjs" },
+  });
+  writeFixtureJson(pluginDir, "openclaw.plugin.json", pluginManifest(params.id, [params.id]));
   fs.writeFileSync(
     path.join(pluginDir, "index.cjs"),
     params.useBundledFullEntryContract
@@ -756,29 +731,13 @@ module.exports = {
   register() {},
 };`
       : `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
-module.exports = {
-  id: ${JSON.stringify(params.id)},
-  register(api) {
-    api.registerChannel({
-      plugin: {
-        id: ${JSON.stringify(params.id)},
-        meta: {
-          id: ${JSON.stringify(params.id)},
-          label: ${JSON.stringify(params.label)},
-          selectionLabel: ${JSON.stringify(params.label)},
-          docsPath: ${JSON.stringify(`/channels/${params.id}`)},
-          blurb: ${JSON.stringify(params.fullBlurb)},
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => ${listAccountIds},
-          resolveAccount: () => ${resolveAccount},
-        },
-        outbound: { deliveryMode: "direct" },
-      },
-    });
-  },
-};`,
+${channelPluginSource({
+  pluginId: params.id,
+  label: params.label,
+  docsPath: `/channels/${params.id}`,
+  blurb: params.fullBlurb,
+  configured: params.configured,
+})}`,
     "utf-8",
   );
   fs.writeFileSync(

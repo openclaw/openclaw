@@ -37,6 +37,18 @@ export const discordChannelConfigUiHints = {
     },
     progress: { includeCommentary: true },
   }),
+  joinIntro: {
+    label: "Discord Guild Join Introduction",
+    help: "Post one brief, room-specific introduction when the bot joins an allowed Discord guild (default: true). Account settings override the channel-wide setting.",
+  },
+  "guilds.*.requireMentionInBotThreads": {
+    label: "Require Mention in Bot-Created Threads",
+    help: "Override mention gating only in threads owned by this bot. False allows unmentioned follow-ups; true requires a mention even with autoThread enabled. Omitted preserves existing behavior. Sender and channel access rules still apply.",
+  },
+  "guilds.*.channels.*.requireMentionInBotThreads": {
+    label: "Require Mention in Bot-Created Threads",
+    help: "Override the guild setting for this channel. Applies only when Discord identifies this bot as the thread owner; unknown or other owners keep ordinary mention rules. Unmentioned messages require Message Content Intent.",
+  },
   proxy: {
     label: "Discord Proxy URL",
     help: "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
@@ -55,11 +67,11 @@ export const discordChannelConfigUiHints = {
   },
   "threadBindings.enabled": {
     label: "Discord Thread Binding Enabled",
-    help: "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set.",
+    help: "Enable Discord thread-bound session spawning, routing, and delivery. Overrides session.threadBindings.enabled when set.",
   },
   "threadBindings.idleHours": {
     label: "Discord Thread Binding Idle Timeout (hours)",
-    help: "Inactivity window in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+    help: "Inactivity window in hours for Discord thread-bound sessions. Set 0 to disable idle expiry (default: 24). Overrides session.threadBindings.idleHours when set.",
   },
   "threadBindings.maxAgeHours": {
     label: "Discord Thread Binding Max Age (hours)",
@@ -99,7 +111,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.model": {
     label: "Discord Voice Model",
-    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai/gpt-5.6-sol). Leave unset to inherit the routed agent model.",
+    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai/gpt-6-astra). Leave unset to inherit the routed agent model.",
   },
   "voice.mode": {
     label: "Discord Voice Mode",
@@ -172,7 +184,11 @@ export const discordChannelConfigUiHints = {
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",
-    help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+    help: "Voice channels to auto-join (list of guildId/channelId entries). Set whenOccupied on an entry to connect only while humans are present.",
+  },
+  "voice.autoJoin.*.whenOccupied": {
+    label: "Discord Voice Auto-Join When Occupied",
+    help: "Join and remain in this auto-managed voice channel only while at least one human is present. The OpenClaw bot and other bots do not count. Default: false.",
   },
   "voice.allowedChannels": {
     label: "Discord Voice Allowed Channels",
@@ -268,7 +284,7 @@ export const discordChannelConfigUiHints = {
   },
   allowBots: {
     label: "Discord Allow Bot Messages",
-    help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+    help: 'Allow bot-authored messages through normal Discord mention and access rules (default: true). Set false to disable bot-triggered turns, or "mentions" to require a bot mention. Accessible bot messages remain available as conversation context.',
   },
   botLoopProtection: {
     label: "Discord Bot Loop Protection",
@@ -305,7 +321,7 @@ export const discordChannelConfigUiHints = {
   },
   activities: {
     label: "Discord Activities",
-    help: "Enable Discord Activity widgets for this account. Routes, the agent tool, and the launch handler remain disabled when this block is absent.",
+    help: "Enable the Discord Activity presenter for the core show_widget tool on this account. Activity routes and the launch handler remain disabled when this block is absent.",
   },
   "activities.clientSecret": {
     label: "Discord Activities Client Secret",

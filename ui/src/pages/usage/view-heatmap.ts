@@ -31,7 +31,7 @@ function renderHeatmapSvg(heatmap: UsageHeatmap) {
       class="usage-heatmap__svg"
       viewBox="0 0 ${width} ${height}"
       style="--usage-heatmap-width: ${width}px"
-      role="img"
+      role="group"
       aria-label=${t("usage.heatmap.title")}
     >
       ${heatmap.monthLabels.map((label, index) =>
@@ -59,7 +59,10 @@ function renderHeatmapSvg(heatmap: UsageHeatmap) {
               width=${HEATMAP_CELL}
               height=${HEATMAP_CELL}
               rx="2.5"
-            ><title>${tooltip}</title></rect>
+              role="img"
+              data-tooltip=${tooltip}
+              aria-label=${tooltip}
+            ></rect>
           `;
         }),
       )}

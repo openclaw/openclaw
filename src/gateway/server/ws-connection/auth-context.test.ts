@@ -1,6 +1,7 @@
 // WebSocket auth-context tests cover token, password, bootstrap, and device-token decision state.
 import { describe, expect, it, vi } from "vitest";
-import { createAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
+import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
+import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 
 type ConnectAuthState = Awaited<ReturnType<typeof resolveConnectAuthState>>;
@@ -91,7 +92,7 @@ function createBaseState(overrides?: Partial<ConnectAuthState>): ConnectAuthStat
     authOk: false,
     authMethod: "token",
     sharedAuthOk: false,
-    sharedAuthProvided: true,
+    pendingSharedAuthFailure: false,
     deviceTokenCandidate: "device-token",
     deviceTokenCandidateSource: "shared-token-fallback",
     ...overrides,
@@ -262,6 +263,27 @@ function expectBootstrapTokenAccepted(params: {
 }
 
 describe("resolveConnectAuthDecision", () => {
+  it.each(["proxy_attribution_required", "token_redacted_config", "password_redacted_config"])(
+    "does not try credential fallbacks after %s",
+    async (reason) => {
+      const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
+      const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
+      const decision = await resolveDeviceTokenDecision({
+        verifyDeviceToken,
+        verifyBootstrapToken,
+        stateOverrides: {
+          authResult: { ok: false, reason },
+          bootstrapTokenCandidate: BOOTSTRAP_TOKEN,
+        },
+      });
+
+      expect(decision.authOk).toBe(false);
+      expect(decision.authResult.reason).toBe(reason);
+      expect(verifyDeviceToken).not.toHaveBeenCalled();
+      expect(verifyBootstrapToken).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps shared-secret mismatch when fallback device-token check fails", async () => {
     const verifyDeviceToken = createVerifyDeviceToken({ ok: false });
     const verifyBootstrapToken = createVerifyBootstrapToken({
@@ -464,13 +486,16 @@ describe("resolveConnectAuthDecision", () => {
   });
 
   it("serializes concurrent bootstrap-token failures before checking the next attempt", async () => {
-    const rateLimiter = createAuthRateLimiter({
-      maxAttempts: 3,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      exemptLoopback: false,
-      pruneIntervalMs: 0,
-    });
+    const rateLimiter = createGatewayAuthRateLimiter(
+      {
+        maxAttempts: 3,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: false,
+        pruneIntervalMs: 0,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
     let activeBootstrapChecks = 0;
     let maxActiveBootstrapChecks = 0;
     const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => {

@@ -1,15 +1,24 @@
 import { readMissingScopeError } from "@openclaw/gateway-client/browser";
-import { html, nothing, render } from "lit";
-import type { FsListDirResult } from "../../../packages/gateway-protocol/src/index.js";
+import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
+import type {
+  FsListDirResult,
+  WorktreeRepositoryStatus,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import { pathDisplayName } from "../lib/path-display.ts";
 import { renderSessionMenuItem } from "../pages/new-session/cloud-target.ts";
-import type { BrowserTarget } from "../pages/new-session/discovery.ts";
-import { folderDisplayName, isAbsolutePath } from "../pages/new-session/path.ts";
+import { PlaceBrowserState } from "../pages/new-session/place-browser-state.ts";
 import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
-import "./modal-dialog.ts";
-import "./web-awesome-popover.ts";
+import { withPromiseModalHost } from "./promise-modal-host.ts";
+import { syncPopoverLabel } from "./web-awesome-popover.ts";
+import { syncDropdownItemRadio } from "./web-awesome.ts";
+
+registerNewSessionSetupEnglish();
 
 export type SessionGroupDefaults = { cwd: string; worktree: boolean };
 
@@ -17,6 +26,7 @@ type Options = {
   group: string;
   defaults: SessionGroupDefaults;
   listDirectory: (path?: string) => Promise<FsListDirResult>;
+  inspectRepository: (path?: string) => Promise<WorktreeRepositoryStatus>;
   submit: (defaults: SessionGroupDefaults) => Promise<string | null>;
 };
 
@@ -27,45 +37,38 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     return Promise.resolve();
   }
   active = true;
-  const host = document.createElement("div");
-  document.body.append(host);
-  return new Promise<void>((resolve) => {
+  return withPromiseModalHost<void>(undefined, ({ host, render, finish: settle }) => {
     let cwd = options.defaults.cwd;
+    let worktree = false;
+    let repositoryStatus: WorktreeRepositoryStatus | "checking" | "restricted" = "checking";
+    let repositoryRequestToken = 0;
     let submitting = false;
     let failure: string | null = null;
     let browserVisible = false;
-    let browserLoading = false;
-    let browserError: string | null = null;
-    let browserListing: FsListDirResult | null = null;
-    let browserPathDraft = "";
-    let browserRequestToken = 0;
-    const browserTarget: BrowserTarget = { nodeId: "", label: t("newSession.gateway") };
+    const browser = new PlaceBrowserState(options.listDirectory, paint);
 
     const finish = () => {
-      browserRequestToken += 1;
-      render(nothing, host);
-      host.remove();
+      browser.reset();
+      repositoryRequestToken += 1;
+      settle();
       active = false;
-      resolve();
     };
 
     const handleSubmit = async (event: Event) => {
       event.preventDefault();
-      if (submitting) {
+      if (submitting || (repositoryStatus !== "git" && repositoryStatus !== "not_git")) {
         return;
       }
-      const form = event.currentTarget as HTMLFormElement;
-      const data = new FormData(form);
       submitting = true;
       failure = null;
       paint();
       try {
         failure = await options.submit({
           cwd: cwd.trim(),
-          worktree: data.get("mode") === "worktree",
+          worktree: repositoryStatus === "git" && worktree,
         });
       } catch (error) {
-        failure = String(error);
+        failure = formatUiError(error);
       }
       if (!failure) {
         finish();
@@ -85,12 +88,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     };
 
     const showPickerRoot = () => {
-      browserRequestToken += 1;
+      browser.reset();
       browserVisible = false;
-      browserLoading = false;
-      browserError = null;
-      browserListing = null;
-      browserPathDraft = "";
       paint();
     };
 
@@ -98,57 +97,100 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       cwd = path.trim();
       showPickerRoot();
       closePicker();
+      void inspectRepository(false);
     };
 
-    const loadDirectory = async (path?: string) => {
-      const requestToken = ++browserRequestToken;
-      const requestedPath = path?.trim() || undefined;
-      browserLoading = true;
-      browserError = null;
-      browserListing = null;
-      browserPathDraft = requestedPath ?? "";
+    const inspectRepository = async (restoreSavedWorktree: boolean) => {
+      const requestToken = ++repositoryRequestToken;
+      repositoryStatus = "checking";
+      worktree = false;
+      failure = null;
       paint();
       try {
-        const listing = await options.listDirectory(requestedPath);
-        if (requestToken !== browserRequestToken) {
+        const status = await options.inspectRepository(cwd.trim() || undefined);
+        if (requestToken !== repositoryRequestToken) {
           return;
         }
-        browserListing = listing;
-        if (listing.path && browserPathDraft === (requestedPath ?? "")) {
-          browserPathDraft = listing.path;
-        }
+        repositoryStatus = status;
+        worktree = status === "git" && restoreSavedWorktree && options.defaults.worktree;
       } catch (error) {
-        if (requestToken !== browserRequestToken) {
+        if (requestToken !== repositoryRequestToken) {
           return;
         }
-        browserError = readMissingScopeError(error)?.missingScope
-          ? t("newSession.browseRequiresAdmin")
-          : error instanceof Error
-            ? error.message
-            : t("newSession.browserLoadFailed");
-      } finally {
-        if (requestToken === browserRequestToken) {
-          browserLoading = false;
-          paint();
-        }
+        worktree = false;
+        // A path-authorization denial is not a repository status: collapsing it
+        // into "couldn't verify Git" would present a retry that can never
+        // succeed while the connection still lacks the required operator scope.
+        repositoryStatus = readMissingScopeError(error) ? "restricted" : "unavailable";
       }
+      paint();
+    };
+
+    const selectWorktree = (value: boolean) => {
+      worktree = value;
+      failure = null;
+      paint();
+    };
+
+    const handleModeSelect = (event: CustomEvent<{ item: Element }>) => {
+      const value = event.detail.item.getAttribute("value");
+      if (value !== "local" && value !== "worktree") {
+        return;
+      }
+      selectWorktree(value === "worktree");
+    };
+
+    const handleModeKeydown = (event: KeyboardEvent) => {
+      if (!(event.currentTarget instanceof HTMLElement)) {
+        return;
+      }
+      const dropdown = event.currentTarget as HTMLElement & { open?: boolean };
+      if (event.key !== "Escape" || !dropdown.open) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      dropdown.open = false;
+      dropdown
+        .querySelector<HTMLElement>("#session-group-defaults-mode-trigger")
+        ?.focus({ preventScroll: true });
     };
 
     const showBrowser = () => {
       browserVisible = true;
-      void loadDirectory(cwd || undefined);
+      void browser.navigate(cwd || undefined, "initial");
     };
 
     function paint() {
       const trimmedCwd = cwd.trim();
       const folderLabel = trimmedCwd
-        ? folderDisplayName(trimmedCwd)
+        ? pathDisplayName(trimmedCwd)
         : t("sessionsView.groupDefaultsCwdPlaceholder");
-      const usableBrowserPath = isAbsolutePath(browserPathDraft.trim())
-        ? browserPathDraft.trim()
-        : null;
-      render(
-        html`
+      const environmentState =
+        repositoryStatus === "checking"
+          ? "checking"
+          : repositoryStatus === "git"
+            ? "git"
+            : repositoryStatus === "restricted"
+              ? "restricted"
+              : "local";
+      const environmentOptions = [
+        {
+          value: "local",
+          label: t("sessionsView.groupDefaultsLocal"),
+          description: t("newSession.checkoutCurrentNote"),
+          icon: icons.monitor,
+        },
+        {
+          value: "worktree",
+          label: t("sessionsView.groupDefaultsWorktree"),
+          description: t("sessionsView.groupDefaultsWorktreeHint"),
+          icon: icons.gitBranch,
+        },
+      ] as const;
+      const selectedEnvironment = environmentOptions[worktree ? 1 : 0];
+      render(() => {
+        return html`
           <openclaw-modal-dialog
             label=${t("sessionsView.groupDefaultsTitle", { group: options.group })}
             @modal-cancel=${(event: Event) => {
@@ -159,19 +201,22 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
               finish();
             }}
           >
-            <form class="exec-approval-card" @submit=${handleSubmit}>
+            <form class="exec-approval-card session-group-defaults" @submit=${handleSubmit}>
               <div class="exec-approval-header">
-                <div class="exec-approval-title">
-                  ${t("sessionsView.groupDefaultsTitle", { group: options.group })}
+                <div>
+                  <div class="exec-approval-title">
+                    ${t("sessionsView.groupDefaultsTitle", { group: options.group })}
+                  </div>
+                  <div class="exec-approval-sub">${t("sessionsView.groupDefaultsDescription")}</div>
                 </div>
               </div>
-              <div class="field">
-                <span>${t("sessionsView.groupDefaultsCwd")}</span>
-                <span class="new-session-page__select">
+              <div class="session-group-defaults__fields">
+                <div class="field">
+                  <span>${t("sessionsView.groupDefaultsCwd")}</span>
                   <button
                     id="session-group-defaults-folder-trigger"
                     type="button"
-                    class="new-session-page__trigger"
+                    class="new-session-page__trigger session-group-defaults__folder"
                     aria-label="${t("sessionsView.groupDefaultsCwd")}: ${folderLabel}"
                     aria-haspopup="dialog"
                     ?disabled=${submitting}
@@ -179,101 +224,216 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                     <span class="new-session-page__target-icon" aria-hidden="true"
                       >${icons.folder}</span
                     >
-                    <span class="new-session-page__trigger-label">${folderLabel}</span>
+                    <span class="session-group-defaults__folder-copy">
+                      <strong>${folderLabel}</strong>
+                      <small title=${trimmedCwd || nothing}
+                        >${trimmedCwd || t("sessionsView.groupDefaultsCwdHint")}</small
+                      >
+                    </span>
                     <span class="new-session-page__trigger-chevron" aria-hidden="true"
                       >${icons.chevronDown}</span
                     >
                   </button>
-                </span>
-                <wa-popover
-                  class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover session-group-defaults__folder-popover"
-                  for="session-group-defaults-folder-trigger"
-                  placement="bottom-start"
-                  without-arrow
-                  @wa-hide=${showPickerRoot}
-                >
-                  ${browserVisible
-                    ? renderPlaceBrowser({
-                        listing: browserListing,
-                        target: browserTarget,
-                        loading: browserLoading,
-                        error: browserError,
-                        pathDraft: browserPathDraft,
-                        usablePath: usableBrowserPath,
-                        registerProjectPath: null,
-                        registeringProject: false,
-                        onPathDraftChange: (value) => {
-                          browserPathDraft = value;
-                          paint();
-                        },
-                        onNavigate: (path) => void loadDirectory(path),
-                        onBack: showPickerRoot,
-                        onRegisterProject: () => undefined,
-                        onClose: showPickerRoot,
-                        onApplyFolder: applyFolder,
-                      })
-                    : html`
-                        <div class="new-session-page__picker-root">
-                          ${renderSessionMenuItem(
-                            {
-                              value: "agent-workspace",
-                              label: t("sessionsView.groupDefaultsCwdPlaceholder"),
-                              icon: icons.folder,
-                              checked: !trimmedCwd,
-                              onSelect: () => applyFolder(""),
-                            },
-                            submitting,
-                          )}
-                          <button
-                            type="button"
-                            class="session-menu__item"
-                            data-value="browse"
-                            aria-pressed="false"
-                            ?disabled=${submitting}
-                            @click=${showBrowser}
-                          >
-                            <span class="session-menu__check" aria-hidden="true"></span>
-                            <span class="session-menu__text">${t("newSession.browse")}</span>
-                            <span class="new-session-page__menu-chevron" aria-hidden="true"
-                              >${icons.chevronRight}</span
+                  <wa-popover
+                    ${ref(syncPopoverLabel)}
+                    class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover session-group-defaults__folder-popover"
+                    for="session-group-defaults-folder-trigger"
+                    placement="bottom-start"
+                    without-arrow
+                    @wa-hide=${showPickerRoot}
+                  >
+                    ${
+                      browserVisible
+                        ? renderPlaceBrowser({
+                            browser,
+                            id: "session-group-defaults-browser",
+                            label: t("newSession.gateway"),
+                            registerProjectPath: null,
+                            registeringProject: false,
+                            onBack: showPickerRoot,
+                            onRegisterProject: () => undefined,
+                            onClose: showPickerRoot,
+                            onApplyFolder: applyFolder,
+                          })
+                        : html`
+                            <div class="new-session-page__picker-root">
+                              ${renderSessionMenuItem(
+                                {
+                                  value: "agent-workspace",
+                                  label: t("sessionsView.groupDefaultsCwdPlaceholder"),
+                                  icon: icons.folder,
+                                  checked: !trimmedCwd,
+                                  onSelect: () => applyFolder(""),
+                                },
+                                submitting,
+                              )}
+                              <button
+                                type="button"
+                                class="session-menu__item"
+                                data-value="browse"
+                                aria-pressed="false"
+                                ?disabled=${submitting}
+                                @click=${showBrowser}
+                              >
+                                <span class="session-menu__check" aria-hidden="true"></span>
+                                <span class="session-menu__text">${t("newSession.browse")}</span>
+                                <span class="new-session-page__menu-chevron" aria-hidden="true"
+                                  >${icons.chevronRight}</span
+                                >
+                              </button>
+                            </div>
+                          `
+                    }
+                  </wa-popover>
+                </div>
+                <div class="field">
+                  <span>${t("sessionsView.groupDefaultsMode")}</span>
+                  <div
+                    class="session-group-defaults__environment"
+                    data-session-group-environment=${environmentState}
+                    aria-live="polite"
+                  >
+                    ${
+                      repositoryStatus === "git"
+                        ? html`
+                            <wa-dropdown
+                              class="session-group-defaults__mode-dropdown"
+                              placement="bottom-start"
+                              aria-label=${t("sessionsView.groupDefaultsMode")}
+                              @wa-select=${handleModeSelect}
+                              @keydown=${handleModeKeydown}
                             >
-                          </button>
-                        </div>
-                      `}
-                </wa-popover>
-                <span class="muted" title=${trimmedCwd || nothing}
-                  >${trimmedCwd || t("sessionsView.groupDefaultsCwdHint")}</span
-                >
+                              <button
+                                id="session-group-defaults-mode-trigger"
+                                slot="trigger"
+                                type="button"
+                                class="session-group-defaults__resolved-mode session-group-defaults__mode-trigger"
+                                data-value=${selectedEnvironment.value}
+                                aria-label=${`${t("sessionsView.groupDefaultsMode")}: ${selectedEnvironment.label}`}
+                                ?disabled=${submitting}
+                              >
+                                <span class="new-session-page__target-icon" aria-hidden="true"
+                                  >${selectedEnvironment.icon}</span
+                                >
+                                <span class="session-group-defaults__resolved-copy">
+                                  <strong>${selectedEnvironment.label}</strong>
+                                  <small>${selectedEnvironment.description}</small>
+                                </span>
+                                <span class="new-session-page__trigger-chevron" aria-hidden="true"
+                                  >${icons.chevronDown}</span
+                                >
+                              </button>
+                              ${environmentOptions.map((option) => {
+                                const selected = option === selectedEnvironment;
+                                return html`
+                                  <wa-dropdown-item
+                                    class="session-group-defaults__mode-option"
+                                    data-environment-mode=${option.value}
+                                    ?data-selected=${selected}
+                                    aria-label=${`${option.label}, ${option.description}`}
+                                    value=${option.value}
+                                    type="checkbox"
+                                    .checked=${selected}
+                                    ?disabled=${submitting}
+                                    ?autofocus=${selected && !submitting}
+                                    ${ref((element) => syncDropdownItemRadio(element, selected))}
+                                  >
+                                    <span
+                                      slot="icon"
+                                      class="new-session-page__target-icon session-group-defaults__mode-option-icon"
+                                      aria-hidden="true"
+                                      >${option.icon}</span
+                                    >
+                                    <span class="session-group-defaults__resolved-copy">
+                                      <strong>${option.label}</strong>
+                                      <small>${option.description}</small>
+                                    </span>
+                                  </wa-dropdown-item>
+                                `;
+                              })}
+                            </wa-dropdown>
+                          `
+                        : html`
+                            <div
+                              class="session-group-defaults__resolved-mode"
+                              role=${repositoryStatus === "checking" ? "status" : nothing}
+                            >
+                              <span class="new-session-page__target-icon" aria-hidden="true"
+                                >${
+                                  repositoryStatus === "checking" ? icons.gitBranch : icons.monitor
+                                }</span
+                              >
+                              <span class="session-group-defaults__resolved-copy">
+                                <strong
+                                  >${
+                                    repositoryStatus === "checking"
+                                      ? t("newSession.checkingGit")
+                                      : t("sessionsView.groupDefaultsLocal")
+                                  }</strong
+                                >
+                                ${
+                                  repositoryStatus === "checking"
+                                    ? nothing
+                                    : html`<small
+                                        >${
+                                          repositoryStatus === "restricted"
+                                            ? t("sessionsView.groupDefaultsRequiresAdmin")
+                                            : repositoryStatus === "unavailable"
+                                              ? t("newSession.gitCheckUnavailable")
+                                              : t("newSession.checkoutCurrentNote")
+                                        }</small
+                                      >`
+                                }
+                              </span>
+                            </div>
+                          `
+                    }
+                  </div>
+                </div>
               </div>
-              <label class="field">
-                <span>${t("sessionsView.groupDefaultsMode")}</span>
-                <select name="mode" ?disabled=${submitting}>
-                  <option value="local" ?selected=${!options.defaults.worktree}>
-                    ${t("sessionsView.groupDefaultsLocal")}
-                  </option>
-                  <option value="worktree" ?selected=${options.defaults.worktree}>
-                    ${t("sessionsView.groupDefaultsWorktree")}
-                  </option>
-                </select>
-              </label>
-              ${failure
-                ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
-                : nothing}
+              ${
+                failure
+                  ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
+                  : nothing
+              }
               <div class="exec-approval-actions">
-                <button type="submit" class="btn primary" ?disabled=${submitting}>
+                <button
+                  type="submit"
+                  class="btn primary"
+                  ?disabled=${
+                    submitting ||
+                    repositoryStatus === "checking" ||
+                    repositoryStatus === "unavailable" ||
+                    repositoryStatus === "restricted"
+                  }
+                >
                   ${t("common.save")}
                 </button>
+                ${
+                  repositoryStatus === "unavailable" || repositoryStatus === "restricted"
+                    ? html`
+                        <button
+                          type="button"
+                          class="btn"
+                          ?disabled=${submitting}
+                          @click=${() =>
+                            void inspectRepository(cwd.trim() === options.defaults.cwd.trim())}
+                        >
+                          ${t("common.retry")}
+                        </button>
+                      `
+                    : nothing
+                }
                 <button type="button" class="btn" ?disabled=${submitting} @click=${finish}>
                   ${t("common.cancel")}
                 </button>
               </div>
             </form>
           </openclaw-modal-dialog>
-        `,
-        host,
-      );
+        `;
+      });
     }
 
-    paint();
+    void inspectRepository(true);
   });
 }

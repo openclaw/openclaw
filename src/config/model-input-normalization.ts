@@ -3,41 +3,65 @@ import {
   normalizeConfiguredProviderCatalogModelId,
   type ManifestModelIdNormalizationProvider,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
-import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
+import {
+  normalizeAgentModelMapForConfig,
+  normalizeAgentModelRefForConfig,
+  normalizeAgentModelSelectionForConfig,
+  toAgentModelListLike,
+} from "./model-input.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const MODEL_SELECTION_KEYS = ["model", "imageModel", "voiceModel", "pdfModel"] as const;
 const MEDIA_MODEL_KEYS = ["image", "video", "music"] as const;
 
-function normalizeModelSelection(value: unknown): unknown {
-  if (typeof value === "string") {
-    return normalizeAgentModelRefForConfig(value);
+/** Preserve a string model when a path write enters its supported object form. */
+export function normalizeConfigModelSelectionParent(
+  value: unknown,
+  path: readonly string[],
+  parentIndex: number,
+): ReturnType<typeof toAgentModelListLike> {
+  if (typeof value !== "string") {
+    return undefined;
   }
-  if (!isRecord(value)) {
-    return value;
+  const member = path[parentIndex + 1];
+  if (member !== "primary" && member !== "fallbacks" && member !== "timeoutMs") {
+    return undefined;
   }
-
-  let next = value;
-  const assign = (key: string, candidate: unknown) => {
-    if (candidate === next[key]) {
-      return;
-    }
-    next = { ...next, [key]: candidate };
-  };
-  if (typeof value.primary === "string") {
-    assign("primary", normalizeAgentModelRefForConfig(value.primary));
+  const isDefaults = path[0] === "agents" && path[1] === "defaults";
+  const isAgentEntry =
+    path[0] === "agents" &&
+    ((path[1] === "entries" && Boolean(path[2])) ||
+      (path[1] === "list" && parseConfigPathArrayIndex(path[2] ?? "") !== undefined));
+  const scopeIndex = isDefaults ? 2 : isAgentEntry ? 3 : undefined;
+  const isAgentModel =
+    scopeIndex !== undefined &&
+    ((parentIndex === scopeIndex && path[scopeIndex] === "model") ||
+      (parentIndex === scopeIndex + 1 &&
+        path[scopeIndex] === "subagents" &&
+        path[parentIndex] === "model"));
+  const isToolModel =
+    isDefaults &&
+    ((parentIndex === 2 &&
+      MODEL_SELECTION_KEYS.some((key) => key !== "model" && key === path[2])) ||
+      (parentIndex === 3 &&
+        path[2] === "mediaModels" &&
+        MEDIA_MODEL_KEYS.some((key) => key === path[3])));
+  const reviewerStart = isAgentEntry ? 3 : 0;
+  const isReviewerModel =
+    parentIndex === reviewerStart + 3 &&
+    path[reviewerStart] === "tools" &&
+    path[reviewerStart + 1] === "exec" &&
+    path[reviewerStart + 2] === "reviewer" &&
+    path[parentIndex] === "model";
+  if (
+    (!isAgentModel && !isToolModel && !isReviewerModel) ||
+    (member === "timeoutMs" && !isToolModel)
+  ) {
+    return undefined;
   }
-  if (Array.isArray(value.fallbacks)) {
-    const originalFallbacks = value.fallbacks;
-    const fallbacks = originalFallbacks.map((fallback) =>
-      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
-    );
-    if (fallbacks.some((fallback, index) => fallback !== originalFallbacks[index])) {
-      assign("fallbacks", fallbacks);
-    }
-  }
-  return next;
+  return toAgentModelListLike(value);
 }
 
 function normalizeStringModelRef(value: unknown): unknown {
@@ -71,7 +95,7 @@ function normalizeAgentModelScope(value: unknown): unknown {
 
   for (const key of MODEL_SELECTION_KEYS) {
     if (Object.hasOwn(value, key)) {
-      assign(key, normalizeModelSelection(value[key]));
+      assign(key, normalizeAgentModelSelectionForConfig(value[key]));
     }
   }
   if (Object.hasOwn(value, "utilityModel")) {
@@ -79,24 +103,21 @@ function normalizeAgentModelScope(value: unknown): unknown {
   }
   const originalMediaModels = value.mediaModels;
   if (isRecord(originalMediaModels)) {
-    let mediaModelsChanged = false;
-    const mediaModels = { ...originalMediaModels };
+    let mediaModels: unknown = originalMediaModels;
     for (const key of MEDIA_MODEL_KEYS) {
-      if (!Object.hasOwn(originalMediaModels, key)) {
-        continue;
-      }
-      const normalized = normalizeModelSelection(originalMediaModels[key]);
-      if (normalized !== mediaModels[key]) {
-        mediaModels[key] = normalized;
-        mediaModelsChanged = true;
-      }
+      mediaModels = normalizeNestedModelField(
+        mediaModels,
+        key,
+        normalizeAgentModelSelectionForConfig,
+      );
     }
-    if (mediaModelsChanged) {
-      assign("mediaModels", mediaModels);
-    }
+    assign("mediaModels", mediaModels);
   }
   assign("heartbeat", normalizeNestedModelField(value.heartbeat, "model", normalizeStringModelRef));
-  assign("subagents", normalizeNestedModelField(value.subagents, "model", normalizeModelSelection));
+  assign(
+    "subagents",
+    normalizeNestedModelField(value.subagents, "model", normalizeAgentModelSelectionForConfig),
+  );
 
   if (isRecord(value.compaction)) {
     let compaction = normalizeNestedModelField(value.compaction, "model", normalizeStringModelRef);

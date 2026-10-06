@@ -8,13 +8,13 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
-import { resetSkillsRefreshForTest } from "../skills/runtime/refresh.test-support.js";
+import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import {
   clearSessionAuthProfileOverrideMock,
   compactEmbeddedAgentSessionMock,
   loadModelCatalogMock,
   resolveCommandSecretRefsViaGatewayMock,
-  resolveSessionAuthProfileOverrideMock,
+  resolveSessionAuthSelectionMock,
   runDirectiveBehaviorReplyAgent,
   runEmbeddedAgentMock,
   runDirectiveBehaviorPreparedReply,
@@ -103,7 +103,7 @@ function createDirectiveBehaviorProviderRegistry(): ReturnType<typeof createEmpt
 
 export function installDirectiveBehaviorE2EHooks() {
   beforeEach(async () => {
-    await resetSkillsRefreshForTest();
+    await closeSkillsWatchers(true);
     clearRuntimeAuthProfileStoreSnapshots();
     clearSessionStoreCacheForTest();
     resetSystemEventsForTest();
@@ -123,8 +123,8 @@ export function installDirectiveBehaviorE2EHooks() {
     }));
     clearSessionAuthProfileOverrideMock.mockReset();
     clearSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
-    resolveSessionAuthProfileOverrideMock.mockReset();
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockReset();
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     runReplyAgentMock.mockReset();
     runReplyAgentMock.mockImplementation(runDirectiveBehaviorReplyAgent);
     runPreparedReplyMock.mockReset();
@@ -132,7 +132,7 @@ export function installDirectiveBehaviorE2EHooks() {
   });
 
   afterEach(async () => {
-    await resetSkillsRefreshForTest();
+    await closeSkillsWatchers(true);
     clearRuntimeAuthProfileStoreSnapshots();
     clearSessionStoreCacheForTest();
     resetSystemEventsForTest();

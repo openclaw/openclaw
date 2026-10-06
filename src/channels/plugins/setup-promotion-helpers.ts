@@ -1,27 +1,19 @@
-/**
- * Channel setup promotion helpers.
- *
- * Moves legacy single-account channel config into account-scoped config records.
- */
 import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
+import type { ChannelSetupAdapter } from "./setup-adapter.types.js";
 import {
   collectSingleAccountPromotionEntries,
   isCommonSingleAccountPromotionKey,
   isSetupSingleAccountPromotionKey,
 } from "./setup-promotion-keys.js";
 
-type ChannelSectionBase = {
-  defaultAccount?: string;
-  accounts?: Record<string, Record<string, unknown>>;
-};
-
-export type ChannelSetupPromotionSurface = {
-  singleAccountKeysToMove?: readonly string[];
-  namedAccountPromotionKeys?: readonly string[];
-  resolveSingleAccountPromotionTarget?: (params: {
-    channel: ChannelSectionBase;
-  }) => string | undefined;
-};
+export type ChannelSetupPromotionSurface = Pick<
+  ChannelSetupAdapter,
+  | "accountKeyPolicy"
+  | "configPromotion"
+  | "singleAccountKeysToMove"
+  | "namedAccountPromotionKeys"
+  | "resolveSingleAccountPromotionTarget"
+>;
 
 type SingleAccountPromotionParams = {
   channelKey: string;
@@ -30,6 +22,10 @@ type SingleAccountPromotionParams = {
   includeSetupKeys?: boolean;
   resolveBundledSurface?: (channelKey: string) => ChannelSetupPromotionSurface | null;
 };
+
+type SingleAccountPromotion =
+  | { kind: "preserve-root" }
+  | { kind: "promote"; keysToMove: string[]; shouldDeferPromotion: boolean };
 
 // Published undeclared adapters still depend on these keys: Chatu, GroupMe, OneBot,
 // and WhatsApp Cloud use accessToken; Claworld uses appToken; OneBot uses httpUrl;
@@ -73,27 +69,23 @@ function getLoadedChannelSetupPromotionSurface(
 /**
  * Resolves all root-level keys eligible for single-account promotion.
  */
-export function resolveSingleAccountPromotion(params: SingleAccountPromotionParams) {
+export function resolveSingleAccountPromotion(
+  params: SingleAccountPromotionParams,
+): SingleAccountPromotion {
+  const setupSurface =
+    params.setupSurface === undefined
+      ? (getLoadedChannelSetupPromotionSurface(params.channelKey) ??
+        params.resolveBundledSurface?.(params.channelKey) ??
+        null)
+      : asPromotionSurface(params.setupSurface);
+  // Generic policy fields also belong to a preserved root identity.
+  if (setupSurface?.configPromotion === "preserve-root") {
+    return { kind: "preserve-root" };
+  }
   const { entries, hasNamedAccounts } = collectSingleAccountPromotionEntries(params.channel);
   if (entries.length === 0) {
-    return { keysToMove: [], shouldDeferPromotion: false };
+    return { kind: "promote", keysToMove: [], shouldDeferPromotion: false };
   }
-
-  const callerSetupSurface =
-    params.setupSurface === undefined ? undefined : asPromotionSurface(params.setupSurface);
-  let discoveredSetupSurface: ChannelSetupPromotionSurface | null | undefined;
-  const resolveSetupSurface = () => {
-    if (callerSetupSurface !== undefined) {
-      return callerSetupSurface;
-    }
-    if (discoveredSetupSurface === undefined) {
-      discoveredSetupSurface =
-        getLoadedChannelSetupPromotionSurface(params.channelKey) ??
-        params.resolveBundledSurface?.(params.channelKey) ??
-        null;
-    }
-    return discoveredSetupSurface;
-  };
   const isGenericPromotionKey = params.includeSetupKeys
     ? isSetupSingleAccountPromotionKey
     : isCommonSingleAccountPromotionKey;
@@ -102,16 +94,16 @@ export function resolveSingleAccountPromotion(params: SingleAccountPromotionPara
   const hasUncoveredRootKeys = entries.some(
     (key) => !isGenericPromotionKey(key) && !isLegacyPromotionKey(key),
   );
-  const buildResult = (keysToMove: string[]) => ({
+  const buildResult = (keysToMove: string[]): SingleAccountPromotion => ({
+    kind: "promote",
     keysToMove,
-    shouldDeferPromotion: hasUncoveredRootKeys && !hasPromotionDeclarations(resolveSetupSurface()),
+    shouldDeferPromotion: hasUncoveredRootKeys && !hasPromotionDeclarations(setupSurface),
   });
 
   const keysToMove = entries.filter((key) => {
     if (isGenericPromotionKey(key)) {
       return true;
     }
-    const setupSurface = resolveSetupSurface();
     return hasPromotionDeclarations(setupSurface)
       ? Boolean(setupSurface?.singleAccountKeysToMove?.includes(key))
       : isLegacyPromotionKey(key);
@@ -122,14 +114,9 @@ export function resolveSingleAccountPromotion(params: SingleAccountPromotionPara
 
   // Once named accounts exist, only keys explicitly allowed for named-account
   // promotion should move. This avoids flattening root-only channel settings.
-  const namedAccountPromotionKeys = resolveSetupSurface()?.namedAccountPromotionKeys;
+  const namedAccountPromotionKeys = setupSurface?.namedAccountPromotionKeys;
   if (!namedAccountPromotionKeys) {
     return buildResult(keysToMove);
   }
   return buildResult(keysToMove.filter((key) => namedAccountPromotionKeys.includes(key)));
-}
-
-/** Resolves all root-level keys eligible for single-account promotion. */
-export function resolveSingleAccountKeysToMove(params: SingleAccountPromotionParams): string[] {
-  return resolveSingleAccountPromotion(params).keysToMove;
 }

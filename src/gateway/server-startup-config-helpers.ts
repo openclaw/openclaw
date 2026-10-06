@@ -1,22 +1,29 @@
 // Shared validation, auth-surface, and config-load helpers for Gateway startup.
+import { isDeepStrictEqual } from "node:util";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import {
   formatInvalidConfigRecoveryHint,
   formatPluginPackagingRuntimeOutputRecoveryHint,
 } from "../cli/config-recovery-hints.js";
-import { createInvalidConfigError } from "../config/io.invalid-config.js";
+import {
+  createConfigReadError,
+  createInvalidConfigError,
+  isConfigReadFailure,
+} from "../config/io.invalid-config.js";
 import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
 } from "../config/io.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
-import {
-  retainLegacyDefaultAgentId,
-  tryGetLegacyDefaultAgentId,
-} from "../config/legacy.default-agent-owner.js";
-import { materializeLegacyDefaultAgentRoles } from "../config/legacy.default-agent-roles.js";
-import { isNixMode } from "../config/paths.js";
+import { renderConfigValidationIssueLines } from "../config/issue-location.js";
+import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
+import {
+  copyConfigResolutionFacts,
+  copyConfigResolutionFactsExcept,
+  hasUnresolvedConfigPath,
+} from "../config/resolution-facts.js";
+import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -24,9 +31,12 @@ import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
-import { resolveGatewayAuth } from "./auth.js";
+import { mergeGatewayAuthConfig, resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
-import { mergeGatewayAuthConfig, mergeGatewayTailscaleConfig } from "./startup-auth.js";
+import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
+import type { ActivateRuntimeSecrets } from "./server-startup-config.types.js";
+import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
+import { ensureGatewayStartupAuth, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
 export type GatewayStartupLog = {
   info: (message: string) => void;
@@ -42,12 +52,11 @@ export type GatewayStartupConfigMeasure = <T>(
 
 export type GatewayStartupConfigSnapshotLoadResult = {
   snapshot: ConfigFileSnapshot;
-  wroteConfig: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 /** Throw a formatted startup error when the loaded config snapshot is invalid. */
-export function assertValidGatewayStartupConfigSnapshot(
+function assertValidGatewayStartupConfigSnapshot(
   snapshot: ConfigFileSnapshot,
   options: { includeDoctorHint?: boolean } = {},
 ): void {
@@ -56,8 +65,14 @@ export function assertValidGatewayStartupConfigSnapshot(
   }
   const issues =
     snapshot.issues.length > 0
-      ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
+      ? renderConfigValidationIssueLines(snapshot, "").join("\n")
       : "Unknown validation issue.";
+  if (isConfigReadFailure(snapshot)) {
+    throw createConfigReadError(
+      snapshot,
+      `${issues}\nResolve the read error shown above, then retry.`,
+    );
+  }
   const recoveryHint =
     options.includeDoctorHint && isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
       ? `\n${formatPluginPackagingRuntimeOutputRecoveryHint()}`
@@ -69,20 +84,10 @@ export function assertValidGatewayStartupConfigSnapshot(
   });
 }
 
-function withRuntimeConfig(
-  snapshot: ConfigFileSnapshot,
-  runtimeConfig: OpenClawConfig,
-): ConfigFileSnapshot {
-  return {
-    ...snapshot,
-    runtimeConfig,
-    config: runtimeConfig,
-  };
-}
-
 /** Load and validate the config snapshot, applying runtime-only plugin auto-enable changes. */
 export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
+  ambientEnvTriggers: AmbientEnvTriggerPolicy;
   log: GatewayStartupLog;
   measure?: GatewayStartupConfigMeasure;
   initialSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
@@ -95,11 +100,12 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     ));
   const configSnapshot = snapshotRead.snapshot;
   const pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
-  const wroteConfig = false;
-  if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
+  if (configSnapshot.legacyIssues.length > 0 && resolveIsConfigReadOnly()) {
     throw createInvalidConfigError(
       configSnapshot.path,
-      "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
+      isNixMode
+        ? "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart."
+        : "Legacy config entries detected in read-only config. Update your external config source to the latest schema and restart.",
       { recovery: "manual" },
     );
   }
@@ -113,6 +119,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
         applyPluginAutoEnable({
           config: configSnapshot.sourceConfig,
           env: process.env,
+          ambientEnvTriggers: params.ambientEnvTriggers,
           ...(pluginMetadataSnapshot?.manifestRegistry
             ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
             : {}),
@@ -122,7 +129,6 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   if (autoEnable.changes.length === 0) {
     return {
       snapshot: configSnapshot,
-      wroteConfig,
       ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     };
   }
@@ -130,14 +136,13 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   params.log.info(
     `gateway: auto-enabled plugins for this runtime without writing config:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
   );
-  const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(configSnapshot.sourceConfig);
-  const runtimeConfig = legacyDefaultAgentId
-    ? materializeLegacyDefaultAgentRoles(autoEnable.config, legacyDefaultAgentId).config
-    : autoEnable.config;
-  retainLegacyDefaultAgentId(runtimeConfig, legacyDefaultAgentId);
+  const runtimeConfig = mergeActivationSectionsIntoRuntimeConfig({
+    runtimeConfig: configSnapshot.runtimeConfig,
+    activationConfig: autoEnable.config,
+  });
+  copyConfigResolutionFacts(configSnapshot.sourceConfig, runtimeConfig);
   return {
-    snapshot: withRuntimeConfig(configSnapshot, runtimeConfig),
-    wroteConfig,
+    snapshot: { ...configSnapshot, runtimeConfig, config: runtimeConfig },
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   };
 }
@@ -156,11 +161,13 @@ export function hasActiveGatewayAuthSecretRef(config: OpenClawConfig): boolean {
 
 export function assertRuntimeGatewayAuthNotKnownWeak(config: OpenClawConfig): void {
   assertGatewayAuthNotKnownWeak(
-    resolveGatewayAuth({
-      authConfig: config.gateway?.auth,
+    resolveGatewayAuthForConfig({
+      config,
       env: process.env,
       tailscaleMode: config.gateway?.tailscale?.mode ?? "off",
     }),
+    config.gateway?.auth?.token,
+    config.gateway?.auth?.password,
   );
 }
 
@@ -189,9 +196,7 @@ export function logGatewayAuthSurfaceDiagnostics(
       continue;
     }
     const stateLabel = state.active ? "active" : "inactive";
-    const inactiveDetails =
-      !state.active && inactiveWarnings.get(path) ? inactiveWarnings.get(path) : undefined;
-    const details = inactiveDetails ?? state.reason;
+    const details = (!state.active && inactiveWarnings.get(path)) || state.reason;
     logSecrets.info(`[SECRETS_GATEWAY_AUTH_SURFACE] ${path} is ${stateLabel}. ${details}`);
   }
 }
@@ -203,12 +208,127 @@ export function applyGatewayAuthOverridesForStartupPreflight(
   if (!overrides.auth && !overrides.tailscale) {
     return config;
   }
-  return {
+  const next = {
     ...config,
     gateway: {
       ...config.gateway,
-      auth: mergeGatewayAuthConfig(config.gateway?.auth, overrides.auth),
-      tailscale: mergeGatewayTailscaleConfig(config.gateway?.tailscale, overrides.tailscale),
+      ...(overrides.auth
+        ? { auth: mergeGatewayAuthConfig(config.gateway?.auth, overrides.auth) }
+        : {}),
+      ...(overrides.tailscale
+        ? { tailscale: mergeGatewayTailscaleConfig(config.gateway?.tailscale, overrides.tailscale) }
+        : {}),
     },
   };
+  copyConfigResolutionFactsExcept(config, next, [
+    ...(overrides.auth?.token !== undefined ? ["gateway.auth.token"] : []),
+    ...(overrides.auth?.password !== undefined ? ["gateway.auth.password"] : []),
+  ]);
+  return next;
+}
+
+/** Prepare the effective Gateway startup config after auth, overrides, and secrets activation. */
+export async function prepareGatewayStartupConfig(params: {
+  configSnapshot: ConfigFileSnapshot;
+  authOverride?: GatewayAuthConfig;
+  tailscaleOverride?: GatewayTailscaleConfig;
+  activateRuntimeSecrets: ActivateRuntimeSecrets;
+  log?: GatewayStartupLog;
+  measure?: GatewayStartupConfigMeasure;
+}): Promise<Awaited<ReturnType<typeof ensureGatewayStartupAuth>>> {
+  const measure = params.measure ?? (async (_name, run) => await run());
+  await measure("config.auth.snapshot-validate", () =>
+    assertValidGatewayStartupConfigSnapshot(params.configSnapshot),
+  );
+
+  const runtimeConfig = await measure("config.auth.runtime-overrides", () =>
+    applyConfigOverrides(params.configSnapshot.config),
+  );
+  copyConfigResolutionFacts(params.configSnapshot.config, runtimeConfig);
+  const startupPreflightConfig = await measure("config.auth.startup-overrides", () =>
+    applyGatewayAuthOverridesForStartupPreflight(runtimeConfig, {
+      auth: params.authOverride,
+      tailscale: params.tailscaleOverride,
+    }),
+  );
+  const needsAuthSecretPreflight = await measure("config.auth.secret-surface", () =>
+    hasActiveGatewayAuthSecretRef(startupPreflightConfig),
+  );
+  let preflightPrepared: Awaited<ReturnType<ActivateRuntimeSecrets>> | undefined;
+  const preflightConfig = await measure(
+    "config.auth.secret-preflight",
+    async () => {
+      if (!needsAuthSecretPreflight) {
+        return startupPreflightConfig;
+      }
+      preflightPrepared = await params.activateRuntimeSecrets(startupPreflightConfig, {
+        reason: "startup",
+        activate: false,
+      });
+      return preflightPrepared.config;
+    },
+    { omitErrorMessage: true },
+  );
+  const activateStartupSecrets = async (config: OpenClawConfig) => {
+    // Reuse the preflight snapshot only if generated startup auth did not
+    // change the secret-relevant source config.
+    if (
+      preflightPrepared &&
+      isDeepStrictEqual(
+        resolveGatewayStartupSourceConfig(config, process.env),
+        preflightPrepared.sourceConfig,
+      )
+    ) {
+      return await params.activateRuntimeSecrets.activatePreparedSnapshot(preflightPrepared, {
+        reason: "startup",
+        activate: true,
+        runtimeSourceConfig: params.configSnapshot.sourceConfig,
+      });
+    }
+    return await params.activateRuntimeSecrets(config, {
+      reason: "startup",
+      activate: true,
+      runtimeSourceConfig: params.configSnapshot.sourceConfig,
+    });
+  };
+  const preflightAuthOverride = await measure("config.auth.preflight-override", () => {
+    const token = preflightConfig.gateway?.auth?.token;
+    const password = preflightConfig.gateway?.auth?.password;
+    const resolvedToken =
+      typeof token === "string" && !hasUnresolvedConfigPath(preflightConfig, "gateway.auth.token");
+    const resolvedPassword =
+      typeof password === "string" &&
+      !hasUnresolvedConfigPath(preflightConfig, "gateway.auth.password");
+    return resolvedToken || resolvedPassword
+      ? {
+          ...params.authOverride,
+          ...(resolvedToken ? { token } : {}),
+          ...(resolvedPassword ? { password } : {}),
+        }
+      : params.authOverride;
+  });
+
+  const authBootstrap = await measure("config.auth.ensure", () =>
+    ensureGatewayStartupAuth({
+      cfg: runtimeConfig,
+      env: process.env,
+      authOverride: preflightAuthOverride,
+      tailscaleOverride: params.tailscaleOverride,
+      warn: params.log?.warn,
+    }),
+  );
+  const runtimeStartupConfig = await measure("config.auth.runtime-startup-overrides", () =>
+    applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {
+      auth: params.authOverride,
+      tailscale: params.tailscaleOverride,
+    }),
+  );
+  const activatedConfig = (
+    await measure(
+      "config.auth.secrets-activate",
+      () => activateStartupSecrets(runtimeStartupConfig),
+      { omitErrorMessage: true },
+    )
+  ).config;
+  return { ...authBootstrap, cfg: activatedConfig };
 }

@@ -1,14 +1,19 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.gatewayTalkSetupDescription
+import ai.openclaw.app.gatewayTalkSetupDescriptionText
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.requiresSetup
+import ai.openclaw.app.ui.FoldAwarePrompt
+import ai.openclaw.app.ui.design.ClawTheme
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -38,10 +43,29 @@ internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> U
   val context = LocalContext.current
   val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
   val currentTalkSetup by rememberUpdatedState(talkSetupReadiness.realtimeTalk)
+  val failureNotice by viewModel.talkFailureNotice.collectAsState()
+  val setupMessage by viewModel.pendingTalkSetupMessage.collectAsState()
   val showSetupMessage = {
-    Toast
-      .makeText(context, gatewayTalkSetupDescription(currentTalkSetup), Toast.LENGTH_LONG)
-      .show()
+    viewModel.showTalkSetupMessage(gatewayTalkSetupDescriptionText(currentTalkSetup))
+  }
+  val shownFailure = failureNotice
+  val shownSetup = setupMessage
+  (shownFailure?.text ?: shownSetup?.resolveNativeTextResource())?.let { message ->
+    val dismissMessage = {
+      if (shownFailure != null) {
+        viewModel.acknowledgeTalkModeFailure(shownFailure)
+      } else if (shownSetup != null) {
+        viewModel.dismissTalkSetupMessage(shownSetup)
+      }
+    }
+    FoldAwarePrompt(
+      onDismissRequest = dismissMessage,
+      title = nativeString("Talk"),
+      text = { Text(message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+      actions = {
+        TextButton(onClick = dismissMessage) { Text(nativeString("OK")) }
+      },
+    )
   }
   val requestMicPermission =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->

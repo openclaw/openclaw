@@ -1,7 +1,9 @@
-// Control UI view renders the dreaming on/off confirmation screen content.
 import { html, nothing } from "lit";
 import { t } from "../../../i18n/index.ts";
 import "../../../components/modal-dialog.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
+
+registerDreamingEnglish();
 
 type DreamingToggleConfirmationProps = {
   open: boolean;
@@ -48,9 +50,13 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
         <div class="callout ${props.enabling ? "info" : "warn"}" style="margin-top: 12px;">
           ${detail}
         </div>
-        ${props.hasError
-          ? html`<div class="exec-approval-error">${t("dreaming.toggleConfirmation.failed")}</div>`
-          : nothing}
+        ${
+          props.hasError
+            ? html`<div class="exec-approval-error">
+                ${t("dreaming.toggleConfirmation.failed")}
+              </div>`
+            : nothing
+        }
         <div class="exec-approval-actions">
           <button
             class="btn ${props.enabling ? "primary" : "danger"}"

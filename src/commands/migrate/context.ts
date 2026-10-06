@@ -2,8 +2,7 @@
 import path from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
-import { listAgentIds } from "../../agents/agent-scope.js";
-import { formatCliCommand } from "../../cli/command-format.js";
+import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,11 +35,14 @@ export function buildMigrationReportDir(
 }
 
 /** Resolves an explicit migration owner without allowing typo-created agent stores. */
-export function resolveMigrationTargetAgentId(
+function resolveMigrationTargetAgentId(
   config: OpenClawConfig,
   rawAgentId: string | undefined,
 ): string | undefined {
   const raw = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !raw) {
+    throw new Error("--agent must not be blank");
+  }
   if (!raw) {
     return undefined;
   }
@@ -48,16 +50,9 @@ export function resolveMigrationTargetAgentId(
     throw new Error(`Invalid agent id "${raw}".`);
   }
   const agentId = normalizeAgentId(raw);
-  const knownAgentIds = new Set(listAgentIds(config).map(normalizeAgentId));
-  if (!knownAgentIds.has(agentId)) {
-    throw new Error(
-      `Unknown agent id "${raw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
-    );
-  }
-  return agentId;
+  return resolveConfiguredAgentId(config, agentId);
 }
 
-/** Builds the provider-facing migration context from CLI options and runtime state. */
 export function buildMigrationContext(params: {
   source?: string;
   targetAgentId?: string;

@@ -1,7 +1,6 @@
-// Normalizes channel capability metadata from config and plugin manifests.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
 import type { SlackCapabilitiesConfig } from "./types.slack.js";
@@ -35,7 +34,7 @@ export function resolveChannelCapabilities(params: {
   }
 
   const channelsConfig = cfg.channels as Record<string, unknown> | undefined;
-  const channelConfig = (channelsConfig?.[channel] ?? (cfg as Record<string, unknown>)[channel]) as
+  const channelConfig = channelsConfig?.[channel] as
     | {
         accounts?: Record<string, { capabilities?: CapabilitiesConfig }>;
         capabilities?: CapabilitiesConfig;
@@ -48,7 +47,7 @@ export function resolveChannelCapabilities(params: {
   const accounts = channelConfig.accounts;
   const accountConfig =
     accounts && typeof accounts === "object"
-      ? resolveAccountEntry(accounts, normalizedAccountId)
+      ? resolveChannelAccountEntry(accounts, normalizedAccountId, channel)
       : undefined;
   // Account capabilities override channel capabilities; empty/object account values fall back.
   return (

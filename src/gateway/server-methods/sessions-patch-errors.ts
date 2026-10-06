@@ -1,0 +1,63 @@
+import {
+  ErrorCodes,
+  errorShape,
+  type ErrorShape,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { SessionWorktreeLifecycleError } from "../../agents/worktrees/errors.js";
+import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { sessionLog } from "./sessions-shared.js";
+
+export function unexpectedPatchError(key: string, error: unknown): ErrorShape {
+  if (error instanceof ModelAccountConnectAuthorityError) {
+    return errorShape(ErrorCodes.FORBIDDEN, error.message);
+  }
+  if (error instanceof SessionMutationAuthorizationChangedError) {
+    return error.error;
+  }
+  if (error instanceof SessionWorktreeLifecycleError) {
+    return error.reason === "session-changed"
+      ? sessionChangedError(key)
+      : errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true });
+  }
+  sessionLog.warn(`sessions.patch: target failed for ${key}: ${formatErrorMessage(error)}`);
+  const message = "Session patch failed unexpectedly. Retry the request.";
+  return errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: true });
+}
+
+export function sessionChangedError(key: string): ErrorShape {
+  return errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`, {
+    details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
+  });
+}
+
+export function createCommitGuard(key: string, assertCurrent: (() => void) | undefined) {
+  return (): ErrorShape | undefined => {
+    try {
+      assertCurrent?.();
+      return undefined;
+    } catch (error) {
+      return unexpectedPatchError(key, error);
+    }
+  };
+}
+
+/** Every detached preparation must revalidate its exact owners at the synchronous commit. */
+export function assertSessionPatchCommitAllowed(params: {
+  personalModelSelection?: { assertCurrent: () => void };
+  guards: Iterable<() => ErrorShape | undefined>;
+  archiveTransitions: Iterable<{ assertCommitAllowed: () => void }>;
+}): void {
+  params.personalModelSelection?.assertCurrent();
+  for (const guard of params.guards) {
+    const error = guard();
+    if (error) {
+      throw new SessionMutationAuthorizationChangedError(error);
+    }
+  }
+  for (const transition of params.archiveTransitions) {
+    transition.assertCommitAllowed();
+  }
+}

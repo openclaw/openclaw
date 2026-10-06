@@ -1,4 +1,6 @@
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { runExec, spawnCommand } from "../../process/exec.js";
 
 const OPEN_PATH_TIMEOUT_MS = 5_000;
@@ -41,6 +43,7 @@ async function observeXdgOpenStartup(command: OpenPathCommand): Promise<void> {
   // failures without making the Gateway own the launched application's lifetime.
   const child = spawnCommand([command.command, ...command.args], {
     buffer: false,
+    // Independent applications must survive Gateway/broker shutdown.
     cleanup: false,
     detached: true,
     reject: true,
@@ -58,48 +61,33 @@ async function observeXdgOpenStartup(command: OpenPathCommand): Promise<void> {
   };
   stderr?.on("data", onStderr);
 
-  await new Promise<void>((resolve, reject) => {
-    let observationComplete = false;
-    const releaseStderr = (childSettled: boolean) => {
-      stderr?.off("data", onStderr);
-      if (childSettled) {
-        stderr?.destroy();
-        return;
-      }
-      // Keep draining after the observation window. Closing the pipe can send
-      // SIGPIPE to a foreground application that writes diagnostics later.
-      stderr?.resume();
-      (stderr as (typeof stderr & { unref?: () => void }) | null)?.unref?.();
-    };
-    const timer = setTimeout(() => {
-      observationComplete = true;
-      releaseStderr(false);
-      resolve();
-    }, XDG_OPEN_STARTUP_OBSERVATION_MS);
-    void child.then(
-      () => {
-        clearTimeout(timer);
-        releaseStderr(true);
-        if (!observationComplete) {
-          resolve();
-        }
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        releaseStderr(true);
-        if (observationComplete) {
-          return;
-        }
-        const commandError = error instanceof Error ? error : new Error(String(error));
-        const diagnostic = stderrText.trim();
-        reject(
-          diagnostic
+  const releaseStderr = (childSettled: boolean) => {
+    stderr?.off("data", onStderr);
+    if (childSettled) {
+      stderr?.destroy();
+      return;
+    }
+    // Keep draining after the observation window. Closing the pipe can send
+    // SIGPIPE to a foreground application that writes diagnostics later.
+    stderr?.resume();
+    (stderr as (typeof stderr & { unref?: () => void }) | null)?.unref?.();
+  };
+  await raceWithTimeout(
+    () =>
+      child.then(
+        () => releaseStderr(true),
+        (error: unknown) => {
+          releaseStderr(true);
+          const commandError = error instanceof Error ? error : new Error(String(error));
+          const diagnostic = stderrText.trim();
+          throw diagnostic
             ? new Error(`${commandError.message}: ${diagnostic}`, { cause: commandError })
-            : commandError,
-        );
-      },
-    );
-  });
+            : commandError;
+        },
+      ),
+    XDG_OPEN_STARTUP_OBSERVATION_MS,
+    () => releaseStderr(false),
+  );
 }
 
 export async function execOpenPath(
@@ -128,7 +116,19 @@ export function formatOpenPathError(error: unknown): string {
   return String(error);
 }
 
-export function isHeadlessOpenPathError(message: string): boolean {
+export function isHeadlessOpenPathError(
+  error: unknown,
+  command: OpenPathCommand,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (
+    platform === "linux" &&
+    command.command === "xdg-open" &&
+    extractErrorCode(error) === "ENOENT"
+  ) {
+    return true;
+  }
+  const message = formatOpenPathError(error);
   return message.includes("xdg-open") && message.includes("no method available");
 }
 

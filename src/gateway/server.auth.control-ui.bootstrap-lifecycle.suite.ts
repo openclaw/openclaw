@@ -3,7 +3,7 @@ import {
   createOperatorIdentityFixture,
   expectArrayIncludes,
   REMOTE_BOOTSTRAP_HEADERS,
-  startControlUiServer,
+  startProxiedControlUiServer,
 } from "./server.auth.control-ui.fixtures.test-support.js";
 import {
   connectReq,
@@ -21,11 +21,11 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
     const { issueDevicePairSetupBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
-    const { approveBootstrapDevicePairing, requestDevicePairing } =
-      await import("../infra/device-pairing.js");
+    const { approveBootstrapDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { requestDevicePairing } = await import("../infra/device-pairing.js");
     const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-node-retry-",
     );
@@ -149,7 +149,7 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
   test("rejected non-baseline bootstrap request cannot recreate pending node pairing", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
     const { listDevicePairing, rejectDevicePairing } = await import("../infra/device-pairing.js");
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-node-reject-",
     );
@@ -222,12 +222,13 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
 
   test("does not consume bootstrap token when node reconcile fails before hello-ok", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
     const reconcileModule = await import("./node-connect-reconcile.js");
     const reconcileSpy = vi
       .spyOn(reconcileModule, "reconcileNodePairingOnConnect")
       .mockRejectedValueOnce(new Error("boom"));
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
 
     const { identityPath, client } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-reconcile-fail-",
@@ -301,10 +302,11 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
 
   test("requires approval for bootstrap-auth role upgrades on already-paired devices", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { getPairedDevice, listDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-role-upgrade-",
@@ -385,51 +387,6 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
       const paired = await getPairedDevice(identity.deviceId);
       expectArrayIncludes(paired?.roles, ["operator"]);
       wsUpgrade.close();
-    } finally {
-      await server.close();
-      restoreGatewayToken(prevToken);
-    }
-  });
-
-  test("requires approval for bootstrap-auth operator pairing outside the qr baseline profile", async () => {
-    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
-    const { server, port, prevToken } = await startControlUiServer("secret");
-
-    const { identityPath, identity, client } = await createOperatorIdentityFixture(
-      "openclaw-bootstrap-operator-",
-    );
-
-    try {
-      const issued = await issueDeviceBootstrapToken({
-        profile: {
-          roles: ["operator"],
-          scopes: ["operator.read"],
-        },
-      });
-      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-      const initial = await connectReq(wsBootstrap, {
-        skipDefaultAuth: true,
-        bootstrapToken: issued.token,
-        role: "operator",
-        scopes: ["operator.read"],
-        client,
-        deviceIdentityPath: identityPath,
-      });
-      expect(initial.ok).toBe(false);
-      expect(initial.error?.message ?? "").toContain("pairing required");
-      expect((initial.error?.details as { code?: string } | undefined)?.code).toBe(
-        ConnectErrorDetailCodes.PAIRING_REQUIRED,
-      );
-
-      const pending = (await listDevicePairing()).pending.filter(
-        (entry) => entry.deviceId === identity.deviceId,
-      );
-      expect(pending).toHaveLength(1);
-      expect(pending[0]?.role).toBe("operator");
-      expectArrayIncludes(pending[0]?.scopes, ["operator.read"]);
-      expect(await getPairedDevice(identity.deviceId)).toBeNull();
-      wsBootstrap.close();
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);

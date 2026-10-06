@@ -7,13 +7,13 @@ import {
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 
 /** Coarse chat shape used when a channel can distinguish direct, group, and broadcast targets. */
-export type ChannelRouteChatType = "direct" | "group" | "channel";
+type ChannelRouteChatType = "direct" | "group" | "channel";
 
 /** Provider-specific thread kind carried with normalized channel routes. */
-export type ChannelRouteThreadKind = "topic" | "thread" | "reply";
+type ChannelRouteThreadKind = "topic" | "thread" | "reply";
 
 /** Describes which runtime surface supplied a channel route thread id. */
-export type ChannelRouteThreadSource = "explicit" | "target" | "session" | "turn";
+type ChannelRouteThreadSource = "explicit" | "target" | "session" | "turn";
 
 /** Normalized channel route used for comparison, binding, and dedupe helpers. */
 export type ChannelRouteRef = {
@@ -68,30 +68,9 @@ export type ChannelRouteTargetInput = Pick<
 /** Route input accepted by compact-key helpers after legacy and normalized callers converge. */
 export type ChannelRouteKeyInput = ChannelRouteRef | ChannelRouteTargetInput;
 
-/** @deprecated Use `messaging.resolveOutboundSessionRoute` for provider-specific target grammar. */
-export type ChannelRouteExplicitTarget = {
-  /** Canonical destination id parsed from the provider-specific target string. */
-  to: string;
-  /** Optional provider thread/topic/root id parsed from the target string. */
-  threadId?: string | number;
-  /** Coarse destination shape parsed from the target string. */
-  chatType?: ChannelRouteChatType;
-};
-
-/** @deprecated Use `messaging.resolveOutboundSessionRoute` for provider-specific target grammar. */
-export type ChannelRouteExplicitTargetParser = (
-  channel: string,
-  rawTarget: string,
-) => ChannelRouteExplicitTarget | null;
-
-/** Normalizes a route thread id while preserving provider string ids. */
-export function normalizeRouteThreadId(value: unknown): string | number | undefined {
-  return normalizeOptionalThreadValue(value);
-}
-
 /** Stringifies a normalized thread id for stable route keys and comparisons. */
 export function stringifyRouteThreadId(value: unknown): string | undefined {
-  const normalized = normalizeRouteThreadId(value);
+  const normalized = normalizeOptionalThreadValue(value);
   return normalized == null ? undefined : String(normalized);
 }
 
@@ -107,7 +86,7 @@ export function normalizeChannelRouteRef(
     typeof input.accountId === "string" ? normalizeOptionalAccountId(input.accountId) : undefined;
   const to = normalizeOptionalString(input.to);
   const rawTo = normalizeOptionalString(input.rawTo);
-  const threadId = normalizeRouteThreadId(input.threadId);
+  const threadId = normalizeOptionalThreadValue(input.threadId);
   if (!channel && !to && !accountId && threadId == null) {
     return undefined;
   }
@@ -152,47 +131,6 @@ export function normalizeChannelRouteTarget(
   return input ? normalizeChannelRouteRef(input) : undefined;
 }
 
-/** Parsed target shape retained for deprecated explicit-target parser adapters. */
-export type ChannelRouteParsedTarget = ChannelRouteTargetInput & {
-  /** Normalized lowercase channel id. */
-  channel: string;
-  /** Trimmed provider-specific target text originally supplied by the caller. */
-  rawTo: string;
-  /** Canonical destination id used by route equality and delivery. */
-  to: string;
-  /** Optional thread/topic/root id from the parser or fallback value. */
-  threadId?: string | number;
-  /** Coarse destination shape parsed from the provider-specific target. */
-  chatType?: ChannelRouteChatType;
-};
-
-/** @deprecated Use `messaging.resolveOutboundSessionRoute` for provider-specific target grammar. */
-export function resolveChannelRouteTargetWithParser(params: {
-  /** Channel id used for normalization and parser dispatch. */
-  channel: string;
-  /** Provider-specific target text to parse. */
-  rawTarget?: string | null;
-  /** Thread id to use when the parsed target omits one. */
-  fallbackThreadId?: string | number | null;
-  /** Legacy parser that understands the channel's explicit-target grammar. */
-  parseExplicitTarget: ChannelRouteExplicitTargetParser;
-}): ChannelRouteParsedTarget | null {
-  const channel = normalizeLowercaseStringOrEmpty(params.channel);
-  const rawTo = normalizeOptionalString(params.rawTarget);
-  if (!channel || !rawTo) {
-    return null;
-  }
-  const parsed = params.parseExplicitTarget(channel, rawTo);
-  const fallbackThreadId = normalizeOptionalThreadValue(params.fallbackThreadId);
-  return {
-    channel,
-    rawTo,
-    to: parsed?.to ?? rawTo,
-    threadId: normalizeOptionalThreadValue(parsed?.threadId ?? fallbackThreadId),
-    chatType: parsed?.chatType,
-  };
-}
-
 /** Builds a JSON route dedupe key that remains unambiguous when route parts contain separators. */
 export function channelRouteDedupeKey(input?: ChannelRouteTargetInput | null): string {
   const route = normalizeChannelRouteTarget(input);
@@ -208,14 +146,6 @@ function threadIdsEqual(left?: string | number, right?: string | number): boolea
   const normalizedLeft = stringifyRouteThreadId(left);
   const normalizedRight = stringifyRouteThreadId(right);
   return normalizedLeft === normalizedRight;
-}
-
-function accountsCompatible(left?: string, right?: string): boolean {
-  return !left || !right || left === right;
-}
-
-function accountsEqual(left?: string, right?: string): boolean {
-  return (left ?? "") === (right ?? "");
 }
 
 /**
@@ -235,7 +165,7 @@ export function channelRoutesMatchExact(params: {
   return (
     left.channel === right.channel &&
     left.target?.to === right.target?.to &&
-    accountsEqual(left.accountId, right.accountId) &&
+    (left.accountId ?? "") === (right.accountId ?? "") &&
     threadIdsEqual(left.thread?.id, right.thread?.id)
   );
 }
@@ -252,7 +182,7 @@ export function channelRoutesShareConversation(params: {
   if (
     left.channel !== right.channel ||
     left.target?.to !== right.target?.to ||
-    !accountsCompatible(left.accountId, right.accountId)
+    (left.accountId && right.accountId && left.accountId !== right.accountId)
   ) {
     return false;
   }

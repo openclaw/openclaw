@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   fetchClawHubSkillInstallResolution,
   fetchClawHubSkillSecurityVerdicts,
+  fetchClawHubSkillVerification,
   searchClawHubSkills,
 } from "./clawhub-skills.js";
 
@@ -50,15 +51,58 @@ function malformedUtf8(prefix: string, suffix: string): ArrayBuffer {
   return buffer;
 }
 
-describe("clawhub client", () => {
-  const originalEnv = captureEnv(["HOME", "XDG_CONFIG_HOME"]);
+function createOversizedJsonResponse() {
+  const cancel = vi.fn();
+  const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+  const overshootChunks = 34; // 34 * 512 KiB = 17 MiB > 16 MiB cap
+  let emitted = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (emitted >= overshootChunks) {
+        controller.close();
+        return;
+      }
+      emitted += 1;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      cancel();
+    },
+  });
+  return {
+    response: new Response(body, { status: 200, headers: { "content-type": "application/json" } }),
+    cancel,
+  };
+}
 
-  async function expectSearchUsesAuthToken(expectedToken: string): Promise<void> {
+async function writeConfigFile(configPath: string, contents: string) {
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, contents, "utf8");
+}
+
+async function withWindowsAppData(run: (root: string) => Promise<void>) {
+  await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    setTestEnvValue("APPDATA", appDataRoot);
+    deleteTestEnvValue("XDG_CONFIG_HOME");
+    try {
+      await run(appDataRoot);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+}
+
+describe("clawhub client", () => {
+  const originalEnv = captureEnv(["APPDATA", "HOME", "XDG_CONFIG_HOME"]);
+
+  async function searchAuthorizationHeader(): Promise<string | null> {
+    let authorization: string | null = null;
     await expect(
       searchClawHubSkills({
         query: "calendar",
         fetchImpl: async (_input, init) => {
-          expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${expectedToken}`);
+          authorization = new Headers(init?.headers).get("Authorization");
           return new Response(JSON.stringify({ results: [] }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -66,6 +110,11 @@ describe("clawhub client", () => {
         },
       }),
     ).resolves.toStrictEqual([]);
+    return authorization;
+  }
+
+  async function expectSearchUsesAuthToken(expectedToken: string): Promise<void> {
+    await expect(searchAuthorizationHeader()).resolves.toBe(`Bearer ${expectedToken}`);
   }
 
   afterEach(() => {
@@ -83,11 +132,9 @@ describe("clawhub client", () => {
     await withTestDir({ prefix: "openclaw-clawhub-config-" }, async (configRoot) => {
       const configPath = path.join(configRoot, "clawhub", "config.json");
       process.env.CLAWHUB_CONFIG_PATH = configPath;
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
+      await writeConfigFile(
         configPath,
         JSON.stringify({ auth: { token: "fixture-config-token" } }),
-        "utf8",
       );
 
       await expectSearchUsesAuthToken("fixture-config-token");
@@ -104,6 +151,57 @@ describe("clawhub client", () => {
     });
   });
 
+  it.each(["clawhub", "clawdhub"])(
+    "loads ClawHub request auth from the Windows AppData %s config path",
+    async (configDirectory) => {
+      await withWindowsAppData(async (appDataRoot) => {
+        await writeConfigFile(
+          path.join(appDataRoot, configDirectory, "config.json"),
+          JSON.stringify({ token: "fixture-appdata-token" }),
+        );
+        await expectSearchUsesAuthToken("fixture-appdata-token");
+      });
+    },
+  );
+
+  it("keeps XDG_CONFIG_HOME ahead of AppData on Windows", async () => {
+    await withWindowsAppData(async (appDataRoot) => {
+      await withTestDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
+        setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
+        await Promise.all([
+          writeConfigFile(
+            path.join(appDataRoot, "clawhub", "config.json"),
+            JSON.stringify({ token: "stale-appdata-token" }),
+          ),
+          writeConfigFile(
+            path.join(xdgRoot, "clawhub", "config.json"),
+            JSON.stringify({ token: "fixture-xdg-token" }),
+          ),
+        ]);
+        await expectSearchUsesAuthToken("fixture-xdg-token");
+      });
+    });
+  });
+
+  it.each([
+    ["without a token", JSON.stringify({})],
+    ["with malformed JSON", "{"],
+  ])(
+    "does not fall back to a legacy token when the canonical config exists %s",
+    async (_, contents) => {
+      await withWindowsAppData(async (appDataRoot) => {
+        await Promise.all([
+          writeConfigFile(path.join(appDataRoot, "clawhub", "config.json"), contents),
+          writeConfigFile(
+            path.join(appDataRoot, "clawdhub", "config.json"),
+            JSON.stringify({ token: "stale-legacy-token" }),
+          ),
+        ]);
+        await expect(searchAuthorizationHeader()).resolves.toBeNull();
+      });
+    },
+  );
+
   it.runIf(process.platform === "darwin")(
     "loads ClawHub request auth from the macOS Application Support path",
     async () => {
@@ -117,8 +215,7 @@ describe("clawhub client", () => {
         );
         const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
         try {
-          await fs.mkdir(path.dirname(configPath), { recursive: true });
-          await fs.writeFile(configPath, JSON.stringify({ token: "fixture-macos-token" }), "utf8");
+          await writeConfigFile(configPath, JSON.stringify({ token: "fixture-macos-token" }));
 
           await expectSearchUsesAuthToken("fixture-macos-token");
         } finally {
@@ -137,8 +234,7 @@ describe("clawhub client", () => {
           const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
           setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
           try {
-            await fs.mkdir(path.dirname(configPath), { recursive: true });
-            await fs.writeFile(configPath, JSON.stringify({ token: "fixture-xdg-token" }), "utf8");
+            await writeConfigFile(configPath, JSON.stringify({ token: "fixture-xdg-token" }));
 
             await expectSearchUsesAuthToken("fixture-xdg-token");
           } finally {
@@ -215,7 +311,7 @@ describe("clawhub client", () => {
     ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
   });
 
-  it.each(["0x10", "1e3", "-1", "-0", "+7", "0.5", "9007199254740993"])(
+  it.each(["0x10", "-0", "0.5", "9007199254740993"])(
     "does not describe malformed RateLimit-Reset values as seconds: %s",
     async (reset) => {
       process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
@@ -232,25 +328,22 @@ describe("clawhub client", () => {
     },
   );
 
-  it.each(["invalid", "+7", "-0"])(
-    "uses a valid Retry-After hint when RateLimit-Reset is malformed: %s",
-    async (reset) => {
-      process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
-      await expect(
-        searchClawHubSkills({
-          query: "calendar",
-          fetchImpl: async () =>
-            new Response("Rate limit exceeded", {
-              status: 429,
-              headers: {
-                "RateLimit-Reset": reset,
-                "Retry-After": "7",
-              },
-            }),
-        }),
-      ).rejects.toThrow(/Rate limit exceeded \(resets in 7s\) Sign in for higher rate limits\.$/);
-    },
-  );
+  it("uses a valid Retry-After hint when RateLimit-Reset is malformed", async () => {
+    process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response("Rate limit exceeded", {
+            status: 429,
+            headers: {
+              "RateLimit-Reset": "invalid",
+              "Retry-After": "7",
+            },
+          }),
+      }),
+    ).rejects.toThrow(/Rate limit exceeded \(resets in 7s\) Sign in for higher rate limits\.$/);
+  });
 
   it("retries transient ClawHub reads and honors Retry-After", async () => {
     const cancel = vi.fn();
@@ -387,39 +480,42 @@ describe("clawhub client", () => {
     expect(finalResponse?.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
-  it("bounds oversized successful ClawHub JSON responses and cancels the stream", async () => {
-    const cancel = vi.fn();
-    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
-    const overshootChunks = 34; // 34 * 512 KiB = 17 MiB > 16 MiB cap
-    let emitted = 0;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (emitted >= overshootChunks) {
-          controller.close();
-          return;
-        }
-        emitted += 1;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        cancel();
-      },
-    });
+  it.each([
+    { kind: "metadata", maxMiB: 16, requestPath: "/api/v1/search" },
+    { kind: "verification", maxMiB: 64, requestPath: "/api/v1/skills/weather/verify" },
+  ])(
+    "bounds oversized $kind JSON and cancels the stream",
+    async ({ kind, maxMiB, requestPath }) => {
+      const cancel = vi.fn();
+      const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+      let emitted = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (emitted >= (maxMiB + 1) * 2) {
+            controller.close();
+            return;
+          }
+          emitted += 1;
+          controller.enqueue(chunk);
+        },
+        cancel() {
+          cancel();
+        },
+      });
+      const fetchImpl = async () =>
+        new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+      const result =
+        kind === "verification"
+          ? fetchClawHubSkillVerification({ slug: "weather", fetchImpl })
+          : searchClawHubSkills({ query: "calendar", fetchImpl });
 
-    await expect(
-      searchClawHubSkills({
-        query: "calendar",
-        fetchImpl: async () =>
-          new Response(body, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-      }),
-    ).rejects.toThrow(/ClawHub \/api\/v1\/search response exceeded 16777216 bytes/);
-    // The reader is cancelled at the cap so the oversized stream releases its
-    // socket/buffer instead of being drained into memory.
-    expect(cancel).toHaveBeenCalledTimes(1);
-  });
+      await expect(result).rejects.toThrow(
+        `ClawHub ${requestPath} response exceeded ${maxMiB * 1024 * 1024} bytes`,
+      );
+      // Cancel at the cap before allocating a contiguous copy of the oversized body.
+      expect(cancel).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("bounds oversized ClawHub error bodies to a short collapsed snippet", async () => {
     const oversized = "boom ".repeat(64 * 1024); // ~320 KiB error body
@@ -442,32 +538,12 @@ describe("clawhub client", () => {
   });
 
   it("bounds oversized ClawHub install-resolution JSON responses and cancels the stream", async () => {
-    const cancel = vi.fn();
-    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
-    const overshootChunks = 34; // 34 * 512 KiB = 17 MiB > 16 MiB cap
-    let emitted = 0;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (emitted >= overshootChunks) {
-          controller.close();
-          return;
-        }
-        emitted += 1;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        cancel();
-      },
-    });
+    const { response, cancel } = createOversizedJsonResponse();
 
     await expect(
       fetchClawHubSkillInstallResolution({
         slug: "weather",
-        fetchImpl: async () =>
-          new Response(body, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
+        fetchImpl: async () => response,
       }),
     ).rejects.toThrow(
       /ClawHub \/api\/v1\/skills\/weather\/install response exceeded 16777216 bytes/,

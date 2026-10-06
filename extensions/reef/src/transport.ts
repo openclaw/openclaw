@@ -1,9 +1,11 @@
 import { toStringifiedError as asError } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import WebSocket from "ws";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
 import type { Envelope, SignedReceipt } from "../protocol/index.js";
 import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
@@ -23,9 +25,16 @@ const REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
 // window while catch-up or entry dispatch is busy. At the payload cap this
 // limits retained frame data to roughly 16 MiB per connection.
 const REEF_INBOX_LIVE_BUFFER_MAX_ENTRIES = 256;
+// Mailbox.pull returns at most 200 entries; a shorter page proves the tail absent.
+const REEF_INBOX_REST_PAGE_SIZE = 200;
 // Stalled TCP peers that never complete the HTTP upgrade would otherwise hang
 // forever — ws defaults to no handshakeTimeout. Match sibling channel WS budgets.
 const REEF_WS_HANDSHAKE_MS = 30_000;
+// The relay answers a literal "ping" with "pong". Long-idle inbox sockets get
+// cut without a close frame on some network paths (observed as periodic 1006
+// reconnects); the keepalive both prevents the idle cut and detects a dead
+// link within two intervals instead of waiting for the next relay push.
+const REEF_INBOX_KEEPALIVE_MS = 45_000;
 // Cover headers and body consumption. A relay that accepts the request but
 // stops producing bytes must not pin inbox recovery forever.
 const REEF_RELAY_REQUEST_TIMEOUT_MS = 15_000;
@@ -161,31 +170,33 @@ export class ReefTransportClient {
     ]);
   }
 
-  mintFriendCode(): Promise<{ code: string; expires: number }> {
-    return this.signed("POST", "/v1/friend-codes");
+  mintFriendCode(signal?: AbortSignal): Promise<{ code: string; expires: number }> {
+    return this.signed("POST", "/v1/friend-codes", undefined, signal);
   }
-  requestFriend(to: string, code?: string): Promise<{ status: string }> {
+  requestFriend(to: string, code?: string, signal?: AbortSignal): Promise<{ status: string }> {
     return this.signed(
       "POST",
       "/v1/friends/request",
       code ? { to, code } : { to },
-      undefined,
+      signal,
       code ? [code] : [],
     );
   }
   async respondFriend(
     friend: RelayFriend,
     accept: boolean,
+    signal?: AbortSignal,
   ): Promise<{ peer: string; status: "active" | "blocked" }> {
+    const request = {
+      peer: friend.peer,
+      accept,
+      expected_key_epoch: friend.key_epoch,
+      expected_ed25519_pub: friend.ed25519_pub,
+      expected_x25519_pub: friend.x25519_pub,
+    };
     let result: unknown;
     try {
-      result = await this.signed("POST", "/v1/friends/respond", {
-        peer: friend.peer,
-        accept,
-        expected_key_epoch: friend.key_epoch,
-        expected_ed25519_pub: friend.ed25519_pub,
-        expected_x25519_pub: friend.x25519_pub,
-      });
+      result = await this.signed("POST", "/v1/friends/respond", request, signal);
     } catch (error) {
       if (
         error instanceof ReefRelayError &&
@@ -219,14 +230,18 @@ export class ReefTransportClient {
     }
     return { peer: friend.peer, status };
   }
-  listFriends(): Promise<{ friendships: RelayFriend[] }> {
-    return this.signed("GET", "/v1/friends");
+  listFriends(signal?: AbortSignal): Promise<{ friendships: RelayFriend[] }> {
+    return this.signed("GET", "/v1/friends", undefined, signal);
   }
-  removeFriend(peer: string): Promise<void> {
-    return this.signed("DELETE", `/v1/friends/${encodeURIComponent(peer)}`);
+  removeFriend(peer: string, signal?: AbortSignal): Promise<void> {
+    return this.signed("DELETE", `/v1/friends/${encodeURIComponent(peer)}`, undefined, signal);
   }
-  sendEnvelope(peer: string, envelope: Envelope): Promise<{ id: string; status: string }> {
-    return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}`, envelope);
+  sendEnvelope(
+    peer: string,
+    envelope: Envelope,
+    signal?: AbortSignal,
+  ): Promise<{ id: string; status: string }> {
+    return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}`, envelope, signal);
   }
   acknowledge(peer: string, id: string, receipt: SignedReceipt): Promise<{ result: string }> {
     return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}/ack`, { id, receipt });
@@ -303,6 +318,7 @@ export class ReefTransportClient {
     signal?: AbortSignal,
     secrets: readonly string[] = [],
   ): Promise<T> {
+    const effect = captureEffectAuthority();
     const url = new URL(path, this.relayUrl).toString();
     const timeout = buildTimeoutAbortSignal({
       timeoutMs: this.requestTimeoutMs,
@@ -312,14 +328,25 @@ export class ReefTransportClient {
     });
     try {
       let response: Response;
+      let initiated = false;
       try {
-        response = await this.fetcher(url, {
-          method,
-          headers: { ...headers, ...(bytes.length ? { "content-type": "application/json" } : {}) },
-          ...(bytes.length ? { body: bytes as BodyInit } : {}),
-          signal: timeout.signal,
+        response = await effect.initiate(() => {
+          timeout.signal?.throwIfAborted();
+          initiated = true;
+          return this.fetcher(url, {
+            method,
+            headers: {
+              ...headers,
+              ...(bytes.length ? { "content-type": "application/json" } : {}),
+            },
+            ...(bytes.length ? { body: bytes as BodyInit } : {}),
+            signal: timeout.signal,
+          });
         });
       } catch (error) {
+        if (!initiated) {
+          throw error;
+        }
         if (timeout.signal?.aborted) {
           throw timeout.signal.reason;
         }
@@ -368,12 +395,26 @@ export interface WebSocketLike {
     type: "error",
     listener: (event: { error?: unknown; message?: string }) => void,
   ): void;
+  send(data: string): void;
   close(): void;
+}
+
+/**
+ * An inbox entry whose processing parked instead of completing: a pending owner
+ * review, or a transient guard failure. The entry stays un-acked at the relay,
+ * the durable cursor holds before it, and the next poll re-attempts it. The
+ * socket stays up and no error surfaces — this is a waiting state, not a fault.
+ */
+export class ReefInboxEntryParkedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReefInboxEntryParkedError";
+  }
 }
 
 interface ReefInboxConnectionOptions {
   initialCursor?: number;
-  persistCursor?: (cursor: number) => void;
+  persistCursor?: ((cursor: number) => void) | ((cursor: number) => Promise<void>);
   onState?: (state: "connected" | "disconnected") => void;
   onError?: (error: Error) => void;
 }
@@ -388,22 +429,6 @@ export function createReefWebSocket(
   });
 }
 
-export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(done, ms);
-    function done(): void {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", done);
-      resolve();
-    }
-    signal?.addEventListener("abort", done, { once: true });
-  });
-}
-
 export class ReefInboxConnection {
   private cursor: number;
   // Entry dispatch remains serial across socket replacements. A closed socket
@@ -411,6 +436,15 @@ export class ReefInboxConnection {
   // second connection concurrently delivering the same durable cursor range.
   private processing = Promise.resolve();
   private stopped = false;
+  // Live frames cannot prove an older park resolved. Only a successful REST
+  // drain may clear this barrier, including across socket replacements.
+  private parked = false;
+  // REST-covered frames need no live dispatch (parks retry via REST). Keep this
+  // watermark after pruning completions whose delayed socket frames may still arrive.
+  private reconciledThrough = 0;
+  // Avoid replaying completed entries while a park holds the durable cursor.
+  // REST pages prune entries no longer retained in their authoritative range.
+  private readonly processedAboveCursor = new Set<number>();
   constructor(
     readonly client: ReefTransportClient,
     readonly onEntries: (entries: InboxEntry[]) => Promise<void>,
@@ -443,7 +477,7 @@ export class ReefInboxConnection {
         });
       } catch (error) {
         this.options.onError?.(asError(error));
-        await abortableSleep(delay, signal);
+        await sleepWithAbort(delay, signal).catch(() => {});
         delay = Math.min(delay * 2, 30_000);
       }
     }
@@ -462,8 +496,10 @@ export class ReefInboxConnection {
         throw new Error("invalid Reef relay inbox cursor");
       }
       const previous = this.cursor;
-      await this.processEntries(page.entries, page.cursor, signal);
+      const parked = await this.processEntries(page.entries, page.cursor, signal);
+      signal?.throwIfAborted();
       if (!page.entries.length || this.cursor === previous) {
+        this.parked = parked;
         return;
       }
     }
@@ -473,7 +509,7 @@ export class ReefInboxConnection {
     entries: readonly InboxEntry[],
     cursor?: number,
     signal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<boolean> {
     let highestSequence = 0;
     for (const entry of entries) {
       if (!Number.isSafeInteger(entry.seq) || entry.seq < 1) {
@@ -487,30 +523,80 @@ export class ReefInboxConnection {
       throw new Error("Reef relay inbox cursor does not match its entries");
     }
     const fresh = entries.toSorted((left, right) => left.seq - right.seq);
-    if (fresh.length === 0) {
-      if (cursor !== undefined) {
-        this.advanceCursor(cursor);
-      }
-      return;
-    }
+    // REST orders all retained entries in its range; a live batch cannot clear
+    // an older barrier. Publish new parks immediately, even if this scan fails.
+    let parked = cursor === undefined && this.parked;
     for (const entry of fresh) {
-      if (entry.seq <= this.cursor) {
+      if (
+        entry.seq <= this.cursor ||
+        (cursor === undefined && entry.seq <= this.reconciledThrough)
+      ) {
         continue;
       }
       signal?.throwIfAborted();
-      await this.onEntries([entry]);
+      if (!this.processedAboveCursor.has(entry.seq)) {
+        try {
+          await this.onEntries([entry]);
+        } catch (error) {
+          if (error instanceof ReefInboxEntryParkedError) {
+            this.parked = parked = true;
+            continue;
+          }
+          throw error;
+        }
+      }
       // A completed handler has consumed the entry even if shutdown arrived
       // while it ran. Persist it before the next abort check to avoid replay.
-      this.advanceCursor(entry.seq);
+      if (parked) {
+        this.processedAboveCursor.add(entry.seq);
+      } else {
+        await this.advanceCursor(entry.seq);
+      }
     }
+    if (cursor !== undefined) {
+      const retained = new Set(fresh.map((entry) => entry.seq));
+      this.reconciledThrough = Math.max(this.reconciledThrough, cursor);
+      for (const seq of this.processedAboveCursor) {
+        if ((seq <= cursor || fresh.length < REEF_INBOX_REST_PAGE_SIZE) && !retained.has(seq)) {
+          this.processedAboveCursor.delete(seq);
+          this.reconciledThrough = Math.max(this.reconciledThrough, seq);
+        }
+      }
+      if (fresh.length === 0) {
+        // Empty pages may echo the old cursor after expiry/acknowledgment.
+        await this.advanceCursor(this.reconciledThrough);
+      }
+    }
+    return parked;
   }
 
-  private advanceCursor(cursor: number): void {
+  /**
+   * Re-attempts parked entries over REST while the live socket stays up. The
+   * reconcile loop calls this; after an owner decides a review (or a guard
+   * outage ends) the next poll completes the delivery.
+   */
+  async poll(signal?: AbortSignal): Promise<void> {
+    if (this.stopped || signal?.aborted) {
+      return;
+    }
+    await this.serialize(() => this.drain(signal));
+  }
+
+  private async advanceCursor(cursor: number): Promise<void> {
     if (cursor <= this.cursor) {
       return;
     }
-    this.options.persistCursor?.(cursor);
+    await this.options.persistCursor?.(cursor);
+    // A direct drain may publish a newer cursor while this persistence waits.
+    if (cursor <= this.cursor) {
+      return;
+    }
     this.cursor = cursor;
+    for (const seq of this.processedAboveCursor) {
+      if (seq <= cursor) {
+        this.processedAboveCursor.delete(seq);
+      }
+    }
   }
 
   private serialize(task: () => Promise<void>): Promise<void> {
@@ -536,6 +622,8 @@ export class ReefInboxConnection {
       let opened = false;
       let catchUpPending = false;
       let pumpScheduled = false;
+      let awaitingPong = false;
+      let keepalive: ReturnType<typeof setInterval> | undefined;
       const bufferedEntries: InboxEntry[] = [];
       const abortListener = () => {
         if (finished) {
@@ -556,6 +644,9 @@ export class ReefInboxConnection {
           return;
         }
         finished = true;
+        if (keepalive !== undefined) {
+          clearInterval(keepalive);
+        }
         signal?.removeEventListener("abort", abortListener);
         if (error) {
           reject(error);
@@ -637,10 +728,31 @@ export class ReefInboxConnection {
         }
         opened = true;
         catchUpPending = true;
+        keepalive = setInterval(() => {
+          if (disconnected || finished) {
+            return;
+          }
+          // An unanswered ping means the link died without a close frame.
+          if (awaitingPong) {
+            disconnect(new Error("reef inbox keepalive timed out"));
+            return;
+          }
+          awaitingPong = true;
+          try {
+            socket.send("ping");
+          } catch (error) {
+            disconnect(asError(error));
+          }
+        }, REEF_INBOX_KEEPALIVE_MS);
+        keepalive.unref?.();
         this.options.onState?.("connected");
         pump();
       });
       socket.addEventListener("message", (event) => {
+        if (String(event.data) === "pong") {
+          awaitingPong = false;
+          return;
+        }
         try {
           const frame = JSON.parse(String(event.data)) as { type?: string; entry?: InboxEntry };
           if (frame.type !== "entry" || !frame.entry) {

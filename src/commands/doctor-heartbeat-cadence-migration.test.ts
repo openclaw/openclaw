@@ -3,11 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { heartbeatMonitorAgentId } from "../cron/heartbeat-monitor.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
@@ -24,6 +26,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   if (originalHome === undefined) {
@@ -48,7 +51,7 @@ async function createFixture(every = "15m") {
   const cfg = {
     agents: {
       defaults: { heartbeat: { every } },
-      list: [{ id: "main" }],
+      entries: { main: {} },
     },
   } as OpenClawConfig;
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
@@ -57,7 +60,7 @@ async function createFixture(every = "15m") {
 
 async function loadMonitor(storePath: string, agentId: string) {
   const store = await loadCronJobsStore(storePath);
-  return store.jobs.find((job) => heartbeatMonitorAgentId(job) === agentId);
+  return store.jobs.find((job) => job.agentId === agentId && job.payload.kind === "heartbeat");
 }
 
 async function loadMainMonitor(storePath: string) {
@@ -132,8 +135,20 @@ describe("heartbeat cadence cron migration", () => {
     ).resolves.toEqual([]);
   });
 
-  it("preserves a disabled heartbeat as a disabled monitor row", async () => {
+  it.each(["Create", "Update"])("reports %s of a disabled heartbeat monitor", async (action) => {
     const fixture = await createFixture("0m");
+    if (action === "Update") {
+      await maybeMigrateHeartbeatCadenceToCron({
+        cfg: {
+          ...fixture.cfg,
+          agents: { ...fixture.cfg.agents, defaults: { heartbeat: { every: "15m" } } },
+        },
+        shouldRepair: true,
+        env: fixture.env,
+      });
+    }
+
+    const findings = await collectHeartbeatCadenceMigrationFindings(fixture.cfg, fixture.env);
 
     const result = await maybeMigrateHeartbeatCadenceToCron({
       cfg: fixture.cfg,
@@ -145,16 +160,19 @@ describe("heartbeat cadence cron migration", () => {
     expect(await loadMainMonitor(fixture.storePath)).toEqual(
       expect.objectContaining({ enabled: false, payload: { kind: "heartbeat" } }),
     );
+    const message = `${action} heartbeat monitor for agent "main" as disabled.`;
+    expect(result.changes).toEqual([message]);
+    expect(findings).toEqual([expect.objectContaining({ message })]);
   });
 
   it("keeps ownerless multi-agent updates scoped to their declared monitors", async () => {
     const fixture = await createFixture();
     const initialCfg = {
       agents: {
-        list: [
-          { id: "alpha", heartbeat: { every: "15m" } },
-          { id: "beta", heartbeat: { every: "20m" } },
-        ],
+        entries: {
+          alpha: { heartbeat: { every: "15m" } },
+          beta: { heartbeat: { every: "20m" } },
+        },
       },
     } as OpenClawConfig;
     await maybeMigrateHeartbeatCadenceToCron({
@@ -167,10 +185,10 @@ describe("heartbeat cadence cron migration", () => {
 
     const updatedCfg = {
       agents: {
-        list: [
-          { id: "alpha", heartbeat: { every: "45m" } },
-          { id: "gamma", heartbeat: { every: "30m" } },
-        ],
+        entries: {
+          alpha: { heartbeat: { every: "45m" } },
+          gamma: { heartbeat: { every: "30m" } },
+        },
       },
     } as OpenClawConfig;
     const result = await maybeMigrateHeartbeatCadenceToCron({
@@ -246,7 +264,7 @@ describe("heartbeat cadence cron migration", () => {
     const cfg = {
       agents: {
         defaults: { heartbeat: { every: "15m" } },
-        list: [{ id: agentId }],
+        entries: { [agentId]: {} },
       },
     } as OpenClawConfig;
     const storePath = resolveCronJobsStorePathFromConfig(cfg, suppliedEnv);

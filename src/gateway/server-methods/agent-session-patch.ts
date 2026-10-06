@@ -5,20 +5,28 @@ import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-re
 import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
-  resolveSessionLifecycleTimestamps,
   type SessionFreshness,
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
 import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import {
   deliveryContextFromSession,
-  mergeDeliveryContext,
-  normalizeSessionDeliveryState,
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
+} from "../../utils/delivery-context.read.js";
+import {
+  mergeDeliveryContext,
+  normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
@@ -27,7 +35,7 @@ import {
   requestGroupMatchesTrusted,
   resolveTrustedGroupMetadata,
   type TrustedGroupMetadata,
-} from "./agent-task-tracking.js";
+} from "./agent-subagent-registration.js";
 
 export type AgentSessionPatchBuild = {
   patch: Partial<SessionEntry>;
@@ -42,17 +50,12 @@ export type AgentSessionPatchBuild = {
   freshness: SessionFreshness | undefined;
 };
 
-export function buildAgentSessionPatch(params: {
+type AgentSessionReuseInput = {
   freshEntry: SessionEntry | undefined;
-  initialEntry: SessionEntry | undefined;
   cfg: OpenClawConfig;
   sessionAgentId: string;
   canonicalSessionKey: string;
   storePath: string;
-  normalizedSpawned: { groupId?: string; groupChannel?: string; groupSpace?: string };
-  requestDeliveryHint: DeliveryContext | undefined;
-  requestLabel?: string;
-  pluginOwnerId?: string;
   expectedExistingSessionId?: string;
   hasRestoredCronContinuation: boolean;
   resetPolicy: ReturnType<typeof import("../../config/sessions.js").resolveSessionResetPolicy>;
@@ -60,10 +63,91 @@ export function buildAgentSessionPatch(params: {
   requestedSessionId?: string;
   isSystemGatewayRun: boolean;
   visibleRequest: boolean;
-  fallbackSessionId: string;
-  touchInteraction: boolean;
   failedSessionTranscriptMissing: (entry: SessionEntry | undefined) => boolean;
-}): AgentSessionPatchBuild {
+};
+
+/** Re-evaluate the entry from each read; callers retain admission and concurrent-rotation fencing. */
+export async function evaluateAgentSessionReuse(params: AgentSessionReuseInput) {
+  const lifecycleTimestamps = params.freshEntry
+    ? await resolveSessionLifecycleTimestampsAsync({
+        entry: params.freshEntry,
+        storePath: params.storePath,
+        agentId: params.sessionAgentId,
+        sessionKey: params.canonicalSessionKey,
+      })
+    : undefined;
+  const skipImplicitExpiry =
+    params.expectedExistingSessionId !== undefined ||
+    params.hasRestoredCronContinuation ||
+    params.freshEntry?.modelSelectionLocked === true ||
+    (params.resetPolicy.configured !== true && hasProviderOwnedSession(params.freshEntry));
+  const freshness = params.freshEntry
+    ? skipImplicitExpiry
+      ? ({ fresh: true } satisfies SessionFreshness)
+      : evaluateSessionFreshness({
+          updatedAt: params.freshEntry.updatedAt,
+          ...lifecycleTimestamps,
+          now: params.now,
+          policy: params.resetPolicy,
+        })
+    : undefined;
+  const requestedSessionMatchesEntry = Boolean(
+    params.requestedSessionId && params.freshEntry?.sessionId?.trim() === params.requestedSessionId,
+  );
+  const terminalMainTranscriptNewerThanRegistry =
+    params.isSystemGatewayRun || requestedSessionMatchesEntry
+      ? false
+      : hasTerminalMainSessionTranscriptNewerThanRegistrySync({
+          entry: params.freshEntry,
+          sessionScope: params.cfg.session?.scope,
+          sessionKey: params.canonicalSessionKey,
+          agentId: params.sessionAgentId,
+          mainKey: params.cfg.session?.mainKey,
+          storePath: params.storePath,
+        });
+  const recoverableTerminalSession =
+    Boolean(params.freshEntry?.sessionId) &&
+    params.visibleRequest &&
+    isRecoverableTerminalSessionStatus(params.freshEntry?.status);
+  const canReuseSession =
+    Boolean(params.freshEntry?.sessionId) &&
+    ((freshness?.fresh ?? false) || recoverableTerminalSession) &&
+    !params.failedSessionTranscriptMissing(params.freshEntry) &&
+    !terminalMainTranscriptNewerThanRegistry;
+  const usableRequestedSessionId =
+    params.requestedSessionId && (!params.freshEntry?.sessionId || canReuseSession)
+      ? params.requestedSessionId
+      : undefined;
+  const sessionId =
+    usableRequestedSessionId ?? (canReuseSession ? params.freshEntry?.sessionId : undefined);
+  const isNewSession =
+    !params.freshEntry ||
+    (!canReuseSession && !usableRequestedSessionId) ||
+    Boolean(usableRequestedSessionId && params.freshEntry?.sessionId !== usableRequestedSessionId);
+  return {
+    lifecycleTimestamps,
+    freshness,
+    recoverableTerminalSession,
+    canReuseSession,
+    usableRequestedSessionId,
+    sessionId,
+    isNewSession,
+  };
+}
+
+export async function buildAgentSessionPatch(
+  params: AgentSessionReuseInput & {
+    initialEntry: SessionEntry | undefined;
+    normalizedSpawned: { groupId?: string; groupChannel?: string; groupSpace?: string };
+    requestDeliveryHint: DeliveryContext | undefined;
+    requestLabel?: string;
+    explicitSessionKey?: string;
+    pluginOwnerId?: string;
+    fallbackSessionId: string;
+    touchInteraction: boolean;
+  },
+): Promise<AgentSessionPatchBuild> {
+  const reuse = await evaluateAgentSessionReuse(params);
   const storedSpawnedBy = normalizeOptionalString(params.freshEntry?.spawnedBy);
   const freshSpawnedBy = storedSpawnedBy
     ? resolveSessionStoreKey({
@@ -136,72 +220,22 @@ export function buildAgentSessionPatch(params: {
     origin: sessionDeliveryOrigin(params.freshEntry),
   });
   const labelValue = normalizeOptionalString(params.requestLabel) || params.freshEntry?.label;
+  const explicitSessionDisplayName =
+    params.freshEntry === undefined &&
+    params.visibleRequest &&
+    normalizeOptionalString(params.explicitSessionKey) &&
+    !labelValue &&
+    !isCronSessionKey(params.canonicalSessionKey) &&
+    !isSubagentSessionKey(params.canonicalSessionKey) &&
+    !isAcpSessionKey(params.canonicalSessionKey)
+      ? parseAgentSessionKey(params.canonicalSessionKey)?.rest.trim()
+      : undefined;
   const freshSessionRotatedSinceLoad = Boolean(
     params.initialEntry?.sessionId &&
     params.freshEntry?.sessionId &&
     params.freshEntry.sessionId !== params.initialEntry.sessionId,
   );
-  const freshLifecycleTimestamps = params.freshEntry
-    ? resolveSessionLifecycleTimestamps({
-        entry: params.freshEntry,
-        storePath: params.storePath,
-        agentId: params.sessionAgentId,
-        sessionKey: params.canonicalSessionKey,
-      })
-    : undefined;
-  const freshSkipImplicitExpiry =
-    params.expectedExistingSessionId !== undefined ||
-    params.hasRestoredCronContinuation ||
-    params.freshEntry?.modelSelectionLocked === true ||
-    (params.resetPolicy.configured !== true && hasProviderOwnedSession(params.freshEntry));
-  const freshFreshness = params.freshEntry
-    ? freshSkipImplicitExpiry
-      ? ({ fresh: true } satisfies SessionFreshness)
-      : evaluateSessionFreshness({
-          updatedAt: params.freshEntry.updatedAt,
-          ...freshLifecycleTimestamps,
-          now: params.now,
-          policy: params.resetPolicy,
-        })
-    : undefined;
-  const freshRequestedSessionMatchesEntry = Boolean(
-    params.requestedSessionId && params.freshEntry?.sessionId?.trim() === params.requestedSessionId,
-  );
-  const freshTerminalMainTranscriptNewerThanRegistry =
-    params.isSystemGatewayRun || freshRequestedSessionMatchesEntry
-      ? false
-      : hasTerminalMainSessionTranscriptNewerThanRegistrySync({
-          entry: params.freshEntry,
-          sessionScope: params.cfg.session?.scope,
-          sessionKey: params.canonicalSessionKey,
-          agentId: params.sessionAgentId,
-          mainKey: params.cfg.session?.mainKey,
-          storePath: params.storePath,
-        });
-  const freshRecoverableTerminalSession =
-    Boolean(params.freshEntry?.sessionId) &&
-    params.visibleRequest &&
-    isRecoverableTerminalSessionStatus(params.freshEntry?.status);
-  const freshCanReuseSession =
-    Boolean(params.freshEntry?.sessionId) &&
-    ((freshFreshness?.fresh ?? false) || freshRecoverableTerminalSession) &&
-    !params.failedSessionTranscriptMissing(params.freshEntry) &&
-    !freshTerminalMainTranscriptNewerThanRegistry;
-  const freshUsableRequestedSessionId =
-    params.requestedSessionId && (!params.freshEntry?.sessionId || freshCanReuseSession)
-      ? params.requestedSessionId
-      : undefined;
-  const freshSessionId =
-    freshUsableRequestedSessionId ??
-    (freshCanReuseSession ? params.freshEntry?.sessionId : undefined) ??
-    params.fallbackSessionId;
-  const freshIsNewSession =
-    !params.freshEntry ||
-    (!freshCanReuseSession && !freshUsableRequestedSessionId) ||
-    Boolean(
-      freshUsableRequestedSessionId &&
-      params.freshEntry?.sessionId !== freshUsableRequestedSessionId,
-    );
+  const freshSessionId = reuse.sessionId ?? params.fallbackSessionId;
   const freshRotatedSessionId = Boolean(
     params.freshEntry?.sessionId && params.freshEntry.sessionId !== freshSessionId,
   );
@@ -210,8 +244,8 @@ export function buildAgentSessionPatch(params: {
     : freshSessionId;
   const shouldClearRotatedState = freshRotatedSessionId && !freshSessionRotatedSinceLoad;
   const shouldClearTerminalState =
-    freshCanReuseSession &&
-    freshRecoverableTerminalSession &&
+    reuse.canReuseSession &&
+    reuse.recoverableTerminalSession &&
     !freshSessionRotatedSinceLoad &&
     patchSessionId === params.freshEntry?.sessionId;
   const automaticRecoveryClearPatch = shouldClearRotatedState
@@ -220,7 +254,13 @@ export function buildAgentSessionPatch(params: {
   const patch: Partial<SessionEntry> = {
     sessionId: patchSessionId,
     updatedAt: params.now,
-    ...(freshIsNewSession && !freshSessionRotatedSinceLoad ? { sessionStartedAt: params.now } : {}),
+    ...(reuse.isNewSession && !freshSessionRotatedSinceLoad
+      ? { sessionStartedAt: params.now }
+      : params.freshEntry?.sessionStartedAt === undefined &&
+          patchSessionId === params.freshEntry?.sessionId &&
+          reuse.lifecycleTimestamps?.sessionStartedAt !== undefined
+        ? { sessionStartedAt: reuse.lifecycleTimestamps.sessionStartedAt }
+        : {}),
     ...(params.touchInteraction
       ? {
           lastInteractionAt: params.now,
@@ -232,6 +272,9 @@ export function buildAgentSessionPatch(params: {
     ...automaticRecoveryClearPatch,
     delivery,
     ...(labelValue ? { label: labelValue } : {}),
+    // An operator-supplied key is an explicit name: keep it instead of generating
+    // a dashboard title later, matching the semantics of a Control UI rename.
+    ...(explicitSessionDisplayName ? { displayName: explicitSessionDisplayName } : {}),
     ...(freshSpawnedBy ? { spawnedBy: freshSpawnedBy } : {}),
     groupId: nextGroup.groupId,
     groupChannel: nextGroup.groupChannel,
@@ -244,6 +287,7 @@ export function buildAgentSessionPatch(params: {
       ? {
           status: undefined,
           lifecycleRunId: undefined,
+          lastRunId: undefined,
           startedAt: undefined,
           endedAt: undefined,
           runtimeMs: undefined,
@@ -261,9 +305,9 @@ export function buildAgentSessionPatch(params: {
     groupChannel: nextGroup.groupChannel,
     groupSpace: nextGroup.groupSpace,
     freshSessionRotatedSinceLoad,
-    isNewSession: freshIsNewSession,
+    isNewSession: reuse.isNewSession,
     rotatedSessionId: freshRotatedSessionId,
-    usableRequestedSessionId: freshUsableRequestedSessionId,
-    freshness: freshFreshness,
+    usableRequestedSessionId: reuse.usableRequestedSessionId,
+    freshness: reuse.freshness,
   };
 }

@@ -73,22 +73,30 @@ enum OnboardingGatewayConnectionAttempt: Equatable {
     case trustCertificate
 }
 
-struct GatewaySetupLinkStaging {
-    private(set) var link: GatewayConnectDeepLink?
+enum OnboardingQRCodeDestination: Equatable {
+    case mainUI
+    case successScreen
+}
+
+struct OnboardingQRCodeCompletion {
+    private var targetStableID: String?
 
     mutating func stage(_ link: GatewayConnectDeepLink) {
-        self.link = link
+        self.targetStableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
+            host: link.host,
+            port: link.port,
+            contextPath: link.contextPath)
     }
 
-    mutating func take() -> GatewayConnectDeepLink? {
-        defer { self.link = nil }
-        return self.link
+    mutating func cancel() {
+        self.targetStableID = nil
     }
 
-    @discardableResult
-    mutating func cancel() -> Bool {
-        guard self.link != nil else { return false }
-        self.link = nil
-        return true
+    mutating func destination(connectedStableID: String?) -> OnboardingQRCodeDestination {
+        guard let targetStableID else { return .successScreen }
+        self.targetStableID = nil
+        return GatewayStableIdentifier.matches(targetStableID, connectedStableID)
+            ? .mainUI
+            : .successScreen
     }
 }

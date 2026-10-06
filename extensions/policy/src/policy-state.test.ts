@@ -1,17 +1,161 @@
 // Policy tests cover policy state plugin behavior.
 import { describe, expect, it } from "vitest";
 import { scanPolicySandboxPosture } from "./policy-state-sandbox.js";
-import { collectPolicyEvidence } from "./policy-state.js";
+import { scanPolicyToolPosture } from "./policy-state-tool-posture.js";
+import {
+  collectPolicyEvidence,
+  createPolicyAttestation,
+  policyDocumentHash,
+} from "./policy-state.js";
 
 const scanPolicyChannels = (cfg: Record<string, unknown>) => collectPolicyEvidence(cfg).channels;
 
-async function scanPolicyTools(raw: string) {
-  const evidence = await collectPolicyEvidence({}, { toolsRaw: raw });
-  return evidence.tools ?? [];
-}
+const scanPolicyTools = (raw: string) => collectPolicyEvidence({}, { toolsRaw: raw }).tools ?? [];
 
 const scanPolicyExecApprovals = (raw: string) =>
   collectPolicyEvidence({}, { execApprovalsRaw: raw }).execApprovals ?? [];
+
+describe("configured agent scanning", () => {
+  const keyedConfig = {
+    tools: { elevated: { enabled: true } },
+    agents: {
+      defaults: { sandbox: { mode: "off" } },
+      entries: {
+        guest: {
+          models: { "openai/gpt-5.6-luna": {} },
+          sandbox: { mode: "all", workspaceAccess: "none" },
+          tools: { deny: ["exec"], elevated: { enabled: false } },
+        },
+      },
+    },
+  };
+
+  it("uses agents.entries across policy evidence", () => {
+    const evidence = collectPolicyEvidence(keyedConfig);
+    expect(evidence.sandboxPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "mode",
+          scope: "agent",
+          agentId: "guest",
+          value: "all",
+          source: "oc://openclaw.config/agents/entries/guest/sandbox/mode",
+        }),
+      ]),
+    );
+    expect(
+      evidence.toolPosture?.filter((entry) => entry.scope === "agent" && entry.agentId === "guest"),
+    ).not.toHaveLength(0);
+    expect(evidence.toolPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: "agent",
+          agentId: "guest",
+          source: "oc://openclaw.config/agents/entries/guest/tools/elevated/enabled",
+          value: false,
+        }),
+      ]),
+    );
+    expect(evidence.agentWorkspace).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: "agent",
+          agentId: "guest",
+          source: "oc://openclaw.config/agents/entries/guest/sandbox/workspaceAccess",
+          value: "none",
+        }),
+      ]),
+    );
+    expect(evidence.modelRefs).toContainEqual({
+      ref: "openai/gpt-5.6-luna",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      source: 'oc://openclaw.config/agents/entries/guest/models/"openai/gpt-5.6-luna"',
+    });
+  });
+
+  it("still uses legacy agents.list across policy evidence", () => {
+    const evidence = collectPolicyEvidence({
+      agents: {
+        defaults: { sandbox: { mode: "off" } },
+        list: [
+          {
+            id: "legacy",
+            models: { "openai/gpt-5.6-luna": {} },
+            sandbox: { mode: "all" },
+          },
+        ],
+      },
+    });
+    expect(evidence.sandboxPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "mode",
+          scope: "agent",
+          agentId: "legacy",
+          value: "all",
+          source: "oc://openclaw.config/agents/list/#0/sandbox/mode",
+        }),
+      ]),
+    );
+    expect(evidence.modelRefs).toContainEqual(
+      expect.objectContaining({
+        ref: "openai/gpt-5.6-luna",
+        source: 'oc://openclaw.config/agents/list/#0/models/"openai/gpt-5.6-luna"',
+      }),
+    );
+  });
+
+  it("does not fall back to stale agents.list when entries owns the roster", () => {
+    const evidence = collectPolicyEvidence({
+      agents: {
+        entries: {},
+        list: [{ id: "legacy", sandbox: { mode: "all" } }],
+      },
+    });
+    expect(evidence.sandboxPosture).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ agentId: "legacy" })]),
+    );
+  });
+
+  it("keeps attestations stable across keyed entry order", () => {
+    const first = {
+      alpha: { models: { "openai/gpt-5.6-luna": {} } },
+      omega: { models: { "openai/gpt-5.6-luna": {} } },
+    };
+    const attestationHash = (entries: Record<string, unknown>) =>
+      createPolicyAttestation({
+        ok: true,
+        checkedAt: new Date(0).toISOString(),
+        policyPath: "policy.jsonc",
+        policyHash: policyDocumentHash({}),
+        evidence: collectPolicyEvidence({ agents: { entries } }),
+        findings: [],
+      }).attestationHash;
+
+    expect(attestationHash(first)).toBe(
+      attestationHash({ omega: first.omega, alpha: first.alpha }),
+    );
+  });
+
+  it("escapes entry keys that are not bare identifiers", () => {
+    const evidence = scanPolicySandboxPosture({
+      agents: {
+        defaults: { sandbox: { mode: "off" } },
+        entries: { "team/qa": { sandbox: { mode: "all" } } },
+      },
+    });
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "mode",
+          agentId: "team/qa",
+          source: 'oc://openclaw.config/agents/entries/"team/qa"/sandbox/mode',
+        }),
+      ]),
+    );
+  });
+});
 
 describe("scanPolicySandboxPosture", () => {
   it("keeps explicit Podman identity while exposing shared container settings", () => {
@@ -48,6 +192,61 @@ describe("scanPolicySandboxPosture", () => {
           kind: "containerMount",
           bindSurface: "docker",
           bind: "/host/data:/data:ro",
+        }),
+      ]),
+    );
+  });
+});
+
+describe("scanPolicyToolPosture", () => {
+  it("derives exec posture from normalized agent entries", () => {
+    const evidence = scanPolicyToolPosture({
+      agents: {
+        entries: { reviewer: { tools: { exec: { mode: "ask" } } } },
+      },
+    });
+
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "reviewer-exec-security",
+          kind: "execSecurity",
+          value: "allowlist",
+          source: "oc://openclaw.config/agents/entries/reviewer/tools/exec/mode",
+          explicit: true,
+        }),
+        expect.objectContaining({
+          id: "reviewer-exec-ask",
+          kind: "execAsk",
+          value: "on-miss",
+          source: "oc://openclaw.config/agents/entries/reviewer/tools/exec/mode",
+          explicit: true,
+        }),
+      ]),
+    );
+  });
+
+  it("merges legacy agent fields with an inherited exec mode", () => {
+    const evidence = scanPolicyToolPosture({
+      tools: { exec: { mode: "auto" } },
+      agents: {
+        entries: { reviewer: { tools: { exec: { ask: "always" } } } },
+      },
+    });
+
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "reviewer-exec-security",
+          kind: "execSecurity",
+          value: "allowlist",
+          source: "oc://openclaw.config/tools/exec/mode",
+        }),
+        expect.objectContaining({
+          id: "reviewer-exec-ask",
+          kind: "execAsk",
+          value: "always",
+          source: "oc://openclaw.config/agents/entries/reviewer/tools/exec/ask",
         }),
       ]),
     );
@@ -98,8 +297,8 @@ describe("scanPolicyRouting", () => {
 });
 
 describe("scanPolicyTools", () => {
-  it("scans documented bullet tool declarations", async () => {
-    await expect(
+  it("scans documented bullet tool declarations", () => {
+    expect(
       scanPolicyTools(
         [
           "## Tools",
@@ -109,7 +308,7 @@ describe("scanPolicyTools", () => {
           "  owner: support",
         ].join("\n"),
       ),
-    ).resolves.toEqual([
+    ).toEqual([
       {
         id: "deploy-tool",
         source: "oc://AGENTS.md/tools/deploy-tool",
@@ -130,10 +329,10 @@ describe("scanPolicyTools", () => {
     ]);
   });
 
-  it("does not treat indented metadata bullets as tool declarations", async () => {
-    await expect(
+  it("does not treat indented metadata bullets as tool declarations", () => {
+    expect(
       scanPolicyTools(["## Tools", "- deploy: risk: critical", "  - owner: ops"].join("\n")),
-    ).resolves.toEqual([
+    ).toEqual([
       {
         id: "deploy",
         source: "oc://AGENTS.md/tools/deploy",
@@ -144,8 +343,8 @@ describe("scanPolicyTools", () => {
     ]);
   });
 
-  it("ignores local-note examples inside fenced blocks", async () => {
-    await expect(
+  it("ignores local-note examples inside fenced blocks", () => {
+    expect(
       scanPolicyTools(
         [
           "## Tools",
@@ -155,19 +354,11 @@ describe("scanPolicyTools", () => {
           "```",
         ].join("\n"),
       ),
-    ).resolves.toEqual([]);
+    ).toEqual([]);
   });
 
-  it("ignores the complete local-notes subsection", async () => {
-    await expect(
-      scanPolicyTools(
-        ["## Tools", "### Local notes", "- SSH: prod-host", "### deploy risk: high"].join("\n"),
-      ),
-    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "high" })]);
-  });
-
-  it("parses a tool literally named tools after local notes", async () => {
-    await expect(
+  it("parses a tool literally named tools after local notes", () => {
+    expect(
       scanPolicyTools(
         [
           "## Tools",
@@ -176,7 +367,7 @@ describe("scanPolicyTools", () => {
           "### tools risk: high sensitivity: restricted owner: ops",
         ].join("\n"),
       ),
-    ).resolves.toEqual([
+    ).toEqual([
       expect.objectContaining({
         id: "tools",
         risk: "high",
@@ -186,8 +377,8 @@ describe("scanPolicyTools", () => {
     ]);
   });
 
-  it("ignores deeper Tools sections outside the governed H1/H2 contract", async () => {
-    await expect(
+  it("ignores deeper Tools sections outside the governed H1/H2 contract", () => {
+    expect(
       scanPolicyTools(
         [
           "## Build",
@@ -197,11 +388,11 @@ describe("scanPolicyTools", () => {
           "### deploy risk: low owner: release",
         ].join("\n"),
       ),
-    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "low", owner: "release" })]);
+    ).toEqual([expect.objectContaining({ id: "deploy", risk: "low", owner: "release" })]);
   });
 
-  it("does not carry metadata across repeated Tools section boundaries", async () => {
-    const evidence = await scanPolicyTools(
+  it("does not carry metadata across repeated Tools section boundaries", () => {
+    const evidence = scanPolicyTools(
       [
         "## Tools",
         "### deploy risk: high",
@@ -217,14 +408,14 @@ describe("scanPolicyTools", () => {
     expect(evidence[0]).not.toHaveProperty("owner");
   });
 
-  it("keeps longer fences open across shorter delimiter runs", async () => {
-    await expect(
+  it("keeps longer fences open across shorter delimiter runs", () => {
+    expect(
       scanPolicyTools(["## Tools", "````markdown", "```", "- SSH: home-server", "````"].join("\n")),
-    ).resolves.toEqual([]);
+    ).toEqual([]);
   });
 
-  it("scans a migrated legacy Tools section after its document heading", async () => {
-    await expect(
+  it("scans a migrated legacy Tools section after its document heading", () => {
+    expect(
       scanPolicyTools(
         [
           "## Tools",
@@ -234,7 +425,7 @@ describe("scanPolicyTools", () => {
           "### deploy risk: high sensitivity: restricted owner: ops",
         ].join("\n"),
       ),
-    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "high", owner: "ops" })]);
+    ).toEqual([expect.objectContaining({ id: "deploy", risk: "high", owner: "ops" })]);
   });
 });
 
@@ -315,15 +506,21 @@ describe("scanPolicyExecApprovals", () => {
     ]);
   });
 
-  it("normalizes legacy default agents and string allowlist entries", () => {
+  it("projects canonical approval entries while retaining source indices across invalid entries", () => {
     expect(
       scanPolicyExecApprovals(
         JSON.stringify({
           version: 1,
           agents: {
-            default: {
+            main: {
               security: "allowlist",
-              allowlist: ["legacy", { pattern: "doctor" }],
+              allowlist: [
+                null,
+                { id: "entry-1", pattern: "legacy" },
+                "not-an-approval-entry",
+                { pattern: " " },
+                { id: "entry-2", pattern: "doctor" },
+              ],
             },
           },
         }),
@@ -338,21 +535,21 @@ describe("scanPolicyExecApprovals", () => {
         kind: "agent",
         agentId: "main",
         security: "allowlist",
-        source: "oc://exec-approvals.json/agents/default",
+        source: "oc://exec-approvals.json/agents/main",
       }),
       expect.objectContaining({
         id: "agent:main:allowlist:0",
         kind: "allowlist",
         agentId: "main",
         pattern: "legacy",
-        source: "oc://exec-approvals.json/agents/default/allowlist/#0",
+        source: "oc://exec-approvals.json/agents/main/allowlist/#1",
       }),
       expect.objectContaining({
         id: "agent:main:allowlist:1",
         kind: "allowlist",
         agentId: "main",
         pattern: "doctor",
-        source: "oc://exec-approvals.json/agents/default/allowlist/#1",
+        source: "oc://exec-approvals.json/agents/main/allowlist/#4",
       }),
     ]);
   });

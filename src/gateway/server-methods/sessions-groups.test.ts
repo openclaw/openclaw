@@ -1,11 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const groupMocks = vi.hoisted(() => ({
+  NotEmpty: class SessionGroupNotEmptyError extends Error {},
   NotFound: class SessionGroupNotFoundError extends Error {},
+  put: vi.fn(),
   rename: vi.fn(),
   update: vi.fn(),
+  defaults: vi.fn<() => Array<{ name: string; cwd?: string; worktree?: boolean }>>(() => []),
 }));
 const pathMocks = vi.hoisted(() => ({
   isCurrent: vi.fn(),
@@ -14,13 +18,22 @@ const pathMocks = vi.hoisted(() => ({
 
 vi.mock("../session-groups.js", () => ({
   deleteSessionGroup: vi.fn(),
-  listSessionGroupDefaults: vi.fn(() => []),
-  listSessionGroups: vi.fn(() => []),
-  listSidebarSectionOrder: vi.fn(() => []),
-  putSessionGroups: vi.fn(() => []),
+  putSessionGroups: groupMocks.put,
   renameSessionGroup: groupMocks.rename,
+  SessionGroupNotEmptyError: groupMocks.NotEmpty,
   SessionGroupNotFoundError: groupMocks.NotFound,
   updateSessionGroupDefaults: groupMocks.update,
+}));
+vi.mock("../session-group-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-group-catalog.js")>()),
+  readSessionGroupCatalog: () => ({
+    groups: [],
+    defaults: groupMocks.defaults(),
+    sectionOrder: [],
+  }),
+}));
+vi.mock("../session-group-defaults-access.js", () => ({
+  filterMutableSessionGroupRecords: async ({ records }: { records: () => unknown[] }) => records(),
 }));
 vi.mock("./workspace-path-containment.js", () => ({
   isWorkspacePathContainmentCurrent: pathMocks.isCurrent,
@@ -49,13 +62,88 @@ function renameOptions(params: Record<string, unknown>, respond: ReturnType<type
   return {
     params,
     respond,
-    context: { getRuntimeConfig: () => ({}) },
+    context: {
+      getRuntimeConfig: () => ({}),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+    },
   } as unknown as GatewayRequestHandlerOptions;
 }
+
+describe("sessions.groups.put", () => {
+  beforeEach(() => {
+    groupMocks.put.mockReset();
+  });
+
+  it("rejects dropping a non-empty group as an invalid request", async () => {
+    const message = "cannot drop Gone; remove it via sessions.groups.delete";
+    groupMocks.put.mockImplementation(() => {
+      throw new groupMocks.NotEmpty(message);
+    });
+    const respond = vi.fn();
+    await expectDefined(
+      sessionGroupHandlers["sessions.groups.put"],
+      'sessionGroupHandlers["sessions.groups.put"] test invariant',
+    )(updateOptions({ names: ["Keep"] }, respond));
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST", message }),
+    );
+  });
+
+  it("replaces the catalog using the runtime config and authorization guards", async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const names = ["Keep"];
+    const sectionOrder = ["category:Keep", "ungrouped"];
+    const groups = [{ name: "Keep", position: 0 }];
+    groupMocks.put.mockReturnValue(groups);
+    const respond = vi.fn();
+    const options = updateOptions({ names, sectionOrder }, respond);
+    options.context.getRuntimeConfig = () => cfg;
+    const assertCurrent = vi.fn();
+    const assertTargetCurrent = vi.fn();
+    options.sessionMutationAuthorization = { assertCurrent, assertTargetCurrent };
+
+    await expectDefined(
+      sessionGroupHandlers["sessions.groups.put"],
+      'sessionGroupHandlers["sessions.groups.put"] test invariant',
+    )(options);
+
+    expect(groupMocks.put).toHaveBeenCalledExactlyOnceWith({
+      cfg,
+      names,
+      sectionOrder,
+      assertCurrent,
+      assertTargetCurrent,
+    });
+    expect(groupMocks.put.mock.calls[0]?.[0].cfg).toBe(cfg);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, groups, sectionOrder: [] }, undefined);
+  });
+
+  it("rethrows changed authorization instead of mapping it to an unavailable response", async () => {
+    const error = new SessionMutationAuthorizationChangedError({
+      code: "INVALID_REQUEST",
+      message: "session changed before sessions.groups.put; retry the request",
+    });
+    groupMocks.put.mockImplementation(() => {
+      throw error;
+    });
+    const respond = vi.fn();
+    await expect(
+      expectDefined(
+        sessionGroupHandlers["sessions.groups.put"],
+        'sessionGroupHandlers["sessions.groups.put"] test invariant',
+      )(updateOptions({ names: [] }, respond)),
+    ).rejects.toBe(error);
+    expect(respond).not.toHaveBeenCalled();
+  });
+});
 
 describe("sessions.groups.update", () => {
   beforeEach(() => {
     groupMocks.update.mockReset();
+    groupMocks.defaults.mockReset().mockReturnValue([]);
     pathMocks.isCurrent.mockReset();
     pathMocks.isCurrent.mockReturnValue(true);
     pathMocks.resolveContainment.mockReset();
@@ -120,9 +208,12 @@ describe("sessions.groups.update", () => {
       path: "/workspace/client",
       workspaceRoot: "/workspace",
     });
-    groupMocks.update.mockReturnValue([
-      { name: "Client", cwd: "/workspace/client", worktree: true },
-    ]);
+    groupMocks.update.mockImplementation((_name, _defaults, _env, assertCurrent) => {
+      assertCurrent();
+      const records = [{ name: "Client", cwd: "/workspace/client", worktree: true }];
+      groupMocks.defaults.mockReturnValue(records);
+      return records;
+    });
     const respond = vi.fn();
     const assertCurrent = vi.fn();
     const options = updateOptions(
@@ -140,10 +231,16 @@ describe("sessions.groups.update", () => {
     )(options);
 
     expect(assertCurrent).toHaveBeenCalledOnce();
-    expect(groupMocks.update).toHaveBeenCalledWith("Client", {
-      cwd: "/workspace/client",
-      worktree: true,
-    });
+    expect(groupMocks.update).toHaveBeenCalledWith(
+      "Client",
+      {
+        cwd: "/workspace/client",
+        worktree: true,
+      },
+      expect.any(Object),
+      expect.any(Function),
+      {},
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       {

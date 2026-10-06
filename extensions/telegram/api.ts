@@ -1,4 +1,3 @@
-// Telegram API module exposes the plugin public contract.
 export type { Message as TelegramBotMessage, Update as TelegramBotUpdate } from "grammy/types";
 export { telegramPlugin } from "./src/channel.js";
 export { telegramSetupPlugin } from "./src/channel.setup.js";
@@ -12,7 +11,6 @@ export {
   listEnabledTelegramAccounts,
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
-  resetMissingDefaultWarnFlag,
   resolveDefaultTelegramAccountId,
   type ResolvedTelegramAccount,
   resolveTelegramAccount,
@@ -50,7 +48,6 @@ export {
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
-  resetTelegramForumFlagCacheForTest,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
@@ -139,12 +136,7 @@ export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "./src/outbound-params.js";
-export {
-  probeTelegram,
-  resetTelegramProbeFetcherCacheForTests,
-  type TelegramProbe,
-  type TelegramProbeOptions,
-} from "./src/probe.js";
+export { probeTelegram, type TelegramProbe, type TelegramProbeOptions } from "./src/probe.js";
 export {
   type ResolvedReactionLevel,
   resolveTelegramReactionLevel,

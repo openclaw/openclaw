@@ -1,5 +1,10 @@
-import { describe, expectTypeOf, it } from "vitest";
-import type { GetReplyOptions } from "./reply-runtime.js";
+import type { PluginHookReplyDispatchEvent } from "openclaw/plugin-sdk/core";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  createReplyDispatcher,
+  type GetReplyOptions,
+  type ReplyDispatcher,
+} from "./reply-runtime.js";
 
 type ProgressResult = boolean | void;
 type ProgressCallback = GetReplyOptions[
@@ -18,6 +23,54 @@ type ProgressBoundaryCallback = GetReplyOptions[
   | "onCompactionEnd"];
 
 describe("reply runtime public progress contracts", () => {
+  it("retains released run-start callback arguments and synchronous completion acknowledgment", () => {
+    type AgentRunStart = NonNullable<GetReplyOptions["onAgentRunStart"]>;
+    type LegacyAgentRunStart = (
+      runId: string,
+      executionIdentityToken?: Parameters<AgentRunStart>[1],
+      options?: Parameters<AgentRunStart>[2],
+    ) => unknown;
+
+    expectTypeOf<[string]>().toExtend<Parameters<AgentRunStart>>();
+    expectTypeOf<Parameters<LegacyAgentRunStart>>().toExtend<Parameters<AgentRunStart>>();
+    expectTypeOf<LegacyAgentRunStart>().toExtend<AgentRunStart>();
+    expectTypeOf<AgentRunStart>().toExtend<LegacyAgentRunStart>();
+    expectTypeOf<AgentRunStart>().returns.toEqualTypeOf<unknown>();
+  });
+
+  it("retains released synchronous visibility contracts beside awaited companions", () => {
+    expectTypeOf<GetReplyOptions["onVerboseProgressVisibility"]>().toEqualTypeOf<
+      ((isActive: () => boolean) => void) | undefined
+    >();
+    expectTypeOf<GetReplyOptions["onVerboseProgressVisibilityAsync"]>().toEqualTypeOf<
+      ((isActive: () => Promise<boolean>) => Promise<void> | void) | undefined
+    >();
+    expectTypeOf<
+      PluginHookReplyDispatchEvent["shouldSendToolSummaries"]
+    >().toEqualTypeOf<boolean>();
+    expectTypeOf<
+      PluginHookReplyDispatchEvent["shouldSendFullToolDetails"]
+    >().toEqualTypeOf<boolean>();
+    expectTypeOf<PluginHookReplyDispatchEvent["shouldSendToolSummariesAsync"]>().toEqualTypeOf<
+      (() => Promise<boolean>) | undefined
+    >();
+    expectTypeOf<PluginHookReplyDispatchEvent["shouldSendFullToolDetailsAsync"]>().toEqualTypeOf<
+      (() => Promise<boolean>) | undefined
+    >();
+    expectTypeOf<
+      Omit<
+        PluginHookReplyDispatchEvent,
+        "shouldSendToolSummariesAsync" | "shouldSendFullToolDetailsAsync"
+      >
+    >().toExtend<PluginHookReplyDispatchEvent>();
+  });
+  it("still accepts the deprecated suppressToolErrorWarnings option as a no-op", () => {
+    // Removal window: first stable release after 2026.10 (see GetReplyOptions).
+    expectTypeOf<GetReplyOptions["suppressToolErrorWarnings"]>().toEqualTypeOf<
+      boolean | undefined
+    >();
+  });
+
   it("exports acceptance-aware progress callback results", () => {
     expectTypeOf<Exclude<ProgressCallback, undefined>>().returns.toEqualTypeOf<
       Promise<ProgressResult> | ProgressResult
@@ -40,5 +93,64 @@ describe("reply runtime public progress contracts", () => {
     expectTypeOf<
       Exclude<GetReplyOptions["shouldDeliverCommentaryPayloads"], undefined>
     >().returns.toEqualTypeOf<boolean>();
+  });
+});
+
+describe("reply runtime public dispatcher compatibility", () => {
+  it("preserves deprecated admission counters beside settled receipt outcomes", async () => {
+    let releaseFirstDelivery!: () => void;
+    const firstDelivery = new Promise<void>((resolve) => {
+      releaseFirstDelivery = resolve;
+    });
+    let firstDeliveryPending = true;
+    const dispatcher: ReplyDispatcher = createReplyDispatcher({
+      beforeDeliver: async (payload) => (payload.text === "cancel" ? null : payload),
+      deliver: async (payload) => {
+        if (firstDeliveryPending) {
+          firstDeliveryPending = false;
+          await firstDelivery;
+        }
+        if (payload.text === "fail") {
+          throw new Error("transport failed after send started");
+        }
+      },
+    });
+
+    dispatcher.sendToolResult({ text: "delivered" });
+    dispatcher.sendBlockReply({ text: "cancel" });
+    dispatcher.sendFinalReply({ text: "fail" });
+
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 1, block: 1, final: 1 });
+    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+    expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+
+    releaseFirstDelivery();
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
+
+    expect(receipt).toMatchObject({
+      anyVisibleDelivered: true,
+      counts: {
+        tool: { delivered: 1 },
+        block: { cancelled: 1 },
+        final: { failedAfterSend: 1 },
+      },
+    });
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 1, block: 1, final: 1 });
+    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 1, final: 0 });
+    expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+  });
+
+  it("publishes an empty receipt when no delivery was admitted", async () => {
+    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+    dispatcher.markComplete();
+    await expect(dispatcher.waitForIdle()).resolves.toMatchObject({
+      anyVisibleDelivered: false,
+      counts: {
+        tool: { delivered: 0 },
+        block: { delivered: 0 },
+        final: { delivered: 0 },
+      },
+    });
   });
 });

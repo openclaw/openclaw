@@ -9,13 +9,14 @@ import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-m
 // per-load salt, so the palette (and with it sprite geometry like the sleeping
 // eye peek) varies per test process. Pin a canonical look so pose assertions
 // stay deterministic.
-vi.mock("../../components/lobster-pet.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../components/lobster-pet.ts")>();
+vi.mock("../../components/lobster-pet-look.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../components/lobster-pet-look.ts")>();
+  const { LOBSTER_PET_PALETTES } = await import("../../components/lobster-pet-palettes.ts");
   return {
     ...actual,
     createLobsterPetLook: () =>
       actual.canonicalLobsterLook(
-        expectDefined(actual.LOBSTER_PET_PALETTES[0], "canonical lobster palette"),
+        expectDefined(LOBSTER_PET_PALETTES[0], "canonical lobster palette"),
       ),
   };
 });
@@ -85,9 +86,9 @@ function fixturePayload(): DoctorMemoryStatusPayload {
 
 function renderOverview(
   status: MemoryOverviewStatus,
-  engineSelection: { kind: "off" } | { kind: "auto"; engineId: string } = {
-    kind: "auto",
-    engineId: "memory-core",
+  engineSelection: MemoryOverviewProps["engineSelection"] = {
+    kind: "default",
+    pluginId: "memory-core",
   },
   overrides: Partial<MemoryOverviewProps> = {},
 ) {
@@ -144,19 +145,10 @@ describe("renderMemoryOverview", () => {
   });
 
   it("hibernates a disabled pinned engine and points to Settings", () => {
-    const container = document.createElement("div");
-    render(
-      renderMemoryOverview({
-        agentId: "main",
-        engineSelection: { kind: "pinned", engineId: "memory-core" },
-        engineDisabled: true,
-        status: { kind: "ready", payload: fixturePayload() },
-        probingEmbeddings: false,
-        onRefresh: vi.fn(),
-        onProbeEmbeddings: vi.fn(),
-        onNavigate: vi.fn(),
-      }),
-      container,
+    const container = renderOverview(
+      { kind: "ready", payload: fixturePayload() },
+      { kind: "pinned", pluginId: "memory-core" },
+      { engineDisabled: true },
     );
 
     expect(container.textContent).toContain("Memory is hibernating");
@@ -245,33 +237,6 @@ describe("renderMemoryOverview", () => {
     expect(onProbeEmbeddings).toHaveBeenCalledOnce();
   });
 
-  it("disables the embedding test while probing and shows the checking state", () => {
-    const payload = fixturePayload();
-    payload.embedding = { ok: false, checked: false };
-    const container = renderOverview({ kind: "ready", payload }, undefined, {
-      probingEmbeddings: true,
-    });
-    const testButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Testing…",
-    );
-
-    expect(testButton?.disabled).toBe(true);
-    expect(container.textContent).toContain("Checking…");
-  });
-
-  it("shows a checked embedding error and hides the test button", () => {
-    const payload = fixturePayload();
-    payload.embedding = { ok: false, checked: true, error: "embedding model unavailable" };
-    const container = renderOverview({ kind: "ready", payload });
-
-    expect(container.textContent).toContain("embedding model unavailable");
-    expect(
-      [...container.querySelectorAll<HTMLButtonElement>("button")].some(
-        (button) => button.textContent?.trim() === "Test",
-      ),
-    ).toBe(false);
-  });
-
   it("hides the embedding test once readiness is healthy", () => {
     const container = renderOverview({ kind: "ready", payload: fixturePayload() });
 
@@ -282,22 +247,32 @@ describe("renderMemoryOverview", () => {
     ).toBe(false);
   });
 
+  it.each([
+    { searchRuntimeRegistered: false, error: "memory plugin unavailable", neutral: true },
+    { searchRuntimeRegistered: true, error: "search manager failed", neutral: false },
+    { searchRuntimeRegistered: undefined, error: "plugin load failed", neutral: false },
+  ])("distinguishes absent search support from $error", ({ neutral, ...diagnostic }) => {
+    const container = renderOverview({
+      kind: "ready",
+      payload: {
+        agentId: "main",
+        searchRuntimeRegistered: diagnostic.searchRuntimeRegistered,
+        embedding: { ok: false, error: diagnostic.error },
+      },
+    });
+
+    expect(container.querySelector(".memory-overview__hero h2")?.textContent).toBe(
+      neutral ? "Host memory search is unavailable" : "Memory needs attention",
+    );
+    expect(container.textContent?.includes("Engine health")).toBe(!neutral);
+    expect(container.textContent?.includes(diagnostic.error)).toBe(!neutral);
+  });
+
   it("opens the Memories tab from the overview shortcut", () => {
     const onNavigate = vi.fn();
-    const container = document.createElement("div");
-    render(
-      renderMemoryOverview({
-        agentId: "main",
-        engineSelection: { kind: "auto", engineId: "memory-core" },
-        engineDisabled: false,
-        status: { kind: "ready", payload: fixturePayload() },
-        probingEmbeddings: false,
-        onRefresh: vi.fn(),
-        onProbeEmbeddings: vi.fn(),
-        onNavigate,
-      }),
-      container,
-    );
+    const container = renderOverview({ kind: "ready", payload: fixturePayload() }, undefined, {
+      onNavigate,
+    });
 
     const shortcut = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
       button.textContent?.includes("Search memories"),

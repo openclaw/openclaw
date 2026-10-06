@@ -1,0 +1,390 @@
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { getUserPreferences, setUserPreferences } from "../state/user-preferences.test-support.js";
+import { onUserProfilesChanged } from "../state/user-profile-events.js";
+import { resolveUserProfileGitHubAttribution } from "../state/user-profile-github-identity.js";
+import {
+  linkEmail,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail, getUserProfileListItem } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
+import {
+  accessOrigin,
+  accessRequest,
+  accountIdClaim,
+  cfg,
+  githubCfg,
+  identityResponse,
+  oidcIdentity,
+} from "./github-user-identity.oidc.test-support.js";
+import { resolveAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";
+import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import { resolveGatewayConnectProfileAdmission } from "./server/ws-connection/connect-user-profile.js";
+
+function disposableAccessRequest(...args: Parameters<typeof accessRequest>) {
+  const request = accessRequest(...args);
+  return {
+    ...request,
+    [Symbol.dispose]() {
+      request.req.destroy();
+    },
+  };
+}
+
+async function resolveWsProfileAdmission(request: ReturnType<typeof accessRequest>) {
+  const admission = await resolveGatewayConnectProfileAdmission({
+    context: {
+      configSnapshot: request.cfg,
+      handler: {
+        connId: "oidc-profile-admission",
+        logWsControl: createSubsystemLogger("test/oidc-profile-admission"),
+        close: vi.fn(),
+      },
+      markHandshakeFailure: vi.fn(),
+      sendHandshakeErrorResponse: vi.fn(),
+      releasePendingNodePairingCleanup: async () => {},
+    },
+    state: {
+      authResult: request.authResult,
+      authMethod: request.authResult.method,
+      role: "operator",
+    },
+    ownerProfileExpected: false,
+    authenticatedUserId: request.authResult.user,
+    resolveAuthenticatedGitHubIdentity: createAuthenticatedGitHubIdentitySync({
+      authResult: request.authResult,
+      authConfig: request.cfg.gateway?.auth,
+      requestHeaders: request.req.headers,
+    }),
+  });
+  if (!admission.ok) {
+    throw new Error("Expected admitted WebSocket profile");
+  }
+  return admission.prepared?.profile;
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  closeOpenClawStateDatabaseForTest();
+});
+
+describe("Cloudflare Access OIDC profile resolution", () => {
+  it("prefers oidc_fields over custom claims for HTTP and WebSocket profiles and public credit", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+        if (url === `${accessOrigin}/cdn-cgi/access/get-identity`) {
+          return identityResponse({ ...oidcIdentity(), custom: { [accountIdClaim]: "202" } });
+        }
+        expect(url).toBe("https://api.github.com/user/101");
+        return identityResponse({ id: 101, login: "canonical-ada", name: "Ada" });
+      });
+      using request = disposableAccessRequest("ada@example.test", githubCfg);
+      const http = await resolveAuthenticatedHttpUserProfile(request);
+      const profileId = http.authenticatedUserProfile!.profileId;
+      expect(http.operatorRolePolicy?.scopes).toEqual([]);
+      expect(getUserProfileListItem(profileId)).toMatchObject({
+        displayName: "Ada",
+        emails: ["ada@example.test"],
+        githubIdentity: { login: "canonical-ada" },
+      });
+      expect((await resolveUserProfileGitHubAttribution([profileId])).get(profileId)).toEqual({
+        accountId: 101,
+        login: "canonical-ada",
+      });
+      const connected = await resolveWsProfileAdmission(request);
+      expect(connected).toEqual(http.authenticatedUserProfile);
+      expect(transport).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it.each([
+    { field: "custom", verified: false },
+    { field: "custom", verified: true },
+  ] as const)(
+    "preserves email admission during $field lookup failure (verified=$verified)",
+    async ({ field, verified }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = verified
+          ? syncGitHubIdentity({
+              identity: { accountId: 101, login: "ada" },
+              authenticationAlias: { kind: "email", email: "ada@example.test" },
+            })
+          : ensureProfileForEmail("ada@example.test");
+        setUserProfileRole(profile.id, "maintainer");
+        setUserPreferences(profile.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
+        const before = getUserProfileListItem(profile.id);
+        const transport = vi
+          .spyOn(globalThis, "fetch")
+          .mockImplementation(async (url) =>
+            url === `${accessOrigin}/cdn-cgi/access/get-identity`
+              ? identityResponse(oidcIdentity("101", field))
+              : identityResponse({}, verified ? 404 : 503),
+          );
+        using request = disposableAccessRequest("ada@example.test", githubCfg);
+        const http = await resolveAuthenticatedHttpUserProfile(request);
+        expect(http.authenticatedUserProfile?.profileId).toBe(profile.id);
+        expect(http.operatorRolePolicy?.scopes).toEqual(["operator.admin"]);
+        expect(await resolveWsProfileAdmission(request)).toEqual(http.authenticatedUserProfile);
+        expect(getUserProfileListItem(profile.id)).toEqual(before);
+        expect(
+          (await resolveUserProfileGitHubAttribution([profile.id])).get(profile.id),
+        ).toBeNull();
+        expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
+          [GIT_COAUTHOR_PREFERENCE_KEY]: false,
+        });
+
+        setUserProfileRole(profile.id, null);
+        invalidateOperatorRolePolicy(profile.id);
+        expect(
+          (await resolveAuthenticatedHttpUserProfile(request)).operatorRolePolicy?.scopes,
+        ).toEqual([]);
+
+        transport.mockImplementation(async (url) =>
+          identityResponse(
+            url === `${accessOrigin}/cdn-cgi/access/get-identity`
+              ? oidcIdentity("101", field)
+              : { id: 101, login: "canonical-ada" },
+          ),
+        );
+        expect(
+          (await resolveAuthenticatedHttpUserProfile(request)).authenticatedUserProfile?.profileId,
+        ).toBe(profile.id);
+        expect(getUserProfileListItem(profile.id).githubIdentity?.login).toBe("canonical-ada");
+        expect(getUserPreferences(profile.id, [GIT_COAUTHOR_PREFERENCE_KEY])).toEqual({
+          [GIT_COAUTHOR_PREFERENCE_KEY]: false,
+        });
+      });
+    },
+  );
+
+  it.each([
+    { name: "no opt-in", config: cfg },
+    { name: "different issuer", issuer: "https://other.cloudflareaccess.com" },
+    {
+      name: "different provider",
+      identity: { ...oidcIdentity(), idp: { type: "oidc", id: "other" } },
+    },
+    {
+      name: "preferred container without the claim",
+      identity: { ...oidcIdentity(), oidc_fields: {}, custom: { [accountIdClaim]: "101" } },
+    },
+    {
+      name: "null preferred container",
+      identity: { ...oidcIdentity(), oidc_fields: null, custom: { [accountIdClaim]: "101" } },
+    },
+  ])("keeps email-only sign-in with $name", async ({ config, issuer, identity }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const transport = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(identityResponse(identity ?? oidcIdentity()));
+      using request = disposableAccessRequest("ada@example.test", config ?? githubCfg, issuer);
+      const result = await resolveAuthenticatedHttpUserProfile(request);
+      expect(getUserProfileListItem(result.authenticatedUserProfile!.profileId)).toMatchObject({
+        emails: ["ada@example.test"],
+        githubIdentity: null,
+      });
+      expect(transport).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each([101, "01", "9007199254740992"])(
+    "ignores malformed trusted account claim %j without falling back to custom or GitHub lookup",
+    async (claim) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const transport = vi
+          .spyOn(globalThis, "fetch")
+          .mockResolvedValueOnce(
+            identityResponse({ ...oidcIdentity(claim), custom: { [accountIdClaim]: "101" } }),
+          );
+        using request = disposableAccessRequest("ada@example.test", githubCfg);
+        const admitted = await resolveAuthenticatedHttpUserProfile(request);
+        const profileId = admitted.authenticatedUserProfile!.profileId;
+        expect(admitted.operatorRolePolicy?.scopes).toEqual([]);
+        expect(getUserProfileListItem(profileId)).toMatchObject({
+          emails: ["ada@example.test"],
+          githubIdentity: null,
+        });
+        expect((await resolveUserProfileGitHubAttribution([profileId])).get(profileId)).toBeNull();
+        expect(transport).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
+  it.each(["different account", "different profile"])(
+    "rejects a %s conflict without merging profiles or moving the email",
+    async (conflict) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const existing = syncGitHubIdentity({
+          identity: { accountId: conflict === "different account" ? 202 : 101, login: "existing" },
+          authenticationAlias: {
+            kind: "email",
+            email: conflict === "different account" ? "ada@example.test" : "other@example.test",
+          },
+        });
+        const emailProfile = ensureProfileForEmail("ada@example.test");
+        setUserProfileRole(emailProfile.id, "maintainer");
+        const before = [
+          getUserProfileListItem(existing.id),
+          getUserProfileListItem(emailProfile.id),
+        ];
+        const transport = vi.spyOn(globalThis, "fetch");
+        using request = disposableAccessRequest("ada@example.test", githubCfg);
+        for (const status of [503, 200]) {
+          transport
+            .mockResolvedValueOnce(identityResponse(oidcIdentity("101", "custom")))
+            .mockResolvedValueOnce(identityResponse({ id: 101, login: "canonical-ada" }, status));
+          await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toThrow(
+            "users.linkEmail",
+          );
+          expect([
+            getUserProfileListItem(existing.id),
+            getUserProfileListItem(emailProfile.id),
+          ]).toEqual(before);
+        }
+      });
+    },
+  );
+
+  it("requires explicit linking before a new email can use an existing profile's authority", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const maintainer = syncGitHubIdentity({
+        identity: { accountId: 101, login: "canonical-ada" },
+        authenticationAlias: { kind: "email", email: "owner@example.test" },
+      });
+      setUserProfileRole(maintainer.id, "maintainer");
+      setUserPreferences(maintainer.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false });
+      const before = getUserProfileListItem(maintainer.id);
+      const transport = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async (url) =>
+          identityResponse(
+            url === `${accessOrigin}/cdn-cgi/access/get-identity`
+              ? oidcIdentity()
+              : { id: 101, login: "canonical-ada" },
+          ),
+        );
+      using request = disposableAccessRequest("ada@example.test", githubCfg);
+      await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toThrow("users.linkEmail");
+      expect(getUserProfileListItem(maintainer.id)).toEqual(before);
+
+      transport.mockResolvedValueOnce(identityResponse({ ...oidcIdentity(), oidc_fields: {} }));
+      const emailOnly = await resolveAuthenticatedHttpUserProfile(request);
+      expect(emailOnly.authenticatedUserProfile?.profileId).not.toBe(maintainer.id);
+      expect(emailOnly.operatorRolePolicy?.scopes).toEqual([]);
+
+      linkEmail("ada@example.test", maintainer.id);
+      const linked = await resolveAuthenticatedHttpUserProfile(request);
+      expect(linked.authenticatedUserProfile?.profileId).toBe(maintainer.id);
+      expect(linked.operatorRolePolicy?.scopes).toEqual(["operator.admin"]);
+      expect(
+        (await resolveUserProfileGitHubAttribution([maintainer.id])).get(maintainer.id),
+      ).toBeNull();
+
+      setUserProfileRole(maintainer.id, null);
+      invalidateOperatorRolePolicy(maintainer.id);
+      const restricted = await resolveAuthenticatedHttpUserProfile(request);
+      expect(restricted.authenticatedUserProfile?.profileId).toBe(maintainer.id);
+      expect(restricted.operatorRolePolicy?.scopes).toEqual([]);
+
+      transport.mockResolvedValueOnce(identityResponse({}, 401));
+      await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toThrow(
+        "Cloudflare Access identity lookup failed",
+      );
+    });
+  });
+
+  it("reuses an existing email profile and role for HTTP and WebSocket connections", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("ada@example.test");
+      setUserProfileRole(profile.id, "maintainer");
+      const before = getUserProfileListItem(profile.id);
+      const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        identityResponse({
+          id: "oidc-subject-101",
+          email: "ADA@Example.Test",
+          name: "OIDC display name",
+          idp: { type: "oidc" },
+        }),
+      );
+      using request = disposableAccessRequest();
+      const queries = vi.spyOn(DatabaseSync.prototype, "prepare");
+      try {
+        const httpProfile = await resolveAuthenticatedHttpUserProfile(request);
+        expect(httpProfile.authenticatedUserProfile?.profileId).toBe(profile.id);
+        expect(httpProfile.operatorRolePolicy?.scopes).toEqual(["operator.admin"]);
+        const connectedProfile = await resolveWsProfileAdmission(request);
+        expect(connectedProfile).toEqual(httpProfile.authenticatedUserProfile);
+        expect(queries).not.toHaveBeenCalled();
+        queries.mockRestore();
+        expect(getUserProfileListItem(profile.id)).toEqual(before);
+        expect(transport).toHaveBeenCalledTimes(2);
+        expect(
+          transport.mock.calls.every(
+            ([url]) => url === `${accessOrigin}/cdn-cgi/access/get-identity`,
+          ),
+        ).toBe(true);
+      } finally {
+        queries.mockRestore();
+      }
+    });
+  });
+
+  it("gives a new OIDC email its own default-role profile without interpreting its subject as GitHub", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const existing = syncGitHubIdentity({
+        identity: { accountId: 101, login: "ada" },
+        authenticationAlias: { kind: "email", email: "ada@example.test" },
+      });
+      setUserProfileRole(existing.id, "maintainer");
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        identityResponse({
+          id: 101,
+          email: "grace@example.test",
+          idp: { type: "oidc" },
+        }),
+      );
+      using request = disposableAccessRequest("grace@example.test");
+      const result = await resolveAuthenticatedHttpUserProfile(request);
+      const profileId = result.authenticatedUserProfile?.profileId;
+      expect(profileId).toBeTypeOf("string");
+      expect(profileId).not.toBe(existing.id);
+      expect(result.operatorRolePolicy?.scopes).toEqual([]);
+      expect(getUserProfileListItem(profileId!)).toMatchObject({
+        emails: ["grace@example.test"],
+        githubIdentity: null,
+      });
+    });
+  });
+
+  it.each([
+    { name: "missing principal", idp: { type: "oidc" } },
+    { name: "missing provider", email: "ada@example.test" },
+    { name: "unknown provider", email: "ada@example.test", idp: { type: "unknown" } },
+  ])("rejects $name without changing an existing profile", async ({ name: _name, ...identity }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("ada@example.test");
+      setUserProfileRole(profile.id, "maintainer");
+      const before = getUserProfileListItem(profile.id);
+      const changed = vi.fn();
+      const stop = onUserProfilesChanged(changed);
+      const transport = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(identityResponse(identity));
+      using request = disposableAccessRequest();
+      try {
+        await expect(resolveAuthenticatedHttpUserProfile(request)).rejects.toThrow();
+        expect(getUserProfileListItem(profile.id)).toEqual(before);
+        expect(changed).not.toHaveBeenCalled();
+        expect(transport).toHaveBeenCalledOnce();
+      } finally {
+        stop();
+      }
+    });
+  });
+});

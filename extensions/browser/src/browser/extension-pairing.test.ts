@@ -1,4 +1,6 @@
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import fs from "node:fs";
+import path from "node:path";
+import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { buildBrowserExtensionPairing } from "./extension-pairing.js";
@@ -7,6 +9,63 @@ const RELAY_KEY = relayTestKey(5);
 const ensureToken = async () => RELAY_KEY;
 
 describe("buildBrowserExtensionPairing", () => {
+  it("binds native bootstrap to the selected profile instead of the first extension relay", async () => {
+    const cfg = {
+      browser: {
+        defaultProfile: "work",
+        profiles: {
+          first: { driver: "extension" as const, cdpPort: 19441 },
+          work: { driver: "extension" as const, cdpPort: 19442 },
+        },
+      },
+    };
+    const legacy = await buildBrowserExtensionPairing({
+      cfg,
+      localTransport: "gateway",
+      ensureToken,
+    });
+    expect(legacy.relayPort).toBe(19441);
+    expect(new URL(legacy.pairingString).searchParams.has("profile")).toBe(false);
+    const result = await buildBrowserExtensionPairing({
+      cfg,
+      profile: "work",
+      localTransport: "gateway",
+      ensureToken,
+    });
+    expect(result.relayPort).toBe(19442);
+    expect(new URL(result.pairingString).searchParams.get("profile")).toBe("work");
+    await expect(
+      buildBrowserExtensionPairing({ cfg, profile: "missing", ensureToken }),
+    ).rejects.toThrow("existing extension profile");
+  });
+
+  it("pairs with the first writer's key when its file is already open but empty", async () => {
+    await withTempDir("openclaw-pairing-", async (dir) => {
+      const stateDir = fs.realpathSync(dir);
+      const credentials = path.join(stateDir, "credentials");
+      fs.mkdirSync(credentials, { mode: 0o700 });
+      const secretPath = path.join(credentials, "browser-extension-relay.secret");
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_OAUTH_DIR: credentials },
+        async () => {
+          const fd = fs.openSync(secretPath, "wx", 0o600);
+          try {
+            const before = fs.fstatSync(fd);
+            const pairing = buildBrowserExtensionPairing({ cfg: {}, localTransport: "gateway" });
+            fs.writeFileSync(fd, `${RELAY_KEY}\n`);
+            const result = await pairing;
+            expect(new URL(result.pairingString).hash).toBe(`#${RELAY_KEY}`);
+            expect(result.topology).toBe("local");
+            expect(fs.readFileSync(secretPath, "utf8")).toBe(`${RELAY_KEY}\n`);
+            expect(fs.statSync(secretPath)).toMatchObject({ dev: before.dev, ino: before.ino });
+          } finally {
+            fs.closeSync(fd);
+          }
+        },
+      );
+    });
+  });
+
   it("preserves the standalone host relay for local manual pairing compatibility", async () => {
     await withEnvAsync({ OPENCLAW_GATEWAY_PORT: undefined }, async () => {
       await expect(

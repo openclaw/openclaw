@@ -51,16 +51,17 @@ describe("plugin install record maps", () => {
     ).toBeNull();
   });
 
-  it.each(["constructor", "toString", "__proto__"])(
-    "rejects an invalid %s record atomically",
-    (pluginId) => {
-      const records = createPluginInstallRecordMap<unknown>();
-      setPluginInstallRecordMapEntry(records, "valid", { source: "npm" });
-      setPluginInstallRecordMapEntry(records, pluginId, { source: "bogus" });
-
-      expect(parsePluginInstallRecordMap(records)).toBeNull();
-    },
-  );
+  it("rejects malformed accepted capability surfaces", () => {
+    expect(
+      parsePluginInstallRecordMap({
+        demo: {
+          source: "npm",
+          acceptedSurface: { tools: ["read"] },
+          acceptedSurfaceHash: "claimed-hash",
+        },
+      }),
+    ).toBeNull();
+  });
 
   it("preserves prototype-named plugin ids as inert own properties", () => {
     const records = parsePluginInstallRecordMap(

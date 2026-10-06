@@ -5,11 +5,40 @@ import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
-import type { CronDelivery, CronJob, CronJobPatch } from "../types.js";
+import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
+import { isSystemOwnedCronPayloadKind, type CronJob, type CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
+import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
+import type { CronServiceState } from "./state.js";
+
+export async function resolveConfiguredChannelsForValidation(
+  state: CronServiceState,
+): Promise<readonly string[] | undefined> {
+  try {
+    return await state.deps.listConfiguredChannels?.();
+  } catch {
+    // Channel discovery is advisory at mutation time. Runtime delivery remains
+    // authoritative, so discovery failures must not create false rejections.
+    state.deps.log.debug({}, "cron: configured channel validation skipped");
+    return undefined;
+  }
+}
+
+function assertCronScriptSyntax(script: string, subject: "script payload" | "trigger script") {
+  if (!script.trim()) {
+    throw new Error(`cron ${subject} must not be empty`);
+  }
+  const parsed = parseCodeModeScriptSyntax(script);
+  if (!parsed.ok) {
+    throw new Error(
+      `cron ${subject} has a syntax error: ${parsed.message} (line ${parsed.line}, column ${parsed.column})`,
+    );
+  }
+}
 
 /** Validates that session target and payload kind form a supported cron job shape. */
 export function assertSupportedJobSpec(
@@ -31,7 +60,7 @@ export function assertSupportedJobSpec(
     job.sessionTarget === "main" &&
     job.payload.kind !== "systemEvent" &&
     job.payload.kind !== "script" &&
-    job.payload.kind !== "heartbeat"
+    !isSystemOwnedCronPayloadKind(job.payload.kind)
   ) {
     throw new Error('main cron jobs require payload.kind="systemEvent" or "script"');
   }
@@ -61,38 +90,34 @@ export function assertScriptPayloadSupport(
   if (job.payload.kind !== "script") {
     return;
   }
-  if (!job.payload.script.trim()) {
-    throw new Error("cron script payload must not be empty");
-  }
   if (opts?.validateSyntax !== false) {
-    const parsed = parseCodeModeScriptSyntax(job.payload.script);
-    if (!parsed.ok) {
-      throw new Error(
-        `cron script payload has a syntax error: ${parsed.message} (line ${parsed.line}, column ${parsed.column})`,
-      );
-    }
+    assertCronScriptSyntax(job.payload.script, "script payload");
+  } else if (!job.payload.script.trim()) {
+    throw new Error("cron script payload must not be empty");
   }
   if (job.trigger) {
     // Both script kinds expose trigger.state, so composing them would give one
     // persisted state slot two owners and make the next trigger run ambiguous.
     throw new Error("cron script payloads cannot be combined with a condition trigger");
   }
-  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
     throw new Error(
-      "cron script payloads are disabled; set cron.triggers.enabled=true to allow unattended scripts",
+      "cron script payloads are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true to allow unattended scripts",
     );
   }
 }
 
 export function assertTriggerSupport(
   job: Pick<CronJob, "schedule" | "trigger">,
-  opts?: { cronConfig?: CronConfig; requireEnabled?: boolean },
+  opts?: { cronConfig?: CronConfig; validateAuthoredTrigger?: boolean },
 ) {
   if (!job.trigger) {
     return;
   }
-  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
-    throw new Error("cron triggers are disabled; set cron.triggers.enabled=true");
+  if (opts?.validateAuthoredTrigger && opts.cronConfig?.triggers?.enabled === false) {
+    throw new Error(
+      "cron triggers are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+    );
   }
   if (
     job.schedule.kind !== "every" &&
@@ -104,6 +129,9 @@ export function assertTriggerSupport(
   const minIntervalMs = resolveCronTriggerMinIntervalMs();
   if (job.schedule.kind === "every" && job.schedule.everyMs < minIntervalMs) {
     throw new Error(`cron trigger every interval must be at least ${minIntervalMs}ms`);
+  }
+  if (opts?.validateAuthoredTrigger) {
+    assertCronScriptSyntax(job.trigger.script, "trigger script");
   }
 }
 
@@ -124,8 +152,10 @@ export function assertStreamScheduleSupport(
   if (job.schedule.kind !== "stream") {
     return;
   }
-  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled !== true) {
-    throw new Error("cron stream schedules are disabled; set cron.triggers.enabled=true");
+  if (opts?.requireEnabled && opts.cronConfig?.triggers?.enabled === false) {
+    throw new Error(
+      "cron stream schedules are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+    );
   }
   const { command, mode = "line", match } = job.schedule;
   if (
@@ -154,11 +184,7 @@ export function assertStreamScheduleSupport(
   }
 }
 
-export function assertTimeScheduleSatisfiable(
-  job: CronJob,
-  nowMs: number,
-  computeJobNextRunAtMs: (job: CronJob, nowMs: number) => number | undefined,
-) {
+export function assertTimeScheduleSatisfiable(job: CronJob, nowMs: number) {
   if (job.schedule.kind === "at") {
     if (parseAbsoluteTimeMs(job.schedule.at) === null) {
       throw new Error("cron at schedule must contain a Date-valid absolute timestamp");
@@ -180,19 +206,30 @@ export function assertTimeScheduleSatisfiable(
 }
 
 export function assertMainSessionAgentId(
-  job: Pick<CronJob, "sessionTarget" | "agentId" | "payload">,
+  job: CronJob,
   defaultAgentId: string | undefined,
+  patch?: CronJobPatch,
 ) {
+  // A changed default must not strand stored jobs. Revalidate newly authored bindings and kinds.
+  if (
+    patch &&
+    !("agentId" in patch) &&
+    !("sessionTarget" in patch) &&
+    patch.payload?.kind === undefined
+  ) {
+    return;
+  }
   if (job.sessionTarget !== "main") {
     return;
   }
   if (!job.agentId) {
     return;
   }
-  // Script payloads run no agent turn; heartbeat monitors only poke the wake
-  // bus and the heartbeat runner resolves the owning agent's main session
-  // itself, so both are valid for non-default agents.
-  if (job.payload.kind === "script" || job.payload.kind === "heartbeat") {
+  if (
+    job.payload.kind === "script" ||
+    isSystemOwnedCronPayloadKind(job.payload.kind) ||
+    isHeartbeatTaskCronJob(job)
+  ) {
     return;
   }
   const normalized = normalizeAgentId(job.agentId);
@@ -205,6 +242,7 @@ export function assertMainSessionAgentId(
 }
 
 export function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+  assertCanonicalCronDeliveryMode(job.delivery);
   if (!job.delivery) {
     return;
   }
@@ -290,24 +328,15 @@ export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean
   );
 }
 
-export function hasConcreteFailureDestination(
-  destination: CronDelivery["failureDestination"] | undefined,
-): boolean {
-  return Boolean(
-    destination &&
-    (destination.channel !== undefined ||
-      destination.to !== undefined ||
-      destination.accountId !== undefined ||
-      destination.mode !== undefined),
-  );
-}
-
 export function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
   const failureDestination = job.delivery?.failureDestination;
-  if (!failureDestination) {
-    return;
-  }
-  if (!hasConcreteFailureDestination(failureDestination)) {
+  if (
+    !failureDestination ||
+    (failureDestination.channel === undefined &&
+      failureDestination.to === undefined &&
+      failureDestination.accountId === undefined &&
+      failureDestination.mode === undefined)
+  ) {
     return;
   }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {

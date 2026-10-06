@@ -1,6 +1,11 @@
+import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   classifyPrivateMessageToolFinal,
@@ -28,6 +33,7 @@ type StrandedReplyRecovery =
 /** Resolve the one allowed recovery action for a final that missed source delivery. */
 export function resolveStrandedReplyRecovery(params: {
   base: FollowupRun;
+  payloads: readonly ReplyPayload[];
   finalText: string;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   sendPolicyDenied: boolean;
@@ -35,7 +41,15 @@ export function resolveStrandedReplyRecovery(params: {
   isHeartbeat: boolean;
   isRoomEvent: boolean;
 }): StrandedReplyRecovery {
-  if (!shouldClassifyPrivateMessageToolFinal(params)) {
+  // Host-owned payloads can still be awaiting transport when completion bookkeeping runs.
+  if (
+    !shouldClassifyPrivateMessageToolFinal(params) ||
+    params.payloads.some(
+      (payload) =>
+        isReplyPayloadTerminalContent(payload) &&
+        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+    )
+  ) {
     return { kind: "none" };
   }
   const classification = classifyPrivateMessageToolFinal(params);
@@ -82,6 +96,7 @@ function buildStrandedReplyRetryFollowupRun(
     summaryLine: STRANDED_REPLY_RETRY_MARKER,
     strandedReplyRetry: true,
     disableCollectBatching: true,
+    toolsAllow: isRuntimeToolAllowed("message", base.toolsAllow) ? ["message"] : [],
     transcriptPrompt: undefined,
     userTurnTranscriptRecorder: undefined,
     currentInboundContext: undefined,
@@ -90,6 +105,7 @@ function buildStrandedReplyRetryFollowupRun(
     // WeakSet-tracked, so a shared object would be double-owned and free cancel
     // while the retry still runs.
     turnAdoptionLifecycle: undefined,
+    replyOperationRunStates: undefined,
     run: {
       ...base.run,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

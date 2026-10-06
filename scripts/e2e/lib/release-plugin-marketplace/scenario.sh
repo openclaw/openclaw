@@ -31,7 +31,7 @@ dump_debug_logs() {
     /tmp/openclaw-release-plugin-marketplace-uninstall.log \
     /tmp/openclaw-release-plugin-marketplace-cli-after-uninstall.log
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 openclaw_e2e_install_package /tmp/openclaw-release-plugin-marketplace-install.log
 command -v openclaw >/dev/null
@@ -78,7 +78,7 @@ node scripts/e2e/lib/release-scenarios/write-marketplace.mjs \
 openclaw plugins marketplace list release-fixtures --json >/tmp/openclaw-release-plugin-marketplace-list.json
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-plugin-marketplace-list.json release-marketplace-plugin
 
-openclaw plugins install release-marketplace-plugin@release-fixtures --force >/tmp/openclaw-release-plugin-marketplace-install-plugin.log 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install release-marketplace-plugin@release-fixtures --force >/tmp/openclaw-release-plugin-marketplace-install-plugin.log 2>&1
 node "$marketplace_assertions" \
   assert-marketplace-state \
   release-marketplace-plugin \
@@ -111,7 +111,7 @@ node "$marketplace_assertions" \
   "$install_path_file"
 openclaw release-market ping >/tmp/openclaw-release-plugin-marketplace-cli-after-dry-run.log 2>&1
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-plugin-marketplace-cli-after-dry-run.log "release-marketplace-plugin:v1"
-openclaw plugins update release-marketplace-plugin >/tmp/openclaw-release-plugin-marketplace-update.log 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins update release-marketplace-plugin >/tmp/openclaw-release-plugin-marketplace-update.log 2>&1
 node "$marketplace_assertions" \
   assert-update-log \
   /tmp/openclaw-release-plugin-marketplace-update.log \
@@ -138,7 +138,7 @@ openclaw plugins uninstall release-marketplace-plugin --force >/tmp/openclaw-rel
 node "$marketplace_assertions" \
   assert-update-log \
   /tmp/openclaw-release-plugin-marketplace-uninstall.log \
-  "Removed: config entry, install record, allowlist entry, denylist entry, load path, directory."
+  "Removed: plugin settings, install record, allowlist entry, denylist entry, load path, directory."
 if openclaw release-market ping >/tmp/openclaw-release-plugin-marketplace-cli-after-uninstall.log 2>&1; then
   echo "release-market CLI should be gone after uninstall" >&2
   exit 1

@@ -1,18 +1,15 @@
-// Voice Call plugin module implements tunnel behavior.
-import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { spawn, type ChildProcess } from "node:child_process";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { formatBoundedChildOutput } from "./bounded-child-output.js";
+import type { VoiceCallStreamExposurePath } from "./config.js";
 import {
-  appendBoundedChildOutput,
-  emptyBoundedChildOutput,
-  formatBoundedChildOutput,
-} from "./bounded-child-output.js";
-import { getTailscaleDnsName } from "./webhook/tailscale.js";
+  cleanupTailscaleExposureRoute,
+  setupTailscaleExposureRoutes,
+} from "./webhook/tailscale.js";
 
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
 const NGROK_ERROR_MARKER = "ERR_NGROK";
 const NGROK_STDERR_TAIL_MAX_CHARS = NGROK_ERROR_MARKER.length - 1;
-const TUNNEL_COMMAND_OUTPUT_MAX_BYTES = 16_384;
 const NGROK_STOP_GRACE_MS = 2_000;
 const NGROK_FORCE_KILL_WAIT_MS = 1_000;
 
@@ -57,35 +54,22 @@ async function terminateNgrokProcess(
   });
 }
 
-function listenForChildStreamErrors(
-  proc: Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr">,
-  onError: (stream: "stdout" | "stderr", error: Error) => void,
-): void {
-  // Keep both listeners for the child lifetime: a late unhandled stream error
-  // would otherwise escape after the startup promise has already settled.
-  proc.stdout.on("error", (error) => onError("stdout", error));
-  proc.stderr.on("error", (error) => onError("stderr", error));
-}
-
-/**
- * Tunnel configuration for exposing the webhook server.
- */
 interface TunnelConfig {
-  /** Tunnel provider: ngrok, tailscale-serve, or tailscale-funnel */
   provider: "ngrok" | "tailscale-serve" | "tailscale-funnel" | "none";
   /** Local port to tunnel */
   port: number;
+  /** External HTTPS port used by Tailscale providers */
+  tailscalePort?: number;
   /** Path prefix for the tunnel (e.g., /voice/webhook) */
   path: string;
+  /** Additional public-to-local WebSocket paths exposed by Tailscale */
+  streamPaths?: VoiceCallStreamExposurePath[];
   /** ngrok auth token (optional, enables longer sessions) */
   ngrokAuthToken?: string;
   /** ngrok custom domain (paid feature) */
   ngrokDomain?: string;
 }
 
-/**
- * Result of starting a tunnel.
- */
 export interface TunnelResult {
   /** The public URL */
   publicUrl: string;
@@ -95,45 +79,26 @@ export interface TunnelResult {
   provider: string;
 }
 
-/**
- * Start an ngrok tunnel to expose the local webhook server.
- *
- * Uses the ngrok CLI which must be installed: https://ngrok.com/download
- *
- * @example
- * const tunnel = await startNgrokTunnel({ port: 3334, path: '/voice/webhook' });
- * console.log('Public URL:', tunnel.publicUrl);
- * // Later: await tunnel.stop();
- */
-async function startNgrokTunnel(config: {
-  port: number;
-  path: string;
-  authToken?: string;
-  domain?: string;
-}): Promise<TunnelResult> {
-  // Set auth token if provided
-  if (config.authToken) {
-    await runNgrokCommand(["config", "add-authtoken", config.authToken]);
-  }
-
-  // Build ngrok command args
+/** Start an ngrok CLI tunnel and retain its child until the tunnel is stopped. */
+async function startNgrokTunnel(config: TunnelConfig): Promise<TunnelResult> {
   const args = ["http", String(config.port), "--log", "stdout", "--log-format", "json"];
 
-  // Add custom domain if provided (paid ngrok feature)
-  if (config.domain) {
-    args.push("--domain", config.domain);
+  if (config.ngrokDomain) {
+    args.push("--domain", config.ngrokDomain);
   }
 
   return new Promise((resolve, reject) => {
     const proc = spawn("ngrok", args, {
       stdio: ["ignore", "pipe", "pipe"],
+      ...(config.ngrokAuthToken
+        ? { env: { ...process.env, NGROK_AUTHTOKEN: config.ngrokAuthToken } }
+        : {}),
     });
 
     // Startup settlement and OS process closure are separate: the deadline can
     // win before the child has been reaped.
     let startupSettled = false;
     let childClosed = false;
-    let publicUrl: string | null = null;
     let outputBuffer = "";
     // Keep only enough UTF-16-safe suffix to recognize an error marker split
     // at the next stream chunk boundary; otherwise the caller loses the code.
@@ -165,34 +130,18 @@ async function startNgrokTunnel(config: {
       try {
         const log = JSON.parse(line);
 
-        // ngrok logs the public URL in a 'started tunnel' message
-        if (log.msg === "started tunnel" && log.url) {
-          publicUrl = log.url;
+        if (startupSettled || !log.url || (log.msg !== "started tunnel" && !log.addr)) {
+          return;
         }
-
-        // Also check for the URL field directly
-        if (log.addr && log.url && !publicUrl) {
-          publicUrl = log.url;
-        }
-
-        // Check for ready state
-        if (publicUrl && !startupSettled) {
-          startupSettled = true;
-          clearTimeout(timeout);
-
-          // Add path to the public URL
-          const fullUrl = publicUrl + config.path;
-
-          console.log(`[voice-call] ngrok tunnel active: ${fullUrl}`);
-
-          resolve({
-            publicUrl: fullUrl,
-            provider: "ngrok",
-            stop: async () => {
-              await terminateNgrokProcess(proc, () => childClosed);
-            },
-          });
-        }
+        startupSettled = true;
+        clearTimeout(timeout);
+        const publicUrl = log.url + config.path;
+        console.log(`[voice-call] ngrok tunnel active: ${publicUrl}`);
+        resolve({
+          publicUrl,
+          provider: "ngrok",
+          stop: () => terminateNgrokProcess(proc, () => childClosed),
+        });
       } catch {
         // Not JSON, might be startup message
       }
@@ -206,8 +155,7 @@ async function startNgrokTunnel(config: {
       const lines = (outputBuffer + chunk).split("\n");
       outputBuffer = lines.pop() || "";
       if (outputBuffer.length > NGROK_LOG_BUFFER_MAX_CHARS) {
-        // Same UTF-16 contract as appendBoundedChildOutput: do not leave a lone
-        // surrogate when an incomplete ngrok log line is trimmed to the ring cap.
+        // Keep incomplete ngrok log lines bounded without leaving a lone surrogate.
         outputBuffer = sliceUtf16Safe(outputBuffer, -NGROK_LOG_BUFFER_MAX_CHARS);
       }
 
@@ -220,18 +168,16 @@ async function startNgrokTunnel(config: {
     proc.stderr.on("data", (chunk: string) => {
       const combined = stderrTail + chunk;
       if (combined.includes(NGROK_ERROR_MARKER)) {
-        rejectIfPending(
-          `ngrok error: ${formatBoundedChildOutput(
-            appendBoundedChildOutput(emptyBoundedChildOutput(), combined),
-          )}`,
-          true,
-        );
+        rejectIfPending(`ngrok error: ${formatBoundedChildOutput(combined)}`, true);
       }
       stderrTail = sliceUtf16Safe(combined, -NGROK_STDERR_TAIL_MAX_CHARS);
     });
-    listenForChildStreamErrors(proc, (stream, error) => {
-      rejectIfPending(`ngrok ${stream} error: ${error.message}`, true);
-    });
+    // Keep stream error listeners after startup so late failures remain handled.
+    for (const stream of ["stdout", "stderr"] as const) {
+      proc[stream].on("error", (error) => {
+        rejectIfPending(`ngrok ${stream} error: ${error.message}`, true);
+      });
+    }
 
     proc.on("error", (err) => {
       rejectIfPending(`Failed to start ngrok: ${err.message}`);
@@ -239,123 +185,54 @@ async function startNgrokTunnel(config: {
 
     proc.on("close", (code) => {
       childClosed = true;
-      if (!startupSettled) {
-        startupSettled = true;
-        clearTimeout(timeout);
-        reject(new Error(`ngrok exited unexpectedly with code ${code}`));
-      }
+      rejectIfPending(`ngrok exited unexpectedly with code ${code}`);
     });
   });
 }
 
-/**
- * Run an ngrok command and wait for completion.
- */
-async function runNgrokCommand(args: string[]): Promise<string> {
-  const result = await runCommandWithTimeout(["ngrok", ...args], {
-    killProcessTree: true,
-    maxOutputBytes: TUNNEL_COMMAND_OUTPUT_MAX_BYTES,
-    outputCapture: "tail",
-    timeoutMs: 30_000,
-  });
-  if (result.termination === "timeout") {
-    throw new Error("ngrok command timed out");
-  }
-  if (result.code === 0) {
-    return result.stdout;
-  }
-  const output = result.stderr
-    ? { text: result.stderr, truncated: Boolean(result.stderrTruncatedBytes) }
-    : { text: result.stdout, truncated: Boolean(result.stdoutTruncatedBytes) };
-  throw new Error(`ngrok command failed: ${formatBoundedChildOutput(output)}`);
-}
-
-/**
- * Start a Tailscale serve/funnel tunnel.
- */
-async function startTailscaleTunnel(config: {
-  mode: "serve" | "funnel";
-  port: number;
-  path: string;
-}): Promise<TunnelResult> {
-  // Get Tailscale DNS name
-  const dnsName = await getTailscaleDnsName();
-  if (!dnsName) {
-    throw new Error("Could not get Tailscale DNS name. Is Tailscale running?");
-  }
-
-  const path = config.path.startsWith("/") ? config.path : `/${config.path}`;
-  const localUrl = `http://127.0.0.1:${config.port}${path}`;
-
-  const result = await runCommandWithTimeout(
-    ["tailscale", config.mode, "--bg", "--yes", "--set-path", path, localUrl],
-    {
-      killProcessTree: true,
-      maxOutputBytes: TUNNEL_COMMAND_OUTPUT_MAX_BYTES,
-      outputCapture: "tail",
-      timeoutMs: 10_000,
-    },
-  );
-  if (result.termination === "timeout") {
-    throw new Error(`Tailscale ${config.mode} timed out`);
-  }
-  if (result.code !== 0) {
-    const output = result.stderr
-      ? { text: result.stderr, truncated: Boolean(result.stderrTruncatedBytes) }
-      : { text: result.stdout, truncated: Boolean(result.stdoutTruncatedBytes) };
-    const detail = output.text ? `: ${formatBoundedChildOutput(output)}` : "";
-    throw new Error(`Tailscale ${config.mode} failed with code ${result.code}${detail}`);
-  }
-  const publicUrl = `https://${dnsName}${path}`;
-  console.log(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
-
-  return {
-    publicUrl,
-    provider: `tailscale-${config.mode}`,
-    stop: async () => {
-      await stopTailscaleTunnel(config.mode, path);
-    },
-  };
-}
-
-/**
- * Stop a Tailscale serve/funnel tunnel.
- */
-async function stopTailscaleTunnel(mode: "serve" | "funnel", path: string): Promise<void> {
-  await runCommandWithTimeout(["tailscale", mode, "off", path], {
-    killProcessTree: true,
-    maxOutputBytes: 1,
-    timeoutMs: 5_000,
-  }).catch(() => {});
-}
-
-/**
- * Start a tunnel based on configuration.
- */
 export async function startTunnel(config: TunnelConfig): Promise<TunnelResult | null> {
   switch (config.provider) {
     case "ngrok":
-      return startNgrokTunnel({
-        port: config.port,
-        path: config.path,
-        authToken: config.ngrokAuthToken,
-        domain: config.ngrokDomain,
-      });
-
+      return startNgrokTunnel(config);
     case "tailscale-serve":
-      return startTailscaleTunnel({
-        mode: "serve",
-        port: config.port,
-        path: config.path,
+    case "tailscale-funnel": {
+      const mode = config.provider === "tailscale-serve" ? "serve" : "funnel";
+      const tailscalePort = config.tailscalePort ?? 443;
+      const exposurePaths: VoiceCallStreamExposurePath[] = [
+        { publicPath: config.path, localPath: config.path },
+        ...(config.streamPaths ?? []),
+      ];
+      const routes = exposurePaths.map(({ publicPath, localPath }) => {
+        const normalizedPublicPath = publicPath.startsWith("/") ? publicPath : `/${publicPath}`;
+        const normalizedLocalPath = localPath.startsWith("/") ? localPath : `/${localPath}`;
+        return {
+          path: normalizedPublicPath,
+          localUrl: `http://127.0.0.1:${config.port}${normalizedLocalPath}`,
+        };
       });
-
-    case "tailscale-funnel":
-      return startTailscaleTunnel({
-        mode: "funnel",
-        port: config.port,
-        path: config.path,
+      const publicUrl = await setupTailscaleExposureRoutes({
+        mode,
+        port: tailscalePort,
+        routes,
       });
+      if (!publicUrl) {
+        throw new Error(`Tailscale ${mode} failed`);
+      }
 
+      return {
+        publicUrl,
+        provider: `tailscale-${mode}`,
+        stop: async () => {
+          for (const route of routes) {
+            await cleanupTailscaleExposureRoute({
+              mode,
+              port: tailscalePort,
+              path: route.path,
+            });
+          }
+        },
+      };
+    }
     default:
       return null;
   }

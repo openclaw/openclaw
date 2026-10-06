@@ -16,8 +16,7 @@ describe("buildPlatformRuntimeLogHints", () => {
         windowsTaskName: "OpenClaw Gateway",
       }),
     ).toEqual([
-      "Launchd stdout (if installed): /Users/test/Library/Logs/openclaw/gateway.log",
-      "Launchd stderr (if installed): suppressed",
+      "Launchd stdout and stderr (if installed): /Users/test/Library/Logs/openclaw/gateway.log",
       "Restart attempts: /tmp/openclaw-state/logs/gateway-restart.log",
     ]);
   });
@@ -57,7 +56,7 @@ describe("buildPlatformServiceStartHints", () => {
     expect(
       buildPlatformServiceStartHints({
         platform: "darwin",
-        installCommand: "openclaw gateway install",
+        installHint: "openclaw gateway install",
         startCommand: "openclaw gateway",
         launchAgentPlistPath: "~/Library/LaunchAgents/com.openclaw.gateway.plist",
         systemdServiceName: "openclaw-gateway",
@@ -71,7 +70,7 @@ describe("buildPlatformServiceStartHints", () => {
     expect(
       buildPlatformServiceStartHints({
         platform: "linux",
-        installCommand: "openclaw gateway install",
+        installHint: "openclaw gateway install",
         startCommand: "openclaw gateway",
         launchAgentPlistPath: "~/Library/LaunchAgents/com.openclaw.gateway.plist",
         systemdServiceName: "openclaw-gateway",

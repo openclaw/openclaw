@@ -1,8 +1,8 @@
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
+  canonicalizeBase64,
   normalizeRealtimeVoiceResponseOutcome,
   type RealtimeVoiceSessionConnection,
-} from "openclaw/plugin-sdk/realtime-voice";
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
@@ -14,16 +14,66 @@ import { XaiRealtimeVoiceProtocol } from "./realtime-voice-protocol.js";
 
 export class XaiRealtimeMalformedAudioError extends Error {}
 
+// Quiet period before committing input that was recognized after its response settled.
+const XAI_REALTIME_INPUT_SETTLE_MS = 1_500;
+
 export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   private assistantTranscriptBuffer = "";
   private assistantTranscriptFinalized = false;
+  private pendingInputTranscript: { key: string; text: string } | undefined;
+  private finalizedInputTranscriptKeys = new Set<string>();
+  private inputSpeechSequence = 0;
+  private inputResponseStarted = false;
+  private inputResponseFinished = false;
+  private outputResponse: { id?: string; ended: boolean } | undefined;
   private finalizedToolCallItems = new Set<string>();
   private inputTranscriptReplacements = new Map<string, string>();
+  private inputSettleTimer: ReturnType<typeof setTimeout> | undefined;
 
   protected abstract acceptsEvent(connection: RealtimeVoiceSessionConnection): boolean;
   protected abstract onSessionUpdated(connection: RealtimeVoiceSessionConnection): void;
 
   protected handleEvent(event: XaiRealtimeEvent, connection: RealtimeVoiceSessionConnection): void {
+    const responseId = event.response_id ?? event.response?.id;
+    // A terminal retires all output from that response. Fence late deltas and
+    // duplicate terminals before they reach the relay or mutate the next response.
+    if (
+      event.type.startsWith("response.") &&
+      event.type !== "response.created" &&
+      this.outputResponse &&
+      (this.outputResponse.ended ||
+        (responseId && this.outputResponse.id && responseId !== this.outputResponse.id))
+    ) {
+      return;
+    }
+    if (event.type === "response.created" && this.acceptsEvent(connection)) {
+      // Publish the response owner before observers can interrupt its first PCM.
+      this.inputResponseStarted = true;
+      this.inputResponseFinished = false;
+      // Cancellation before response.created belongs to that pending response.
+      // Only an identified successor can retire an older live response's fence.
+      if (
+        this.outputResponse &&
+        !this.outputResponse.ended &&
+        responseId &&
+        this.outputResponse.id &&
+        responseId !== this.outputResponse.id
+      ) {
+        this.responseCancelInFlight = false;
+      }
+      this.outputResponse = { id: responseId, ended: false };
+      // The fence drops a retired response's late terminal, including its buffer
+      // cleanup, so the successor must not inherit the predecessor's tool calls.
+      this.toolCallBuffers.clear();
+      this.finalizedToolCallItems.clear();
+      this.outputAudioGeneration += 1;
+      this.responseActive = true;
+      this.responseCreateInFlight = false;
+      this.markQueue = [];
+      this.assistantAudioItem = null;
+      this.resetAssistantTranscript();
+    }
+    const audioGeneration = this.outputAudioGeneration;
     const bridgeEvent = {
       direction: "server",
       type: event.type,
@@ -68,17 +118,13 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
       case "session.updated":
         this.onSessionUpdated(connection);
         return;
-      case "response.created":
-        this.responseActive = true;
-        this.responseCreateInFlight = false;
-        this.markQueue = [];
-        this.lastAssistantItemId = null;
-        this.responseStartTimestamp = null;
-        this.resetAssistantTranscript();
-        return;
       case "response.output_audio.delta": {
         const audioDelta = event.delta ?? event.data;
-        if (!audioDelta) {
+        if (
+          !audioDelta ||
+          this.responseCancelInFlight ||
+          audioGeneration !== this.outputAudioGeneration
+        ) {
           return;
         }
         const canonicalAudio = canonicalizeBase64(audioDelta);
@@ -87,17 +133,33 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
             "xAI realtime voice stream returned malformed base64 audio data",
           );
         }
-        this.emitAudioWithPlaybackMark(Buffer.from(canonicalAudio, "base64"));
-        if (event.item_id && event.item_id !== this.lastAssistantItemId) {
-          this.lastAssistantItemId = event.item_id;
-          this.responseStartTimestamp = this.latestMediaTimestamp;
-        } else if (this.responseStartTimestamp === null) {
-          this.responseStartTimestamp = this.latestMediaTimestamp;
+        const audio = Buffer.from(canonicalAudio, "base64");
+        if (event.item_id && event.item_id !== this.assistantAudioItem?.itemId) {
+          this.assistantAudioItem = {
+            itemId: event.item_id,
+            bytes: audio.byteLength,
+            startTimestamp: this.latestMediaTimestamp,
+          };
+        } else if (this.assistantAudioItem) {
+          this.assistantAudioItem.bytes += audio.byteLength;
         }
         this.responseActive = true;
+        const markName = this.createPlaybackMark();
+        this.config.onAudio(audio, event.item_id ? { itemId: event.item_id } : undefined);
+        if (audioGeneration === this.outputAudioGeneration && this.acceptsEvent(connection)) {
+          this.config.onMark?.(markName, () => {
+            if (this.acceptsEvent(connection)) {
+              this.acknowledgeMark(markName);
+            }
+          });
+        }
         return;
       }
       case "input_audio_buffer.speech_started":
+        this.flushPendingInputTranscript();
+        this.inputSpeechSequence += 1;
+        this.inputResponseStarted = false;
+        this.inputResponseFinished = false;
         this.handleServerVadBargeIn();
         return;
       case "response.text.delta":
@@ -110,6 +172,12 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
       case "response.text.done":
       case "response.output_text.done":
       case "response.output_audio_transcript.done":
+        if (this.isCurrentInputResponse(event)) {
+          this.flushPendingInputTranscript();
+          if (!this.acceptsEvent(connection)) {
+            return;
+          }
+        }
         this.flushAssistantTranscript(event.transcript ?? event.text);
         return;
       case "conversation.item.input_audio_transcription.delta":
@@ -126,17 +194,45 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         const key = this.inputTranscriptKey(event);
         const transcript = event.transcript ?? this.inputTranscriptReplacements.get(key);
         this.inputTranscriptReplacements.delete(key);
-        if (transcript) {
-          this.config.onTranscript?.("user", transcript, true);
+        if (!transcript || this.finalizedInputTranscriptKeys.has(key)) {
+          return;
+        }
+        if (this.pendingInputTranscript && this.pendingInputTranscript.key !== key) {
+          this.flushPendingInputTranscript();
+          if (!this.acceptsEvent(connection)) {
+            return;
+          }
+        }
+        this.pendingInputTranscript = { key, text: transcript };
+        // xAI's completed events are cumulative snapshots, not utterance boundaries.
+        // Preview immediately; commit once the response settles, so later corrections
+        // cannot either duplicate the user message or truncate it permanently.
+        this.config.onTranscript?.("user", transcript, false, { textMode: "snapshot" });
+        if (this.inputResponseFinished) {
+          // Recognition landed after the response settled; xAI may still revise
+          // this item, so commit it after a quiet period rather than at once.
+          this.armInputSettleTimer();
         }
         return;
       }
-      case "conversation.item.input_audio_transcription.failed":
-        this.inputTranscriptReplacements.delete(this.inputTranscriptKey(event));
+      case "conversation.item.input_audio_transcription.failed": {
+        const key = this.inputTranscriptKey(event);
+        if (this.pendingInputTranscript?.key === key) {
+          this.pendingInputTranscript = undefined;
+        }
+        this.inputTranscriptReplacements.delete(key);
         this.config.onError?.(new Error(readXaiRealtimeErrorDetail(event.error)));
         return;
+      }
       case "response.done": {
-        const status = event.response?.status;
+        // A trailing terminal from an interrupted response must not settle new speech.
+        if (this.isCurrentInputResponse(event)) {
+          this.inputResponseFinished = true;
+          this.flushPendingInputTranscript();
+          if (!this.acceptsEvent(connection)) {
+            return;
+          }
+        }
         const output = Array.isArray(event.response?.output)
           ? event.response.output.filter(isRecord)
           : [];
@@ -145,6 +241,12 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           response: event.response,
           responseId: event.response_id,
         });
+        // Non-completed responses discard their output. Retire those marks without
+        // claiming playback so they cannot block the next response indefinitely.
+        if (outcome.status !== "completed") {
+          this.markQueue = [];
+          this.assistantAudioItem = null;
+        }
         let callbackError: unknown;
         const invoke = (callback: () => void) => {
           try {
@@ -154,11 +256,14 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           }
         };
         try {
-          invoke(() => this.config.onResponseDone?.(outcome));
-          invoke(emitBridgeEvent);
+          // Deliver output before completion retires its response owner. Tool callbacks
+          // may close the connection, so remaining output must recheck that owner.
           invoke(() => {
-            if (status === "completed") {
+            if (outcome.status === "completed") {
               for (const [itemId, toolCall] of this.toolCallBuffers) {
+                if (!this.acceptsEvent(connection)) {
+                  return;
+                }
                 this.emitToolCallOnce({
                   itemId,
                   callId: toolCall.callId,
@@ -167,8 +272,14 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
                 });
               }
               for (const item of output) {
+                if (!this.acceptsEvent(connection)) {
+                  return;
+                }
                 this.emitCompletedToolCall(item, event);
               }
+            }
+            if (!this.acceptsEvent(connection)) {
+              return;
             }
             const terminalTranscript = output
               .filter((item) => item.type === "message" && item.role === "assistant")
@@ -183,6 +294,11 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
               .join("");
             this.flushAssistantTranscript(terminalTranscript);
           });
+          if (this.outputResponse) {
+            this.outputResponse.ended = true;
+          }
+          invoke(() => this.config.onResponseDone?.(outcome));
+          invoke(emitBridgeEvent);
         } finally {
           // Keep the response active through terminal tool discovery: callbacks can
           // submit results synchronously and must not start the next response early.
@@ -242,8 +358,48 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   }
 
   protected resetInputTranscripts(): void {
+    this.flushPendingInputTranscript();
     this.inputTranscriptReplacements.clear();
+    this.finalizedInputTranscriptKeys.clear();
+    this.inputResponseStarted = false;
+    this.inputResponseFinished = false;
+    this.outputResponse = undefined;
     this.finalizedToolCallItems.clear();
+  }
+
+  private isCurrentInputResponse(event: XaiRealtimeEvent): boolean {
+    const responseId = event.response_id ?? event.response?.id;
+    return (
+      this.inputResponseStarted &&
+      (!responseId || !this.outputResponse?.id || responseId === this.outputResponse.id)
+    );
+  }
+
+  private armInputSettleTimer(): void {
+    clearTimeout(this.inputSettleTimer);
+    this.inputSettleTimer = setTimeout(() => {
+      this.inputSettleTimer = undefined;
+      this.flushPendingInputTranscript();
+    }, XAI_REALTIME_INPUT_SETTLE_MS);
+    this.inputSettleTimer.unref?.();
+  }
+
+  private flushPendingInputTranscript(): void {
+    clearTimeout(this.inputSettleTimer);
+    this.inputSettleTimer = undefined;
+    const pending = this.pendingInputTranscript;
+    this.pendingInputTranscript = undefined;
+    if (!pending) {
+      return;
+    }
+    this.finalizedInputTranscriptKeys.add(pending.key);
+    if (this.finalizedInputTranscriptKeys.size > 1_024) {
+      const oldest = this.finalizedInputTranscriptKeys.values().next().value;
+      if (oldest !== undefined) {
+        this.finalizedInputTranscriptKeys.delete(oldest);
+      }
+    }
+    this.config.onTranscript?.("user", pending.text, true, { textMode: "snapshot" });
   }
 
   private emitCompletedToolCall(item: XaiRealtimeEvent["item"], event: XaiRealtimeEvent): void {
@@ -301,7 +457,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   }
 
   private inputTranscriptKey(event: XaiRealtimeEvent): string {
-    return event.item_id ?? event.response_id ?? "default";
+    return event.item_id ?? event.response_id ?? `speech-${this.inputSpeechSequence}`;
   }
 
   private handleErrorEvent(error: unknown): void {
@@ -313,6 +469,13 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
       return;
     }
     if (detail === XAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR) {
+      // A late error for an older response.cancel must not retire a successor
+      // response or flush another response.create. The successor's
+      // response.created clears this flag; only an in-flight cancellation may
+      // settle the cancellation error.
+      if (!this.responseCancelInFlight) {
+        return;
+      }
       this.responseActive = false;
       this.responseCancelInFlight = false;
       this.flushPendingResponseCreate();

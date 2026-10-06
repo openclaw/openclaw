@@ -1,12 +1,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelMcpRuntime } from "./channel-server-runtime.js";
 
-/**
- * MCP stdio server assembly for OpenClaw channel conversations.
- *
- * This module wires config, the Gateway bridge, protocol notifications, and
- * registered tools into a lifecycle that callers can either embed or serve.
- */
 type OpenClawMcpServeOptions = NonNullable<Parameters<typeof createChannelMcpRuntime>[0]>;
 
 /** Serve the channel MCP server over stdio until transport or process shutdown. */
@@ -15,10 +10,8 @@ export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}
   const transport = new StdioServerTransport();
 
   let shuttingDown = false;
-  let resolveClosed!: () => void;
-  const closed = new Promise<void>((resolve) => {
-    resolveClosed = resolve;
-  });
+  let closePromise: Promise<void> | undefined;
+  const { promise: closed, resolve: resolveClosed } = createDeferredCore();
 
   const shutdown = () => {
     if (shuttingDown) {
@@ -29,9 +22,9 @@ export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}
     process.stdin.off("close", shutdown);
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
-    // The MCP SDK exposes transport close as a mutable handler rather than an EventEmitter API.
-    transport["onclose"] = undefined;
-    close().then(resolveClosed, resolveClosed);
+    // Assign before cleanup starts so SDK transport-close reentry observes the same owner promise.
+    closePromise = Promise.resolve().then(close);
+    void closePromise.then(resolveClosed, resolveClosed);
   };
 
   transport["onclose"] = shutdown;
@@ -44,8 +37,10 @@ export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}
     await server.connect(transport);
     await start();
     await closed;
+    await closePromise;
   } finally {
     shutdown();
     await closed;
+    await closePromise;
   }
 }

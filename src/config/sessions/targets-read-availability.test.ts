@@ -1,14 +1,49 @@
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config.js";
 import { replaceSessionEntry } from "./session-accessor.js";
+import * as sessionEntryInventory from "./session-accessor.sqlite-entry-inventory.js";
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
 } from "./targets-read-availability.js";
 
 describe("session store availability", () => {
+  it("bounds per-agent availability reads and preserves session-table failures", async () => {
+    await withTempHome(async (home) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      await replaceSessionEntry(
+        { agentId: "main", env, sessionKey: "agent:main:existing" },
+        { sessionId: "existing", updatedAt: 1 },
+      );
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const readKeys = vi.spyOn(sessionEntryInventory, "iterateSessionEntryKeys");
+      try {
+        expect(
+          resolveExistingAgentSessionStoreTargetsReadOnlyResult({}, "main", { env }),
+        ).toMatchObject({ available: true, targets: [{ agentId: "main" }] });
+        const inventoryReads = prepare.mock.calls.filter(
+          ([query]) =>
+            /from\s+"?session_nodes\b/i.test(query) &&
+            !/\bwhere\b|\bexists\s*\(|\blimit\b/i.test(query),
+        );
+        expect(inventoryReads).toEqual([]);
+        readKeys.mockImplementation(() => {
+          throw new Error("synthetic session-table read failure");
+        });
+        expect(resolveExistingAgentSessionStoreTargetsReadOnlyResult({}, "main", { env })).toEqual({
+          available: false,
+          reason: "read-failed",
+        });
+      } finally {
+        readKeys.mockRestore();
+        prepare.mockRestore();
+      }
+    });
+  });
+
   it("reads cross-agent rows from a migrated fixed store", async () => {
     await withTempHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
@@ -38,6 +73,46 @@ describe("session store availability", () => {
         resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "ops", { cache, env }),
       ).toEqual({ available: true, targets: [{ agentId: "ops", storePath }] });
       expect(cache.size).toBe(1);
+    });
+  });
+
+  it("does not let a missing configured store poison readable discovered siblings", async () => {
+    await withTempHome(async (home) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      // Sessions live in the discovered default per-agent store...
+      await replaceSessionEntry(
+        { agentId: "main", env, sessionKey: "agent:main:main" },
+        { sessionId: "live-session", updatedAt: 1 },
+      );
+      // ...while the configured per-agent template points at a path that has
+      // not been created yet (fresh config / store migration window).
+      const cfg: OpenClawConfig = {
+        session: { store: path.join(home, "custom", "{agentId}", "sessions.sqlite") },
+      };
+
+      const result = resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "main", { env });
+
+      // The missing configured candidate must be skipped, not returned as
+      // whole-agent unavailability: evidence consumers map database-missing
+      // to "absent" and destroy live worker placements.
+      expect(result.available).toBe(true);
+      if (result.available) {
+        expect(result.targets.length).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  it("reports database-missing only when no candidate store exists", async () => {
+    await withTempHome(async (home) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      const cfg: OpenClawConfig = {
+        session: { store: path.join(home, "custom", "{agentId}", "sessions.sqlite") },
+      };
+
+      expect(resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "main", { env })).toEqual({
+        available: false,
+        reason: "database-missing",
+      });
     });
   });
 

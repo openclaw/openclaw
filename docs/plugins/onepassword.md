@@ -5,7 +5,7 @@ read_when:
   - You want OpenClaw config credentials to resolve from 1Password
   - You need per-secret approval policy and audit history
   - You are configuring a 1Password service account for OpenClaw
-title: "1Password"
+title: "1Password plugin"
 ---
 
 # 1Password
@@ -257,6 +257,11 @@ call through shared SQLite state, so the handoff also works when more than one
 plugin instance is active in the gateway process. Unused authorizations expire
 after the 600-second approval window.
 
+Pending authorization reads and writes run on the SQLite worker. Tool execution
+waits for an approval's pending write to finish before consuming it; a failed
+write fails the request without retrieving a secret. Existing pending rows and
+their expiry remain compatible across updates.
+
 The in-memory cache defaults to 300 seconds and is bounded by the configured
 slug registry. Set `cacheTtlSeconds` to `0` to disable it. Policy is evaluated
 before every cache lookup, and cache hits are audited. Runtime config reloads
@@ -327,3 +332,9 @@ Policy and validation errors:
 | `POLICY_CHANGED`                                   | Config changed between approval and execution                                |
 | `GRANT_EXPIRED`                                    | Standing grant lapsed before execution                                       |
 | `APPROVAL_CANCELLED`                               | The run was aborted while the approval was pending                           |
+
+## Related
+
+- [Secrets management](/gateway/secrets)
+- [1Password](/gateway/1password) — the built-in `op://` secret source, and how the plugin, skill, and MCP options compare
+- [`openclaw secrets`](/cli/secrets) — store, reload, audit, configure, and apply SecretRefs from the CLI

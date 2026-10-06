@@ -2,11 +2,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import * as mediaCapabilityRegistry from "../media-understanding/provider-capability-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  listActiveDegradedSecretOwners,
+  setActiveCredentialDegradedOwner,
+} from "./runtime-degraded-state.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
@@ -24,44 +29,29 @@ function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function envTokenRef(id: string) {
-  return { source: "env" as const, provider: "default" as const, id };
-}
-
-async function prepareMediaModelAuthSnapshot(params: {
-  provider: string;
-  tokenRef: ReturnType<typeof envTokenRef>;
-  model?: string;
-  capabilities?: string[];
-  audioEnabled?: boolean;
-}) {
-  return await prepareSecretsRuntimeSnapshot({
-    config: asConfig({
-      tools: {
-        media: {
-          models: [
-            {
-              provider: params.provider,
-              ...(params.model ? { model: params.model } : {}),
-              ...(params.capabilities ? { capabilities: params.capabilities } : {}),
-              request: {
-                auth: {
-                  mode: "authorization-bearer",
-                  token: params.tokenRef,
-                },
-              },
+it("requires Doctor before resolving a providerless config SecretRef", async () => {
+  await expect(
+    prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            example: {
+              baseUrl: "https://example.test/v1",
+              models: [],
+              apiKey: { source: "env", id: "SYNTHETIC_AUTH_KEY" },
             },
-          ],
-          audio: {
-            enabled: params.audioEnabled ?? false,
           },
         },
-      },
+      }),
+      env: { SYNTHETIC_AUTH_KEY: "synthetic-credential" },
+      includeAuthStoreRefs: false,
     }),
-    env: {},
-    agentDirs: ["/tmp/openclaw-agent-main"],
-    loadAuthStore: () => ({ version: 1, profiles: {} }),
-  });
+  ).rejects.toThrow("openclaw doctor --fix");
+});
+
+function envTokenRef(id: string) {
+  return { source: "env" as const, provider: "default" as const, id };
 }
 
 describe("secrets runtime provider and media surfaces", () => {
@@ -95,66 +85,6 @@ describe("secrets runtime provider and media surfaces", () => {
     expect(snapshot.config.talk?.realtime?.providers?.openai?.model).toBe("gpt-realtime-2");
   });
 
-  it("resolves file refs via configured file provider", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-file-provider-"));
-    const secretsPath = path.join(root, "secrets.json");
-    try {
-      await fs.writeFile(
-        secretsPath,
-        JSON.stringify(
-          {
-            providers: {
-              openai: {
-                apiKey: "sk-from-file-provider",
-              },
-            },
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
-      await fs.chmod(secretsPath, 0o600);
-
-      const config = asConfig({
-        secrets: {
-          providers: {
-            default: {
-              source: "file",
-              path: secretsPath,
-              mode: "json",
-            },
-          },
-          defaults: {
-            file: "default",
-          },
-        },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
-              models: [],
-            },
-          },
-        },
-      });
-
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config,
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => ({ version: 1, profiles: {} }),
-      });
-
-      expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("sk-from-file-provider");
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("refreshes provider auth without resolving or republishing gateway state", async () => {
     if (process.platform === "win32") {
       return;
@@ -171,7 +101,7 @@ describe("secrets runtime provider and media surfaces", () => {
     };
     try {
       const config = asConfig({
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         secrets: {
           providers: {
             default: { source: "file", path: secretsPath, mode: "json" },
@@ -208,6 +138,14 @@ describe("secrets runtime provider and media surfaces", () => {
       const { getRuntimeConfigSourceSnapshot, getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
         await import("../config/runtime-snapshot.js");
       activateSecretsRuntimeSnapshot(initial);
+      setActiveCredentialDegradedOwner({
+        ownerKind: "account",
+        ownerId: "telegram:work",
+        state: "unavailable",
+        paths: ["channels.telegram.accounts.work.tokenFile"],
+        refKeys: [],
+        reason: "credential file is unavailable",
+      });
       const runtimeSourceConfig: OpenClawConfig = {
         ...initial.sourceConfig,
         logging: { level: "debug" },
@@ -241,6 +179,9 @@ describe("secrets runtime provider and media surfaces", () => {
       expect(active?.config.models?.providers?.openai?.apiKey).toBe("model-new");
       expect(getRuntimeConfigSnapshot()).toEqual(active?.config);
       expect(getRuntimeConfigSourceSnapshot()).toEqual(runtimeSourceConfig);
+      expect(listActiveDegradedSecretOwners()).toContainEqual(
+        expect.objectContaining({ ownerKind: "account", ownerId: "telegram:work" }),
+      );
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -248,7 +189,7 @@ describe("secrets runtime provider and media surfaces", () => {
 
   it("patches env shorthand model refs into the pinned runtime config", async () => {
     const config = asConfig({
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       models: {
         providers: {
           openai: {
@@ -302,7 +243,7 @@ describe("secrets runtime provider and media surfaces", () => {
 
   it("retries provider auth publication after a queued runtime config mutation", async () => {
     const initialConfig = asConfig({
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       gateway: { port: 19_040 },
     });
     const initial = await prepareSecretsRuntimeSnapshot({
@@ -316,7 +257,7 @@ describe("secrets runtime provider and media surfaces", () => {
       refreshActiveProviderAuthRuntimeSnapshot,
     } = await import("./runtime.js");
     const { registerProviderAuthRuntimeSnapshotActivationOwner } =
-      await import("./runtime-provider-auth-activation.js");
+      await import("./runtime-state.js");
     const { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
       await import("../config/runtime-snapshot.js");
     activateSecretsRuntimeSnapshot(initial);
@@ -398,62 +339,53 @@ describe("secrets runtime provider and media surfaces", () => {
   });
 
   it("resolves shared media model request refs when capability blocks are omitted", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        tools: {
-          media: {
-            models: [
-              {
-                provider: "openai",
-                model: "gpt-4o-mini-transcribe",
-                capabilities: ["audio"],
-                request: {
-                  auth: {
-                    mode: "authorization-bearer",
-                    token: {
-                      source: "env",
-                      provider: "default",
-                      id: "MEDIA_SHARED_AUDIO_TOKEN",
+    const registrySpy = vi
+      .spyOn(mediaCapabilityRegistry, "buildMediaUnderstandingCapabilityRegistry")
+      .mockImplementation(() => {
+        throw new Error("UNEXPECTED_MEDIA_CAPABILITY_DISCOVERY");
+      });
+    try {
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openai",
+                  model: "gpt-4o-mini-transcribe",
+                  capabilities: ["audio"],
+                  request: {
+                    auth: {
+                      mode: "authorization-bearer",
+                      token: {
+                        source: "env",
+                        provider: "default",
+                        id: "MEDIA_SHARED_AUDIO_TOKEN",
+                      },
                     },
                   },
                 },
-              },
-            ],
+              ],
+            },
           },
+        }),
+        env: {
+          MEDIA_SHARED_AUDIO_TOKEN: "shared-audio-token",
         },
-      }),
-      env: {
-        MEDIA_SHARED_AUDIO_TOKEN: "shared-audio-token",
-      },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      });
 
-    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
-      mode: "authorization-bearer",
-      token: "shared-audio-token",
-    });
-    expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.media.models.0.request.auth.token",
-    );
-  });
-
-  it("treats shared media model request refs as inactive when their capabilities are disabled", async () => {
-    const sharedTokenRef = envTokenRef("MEDIA_DISABLED_AUDIO_TOKEN");
-    const snapshot = await prepareMediaModelAuthSnapshot({
-      provider: "openai",
-      model: "gpt-4o-mini-transcribe",
-      tokenRef: sharedTokenRef,
-      capabilities: ["audio"],
-    });
-
-    expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
-      mode: "authorization-bearer",
-      token: sharedTokenRef,
-    });
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "tools.media.models.0.request.auth.token",
-    );
+      expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
+        mode: "authorization-bearer",
+        token: "shared-audio-token",
+      });
+      expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+        "tools.media.models[0].request.auth.token",
+      );
+    } finally {
+      registrySpy.mockRestore();
+    }
   });
 
   it("resolves shared media model request refs from inferred provider capabilities", async () => {
@@ -503,7 +435,7 @@ describe("secrets runtime provider and media surfaces", () => {
       token: "inferred-audio-token",
     });
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.media.models.0.request.auth.token",
+      "tools.media.models[0].request.auth.token",
     );
   });
 
@@ -521,9 +453,23 @@ describe("secrets runtime provider and media surfaces", () => {
     setActivePluginRegistry(pluginRegistry);
 
     const inferredTokenRef = envTokenRef("MEDIA_INFERRED_DISABLED_AUDIO_TOKEN");
-    const snapshot = await prepareMediaModelAuthSnapshot({
-      provider: "deepgram",
-      tokenRef: inferredTokenRef,
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "deepgram",
+                request: { auth: { mode: "authorization-bearer", token: inferredTokenRef } },
+              },
+            ],
+            audio: { enabled: false },
+          },
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
     expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
@@ -531,7 +477,7 @@ describe("secrets runtime provider and media surfaces", () => {
       token: inferredTokenRef,
     });
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "tools.media.models.0.request.auth.token",
+      "tools.media.models[0].request.auth.token",
     );
   });
 
@@ -568,7 +514,7 @@ describe("secrets runtime provider and media surfaces", () => {
       token: fixtureRef,
     });
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "tools.media.models.0.request.auth.token",
+      "tools.media.models[0].request.auth.token",
     );
   });
 
@@ -610,7 +556,7 @@ describe("secrets runtime provider and media surfaces", () => {
         ownerKind: "capability",
         ownerId: "media-model:shared:0",
         state: "unavailable",
-        paths: ["tools.media.models.0.request.auth.token"],
+        paths: ["tools.media.models[0].request.auth.token"],
       },
     ]);
   });
@@ -632,8 +578,8 @@ describe("secrets runtime provider and media surfaces", () => {
 
         agents: {
           defaults: {},
-          list: [
-            {
+          entries: {
+            main: {
               enabled: true,
               memory: {
                 search: {
@@ -641,7 +587,7 @@ describe("secrets runtime provider and media surfaces", () => {
                 },
               },
             },
-          ],
+          },
         },
       }),
       env: {},
@@ -657,6 +603,76 @@ describe("secrets runtime provider and media surfaces", () => {
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
       "memory.search.remote.apiKey",
     );
+  });
+
+  it.each([
+    ["bare shorthand", "$MEMORY_REMOTE_KEY", "resolved-memory-key"],
+    ["braced shorthand", "${MEMORY_REMOTE_KEY}", "resolved-memory-key"],
+    ["missing bare shorthand", "$MISSING_MEMORY_KEY", envTokenRef("MISSING_MEMORY_KEY")],
+    ["retired marker", "secretref-env:MEMORY_REMOTE_KEY", "secretref-env:MEMORY_REMOTE_KEY"],
+  ] as const)(
+    "materializes memory %s through its canonical Gateway snapshot",
+    async (_, apiKey, expected) => {
+      const usesConfiguredProvider = apiKey.startsWith("$") && typeof expected === "string";
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          ...(usesConfiguredProvider
+            ? {
+                secrets: {
+                  providers: { memoryenv: { source: "env", allowlist: ["MEMORY_REMOTE_KEY"] } },
+                  defaults: { env: "memoryenv" },
+                },
+              }
+            : {}),
+          memory: { search: { remote: { apiKey } } },
+        }),
+        env: { MEMORY_REMOTE_KEY: "resolved-memory-key" },
+        includeAuthStoreRefs: false,
+        allowUnavailableSecretOwners: true,
+      });
+
+      expect(snapshot.config.memory?.search?.remote?.apiKey).toEqual(expected);
+      if (typeof expected !== "string") {
+        expect(snapshot.degradedOwners).toMatchObject([
+          { ownerKind: "capability", ownerId: "memory-provider:main", degradationState: "cold" },
+        ]);
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "an unknown provider",
+      ref: { source: "env", provider: "missing", id: "MEMORY_REMOTE_KEY" },
+      secrets: undefined,
+      code: "SECRET_PROVIDER_NOT_CONFIGURED",
+    },
+    {
+      name: "a source-mismatched provider",
+      ref: { source: "env", provider: "memorystore", id: "MEMORY_REMOTE_KEY" },
+      secrets: { providers: { memorystore: { source: "store" } } },
+      code: "SECRET_PROVIDER_INVALID",
+    },
+    {
+      name: "a denied env allowlist",
+      ref: { source: "env", provider: "memoryenv", id: "MEMORY_REMOTE_KEY" },
+      secrets: {
+        providers: { memoryenv: { source: "env", allowlist: ["OTHER_MEMORY_KEY"] } },
+      },
+      code: "SECRET_REF_POLICY_DENIED",
+    },
+  ])("rejects memory refs using $name before materialization", async ({ ref, secrets, code }) => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          ...(secrets ? { secrets } : {}),
+          memory: { search: { remote: { apiKey: ref } } },
+        }),
+        env: { MEMORY_REMOTE_KEY: "ambient-memory-key" },
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toMatchObject({ code });
   });
 
   it("isolates an inherited memory ref to its exact agent owner", async () => {
@@ -676,17 +692,16 @@ describe("secrets runtime provider and media surfaces", () => {
 
         agents: {
           defaults: {},
-          list: [
-            { id: "cold", default: true },
-            {
-              id: "healthy",
+          entries: {
+            cold: {},
+            healthy: {
               memory: {
                 search: {
                   remote: { apiKey: healthyRef, headers: { "X-Memory-Value": healthyRef } },
                 },
               },
             },
-          ],
+          },
         },
       }),
       env: { HEALTHY_TEST_VALUE: healthyValue },
@@ -695,8 +710,10 @@ describe("secrets runtime provider and media surfaces", () => {
       allowUnavailableSecretOwners: true,
     });
 
-    expect(snapshot.config.agents?.list?.[1]?.memory?.search?.remote?.apiKey).toBe(healthyValue);
-    expect(snapshot.config.agents?.list?.[1]?.memory?.search?.remote?.headers).toEqual({
+    expect(snapshot.config.agents?.entries?.healthy?.memory?.search?.remote?.apiKey).toBe(
+      healthyValue,
+    );
+    expect(snapshot.config.agents?.entries?.healthy?.memory?.search?.remote?.headers).toEqual({
       "X-Memory-Value": healthyValue,
     });
     expect(snapshot.degradedOwners).toMatchObject([

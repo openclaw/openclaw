@@ -13,6 +13,7 @@ import {
 } from "../../../../src/gateway/channel-health-policy.js";
 import type { ChannelRuntimeSnapshot } from "../../../../src/gateway/server-channel-runtime.types.js";
 import type { ChannelManager } from "../../../../src/gateway/server-channels.js";
+import { GatewayScheduler } from "../../../../src/infra/gateway-scheduler.js";
 import { resetLogger, setLoggerOverride } from "../../../../src/logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../../../../src/logging/test-helpers/diagnostic-log-capture.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
@@ -152,6 +153,7 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
 
     const operations: string[] = [];
     let snapshotCalls = 0;
+    let firstSnapshotAt: number | undefined;
     let activeSnapshots = 0;
     let maxActiveSnapshots = 0;
     let failNextSnapshot = true;
@@ -166,6 +168,7 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
     const manager = {
       getRuntimeSnapshot() {
         snapshotCalls += 1;
+        firstSnapshotAt ??= Date.now();
         activeSnapshots += 1;
         maxActiveSnapshots = Math.max(maxActiveSnapshots, activeSnapshots);
         try {
@@ -200,55 +203,66 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
       recoverAutostartSuppression: async () => false,
       isAmbientAutostartSuppressed: () => false,
       isHealthMonitorEnabled: () => true,
+      isAccountListed: () => true,
       isManuallyStopped: () => false,
       isAutoRestartScheduled: () => false,
     } as unknown as ChannelManager;
 
+    const monitorStartupGraceMs = 250;
+    const monitorStartedAt = Date.now();
+    const scheduler = new GatewayScheduler();
     const monitor = startChannelHealthMonitor({
+      scheduler,
       channelManager: manager,
       checkIntervalMs: 20,
       cooldownCycles: 2,
       maxRestartsPerHour: 1,
       timing: {
-        monitorStartupGraceMs: 250,
+        monitorStartupGraceMs,
         channelConnectGraceMs: 0,
         staleEventThresholdMs: 100,
       },
     });
 
-    await sleep(40);
-    const graceRespected = snapshotCalls === 0;
-    await waitFor(() => operations.includes("start:qa-channel:monitored"), "first restart");
-    await waitFor(() => snapshotCalls >= 3, "settled rearm");
-    const callsAfterRecovery = snapshotCalls;
-    await sleep(55);
-    const settledRearmed = snapshotCalls > callsAfterRecovery;
-    const failureRecovered = operations.filter((entry) => entry === "snapshot").length >= 2;
+    try {
+      await waitFor(() => operations.includes("start:qa-channel:monitored"), "first restart");
+      const graceRespected =
+        firstSnapshotAt !== undefined &&
+        firstSnapshotAt - monitorStartedAt >= monitorStartupGraceMs;
+      await waitFor(() => snapshotCalls >= 3, "settled rearm");
+      const callsAfterRecovery = snapshotCalls;
+      await sleep(55);
+      const settledRearmed = snapshotCalls > callsAfterRecovery;
+      const failureRecovered = operations.filter((entry) => entry === "snapshot").length >= 2;
 
-    account = {
-      ...account,
-      connected: false,
-      lastStartAt: Date.now() - 1_000,
-    };
-    await sleep(90);
-    const startCount = operations.filter((entry) => entry.startsWith("start:")).length;
-    const cooldownBounded = startCount === 1;
+      account = {
+        ...account,
+        connected: false,
+        lastStartAt: Date.now() - 1_000,
+      };
+      await sleep(90);
+      const startCount = operations.filter((entry) => entry.startsWith("start:")).length;
+      const cooldownBounded = startCount === 1;
 
-    monitor.shutdown();
-    await monitor.waitForIdle();
-    const callsAtShutdown = snapshotCalls;
-    await sleep(50);
+      monitor.shutdown();
+      await monitor.waitForIdle();
+      const callsAtShutdown = snapshotCalls;
+      await sleep(50);
 
-    return {
-      graceRespected,
-      operationOrder: operations.filter((entry) => entry !== "snapshot"),
-      policyReasons,
-      singleFlight: maxActiveSnapshots === 1,
-      settledRearmed,
-      cooldownBounded,
-      failureRecovered,
-      shutdownStoppedChecks: snapshotCalls === callsAtShutdown,
-    };
+      return {
+        graceRespected,
+        operationOrder: operations.filter((entry) => entry !== "snapshot"),
+        policyReasons,
+        singleFlight: maxActiveSnapshots === 1,
+        settledRearmed,
+        cooldownBounded,
+        failureRecovered,
+        shutdownStoppedChecks: snapshotCalls === callsAtShutdown,
+      };
+    } finally {
+      monitor.shutdown();
+      await scheduler.stop();
+    }
   });
 }
 

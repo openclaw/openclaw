@@ -1,9 +1,3 @@
-/**
- * Sandbox explanation command.
- *
- * It resolves the effective sandbox/tool/elevated policy for an agent session
- * and prints either JSON or a human-readable fix-it report.
- */
 import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
@@ -13,6 +7,7 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentConfig,
+  resolveConfiguredAgentId,
   resolveSessionAgentId,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
@@ -40,7 +35,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../utils/delivery-context.read.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
 type SandboxExplainOptions = {
@@ -63,13 +58,10 @@ function normalizeExplainSessionKey(params: {
       agentId: params.agentId,
     });
   }
-  if (raw.includes(":")) {
+  if (raw.includes(":") || raw === "global") {
     // Fully-qualified session keys are already scoped; only short names need
     // agent/main-key expansion.
     return raw;
-  }
-  if (raw === "global") {
-    return "global";
   }
   return buildAgentMainSessionKey({
     agentId: params.agentId,
@@ -85,21 +77,14 @@ function inferProviderFromSessionKey(params: {
   if (!parsed) {
     return undefined;
   }
-  const rest = parsed.rest.trim();
-  if (!rest) {
-    return undefined;
-  }
-  const parts = rest.split(":").filter(Boolean);
-  if (parts.length === 0) {
-    return undefined;
-  }
+  const channel = parsed.rest.trim().split(":").find(Boolean);
   const configuredMainKey = normalizeMainKey(params.cfg.session?.mainKey);
-  if (parts[0] === configuredMainKey) {
+  if (!channel || channel === configuredMainKey) {
     return undefined;
   }
   // Legacy session keys embedded provider/channel in the first segment after
   // agent id; use that as a fallback when the session store lacks channel data.
-  const candidate = normalizeOptionalLowercaseString(parts[0]);
+  const candidate = normalizeOptionalLowercaseString(channel);
   if (!candidate) {
     return undefined;
   }
@@ -114,29 +99,15 @@ function resolveActiveChannel(params: {
   entry?: SessionEntry;
   sessionKey: string;
 }): string | undefined {
-  const candidate = (sessionDeliveryChannel(params.entry) ?? "").trim();
-  const normalizedCandidate = normalizeOptionalLowercaseString(candidate);
-  if (!normalizedCandidate) {
-    // Empty canonical delivery can still be recovered from the session key.
-    return inferProviderFromSessionKey({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-    });
-  }
+  const normalizedCandidate = normalizeOptionalLowercaseString(
+    sessionDeliveryChannel(params.entry),
+  );
   if (normalizedCandidate === INTERNAL_MESSAGE_CHANNEL) {
     return INTERNAL_MESSAGE_CHANNEL;
   }
-  const normalized = normalizeAnyChannelId(normalizedCandidate);
-  if (normalized) {
-    return normalized;
-  }
-  return inferProviderFromSessionKey({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-  });
+  return normalizeAnyChannelId(normalizedCandidate) ?? inferProviderFromSessionKey(params);
 }
 
-/** Prints the effective sandbox policy for a session or agent. */
 export async function sandboxExplainCommand(
   opts: SandboxExplainOptions,
   runtime: RuntimeEnv,
@@ -144,7 +115,11 @@ export async function sandboxExplainCommand(
   const cfg = getRuntimeConfig();
 
   const requestedSession = opts.session?.trim();
-  const requestedAgentId = opts.agent?.trim() ? normalizeAgentId(opts.agent) : undefined;
+  const requestedAgent = opts.agent?.trim();
+  if (opts.agent !== undefined && !requestedAgent) {
+    throw new Error("--agent must not be blank");
+  }
+  const requestedAgentId = requestedAgent ? normalizeAgentId(requestedAgent) : undefined;
   const sessionAgentId =
     requestedSession && requestedSession !== "global" && requestedSession.includes(":")
       ? normalizeAgentId(resolveAgentIdFromSessionKey(requestedSession))
@@ -153,6 +128,9 @@ export async function sandboxExplainCommand(
     throw new Error(
       `Sandbox explain agent "${requestedAgentId}" does not match session agent "${sessionAgentId}".`,
     );
+  }
+  if (requestedAgentId) {
+    resolveConfiguredAgentId(cfg, requestedAgentId);
   }
   const resolvedAgentId = resolveSessionAgentId({
     sessionKey: requestedSession,
@@ -166,7 +144,6 @@ export async function sandboxExplainCommand(
     session: opts.session,
   });
 
-  const sandboxCfg = resolveSandboxConfigForAgent(cfg, resolvedAgentId);
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, resolvedAgentId);
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg,
@@ -174,6 +151,14 @@ export async function sandboxExplainCommand(
     agentId: resolvedAgentId,
     classificationAgentId: resolvedAgentId,
   });
+  const configuredSandbox = resolveSandboxConfigForAgent(cfg, resolvedAgentId);
+  const sandboxCfg = sandboxRuntime.sandboxRequired
+    ? {
+        ...configuredSandbox,
+        scope: "agent" as const,
+        workspaceAccess: sandboxRuntime.workspaceAccess,
+      }
+    : configuredSandbox;
   const mainSessionKey = sandboxRuntime.mainSessionKey;
   const sessionIsSandboxed = sandboxRuntime.sandboxed;
   const storePath = resolveSessionStorePathCore(cfg.session?.store, {
@@ -202,6 +187,7 @@ export async function sandboxExplainCommand(
   const workspaceLayout = resolveSandboxWorkspaceLayoutPaths({
     cfg: sandboxCfg,
     agentId: resolvedAgentId,
+    isolationSubject: sandboxRuntime.isolationSubject,
     rawSessionKey:
       sessionKey === "global"
         ? buildAgentMainSessionKey({
@@ -251,12 +237,12 @@ export async function sandboxExplainCommand(
   const elevatedAgentEnabled = elevatedAgent?.enabled !== false;
   const elevatedEnabled = elevatedGlobalEnabled && elevatedAgentEnabled;
 
-  const globalAllow = channel ? elevatedGlobal?.allowFrom?.[channel] : undefined;
-  const agentAllow = channel ? elevatedAgent?.allowFrom?.[channel] : undefined;
-
-  const allowTokens = (values?: Array<string | number>) => normalizeStringifiedEntries(values);
-  const globalAllowTokens = allowTokens(globalAllow);
-  const agentAllowTokens = allowTokens(agentAllow);
+  const globalAllowTokens = normalizeStringifiedEntries(
+    channel ? elevatedGlobal?.allowFrom?.[channel] : undefined,
+  );
+  const agentAllowTokens = normalizeStringifiedEntries(
+    channel ? elevatedAgent?.allowFrom?.[channel] : undefined,
+  );
 
   const elevatedAllowedByConfig =
     elevatedEnabled &&
@@ -272,26 +258,19 @@ export async function sandboxExplainCommand(
   const elevatedFailures: Array<{ gate: string; key: string }> = [];
   // Track each failed gate separately so the human report points at concrete
   // config keys instead of only saying elevated access is disabled.
-  if (!elevatedGlobalEnabled) {
-    elevatedFailures.push({ gate: "enabled", key: "tools.elevated.enabled" });
-  }
-  if (!elevatedAgentEnabled) {
-    elevatedFailures.push({
-      gate: "enabled",
-      key: "agents.entries.*.tools.elevated.enabled",
-    });
-  }
-  if (channel && globalAllowTokens.length === 0) {
-    elevatedFailures.push({
-      gate: "allowFrom",
-      key: `tools.elevated.allowFrom.${channel}`,
-    });
-  }
-  if (channel && elevatedAgent?.allowFrom && agentAllowTokens.length === 0) {
-    elevatedFailures.push({
-      gate: "allowFrom",
-      key: `agents.entries.*.tools.elevated.allowFrom.${channel}`,
-    });
+  for (const [failed, gate, key] of [
+    [!elevatedGlobalEnabled, "enabled", "tools.elevated.enabled"],
+    [!elevatedAgentEnabled, "enabled", "agents.entries.*.tools.elevated.enabled"],
+    [channel && globalAllowTokens.length === 0, "allowFrom", `tools.elevated.allowFrom.${channel}`],
+    [
+      channel && elevatedAgent?.allowFrom && agentAllowTokens.length === 0,
+      "allowFrom",
+      `agents.entries.*.tools.elevated.allowFrom.${channel}`,
+    ],
+  ] as const) {
+    if (failed) {
+      elevatedFailures.push({ gate, key });
+    }
   }
 
   const fixIt: string[] = [];
@@ -360,32 +339,23 @@ export async function sandboxExplainCommand(
   const err = (val: string) => colorize(rich, theme.error, val);
   const bool = (flag: boolean) => (flag ? ok("true") : err("false"));
 
-  const lines: string[] = [];
-  lines.push(heading("Effective sandbox:"));
-  lines.push(`  ${key("agentId:")} ${value(payload.agentId)}`);
-  lines.push(`  ${key("sessionKey:")} ${value(payload.sessionKey)}`);
-  lines.push(`  ${key("mainSessionKey:")} ${value(payload.mainSessionKey)}`);
-  lines.push(
+  const lines = [
+    heading("Effective sandbox:"),
+    `  ${key("agentId:")} ${value(payload.agentId)}`,
+    `  ${key("sessionKey:")} ${value(payload.sessionKey)}`,
+    `  ${key("mainSessionKey:")} ${value(payload.mainSessionKey)}`,
     `  ${key("runtime:")} ${payload.sandbox.sessionIsSandboxed ? warn("sandboxed") : ok("direct")}`,
-  );
-  lines.push(
     `  ${key("mode:")} ${value(payload.sandbox.mode)} ${key("scope:")} ${value(
       payload.sandbox.scope,
     )}`,
-  );
-  lines.push(
     `  ${key("workspaceAccess:")} ${value(
       payload.sandbox.workspaceAccess,
     )} ${key("workspaceRoot:")} ${value(payload.sandbox.workspaceRoot)}`,
-  );
-  lines.push(
     `  ${key("effectiveHostWorkspaceRoot:")} ${value(payload.sandbox.effectiveHostWorkspaceRoot)}`,
-  );
-  lines.push(
     `  ${key("backend:")} ${value(payload.sandbox.backend)} ${key("runtimeWorkdir:")} ${value(
       payload.sandbox.runtimeWorkdir ?? "(direct host)",
     )} ${key("workspaceSource:")} ${value(payload.sandbox.workspaceSource)}`,
-  );
+  ];
   if (payload.sandbox.workspaceMounts.length > 0) {
     lines.push(`  ${key("workspaceMounts:")}`);
     for (const mount of payload.sandbox.workspaceMounts) {
@@ -396,23 +366,21 @@ export async function sandboxExplainCommand(
       );
     }
   }
-  lines.push("");
-  lines.push(heading("Sandbox tool policy:"));
   lines.push(
+    "",
+    heading("Sandbox tool policy:"),
     `  ${key(`allow (${payload.sandbox.tools.sources.allow.source}):`)} ${value(
       payload.sandbox.tools.allow.join(", ") || "(empty)",
     )}`,
-  );
-  lines.push(
     `  ${key(`deny  (${payload.sandbox.tools.sources.deny.source}):`)} ${value(
       payload.sandbox.tools.deny.join(", ") || "(empty)",
     )}`,
+    "",
+    heading("Elevated:"),
+    `  ${key("enabled:")} ${bool(payload.elevated.enabled)}`,
+    `  ${key("channel:")} ${value(payload.elevated.channel ?? "(unknown)")}`,
+    `  ${key("allowedByConfig:")} ${bool(payload.elevated.allowedByConfig)}`,
   );
-  lines.push("");
-  lines.push(heading("Elevated:"));
-  lines.push(`  ${key("enabled:")} ${bool(payload.elevated.enabled)}`);
-  lines.push(`  ${key("channel:")} ${value(payload.elevated.channel ?? "(unknown)")}`);
-  lines.push(`  ${key("allowedByConfig:")} ${bool(payload.elevated.allowedByConfig)}`);
   if (payload.elevated.failures.length > 0) {
     lines.push(
       `  ${key("failing gates:")} ${warn(
@@ -428,13 +396,11 @@ export async function sandboxExplainCommand(
       )}`,
     );
   }
-  lines.push("");
-  lines.push(heading("Fix-it:"));
+  lines.push("", heading("Fix-it:"));
   for (const keyLocal of payload.fixIt) {
     lines.push(`  - ${keyLocal}`);
   }
-  lines.push("");
-  lines.push(`${key("Docs:")} ${formatDocsLink("/sandbox", "docs.openclaw.ai/sandbox")}`);
+  lines.push("", `${key("Docs:")} ${formatDocsLink("/sandbox", "docs.openclaw.ai/sandbox")}`);
 
   runtime.log(`${lines.join("\n")}\n`);
 }

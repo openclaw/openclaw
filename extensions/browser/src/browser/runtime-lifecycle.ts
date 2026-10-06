@@ -1,24 +1,20 @@
-/**
- * Browser plugin runtime lifecycle helpers for startup and shutdown cleanup.
- */
 import type { Server } from "node:http";
-import { getExtensionRelayModule } from "./extension-relay.runtime.js";
+import {
+  getExtensionRelayModule,
+  getGatewayExtensionRelayModule,
+} from "./extension-relay.runtime.js";
+import { stopBrowserScreencasts } from "./screencast/session.js";
 import type { BrowserServerState } from "./server-context.js";
 import { markBrowserRuntimeStopping } from "./server-context.lifecycle.js";
 import { stopKnownBrowserProfiles } from "./server-lifecycle.js";
-import { startTrackedBrowserTabCleanupTimer } from "./session-tab-cleanup.js";
 import { registerBrowserUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
 type CreateBrowserRuntimeStateParams = {
   resolved: BrowserServerState["resolved"];
   port: number;
   server?: Server | null;
-  onWarn: (message: string) => void;
 };
 
-const trackedTabCleanupDisposers = new WeakMap<BrowserServerState, () => Promise<void>>();
-
-/** Creates Browser server state and starts runtime-wide cleanup handlers. */
 export async function createBrowserRuntimeState(
   params: CreateBrowserRuntimeStateParams,
 ): Promise<BrowserServerState> {
@@ -28,23 +24,12 @@ export async function createBrowserRuntimeState(
     resolved: params.resolved,
     profiles: new Map(),
   };
-  const stopTrackedTabCleanup = startTrackedBrowserTabCleanupTimer({
-    getResolvedBrowserConfig: () => state.resolved,
-    onWarn: params.onWarn,
-  });
-  trackedTabCleanupDisposers.set(state, stopTrackedTabCleanup);
-  state.stopTrackedTabCleanup = () => {
-    void stopTrackedTabCleanup().catch(() => {});
-  };
   state.stopUnhandledRejectionHandler = registerBrowserUnhandledRejectionHandler();
   return state;
 }
 
-/** Stops Browser profiles, the optional HTTP server, and loaded Playwright state. */
 type StopBrowserRuntimeParams = {
   current: BrowserServerState | null;
-  /** Public API compatibility; cleanup is intentionally pinned to `current`. */
-  getState: () => BrowserServerState | null;
   clearState: () => void;
   closeServer?: boolean;
   onWarn: (message: string) => void;
@@ -61,22 +46,16 @@ async function stopBrowserRuntimeInternal(
   markBrowserRuntimeStopping(current);
   let firstError: Error | undefined;
 
+  // Viewers receive the shutdown code before profile invalidation closes their targets.
+  const screencastDrain = finalizeGlobalAdapters ? stopBrowserScreencasts() : Promise.resolve();
   // stopKnownBrowserProfiles invalidates every actor synchronously before its
-  // first await; only then do we wait for tab cleanup and profile drains.
+  // first await; only then do we wait for profile drains.
   const profileDrain = stopKnownBrowserProfiles({
     current,
     closeSharedAdapters: finalizeGlobalAdapters,
     onWarn: params.onWarn,
   });
-  const stopTrackedTabCleanup = trackedTabCleanupDisposers.get(current);
-  const tabCleanup = Promise.resolve().then(async () => {
-    if (stopTrackedTabCleanup) {
-      await stopTrackedTabCleanup();
-    } else {
-      current.stopTrackedTabCleanup?.();
-    }
-  });
-  for (const result of await Promise.allSettled([profileDrain, tabCleanup])) {
+  for (const result of await Promise.allSettled([screencastDrain, profileDrain])) {
     if (result.status === "rejected") {
       firstError ??= toRuntimeLifecycleError(result.reason, "Browser profile cleanup failed.");
     }
@@ -93,35 +72,30 @@ async function stopBrowserRuntimeInternal(
 
   if (finalizeGlobalAdapters) {
     try {
-      const { disposeGatewayExtensionRelay } =
-        await import("./extension-relay/gateway-relay-route.js");
-      disposeGatewayExtensionRelay();
+      const gatewayRelay = await getGatewayExtensionRelayModule.peek();
+      gatewayRelay?.disposeGatewayExtensionRelay();
     } catch (err) {
       firstError ??= toRuntimeLifecycleError(err, "Gateway browser relay cleanup failed.");
     }
   }
 
-  if (!firstError) {
-    if (params.closeServer && current.server) {
-      await new Promise<void>((resolve) => {
-        current.server?.close(() => resolve());
-      });
-    }
-
-    params.clearState();
-    trackedTabCleanupDisposers.delete(current);
-    current.stopUnhandledRejectionHandler?.();
-  }
   if (firstError) {
     throw firstError;
   }
+  if (params.closeServer && current.server) {
+    await new Promise<void>((resolve) => {
+      current.server?.close(() => resolve());
+    });
+  }
+
+  params.clearState();
+  current.stopUnhandledRejectionHandler?.();
 }
 
 function toRuntimeLifecycleError(value: unknown, message: string): Error {
   return value instanceof Error ? value : new Error(message, { cause: value });
 }
 
-/** Stops Browser profiles, the optional HTTP server, and loaded Playwright state. */
 export async function stopBrowserRuntime(params: StopBrowserRuntimeParams): Promise<void> {
   await stopBrowserRuntimeInternal(params, true);
 }

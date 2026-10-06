@@ -1,30 +1,30 @@
-import { OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL } from "./openclaw-agent-board-schema.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import { withLegacySessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
+import { AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL } from "./openclaw-agent-progress-card-schema.js";
+import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 
-const SHARING_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_members (";
-const SHARING_SCHEMA_END = "CREATE TABLE IF NOT EXISTS heartbeat_outcomes (";
 const SUGGESTIONS_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_suggestions (";
 
-function splitSessionSharingSchema(sql: string): { sharing: string; withoutSharing: string } {
-  const start = sql.indexOf(SHARING_SCHEMA_START);
-  const end = sql.indexOf(SHARING_SCHEMA_END, start);
-  if (start === -1 || end === -1) {
-    throw new Error("OpenClaw agent session-sharing schema markers are missing.");
-  }
-  return {
-    sharing: sql.slice(start, end),
-    withoutSharing: `${sql.slice(0, start)}${sql.slice(end)}`,
-  };
-}
-
-const sessionSharingSchema = splitSessionSharingSchema(OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL);
-const sessionSuggestionsStart = sessionSharingSchema.sharing.indexOf(SUGGESTIONS_SCHEMA_START);
+const sessionSharingSchema = extractSqliteTableSchema(
+  AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL,
+  "session_members",
+  {
+    endMarker: "CREATE TABLE IF NOT EXISTS heartbeat_outcomes (",
+    includeEndMarker: false,
+    errorMessage: "OpenClaw agent session-sharing schema markers are missing.",
+  },
+);
+const sessionSuggestionsStart = sessionSharingSchema.indexOf(SUGGESTIONS_SCHEMA_START);
 if (sessionSuggestionsStart === -1) {
   throw new Error("OpenClaw agent session-suggestions schema marker is missing.");
 }
-export const AGENT_V14_SESSION_SHARING_SCHEMA_SQL = sessionSharingSchema.sharing.slice(
+export const AGENT_V14_SESSION_SHARING_SCHEMA_SQL = sessionSharingSchema.slice(
   0,
   sessionSuggestionsStart,
 );
-export const AGENT_V14_ADDITIVE_SCHEMA_SQL =
-  sessionSharingSchema.sharing.slice(sessionSuggestionsStart);
-export const AGENT_V14_CORE_SCHEMA_SQL = sessionSharingSchema.withoutSharing;
+export const AGENT_V14_ADDITIVE_SCHEMA_SQL = sessionSharingSchema.slice(sessionSuggestionsStart);
+export const AGENT_V14_CORE_SCHEMA_SQL = withLegacySessionParticipantsSchema(
+  withLegacyAgentStorageSchema(
+    AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL.replace(sessionSharingSchema, ""),
+  ),
+);

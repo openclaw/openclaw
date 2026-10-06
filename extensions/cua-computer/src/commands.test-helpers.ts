@@ -87,11 +87,12 @@ export function driver(
   const typeText = vi.fn(async () => result({}));
   const pressKey = vi.fn(async () => result({}));
   const callTool = vi.fn<CuaDriverSession["callTool"]>(async () => result({}));
-  const callDesktopTool = vi.fn<CuaDriverSession["callDesktopTool"]>(async () => result({}));
-  const escalateScope = vi.fn(async () => ({
+  const getCursorPosition = vi.fn<CuaDriverSession["getCursorPosition"]>(async () => result({}));
+  const getSessionState = vi.fn(async () => ({
     session: "openclaw-test",
     captureScope: 2,
     effectiveScope: 1,
+    desktopCaptureAuthorized: true,
     desktopUnlocked: true,
   }));
   const dispose = vi.fn(async () => {});
@@ -102,8 +103,8 @@ export function driver(
     isAvailable: () => true,
     resetAvailabilityCache: () => {},
     callTool,
-    callDesktopTool,
-    escalateScope,
+    getCursorPosition,
+    getSessionState,
     getDesktopState,
     getScreenSize,
     click,
@@ -123,8 +124,8 @@ export function driver(
     moveCursor,
     scroll,
     callTool,
-    callDesktopTool,
-    escalateScope,
+    getCursorPosition,
+    getSessionState,
     dispose,
     typeText,
     pressKey,
@@ -134,16 +135,13 @@ export function driver(
   };
 }
 
-export async function execution(
-  session: CuaDriverSession,
-  options: { resourceRoot?: string } = {},
-) {
+export async function execution(session: CuaDriverSession, platform: NodeJS.Platform = "linux") {
   return await createCuaComputerProvider({
-    platform: "linux",
+    platform,
+    env: macOsEndpoint(),
     driver: session,
     imageProcessor: {
       encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
     },
-    resourceRoot: options.resourceRoot,
   }).openExecution({ executionId: randomUUID() });
 }

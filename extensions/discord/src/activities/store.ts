@@ -1,5 +1,9 @@
 import { randomBytes } from "node:crypto";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type {
+  PluginStateCompareIntent,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DISCORD_EPOCH_MS = 1_420_070_400_000;
@@ -32,7 +36,8 @@ type DiscordActivityPendingLaunch =
   | { state: "ambiguous"; createdAt: number };
 
 type AtomicPluginStateKeyedStore<T> = PluginStateKeyedStore<T> & {
-  update: NonNullable<PluginStateKeyedStore<T>["update"]>;
+  observe: NonNullable<PluginStateKeyedStore<T>["observe"]>;
+  compareAndApply: NonNullable<PluginStateKeyedStore<T>["compareAndApply"]>;
 };
 
 type DiscordActivityStores = {
@@ -42,23 +47,20 @@ type DiscordActivityStores = {
   launches: AtomicPluginStateKeyedStore<DiscordActivityPendingLaunch>;
 };
 
-type OpenKeyedStore = <T>(options: {
-  namespace: string;
-  maxEntries: number;
-  overflowPolicy: "evict-oldest";
-  defaultTtlMs: number;
-}) => PluginStateKeyedStore<T>;
-
-function requireAtomicUpdate<T>(store: PluginStateKeyedStore<T>): AtomicPluginStateKeyedStore<T> {
-  if (!store.update) {
-    throw new Error("Discord Activities require atomic plugin state updates");
+function requireAtomicComparison<T>(
+  store: PluginStateKeyedStore<T>,
+): AtomicPluginStateKeyedStore<T> {
+  if (!store.observe || !store.compareAndApply) {
+    throw new Error("Discord Activities require atomic plugin state comparisons");
   }
   return store as AtomicPluginStateKeyedStore<T>;
 }
 
-export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): DiscordActivityStores {
+export function openDiscordActivityStores(
+  openKeyedStore: PluginRuntime["state"]["openKeyedStore"],
+): DiscordActivityStores {
   return {
-    widgets: requireAtomicUpdate(
+    widgets: requireAtomicComparison(
       openKeyedStore<DiscordActivityWidget>({
         namespace: "activities-widgets",
         maxEntries: 64,
@@ -78,7 +80,7 @@ export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): Disco
       overflowPolicy: "evict-oldest",
       defaultTtlMs: DOC_TOKEN_TTL_MS,
     }),
-    launches: requireAtomicUpdate(
+    launches: requireAtomicComparison(
       openKeyedStore<DiscordActivityPendingLaunch>({
         namespace: "activities-launches",
         maxEntries: 256,
@@ -91,6 +93,31 @@ export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): Disco
 
 function pendingLaunchKey(accountId: string, channelId: string, discordUserId: string): string {
   return `${accountId}:${channelId}:${discordUserId}`;
+}
+
+async function applyActivityStoreIntent<T>(
+  store: AtomicPluginStateKeyedStore<T>,
+  key: string,
+  intent: (current: T | undefined) => PluginStateCompareIntent<T>,
+): Promise<"applied" | "unchanged"> {
+  let observed = await store.observe(key);
+  while (true) {
+    const result = await store.compareAndApply(key, observed.comparison, intent(observed.value));
+    if (result.status !== "conflict") {
+      return result.status;
+    }
+    observed = result.current;
+  }
+}
+
+function pendingLaunchForWidget(
+  existing: DiscordActivityPendingLaunch | undefined,
+  widgetId: string,
+  createdAt: number,
+): DiscordActivityPendingLaunch {
+  return existing && (existing.state === "ambiguous" || existing.widgetId !== widgetId)
+    ? { state: "ambiguous", createdAt }
+    : { state: "single", widgetId, createdAt };
 }
 
 export class DiscordActivityStore {
@@ -110,10 +137,16 @@ export class DiscordActivityStore {
     if (!/^\d+$/u.test(messageId)) {
       throw new Error("Discord Activity delivery returned an invalid message ID");
     }
-    const updated = await this.stores.widgets.update(id, (widget) =>
-      widget ? { ...widget, deliveredMessageId: messageId } : undefined,
+    const outcome = await applyActivityStoreIntent(this.stores.widgets, id, (widget) =>
+      widget
+        ? {
+            operation: "update",
+            action: "set",
+            value: { ...widget, deliveredMessageId: messageId },
+          }
+        : { operation: "update", action: "keep" },
     );
-    if (!updated) {
+    if (outcome === "unchanged") {
       throw new Error("Discord Activity widget disappeared before delivery was recorded");
     }
   }
@@ -182,16 +215,15 @@ export class DiscordActivityStore {
     createdAt: number;
   }): Promise<void> {
     const key = pendingLaunchKey(params.accountId, params.channelId, params.discordUserId);
+    const { widgetId, createdAt } = params;
     // Overlapping clicks on different widgets are ambiguous: which Activity queries first is
     // unordered, so a single slot could hand widget B's record to widget A's shell. Poison the
     // slot instead; consume then returns nothing and resolution falls through to the newest post.
-    await this.stores.launches.update(key, (existing) => {
-      const overlapsDifferentWidget =
-        existing && (existing.state === "ambiguous" || existing.widgetId !== params.widgetId);
-      return overlapsDifferentWidget
-        ? { state: "ambiguous", createdAt: params.createdAt }
-        : { state: "single", widgetId: params.widgetId, createdAt: params.createdAt };
-    });
+    await applyActivityStoreIntent(this.stores.launches, key, (existing) => ({
+      operation: "update",
+      action: "set",
+      value: pendingLaunchForWidget(existing, widgetId, createdAt),
+    }));
   }
 
   async retirePendingLaunch(
@@ -204,9 +236,10 @@ export class DiscordActivityStore {
     // launch cannot poison the next click on a different widget for the whole TTL.
     // Different-widget and ambiguous records stay: their Activities may still query.
     const key = pendingLaunchKey(accountId, channelId, discordUserId);
-    await this.stores.launches.update(key, (existing) =>
-      existing?.state === "single" && existing.widgetId === widgetId ? undefined : existing,
-    );
+    await applyActivityStoreIntent(this.stores.launches, key, (existing) => ({
+      operation: "delete",
+      action: existing?.state === "single" && existing.widgetId === widgetId ? "delete" : "keep",
+    }));
   }
 
   async consumePendingLaunch(

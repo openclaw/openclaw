@@ -1,23 +1,9 @@
-// Slack plugin module implements stream mode behavior.
-import {
-  resolveSlackNativeStreaming,
-  resolveSlackStreamingMode,
-  type StreamingMode,
-} from "./streaming-compat.js";
+import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 
-type SlackStreamingMode = StreamingMode;
-
-export function resolveSlackStreamingConfig(params: {
-  streaming?: unknown;
-  streamMode?: unknown;
-  nativeStreaming?: unknown;
-}): {
-  mode: SlackStreamingMode;
-  nativeStreaming: boolean;
-} {
+export function resolveSlackStreamingConfig(params: Pick<SlackAccountConfig, "streaming">) {
   return {
-    mode: resolveSlackStreamingMode(params),
-    nativeStreaming: resolveSlackNativeStreaming(params),
+    mode: params.streaming?.mode ?? "progress",
+    nativeStreaming: params.streaming?.nativeTransport ?? true,
   };
 }
 
@@ -25,6 +11,8 @@ export function applyAppendOnlyStreamUpdate(params: {
   incoming: string;
   rendered: string;
   source: string;
+  /** Joins a divergent incoming value onto the already-rendered text. */
+  separator?: string;
 }): { rendered: string; source: string; changed: boolean } {
   const incoming = params.incoming.trimEnd();
   if (!incoming) {
@@ -53,7 +41,7 @@ export function applyAppendOnlyStreamUpdate(params: {
     return { rendered: params.rendered, source: params.source, changed: false };
   }
 
-  const separator = params.rendered.endsWith("\n") ? "" : "\n";
+  const separator = params.separator ?? (params.rendered.endsWith("\n") ? "" : "\n");
   return {
     rendered: `${params.rendered}${separator}${incoming}`,
     source: incoming,

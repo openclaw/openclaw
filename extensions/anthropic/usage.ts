@@ -4,10 +4,6 @@ import type {
   ProviderResolvedUsageAuth,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  readClaudeCliCredentialsCached,
-  validateAnthropicSetupToken,
-} from "openclaw/plugin-sdk/provider-auth";
-import {
   addProviderUsageModel,
   asProviderUsageObject,
   buildUsageHttpErrorSnapshot,
@@ -24,7 +20,7 @@ import {
   resolveProviderUsageDisplayName,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
-import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
+import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 const ANTHROPIC_MESSAGES_USAGE_URL =
@@ -46,10 +42,6 @@ function normalizeAdminKey(raw: string | undefined): string | undefined {
 
 function encodeAdminToken(token: string): string {
   return encodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, token);
-}
-
-function decodeAdminToken(raw: string): string | undefined {
-  return decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, raw);
 }
 
 function utcDay(value: string): string | undefined {
@@ -253,20 +245,11 @@ export async function resolveAnthropicUsageAuth(
     return { token: encodeAdminToken(storedAdminKey) };
   }
 
-  const oauthToken = await ctx.resolveOAuthToken();
+  const oauthToken = await ctx.resolveOAuthToken({
+    excludeProfileIds: [CLAUDE_CLI_PROFILE_ID],
+  });
   if (oauthToken) {
     return oauthToken;
-  }
-
-  // Claude CLI-only setups have their keychain login synced under the
-  // claude-cli profile, not anthropic; without this fallback those setups
-  // never surface subscription usage windows. Usage snapshots are keyed per
-  // provider, so when a native anthropic OAuth account and a different Claude
-  // Code account coexist, the native account wins and both auth rows display
-  // its quota. Per-profile usage attribution is tracked in #102807.
-  const claudeCliToken = await ctx.resolveOAuthToken({ provider: CLAUDE_CLI_BACKEND_ID });
-  if (claudeCliToken) {
-    return claudeCliToken;
   }
 
   const apiKey = ctx.resolveApiKeyFromConfigAndStore();
@@ -274,52 +257,33 @@ export async function resolveAnthropicUsageAuth(
   if (adminKey) {
     return { token: encodeAdminToken(adminKey) };
   }
-  if (apiKey && validateAnthropicSetupToken(apiKey) === undefined) {
-    return { token: apiKey };
+  if (apiKey) {
+    const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
+    if (validateAnthropicSetupToken(apiKey) === undefined) {
+      return { token: apiKey };
+    }
   }
+
+  // Claude owns its native refresh-token family. Do not resolve a copied
+  // claude-cli profile here: generic OAuth refresh invalidates Claude's login.
   return { handled: true };
 }
 
 /** Formats keychain plan metadata like ("max", "default_max_20x") as "Max (20x)". */
-function formatClaudePlanLabel(
-  subscriptionType?: string,
-  rateLimitTier?: string,
-): string | undefined {
-  const base = subscriptionType?.trim();
+function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string | undefined {
+  const base = ctx.subscriptionType?.trim();
   if (!base) {
     return undefined;
   }
   const label = base.charAt(0).toUpperCase() + base.slice(1);
-  const tier = rateLimitTier?.trim().match(/_(\d+x)$/i)?.[1];
+  const tier = ctx.rateLimitTier?.trim().match(/_(\d+x)$/i)?.[1];
   return tier ? `${label} (${tier})` : label;
-}
-
-// Best-effort plan label. Preferred source is plan metadata on the resolved
-// auth profile (captured when the external CLI login was synced — the only
-// prompt-free source on keychain-backed macOS installs). Fallback reads the
-// Claude CLI credential file without keychain prompts for file-based logins.
-// When multiple Claude accounts are in play the CLI login may differ from the
-// profile that fetched usage; a mislabeled plan chip is acceptable, a second
-// network call is not.
-function resolveClaudePlanLabel(ctx: ProviderFetchUsageSnapshotContext): string | undefined {
-  const fromAuth = formatClaudePlanLabel(ctx.subscriptionType, ctx.rateLimitTier);
-  if (fromAuth) {
-    return fromAuth;
-  }
-  const credential = readClaudeCliCredentialsCached({
-    allowKeychainPrompt: false,
-    ttlMs: 5 * 60_000,
-  });
-  if (!credential || credential.type !== "oauth") {
-    return undefined;
-  }
-  return formatClaudePlanLabel(credential.subscriptionType, credential.rateLimitTier);
 }
 
 export async function fetchAnthropicUsage(
   ctx: ProviderFetchUsageSnapshotContext,
 ): Promise<ProviderUsageSnapshot> {
-  const adminKey = decodeAdminToken(ctx.token);
+  const adminKey = decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, ctx.token);
   if (adminKey) {
     return await fetchAnthropicAdminUsage({
       apiKey: adminKey,
@@ -331,8 +295,7 @@ export async function fetchAnthropicUsage(
   if (snapshot.error) {
     return snapshot;
   }
-  // Identity is captured on the credential (profile store or the CLI-sync
-  // read), so a fetch-time ambient config read can never mislabel an account.
+  // Identity comes from the selected credential, so ambient config cannot mislabel an account.
   const accountEmail = ctx.email;
   // Plan labels stay window-gated: a windowless response has no plan quota to
   // label, while the account identity is still worth surfacing.

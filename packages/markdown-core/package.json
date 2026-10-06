@@ -57,11 +57,11 @@
   },
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
+    "markdown-it": "15.0.2",
+    "markdown-it-cjk-friendly": "3.0.0",
     "mdast-util-from-markdown": "2.0.3",
     "mdast-util-gfm-table": "2.0.0",
-    "markdown-it": "14.3.0",
-    "markdown-it-cjk-friendly": "2.0.2",
-    "micromark-extension-gfm-table": "2.1.1",
-    "yaml": "2.9.0"
+    "micromark-extension-gfm-table": "2.1.2",
+    "yaml": "2.9.1"
   }
 }

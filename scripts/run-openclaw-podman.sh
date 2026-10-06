@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Rootless OpenClaw in Podman: run after one-time setup.
 #
 # One-time setup (from repo root): ./scripts/podman/setup.sh
@@ -17,55 +21,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/host-timeout.sh
 source "$SCRIPT_DIR/lib/host-timeout.sh"
+# shellcheck source=scripts/podman/common.sh
+source "$SCRIPT_DIR/podman/common.sh"
 PLATFORM_NAME="$(uname -s 2>/dev/null || echo unknown)"
-
-resolve_user_home() {
-  local user="$1"
-  local home=""
-  if command -v getent >/dev/null 2>&1; then
-    home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6 || true)"
-  fi
-  if [[ -z "$home" && -f /etc/passwd ]]; then
-    home="$(awk -F: -v u="$user" '$1==u {print $6}' /etc/passwd 2>/dev/null || true)"
-  fi
-  if [[ -z "$home" ]]; then
-    home="/home/$user"
-  fi
-  printf '%s' "$home"
-}
-
-fail() {
-  echo "$*" >&2
-  exit 1
-}
 
 run_podman_detached() {
   openclaw_host_timeout_cmd "$PODMAN_RUN_TIMEOUT" podman run "$@"
-}
-
-validate_single_line_value() {
-  local label="$1"
-  local value="$2"
-  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
-    fail "Invalid $label: control characters are not allowed."
-  fi
-}
-
-validate_absolute_path() {
-  local label="$1"
-  local value="$2"
-  validate_single_line_value "$label" "$value"
-  [[ "$value" == /* ]] || fail "Invalid $label: expected an absolute path."
-  [[ "$value" != *"//"* ]] || fail "Invalid $label: repeated slashes are not allowed."
-  [[ "$value" != *"/./"* && "$value" != */. && "$value" != *"/../"* && "$value" != */.. ]] ||
-    fail "Invalid $label: dot path segments are not allowed."
-}
-
-validate_mount_source_path() {
-  local label="$1"
-  local value="$2"
-  validate_absolute_path "$label" "$value"
-  [[ "$value" != *:* ]] || fail "Invalid $label: ':' is not allowed in Podman bind-mount source paths."
 }
 
 ensure_safe_existing_regular_file() {
@@ -75,44 +36,6 @@ ensure_safe_existing_regular_file() {
   [[ -e "$file" ]] || fail "Missing $label: $file"
   [[ ! -L "$file" ]] || fail "Unsafe $label: symlinks are not allowed ($file)"
   [[ -f "$file" ]] || fail "Unsafe $label: expected a regular file ($file)"
-}
-
-ensure_safe_existing_dir() {
-  local label="$1"
-  local dir="$2"
-  validate_absolute_path "$label" "$dir"
-  [[ -d "$dir" ]] || fail "Missing $label: $dir"
-  [[ ! -L "$dir" ]] || fail "Unsafe $label: symlinks are not allowed ($dir)"
-}
-
-stat_uid() {
-  local path="$1"
-  if stat -f '%u' "$path" >/dev/null 2>&1; then
-    stat -f '%u' "$path"
-  else
-    stat -Lc '%u' "$path"
-  fi
-}
-
-stat_mode() {
-  local path="$1"
-  if stat -f '%Lp' "$path" >/dev/null 2>&1; then
-    stat -f '%Lp' "$path"
-  else
-    stat -Lc '%a' "$path"
-  fi
-}
-
-ensure_private_existing_dir_owned_by_user() {
-  local label="$1"
-  local dir="$2"
-  local uid=""
-  local mode=""
-  ensure_safe_existing_dir "$label" "$dir"
-  uid="$(stat_uid "$dir")"
-  [[ "$uid" == "$(id -u)" ]] || fail "Unsafe $label: not owned by current user ($dir)"
-  mode="$(stat_mode "$dir")"
-  (( (8#$mode & 0022) == 0 )) || fail "Unsafe $label: group/other writable ($dir)"
 }
 
 ensure_private_existing_regular_file_owned_by_user() {
@@ -125,32 +48,6 @@ ensure_private_existing_regular_file_owned_by_user() {
   [[ "$uid" == "$(id -u)" ]] || fail "Unsafe $label: not owned by current user ($file)"
   mode="$(stat_mode "$file")"
   (( (8#$mode & 0077) == 0 )) || fail "Unsafe $label: expected owner-only permissions ($file)"
-}
-
-ensure_safe_write_file_path() {
-  local label="$1"
-  local file="$2"
-  local dir
-  validate_absolute_path "$label" "$file"
-  if [[ -e "$file" ]]; then
-    [[ ! -L "$file" ]] || fail "Unsafe $label: symlinks are not allowed ($file)"
-    [[ -f "$file" ]] || fail "Unsafe $label: expected a regular file ($file)"
-  fi
-  dir="$(dirname "$file")"
-  ensure_safe_existing_dir "${label} parent directory" "$dir"
-}
-
-write_file_atomically() {
-  local file="$1"
-  local mode="$2"
-  local dir=""
-  local tmp=""
-  ensure_safe_write_file_path "output file" "$file"
-  dir="$(dirname "$file")"
-  tmp="$(mktemp "$dir/.tmp.XXXXXX")"
-  cat >"$tmp"
-  chmod "$mode" "$tmp"
-  mv -f "$tmp" "$file"
 }
 
 load_podman_env_file() {
@@ -187,15 +84,6 @@ load_podman_env_file() {
     export "$key"
   done
   exec 9<&-
-}
-
-validate_port() {
-  local label="$1"
-  local value="$2"
-  local numeric=""
-  [[ "$value" =~ ^[0-9]{1,5}$ ]] || fail "Invalid $label: must be numeric."
-  numeric=$((10#$value))
-  (( numeric >= 1 && numeric <= 65535 )) || fail "Invalid $label: out of range."
 }
 
 EFFECTIVE_USER="$(id -un)"
@@ -237,8 +125,6 @@ if [[ -f "$ENV_FILE" ]]; then
   load_podman_env_file "$ENV_FILE"
 fi
 
-CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$EFFECTIVE_HOME/.openclaw}"
-ENV_FILE="${OPENCLAW_PODMAN_ENV:-$CONFIG_DIR/.env}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$CONFIG_DIR/workspace}"
 CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
 OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-${OPENCLAW_IMAGE:-openclaw:local}}"
@@ -285,49 +171,6 @@ resolve_config_gateway_bind() {
 CONFIG_GATEWAY_BIND="$(resolve_config_gateway_bind "$CONFIG_DIR")"
 GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-${CONFIG_GATEWAY_BIND:-lan}}"
 
-upsert_env_var() {
-  local file="$1"
-  local key="$2"
-  local value="$3"
-  local tmp
-  local dir
-  ensure_safe_write_file_path "env file" "$file"
-  dir="$(dirname "$file")"
-  tmp="$(mktemp "$dir/.env.tmp.XXXXXX")"
-  if [[ -f "$file" ]]; then
-    awk -v k="$key" -v v="$value" '
-      BEGIN { found = 0 }
-      $0 ~ ("^" k "=") { print k "=" v; found = 1; next }
-      { print }
-      END { if (!found) print k "=" v }
-    ' "$file" >"$tmp"
-  else
-    printf '%s=%s\n' "$key" "$value" >"$tmp"
-  fi
-  mv "$tmp" "$file"
-  chmod 600 "$file" 2>/dev/null || true
-}
-
-generate_token_hex_32() {
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 32
-    return 0
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - <<'PY'
-import secrets
-print(secrets.token_hex(32))
-PY
-    return 0
-  fi
-  if command -v od >/dev/null 2>&1; then
-    od -An -N32 -tx1 /dev/urandom | tr -d " \n"
-    return 0
-  fi
-  echo "Missing dependency: need openssl or python3 (or od) to generate OPENCLAW_GATEWAY_TOKEN." >&2
-  exit 1
-}
-
 create_token_env_file() {
   local file="$1"
   local token="$2"
@@ -347,10 +190,24 @@ sync_local_control_ui_origins_via_cli() {
   local config_dir=""
   local allowed_json=""
   local merged_json=""
+  local public_origin=""
   config_dir="$(dirname "$file")"
   if ! command -v openclaw >/dev/null 2>&1; then
     echo "Warning: openclaw not found; unable to sync gateway.controlUi.allowedOrigins in $file." >&2
     return 0
+  fi
+  allowed_json="$(
+    OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
+      openclaw config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+  )"
+  if [[ -z "$allowed_json" ]]; then
+    public_origin="$(
+      OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
+        openclaw config get gateway.publicOrigin 2>/dev/null || true
+    )"
+    if [[ -n "${public_origin//[[:space:]]/}" ]]; then
+      return 0
+    fi
   fi
   if ! command -v python3 >/dev/null 2>&1; then
     OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
@@ -359,10 +216,6 @@ sync_local_control_ui_origins_via_cli() {
       --strict-json >/dev/null
     return 0
   fi
-  allowed_json="$(
-    OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
-      openclaw config get gateway.controlUi.allowedOrigins --json 2>/dev/null || true
-  )"
   merged_json="$(python3 - "$port" "$allowed_json" <<'PY'
 import json
 import sys
@@ -411,58 +264,7 @@ sync_local_control_ui_origins() {
   dir="$(dirname "$file")"
   ensure_private_existing_dir_owned_by_user "config file directory" "$dir"
   tmp="$(mktemp "$dir/.config.tmp.XXXXXX")"
-  if ! python3 - "$file" "$port" "$tmp" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-port = sys.argv[2]
-tmp = sys.argv[3]
-try:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-except json.JSONDecodeError as exc:
-    print(
-        f"Warning: unable to sync gateway.controlUi.allowedOrigins in {path}: existing config is not strict JSON ({exc}). Leaving file unchanged.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-if not isinstance(data, dict):
-    raise SystemExit(f"{path}: expected top-level object")
-gateway = data.setdefault("gateway", {})
-if not isinstance(gateway, dict):
-    raise SystemExit(f"{path}: expected gateway object")
-gateway.setdefault("mode", "local")
-control_ui = gateway.setdefault("controlUi", {})
-if not isinstance(control_ui, dict):
-    raise SystemExit(f"{path}: expected gateway.controlUi object")
-allowed = control_ui.get("allowedOrigins")
-desired = [
-    f"http://127.0.0.1:{port}",
-    f"http://localhost:{port}",
-]
-if not isinstance(allowed, list):
-    allowed = []
-cleaned = []
-seen = set()
-for origin in allowed:
-    if not isinstance(origin, str):
-        continue
-    normalized = origin.strip()
-    if not normalized or normalized in seen:
-        continue
-    cleaned.append(normalized)
-    seen.add(normalized)
-for origin in desired:
-    if origin not in seen:
-        cleaned.append(origin)
-        seen.add(origin)
-control_ui["allowedOrigins"] = cleaned
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
-PY
-  then
+  if ! write_local_control_ui_origins "$file" "$port" "$tmp" sync; then
     rm -f "$tmp"
     sync_local_control_ui_origins_via_cli "$file" "$port"
     return 0
@@ -484,7 +286,8 @@ cleanup_token_env_file() {
 trap cleanup_token_env_file EXIT
 
 if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
-  export OPENCLAW_GATEWAY_TOKEN="$(generate_token_hex_32)"
+  OPENCLAW_GATEWAY_TOKEN="$(generate_token_hex_32)"
+  export OPENCLAW_GATEWAY_TOKEN
   mkdir -p "$(dirname "$ENV_FILE")"
   ensure_safe_existing_dir "env file directory" "$(dirname "$ENV_FILE")"
   upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_TOKEN" "$OPENCLAW_GATEWAY_TOKEN"
@@ -537,11 +340,11 @@ else
   [[ -n "$SELINUX_MOUNT_OPTS" ]] && SELINUX_MOUNT_OPTS=",$SELINUX_MOUNT_OPTS"
 fi
 
+TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
 if [[ "$RUN_SETUP" == true ]]; then
-  TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
   podman run --pull="$PODMAN_PULL" --rm -it \
     --init \
-    "${USERNS_ARGS[@]}" "${RUN_USER_ARGS[@]}" \
+    ${USERNS_ARGS[@]+"${USERNS_ARGS[@]}"} ${RUN_USER_ARGS[@]+"${RUN_USER_ARGS[@]}"} \
     -e HOME=/home/node -e TERM=xterm-256color -e BROWSER=echo \
     -e NPM_CONFIG_CACHE=/home/node/.openclaw/.npm \
     -e OPENCLAW_NO_RESPAWN=1 \
@@ -553,11 +356,10 @@ if [[ "$RUN_SETUP" == true ]]; then
   exit 0
 fi
 
-TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
 run_podman_detached --pull="$PODMAN_PULL" -d --replace \
   --name "$CONTAINER_NAME" \
   --init \
-  "${USERNS_ARGS[@]}" "${RUN_USER_ARGS[@]}" \
+  ${USERNS_ARGS[@]+"${USERNS_ARGS[@]}"} ${RUN_USER_ARGS[@]+"${RUN_USER_ARGS[@]}"} \
   -e HOME=/home/node -e TERM=xterm-256color \
   -e NPM_CONFIG_CACHE=/home/node/.openclaw/.npm \
   -e OPENCLAW_NO_RESPAWN=1 \

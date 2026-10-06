@@ -1,4 +1,8 @@
 import {
+  buildCloudflareAccessHeaders,
+  type CloudflareAccessCredentials,
+} from "../../packages/gateway-client/src/cloudflare-access.js";
+import {
   GatewayClient,
   type GatewayClientCloseInfo,
   type GatewayClientOptions,
@@ -15,6 +19,7 @@ type CandidateConnectionOptions = Omit<
   GatewayClientOptions,
   | "url"
   | "tlsFingerprint"
+  | "edgeAuthHeaders"
   | "onEvent"
   | "onHelloOk"
   | "onConnectError"
@@ -24,16 +29,22 @@ type CandidateConnectionOptions = Omit<
 
 type GatewayCandidateConnectionParams = {
   candidates: readonly NodeHostGatewayConfig[];
+  cloudflareAccessByCandidate?: ReadonlyMap<NodeHostGatewayConfig, CloudflareAccessCredentials>;
   clientOptions: CandidateConnectionOptions;
   onEvent: (event: GatewayCandidateEvent) => void;
-  onHelloOk: (hello: GatewayCandidateHello, url: string, tlsFingerprint?: string) => void;
+  onHelloOk: (
+    hello: GatewayCandidateHello,
+    url: string,
+    tlsFingerprint?: string,
+    cloudflareAccess?: CloudflareAccessCredentials,
+  ) => void;
   onConnectError: (error: Error) => void;
   onReconnectPaused: (info: GatewayReconnectPausedInfo) => void;
   onClose: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
   onWinningCandidate: (candidate: NodeHostGatewayConfig) => void;
 };
 
-function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): string {
+export function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): string {
   const host = gateway.host ?? "127.0.0.1";
   const urlHost =
     host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
@@ -58,6 +69,8 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
 
   let currentCandidateIndex = 0;
   let stopped = false;
+  let stopPromise: Promise<void> | undefined;
+  const candidateClients: GatewayClient[] = [];
   let winnerSelected = params.candidates.length === 1;
   let latestManifest:
     | { caps: string[]; commands: string[]; computerUse?: ComputerUseCapabilityDescriptor }
@@ -70,10 +83,14 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
       throw new Error(`node host gateway candidate ${candidateIndex} is unavailable`);
     }
     const url = formatGatewayCandidateUrl(candidate);
+    const cloudflareAccess = params.cloudflareAccessByCandidate?.get(candidate);
     const candidateClient = new GatewayClient({
       ...params.clientOptions,
       url,
       tlsFingerprint: candidate.tlsFingerprint,
+      ...(cloudflareAccess
+        ? { edgeAuthHeaders: buildCloudflareAccessHeaders(cloudflareAccess) }
+        : {}),
       onEvent: (event) => {
         if (currentCandidateIndex === candidateIndex) {
           params.onEvent(event);
@@ -87,7 +104,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
           winnerSelected = true;
           params.onWinningCandidate(candidate);
         }
-        params.onHelloOk(hello, url, candidate.tlsFingerprint);
+        params.onHelloOk(hello, url, candidate.tlsFingerprint, cloudflareAccess);
       },
       onConnectError: (error) => {
         if (currentCandidateIndex === candidateIndex) {
@@ -100,7 +117,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
         }
       },
       onClose: (code, reason, info) => {
-        if (currentCandidateIndex !== candidateIndex) {
+        if (stopped || currentCandidateIndex !== candidateIndex) {
           return;
         }
         params.onClose(code, reason, info);
@@ -129,16 +146,35 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
     if (latestManifest) {
       candidateClient.updateNodeManifest(latestManifest);
     }
+    candidateClients.push(candidateClient);
     return candidateClient;
   }
 
   return {
     start(): void {
-      currentClient.start();
+      if (!stopped) {
+        currentClient.start();
+      }
     },
-    stop(): void {
+    stop(): Promise<void> {
       stopped = true;
-      currentClient.stop();
+      // Retired candidates can still own accepted storage work. Keep terminal failures
+      // because the client's next drain may have already consumed its first error.
+      stopPromise ??= Promise.resolve().then(async () => {
+        const results = await Promise.allSettled(
+          candidateClients.map((client) => client.stopAndWait()),
+        );
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length === 1) {
+          throw failures[0];
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(failures, "node host gateway cleanup failed");
+        }
+      });
+      return stopPromise;
     },
     request<T = Record<string, unknown>>(
       ...requestArgs: [method: string, params?: unknown, options?: GatewayClientRequestOptions]

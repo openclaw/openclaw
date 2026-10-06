@@ -1,4 +1,3 @@
-// Qa Matrix plugin module implements shared scenario runtime E2EE behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
@@ -62,12 +61,7 @@ export function requireMatrixQaPassword(
   context: MatrixQaScenarioContext,
   actor: "driver" | "observer" | "sut",
 ) {
-  const password =
-    actor === "driver"
-      ? context.driverPassword
-      : actor === "observer"
-        ? context.observerPassword
-        : context.sutPassword;
+  const password = context[`${actor}Password`];
   if (!password) {
     throw new Error(`Matrix E2EE ${actor} password is required for this scenario`);
   }
@@ -227,15 +221,28 @@ export async function waitForMatrixQaVerificationSummary(params: {
   timeoutMs: number;
 }) {
   const startedAt = Date.now();
+  let last: MatrixVerificationSummary[] = [];
   while (Date.now() - startedAt < params.timeoutMs) {
     const summaries = await params.client.listVerifications();
+    last = summaries;
     const found = summaries.find(params.predicate);
     if (found) {
       return found;
     }
     await sleep(Math.min(250, Math.max(25, params.timeoutMs - (Date.now() - startedAt))));
   }
-  throw new Error(`timed out waiting for Matrix verification summary: ${params.label}`);
+  const states = last.slice(0, 4).map((summary) => ({
+    phase: summary.phaseName,
+    pending: summary.pending,
+    completed: summary.completed,
+    initiatedByMe: summary.initiatedByMe,
+    hasReciprocateQr: summary.hasReciprocateQr,
+    hasSas: summary.hasSas,
+    hasError: Boolean(summary.error),
+  }));
+  const details = `timed out waiting for Matrix verification summary: ${params.label}; states=${JSON.stringify(states)}`;
+  process.stderr.write(`[matrix-verification-timeout] ${details}\n`);
+  throw new Error(details);
 }
 
 export function sameMatrixQaVerificationTransaction(
@@ -294,40 +301,35 @@ export function isMatrixQaE2eeNoticeTriggeredSutReply(params: {
   );
 }
 
-export async function createMatrixQaE2eeDriverClient(
+export async function createMatrixQaE2eeAccountClient(
   context: MatrixQaScenarioContext,
-  scenarioId: MatrixQaE2eeScenarioId,
-  opts: { actorId?: "driver" | `driver-${string}` } = {},
+  account: Pick<
+    Parameters<typeof createMatrixQaE2eeScenarioClient>[0],
+    "accessToken" | "actorId" | "deviceId" | "password" | "scenarioId" | "userId"
+  >,
 ) {
   return await createMatrixQaE2eeScenarioClient({
-    accessToken: context.driverAccessToken,
-    actorId: opts.actorId ?? "driver",
+    ...account,
     baseUrl: context.baseUrl,
-    deviceId: context.driverDeviceId,
     observedEvents: context.observedEvents,
     outputDir: requireMatrixQaE2eeOutputDir(context),
-    password: context.driverPassword,
-    scenarioId,
     timeoutMs: context.timeoutMs,
-    userId: context.driverUserId,
   });
 }
 
-async function createMatrixQaE2eeObserverClient(
+export async function createMatrixQaE2eeActorClient(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
+  actor: "driver" | "observer",
+  opts: { actorId?: "driver" | `driver-${string}` } = {},
 ) {
-  return await createMatrixQaE2eeScenarioClient({
-    accessToken: context.observerAccessToken,
-    actorId: "observer",
-    baseUrl: context.baseUrl,
-    deviceId: context.observerDeviceId,
-    observedEvents: context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(context),
-    password: context.observerPassword,
+  return await createMatrixQaE2eeAccountClient(context, {
+    accessToken: context[`${actor}AccessToken`],
+    actorId: opts.actorId ?? actor,
+    deviceId: context[`${actor}DeviceId`],
+    password: context[`${actor}Password`],
     scenarioId,
-    timeoutMs: context.timeoutMs,
-    userId: context.observerUserId,
+    userId: context[`${actor}UserId`],
   });
 }
 
@@ -339,13 +341,30 @@ export async function withMatrixQaE2eeDriverAndObserver<T>(
     observer: MatrixQaE2eeScenarioClient;
   }) => Promise<T>,
 ) {
-  const driver = await createMatrixQaE2eeDriverClient(context, scenarioId);
-  const observer = await createMatrixQaE2eeObserverClient(context, scenarioId);
-  try {
-    return await run({ driver, observer });
-  } finally {
-    await Promise.all([driver.stop(), observer.stop()]);
+  const driver = await createMatrixQaE2eeActorClient(context, scenarioId, "driver");
+  let observer: MatrixQaE2eeScenarioClient | undefined;
+  const [outcome] = await Promise.allSettled([
+    (async () => {
+      observer = await createMatrixQaE2eeActorClient(context, scenarioId, "observer");
+      return await run({ driver, observer });
+    })(),
+  ]);
+  // Join every acquired client before the next scenario can reuse its device and crypto state.
+  const cleanup = await Promise.allSettled(
+    [driver, observer].map(async (client) => client?.stop()),
+  );
+  const failures: unknown[] = outcome.status === "fulfilled" ? [] : [outcome.reason];
+  failures.push(
+    ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+  );
+  if (outcome.status === "fulfilled" && failures.length === 0) {
+    return outcome.value;
   }
+  throw failures.length === 1
+    ? failures[0]
+    : new AggregateError(failures, "Matrix E2EE scenario and client cleanup failed", {
+        cause: failures[0],
+      });
 }
 
 export async function completeMatrixQaSasVerification(params: {

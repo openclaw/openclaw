@@ -1,13 +1,21 @@
 // Hermes provider config contract parsing and normalization.
 import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   MCP_ENV_REFERENCE_RE,
   mcpValueHasEnvReferences,
+  normalizeHermesEnvReferenceName,
   resolveMcpEnvReferences,
 } from "./config-env.js";
-import { childRecord, readStringArray } from "./helpers.js";
-import { normalizeHermesCustomProviderId, normalizeHermesProviderId } from "./model.js";
+import {
+  normalizeHermesCustomProviderId,
+  normalizeHermesProviderId,
+  readHermesBaseUrl,
+} from "./model.js";
 
 type OpenClawModelApi =
   | "anthropic-messages"
@@ -15,12 +23,7 @@ type OpenClawModelApi =
   | "openai-responses"
   | "openai-chatgpt-responses";
 
-type HermesModelConfig = {
-  id: string;
-  contextWindow?: number;
-  maxTokens?: number;
-  supportsVision?: boolean;
-};
+type HermesModelConfig = ReturnType<typeof readModelMetadata> & { id: string };
 
 export type HermesProviderConfig = {
   id: string;
@@ -38,6 +41,27 @@ export const HERMES_TRANSPORTS: Record<string, OpenClawModelApi> = {
   codex_responses: "openai-responses",
   openai_chat: "openai-completions",
 };
+const HERMES_TRANSPORT_ALIASES: Record<string, string> = {
+  openai: "chat_completions",
+  "openai-chat": "chat_completions",
+  "chat-completions": "chat_completions",
+  chatcompletions: "chat_completions",
+  responses: "codex_responses",
+  openai_responses: "codex_responses",
+  "openai-responses": "codex_responses",
+  anthropic: "anthropic_messages",
+  "anthropic-messages": "anthropic_messages",
+  messages: "anthropic_messages",
+};
+
+export function readProviderTransport(raw: Record<string, unknown>): string | undefined {
+  const transport = (
+    normalizeOptionalString(raw.api_mode) ??
+    normalizeOptionalString(raw.apiMode) ??
+    normalizeOptionalString(raw.transport)
+  )?.toLowerCase();
+  return transport ? (HERMES_TRANSPORT_ALIASES[transport] ?? transport) : undefined;
+}
 const HERMES_MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 const HERMES_MINIMAX_CN_BASE_URL = "https://api.minimaxi.com/anthropic";
 const HERMES_ALIBABA_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
@@ -108,18 +132,17 @@ const HERMES_API_KEY_ENV_VARS: Record<string, string> = {
   zai: "ZAI_API_KEY",
 };
 
-function resolveHermesProviderEnvValue(
+export function resolveHermesProviderBaseUrlEnv(
   providerId: string | undefined,
   env: Record<string, string>,
-  special: Record<string, readonly string[]>,
-  canonical: Record<string, readonly string[]>,
 ): string | undefined {
   if (!providerId) {
     return undefined;
   }
   const sourceProvider = normalizeHermesCustomProviderId(providerId);
   const provider = normalizeHermesProviderId(sourceProvider);
-  const names = special[sourceProvider] ?? canonical[provider] ?? [];
+  const names =
+    HERMES_SPECIAL_BASE_URL_ENV_VARS[sourceProvider] ?? HERMES_BASE_URL_ENV_VARS[provider] ?? [];
   for (const name of names) {
     const value = env[name]?.trim();
     if (value) {
@@ -127,18 +150,6 @@ function resolveHermesProviderEnvValue(
     }
   }
   return undefined;
-}
-
-export function resolveHermesProviderBaseUrlEnv(
-  providerId: string | undefined,
-  env: Record<string, string>,
-): string | undefined {
-  return resolveHermesProviderEnvValue(
-    providerId,
-    env,
-    HERMES_SPECIAL_BASE_URL_ENV_VARS,
-    HERMES_BASE_URL_ENV_VARS,
-  );
 }
 
 export function resolveHermesProviderApiKeyEnv(providerId: string | undefined): string | undefined {
@@ -164,13 +175,11 @@ export function resolveHermesImplicitBaseUrl(providerId: string | undefined): st
     : undefined;
 }
 
-export { readPositiveNumber };
-
 export function resolveProviderApi(
   raw: Record<string, unknown>,
   providerId?: string,
 ): OpenClawModelApi | undefined {
-  const transport = normalizeOptionalString(raw.transport) ?? normalizeOptionalString(raw.api_mode);
+  const transport = readProviderTransport(raw);
   const sourceProvider = providerId?.trim().toLowerCase() ?? "";
   if (sourceProvider === "openai-codex") {
     return "openai-chatgpt-responses";
@@ -179,20 +188,10 @@ export function resolveProviderApi(
     return HERMES_TRANSPORTS[transport];
   }
   const provider = sourceProvider ? normalizeHermesProviderId(sourceProvider) : "";
-  const baseUrl =
-    normalizeOptionalString(raw.base_url) ??
-    normalizeOptionalString(raw.baseUrl) ??
-    normalizeOptionalString(raw.url) ??
-    normalizeOptionalString(raw.api);
-  let hostname = "";
-  let pathname = "";
-  try {
-    const parsed = baseUrl ? new URL(baseUrl) : undefined;
-    hostname = parsed?.hostname.toLowerCase() ?? "";
-    pathname = parsed?.pathname.toLowerCase().replace(/\/+$/u, "") ?? "";
-  } catch {
-    // Provider identity still supplies the protocol for templated endpoints.
-  }
+  const baseUrl = readHermesBaseUrl(raw);
+  const parsed = URL.parse(baseUrl ?? "");
+  const hostname = parsed?.hostname.toLowerCase() ?? "";
+  const pathname = parsed?.pathname.toLowerCase().replace(/\/+$/u, "") ?? "";
   // Hermes honors an explicit Responses mode for named providers. Plain
   // `custom` is the exception: endpoint detection rejects stale Responses state.
   if (transport === "codex_responses" && sourceProvider !== "custom") {
@@ -223,18 +222,14 @@ export function resolveProviderApi(
 }
 
 function normalizeProviderBaseUrl(baseUrl: string, api: OpenClawModelApi): string {
-  if (api !== "anthropic-messages") {
+  const parsed = api === "anthropic-messages" ? URL.parse(baseUrl) : null;
+  if (!parsed) {
     return baseUrl;
   }
-  try {
-    const parsed = new URL(baseUrl);
-    // The Anthropic SDK appends /v1/messages. Store the canonical base so
-    // imported proxy paths do not repeat the version segment.
-    parsed.pathname = parsed.pathname.replace(/\/v1\/?$/u, "");
-    return parsed.toString().replace(/\/$/u, "");
-  } catch {
-    return baseUrl;
-  }
+  // The Anthropic SDK appends /v1/messages. Store the canonical base so
+  // imported proxy paths do not repeat the version segment.
+  parsed.pathname = parsed.pathname.replace(/\/v1\/?$/u, "");
+  return parsed.toString().replace(/\/$/u, "");
 }
 
 export function readEnvReference(value: unknown): string | undefined {
@@ -243,39 +238,33 @@ export function readEnvReference(value: unknown): string | undefined {
   return match ? normalizeHermesEnvReferenceName(match[1] ?? "") : undefined;
 }
 
-function normalizeHermesEnvReferenceName(value: string): string | undefined {
-  const trimmed = value.trim();
-  const name = trimmed.startsWith("env:") ? trimmed.slice("env:".length).trim() : trimmed;
-  return name || undefined;
-}
-
 export function readProviderApiKeyEnv(raw: Record<string, unknown>): string | undefined {
   return (
     normalizeOptionalString(raw.key_env) ??
     normalizeOptionalString(raw.api_key_env) ??
+    normalizeOptionalString(raw.keyEnv) ??
     normalizeOptionalString(raw.apiKeyEnv) ??
     normalizeOptionalString(raw.env) ??
-    readEnvReference(raw.api_key)
+    readEnvReference(raw.api_key ?? raw.apiKey)
   );
 }
 
 export function resolveHermesEndpointApiKeyEnv(baseUrl: string): string | undefined {
-  try {
-    const hostname = new URL(baseUrl).hostname.toLowerCase();
-    return hostname === "openai.com" ||
+  const hostname = URL.parse(baseUrl)?.hostname.toLowerCase();
+  return hostname &&
+    (hostname === "openai.com" ||
       hostname.endsWith(".openai.com") ||
       hostname === "openai.azure.com" ||
-      hostname.endsWith(".openai.azure.com")
-      ? "OPENAI_API_KEY"
-      : undefined;
-  } catch {
-    return undefined;
-  }
+      hostname.endsWith(".openai.azure.com"))
+    ? "OPENAI_API_KEY"
+    : undefined;
 }
 
-function readModelMetadata(raw: Record<string, unknown>): Omit<HermesModelConfig, "id"> {
+function readModelMetadata(raw: Record<string, unknown>) {
   const contextWindow =
-    readPositiveNumber(raw.context_length) ?? readPositiveNumber(raw.contextWindow);
+    readPositiveNumber(raw.context_length) ??
+    readPositiveNumber(raw.contextLength) ??
+    readPositiveNumber(raw.contextWindow);
   const maxTokens =
     readPositiveNumber(raw.max_tokens) ??
     readPositiveNumber(raw.max_output_tokens) ??
@@ -291,10 +280,22 @@ function readModelMetadata(raw: Record<string, unknown>): Omit<HermesModelConfig
 export function collectProviderModels(raw: Record<string, unknown>): HermesModelConfig[] {
   const models = new Map<string, HermesModelConfig>();
   const rootMetadata = readModelMetadata(raw);
-  for (const modelId of readStringArray(raw.models)) {
-    models.set(modelId, { id: modelId, ...rootMetadata });
-  }
-  for (const [modelId, metadata] of Object.entries(childRecord(raw, "models"))) {
+  const entries = Array.isArray(raw.models)
+    ? raw.models.map((model) =>
+        isRecord(model)
+          ? ([
+              normalizeOptionalString(model.id) ?? normalizeOptionalString(model.name),
+              model,
+            ] as const)
+          : ([normalizeOptionalString(model), {}] as const),
+      )
+    : Object.entries(asNonArrayRecord(raw.models)).filter(
+        ([id]) => !["__discovered_model_catalog__", "__explicit_model_allowlist__"].includes(id),
+      );
+  for (const [modelId, metadata] of entries) {
+    if (!modelId) {
+      continue;
+    }
     models.set(modelId, {
       id: modelId,
       ...rootMetadata,
@@ -302,7 +303,7 @@ export function collectProviderModels(raw: Record<string, unknown>): HermesModel
     });
   }
   for (const modelId of [
-    normalizeOptionalString(raw.default_model),
+    normalizeOptionalString(raw.default_model) ?? normalizeOptionalString(raw.defaultModel),
     normalizeOptionalString(raw.default),
     normalizeOptionalString(raw.model),
   ]) {
@@ -346,11 +347,7 @@ export function readProviderBaseUrl(
   raw: Record<string, unknown>,
   env: Record<string, string>,
 ): { baseUrl?: string; sensitive: boolean; unresolved: boolean } {
-  const value =
-    normalizeOptionalString(raw.base_url) ??
-    normalizeOptionalString(raw.baseUrl) ??
-    normalizeOptionalString(raw.url) ??
-    normalizeOptionalString(raw.api);
+  const value = readHermesBaseUrl(raw);
   if (!value) {
     return { sensitive: false, unresolved: false };
   }

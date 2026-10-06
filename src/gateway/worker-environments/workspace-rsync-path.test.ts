@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { prepareLocalWorkspaceRsyncReceiver } from "./tunnel.test-support.js";
 import {
   createWorkerWorkspaceRsyncReceiverPathFactory,
   WORKER_WORKSPACE_RSYNC_DESTINATION,
@@ -38,16 +38,8 @@ describe.skipIf(process.platform === "win32")("workspace rsync receiver path", (
     const remoteRelative = path.posix.relative(canonicalHome, canonicalWorkspace);
     const nonce = "b".repeat(32);
     const receiverEntryPath = workerWorkspaceRsyncReceiverEntryPath(BUNDLE_HASH);
-    const installRoot = path.join(canonicalHome, ".openclaw-worker", BUNDLE_HASH);
     const receiverEntry = path.join(canonicalHome, receiverEntryPath);
-    await fs.mkdir(path.dirname(receiverEntry), { recursive: true });
-    await fs.writeFile(path.join(installRoot, "package.json"), '{"type":"module"}\n');
-    const tsxApi = import.meta.resolve("tsx/esm/api");
-    const sourceEntry = pathToFileURL(path.resolve("src/worker/workspace-rsync-receiver.ts")).href;
-    await fs.writeFile(
-      receiverEntry,
-      `import { tsImport } from ${JSON.stringify(tsxApi)};\nawait tsImport(${JSON.stringify(sourceEntry)}, import.meta.url);\n`,
-    );
+    await prepareLocalWorkspaceRsyncReceiver(receiverEntry);
 
     const resolvedRsync = await runCommandWithTimeout(["sh", "-c", "command -v rsync"], {
       timeoutMs: 10_000,

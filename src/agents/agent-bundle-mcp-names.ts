@@ -1,8 +1,8 @@
-/** Sanitizes MCP server/tool names into stable model-facing tool ids. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 
 // Name sanitizers for tools exposed by bundle MCP servers. Provider/tool names
 // must fit model-facing schema limits while remaining stable and collision-free.
@@ -10,6 +10,27 @@ const TOOL_NAME_SAFE_RE = /[^A-Za-z0-9_-]/g;
 export const TOOL_NAME_SEPARATOR = "__";
 const TOOL_NAME_MAX_PREFIX = 30;
 const TOOL_NAME_MAX_TOTAL = 64;
+
+export function compareMcpCatalogTools(left: McpCatalogTool, right: McpCatalogTool): number {
+  return (
+    left.safeServerName.localeCompare(right.safeServerName) ||
+    left.toolName.localeCompare(right.toolName) ||
+    left.serverName.localeCompare(right.serverName)
+  );
+}
+
+export function sanitizeNodeIdFragment(value: string): string {
+  const fragment = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 32);
+  if (!fragment) {
+    return "node";
+  }
+  return /^[a-z]/.test(fragment) ? fragment : `node_${fragment}`.slice(0, 32);
+}
 
 function sanitizeToolFragment(raw: string, fallback: string, maxChars?: number): string {
   const cleaned = raw.trim().replace(TOOL_NAME_SAFE_RE, "-");
@@ -21,7 +42,6 @@ function sanitizeToolFragment(raw: string, fallback: string, maxChars?: number):
   return providerSafe.length > maxChars ? providerSafe.slice(0, maxChars) : providerSafe;
 }
 
-/** Sanitize one MCP server name and reserve it in the provided set. */
 export function sanitizeServerName(raw: string, usedNames: Set<string>): string {
   const base = sanitizeToolFragment(raw, "mcp", TOOL_NAME_MAX_PREFIX);
   let candidate = base;
@@ -50,11 +70,6 @@ export function assignSafeServerNames(serverNames: Iterable<string>): Map<string
   return assignments;
 }
 
-function sanitizeToolName(raw: string): string {
-  return sanitizeToolFragment(raw, "tool");
-}
-
-/** Normalizes reserved tool names for collision checks. */
 export function normalizeReservedToolNames(names?: Iterable<string>): Set<string> {
   return new Set(
     Array.from(names ?? [], (name) => normalizeOptionalLowercaseString(name)).filter(
@@ -63,13 +78,12 @@ export function normalizeReservedToolNames(names?: Iterable<string>): Set<string
   );
 }
 
-/** Build a safe model-facing tool name from server and tool fragments. */
 export function buildSafeToolName(params: {
   serverName: string;
   toolName: string;
   reservedNames: Set<string>;
 }): string {
-  const cleanedToolName = sanitizeToolName(params.toolName);
+  const cleanedToolName = sanitizeToolFragment(params.toolName, "tool");
   const maxToolChars = Math.max(
     1,
     TOOL_NAME_MAX_TOTAL - params.serverName.length - TOOL_NAME_SEPARATOR.length,

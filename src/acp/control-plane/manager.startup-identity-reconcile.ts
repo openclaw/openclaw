@@ -1,4 +1,3 @@
-/** Startup scan that resolves pending ACP session identities when backends can report status. */
 import {
   identityHasStableSessionId,
   isSessionIdentityPending,
@@ -11,16 +10,16 @@ import type {
   AcpStartupIdentityReconcileResult,
   EnsureManagerRuntimeHandle,
   ReconcileManagerRuntimeSessionIdentifiers,
-  ResolveManagerSession,
+  ResolveManagerSessionAsync,
   WithManagerSessionActor,
 } from "./manager.types.js";
+import { assertCurrentAcpActor, resolveAcpSessionTarget } from "./manager.utils.js";
 
-/** Resolves pending ACP session identities opportunistically during manager startup. */
 export async function runManagerStartupIdentityReconcile(params: {
   cfg: OpenClawConfig;
   deps: Pick<AcpSessionManagerDeps, "listAcpSessions">;
   withSessionActor: WithManagerSessionActor;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
 }): Promise<AcpStartupIdentityReconcileResult> {
@@ -55,26 +54,38 @@ export async function runManagerStartupIdentityReconcile(params: {
 
     checked += 1;
     try {
-      const becameResolved = await params.withSessionActor(session.sessionKey, async () => {
-        const resolution = params.resolveSession({
+      const target = resolveAcpSessionTarget({
+        cfg: params.cfg,
+        sessionKey: session.sessionKey,
+        agentId: session.agentId,
+      });
+      const becameResolved = await params.withSessionActor(target, async (isCurrentActor) => {
+        const assertCurrent = () => {
+          assertCurrentAcpActor(isCurrentActor(), target.sessionKey);
+        };
+        const resolution = await params.resolveSession({
           cfg: params.cfg,
-          sessionKey: session.sessionKey,
+          ...target,
+          assertCurrent,
         });
+        assertCurrent();
         if (resolution.kind !== "ready") {
           return false;
         }
         const { runtime, handle, meta } = await params.ensureRuntimeHandle({
           cfg: params.cfg,
-          sessionKey: session.sessionKey,
+          ...target,
           meta: resolution.meta,
+          isCurrentActor,
         });
         const reconciled = await params.reconcileRuntimeSessionIdentifiers({
           cfg: params.cfg,
-          sessionKey: session.sessionKey,
+          ...target,
           runtime,
           handle,
           meta,
           failOnStatusError: false,
+          isCurrentActor,
         });
         return !isSessionIdentityPending(resolveSessionIdentityFromMeta(reconciled.meta));
       });

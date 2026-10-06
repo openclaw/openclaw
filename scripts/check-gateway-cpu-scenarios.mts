@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
-// Runs gateway startup and QA scenarios while checking hot CPU observations.
-import { spawnSync as defaultSpawnSync } from "node:child_process";
-import type { SpawnSyncOptions } from "node:child_process";
+import {
+  spawnSync as defaultSpawnSync,
+  type SpawnSyncOptions,
+  type SpawnSyncReturns,
+} from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -46,11 +48,7 @@ const PRIVATE_QA_REQUIRED_DIST_ENTRIES = [
   "dist/plugin-sdk/qa-runtime.js",
 ];
 
-type SpawnSyncResultLike = {
-  error?: Error;
-  signal?: NodeJS.Signals | null;
-  status?: number | null;
-};
+type SpawnSyncResultLike = Partial<Pick<SpawnSyncReturns<Buffer>, "error" | "signal" | "status">>;
 type SpawnSyncFn = (
   command: string,
   args: string[],
@@ -173,99 +171,56 @@ Options:
 `);
 }
 
-function readJsonIfExists(filePath: string): unknown {
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
-function validateStartupReport(report: unknown): string | null {
+function parseStartupReport(report: unknown) {
   if (!isRecord(report)) {
-    return "startup report must be a JSON object";
+    throw new Error("startup report must be a JSON object");
   }
   if (!Array.isArray(report.results)) {
-    return "startup report missing results array";
+    throw new Error("startup report missing results array");
   }
   if (report.results.length === 0) {
-    return "startup report has no measured results";
+    throw new Error("startup report has no measured results");
   }
-  return null;
+  return report;
 }
 
-function readStartupReport(startupOutput: string) {
-  if (!fs.existsSync(startupOutput)) {
+function parseConcurrencyReport(report: unknown): ConcurrencyReport {
+  if (!isRecord(report)) {
+    throw new Error("concurrency report must be a JSON object");
+  }
+  if (report.mode !== "mock-streaming-agent") {
+    throw new Error("concurrency report has an unexpected mode");
+  }
+  if (!Array.isArray(report.runs) || report.runs.length === 0) {
+    throw new Error("concurrency report has no measured runs");
+  }
+  if (!isRecord(report.summary)) {
+    throw new Error("concurrency report missing summary");
+  }
+  return report as ConcurrencyReport;
+}
+
+function readBenchReport<T>(
+  output: string,
+  kind: "startup" | "concurrency",
+  parse: (report: unknown) => T,
+) {
+  if (!fs.existsSync(output)) {
     return {
-      diagnosticFailure: "startup-report-missing",
-      diagnosticDetail: `expected startup bench report at ${startupOutput}`,
+      diagnosticFailure: `${kind}-report-missing`,
+      diagnosticDetail: `expected ${kind} bench report at ${output}`,
       report: null,
     };
   }
   try {
-    const report = readJsonIfExists(startupOutput);
-    const invalidReason = validateStartupReport(report);
-    if (invalidReason) {
-      return {
-        diagnosticFailure: "startup-report-invalid",
-        diagnosticDetail: invalidReason,
-        report: null,
-      };
-    }
     return {
       diagnosticFailure: null,
       diagnosticDetail: null,
-      report,
+      report: parse(JSON.parse(fs.readFileSync(output, "utf8"))),
     };
   } catch (error) {
     return {
-      diagnosticFailure: "startup-report-invalid",
-      diagnosticDetail: error instanceof Error ? error.message : String(error),
-      report: null,
-    };
-  }
-}
-
-function validateConcurrencyReport(report: unknown): string | null {
-  if (!isRecord(report)) {
-    return "concurrency report must be a JSON object";
-  }
-  if (report.mode !== "mock-streaming-agent") {
-    return "concurrency report has an unexpected mode";
-  }
-  if (!Array.isArray(report.runs) || report.runs.length === 0) {
-    return "concurrency report has no measured runs";
-  }
-  if (!isRecord(report.summary)) {
-    return "concurrency report missing summary";
-  }
-  return null;
-}
-
-function readConcurrencyReport(concurrencyOutput: string) {
-  if (!fs.existsSync(concurrencyOutput)) {
-    return {
-      diagnosticFailure: "concurrency-report-missing",
-      diagnosticDetail: `expected concurrency bench report at ${concurrencyOutput}`,
-      report: null,
-    };
-  }
-  try {
-    const report = readJsonIfExists(concurrencyOutput);
-    const invalidReason = validateConcurrencyReport(report);
-    return invalidReason
-      ? {
-          diagnosticFailure: "concurrency-report-invalid",
-          diagnosticDetail: invalidReason,
-          report: null,
-        }
-      : {
-          diagnosticFailure: null,
-          diagnosticDetail: null,
-          report: report as ConcurrencyReport,
-        };
-  } catch (error) {
-    return {
-      diagnosticFailure: "concurrency-report-invalid",
+      diagnosticFailure: `${kind}-report-invalid`,
       diagnosticDetail: error instanceof Error ? error.message : String(error),
       report: null,
     };
@@ -324,15 +279,6 @@ function runStep(
     signal: result.signal ?? null,
     ...(error ? { error } : {}),
   };
-}
-
-function pnpmCommand(args: string[], params: Pick<GatewayCpuRunParams, "cwd" | "env"> = {}) {
-  return createPnpmRunnerSpawnSpec({
-    cwd: params.cwd ?? process.cwd(),
-    env: params.env ?? process.env,
-    pnpmArgs: args,
-    stdio: "inherit",
-  });
 }
 
 function toRepoRelativePath(repoRoot: string, absolutePath: string): string {
@@ -422,58 +368,49 @@ async function runGatewayCpuScenarios(
       params,
     );
     steps.push(startupBuild);
-    steps.push(
-      startupBuild.status === 0
-        ? runStep(
-            "startup bench",
-            process.execPath,
-            [
-              "--import",
-              "tsx",
-              "scripts/bench-gateway-startup.ts",
-              "--runs",
-              String(options.runs),
-              "--warmup",
-              String(options.warmup),
-              "--output",
-              startupOutput,
-              ...options.startupCases.flatMap((id) => ["--case", id]),
-            ],
-            { env: baseEnv },
-            params,
-          )
-        : { name: "startup bench", signal: null, status: 1 },
-    );
-    steps.push(
-      startupBuild.status === 0
-        ? runStep(
-            "concurrency bench",
-            process.execPath,
-            [
-              "--import",
-              "tsx",
-              "scripts/bench-gateway-concurrency.ts",
-              "--concurrency",
-              String(DEFAULT_GATEWAY_CONCURRENCY),
-              "--workspace-fanout",
-              // Post-fix readyz/sessions.list p100 is 1.3-2.6s across environments;
-              // 4s still catches the pre-fix 8s+ stalls and handshake timeouts.
-              "--max-control-ms",
-              "4000",
-              "--max-handshake-ms",
-              "2000",
-              "--runs",
-              String(options.runs),
-              "--warmup",
-              String(options.warmup),
-              "--output",
-              concurrencyOutput,
-            ],
-            { env: baseEnv },
-            params,
-          )
-        : { name: "concurrency bench", signal: null, status: 1 },
-    );
+    const runArgs = ["--runs", String(options.runs), "--warmup", String(options.warmup)];
+    for (const bench of [
+      {
+        name: "startup bench",
+        script: "scripts/bench-gateway-startup.ts",
+        args: [
+          ...runArgs,
+          "--output",
+          startupOutput,
+          ...options.startupCases.flatMap((id) => ["--case", id]),
+        ],
+      },
+      {
+        name: "concurrency bench",
+        script: "scripts/bench-gateway-concurrency.ts",
+        args: [
+          "--concurrency",
+          String(DEFAULT_GATEWAY_CONCURRENCY),
+          "--workspace-fanout",
+          // Post-fix readyz/sessions.list p100 is 1.3-2.6s across environments;
+          // 4s still catches the pre-fix 8s+ stalls and handshake timeouts.
+          "--max-control-ms",
+          "4000",
+          "--max-handshake-ms",
+          "2000",
+          ...runArgs,
+          "--output",
+          concurrencyOutput,
+        ],
+      },
+    ]) {
+      steps.push(
+        startupBuild.status === 0
+          ? runStep(
+              bench.name,
+              process.execPath,
+              ["--import", "tsx", bench.script, ...bench.args],
+              { env: baseEnv },
+              params,
+            )
+          : { name: bench.name, signal: null, status: 1 },
+      );
+    }
   }
 
   let privateQaBuildFailed = false;
@@ -489,10 +426,30 @@ async function runGatewayCpuScenarios(
     privateQaBuildFailed = privateQaBuild.status !== 0;
   }
 
+  if (!options.skipQa) {
+    steps.push(
+      privateQaBuildFailed
+        ? { name: "node worker finalization gate", signal: null, status: 1 }
+        : runStep(
+            "node worker finalization gate",
+            process.execPath,
+            [
+              "scripts/run-vitest.mjs",
+              "test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts",
+            ],
+            { env: qaBuildEnv },
+            params,
+          ),
+    );
+  }
+
   let qaStep = null;
   if (!options.skipQa) {
-    const qaCommand = pnpmCommand(
-      [
+    const qaCommand = createPnpmRunnerSpawnSpec({
+      cwd: repoRoot,
+      env: qaBuildEnv,
+      stdio: "inherit",
+      pnpmArgs: [
         "openclaw",
         "qa",
         "suite",
@@ -504,15 +461,16 @@ async function runGatewayCpuScenarios(
         qaOutputArg,
         ...options.qaScenarios.flatMap((id) => ["--scenario", id]),
       ],
-      { cwd: repoRoot, env: qaBuildEnv },
-    );
+    });
     qaStep = privateQaBuildFailed
       ? { name: "qa suite", signal: null, status: 1 }
       : runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params);
     steps.push(qaStep);
   }
 
-  const startupReportResult = options.skipStartup ? null : readStartupReport(startupOutput);
+  const startupReportResult = options.skipStartup
+    ? null
+    : readBenchReport(startupOutput, "startup", parseStartupReport);
   const startupReportFailure =
     steps.find((step) => step.name === "startup bench")?.status === 0
       ? (startupReportResult?.diagnosticFailure ?? null)
@@ -520,7 +478,7 @@ async function runGatewayCpuScenarios(
   const startup = startupReportResult?.report ?? null;
   const concurrencyReportResult = options.skipStartup
     ? null
-    : readConcurrencyReport(concurrencyOutput);
+    : readBenchReport(concurrencyOutput, "concurrency", parseConcurrencyReport);
   const concurrencyReportFailure =
     steps.find((step) => step.name === "concurrency bench")?.status === 0
       ? (concurrencyReportResult?.diagnosticFailure ?? null)
@@ -633,11 +591,8 @@ async function main(params: GatewayCpuRunParams = {}) {
  * Test-only access to the gateway CPU scenario parser and runner helpers.
  */
 export const testing = {
-  hasPrivateQaDist,
   parseArgs,
-  readStartupReport,
   runGatewayCpuScenarios,
-  validateStartupReport,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

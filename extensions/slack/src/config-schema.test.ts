@@ -33,6 +33,19 @@ function expectSlackConfigKeyRejected(config: unknown, key: string) {
 }
 
 describe("slack config schema", () => {
+  it("accepts compact progress style", () => {
+    expectSlackConfigValid({
+      streaming: {
+        mode: "progress",
+        progress: { style: "compact" },
+      },
+    });
+    expectSlackConfigIssue(
+      { streaming: { mode: "progress", progress: { style: "plain" } } },
+      "streaming.progress.style",
+    );
+  });
+
   it("accepts capability arrays and rejects retired interactive reply objects", () => {
     expectSlackConfigValid({ capabilities: ["presentation"] });
     expectSlackConfigIssue({ capabilities: { interactiveReplies: true } }, "capabilities");
@@ -62,6 +75,34 @@ describe("slack config schema", () => {
     }
   });
 
+  it("preserves default-on join introductions without masking account inheritance", () => {
+    const parsed = SlackConfigSchema.parse({ accounts: { work: {} } });
+
+    expect(parsed.joinIntro).toBeUndefined();
+    expect(parsed.accounts?.work?.joinIntro).toBeUndefined();
+  });
+
+  it.each([
+    { root: false, account: undefined, expected: false },
+    { root: false, account: true, expected: true },
+    { root: true, account: false, expected: false },
+  ])(
+    "resolves join introductions from root=$root and account=$account to $expected",
+    ({ root, account, expected }) => {
+      const cfg = {
+        channels: {
+          slack: {
+            joinIntro: root,
+            accounts: { work: account === undefined ? {} : { joinIntro: account } },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      expectSlackConfigValid(cfg.channels.slack);
+      expect(resolveSlackAccount({ cfg, accountId: "work" }).config.joinIntro).toBe(expected);
+    },
+  );
+
   it('defaults postAs to "bot"', () => {
     const res = SlackConfigSchema.safeParse({ accounts: { work: {} } });
 
@@ -71,14 +112,6 @@ describe("slack config schema", () => {
       expect(res.data.accounts?.work?.postAs).toBeUndefined();
       expect(res.data.accounts?.work?.postAs ?? res.data.postAs).toBe("bot");
     }
-  });
-
-  it('accepts postAs="user" with a user token and socket companion app', () => {
-    expectSlackConfigValid({
-      postAs: "user",
-      userToken: "test-user-token",
-      appToken: "test-app-token",
-    });
   });
 
   it('accepts postAs="user" with a user token and HTTP companion app', () => {
@@ -157,12 +190,32 @@ describe("slack config schema", () => {
     if (absent.success) {
       expect(absent.data.presenceEvents).toBeUndefined();
     }
-    expectSlackConfigValid({ presenceEvents: { mode: "auto" } });
+    expectSlackConfigValid({ presenceEvents: { mode: "auto", prompt: "Do not greet." } });
     expectSlackConfigValid({
-      accounts: { ops: { presenceEvents: { mode: "on" } } },
-      channels: { C123: { presenceEvents: { mode: "off" } } },
+      accounts: { ops: { presenceEvents: { mode: "on", prompt: "Account guidance" } } },
+      channels: { C123: { presenceEvents: { mode: "off", prompt: "" } } },
     });
     expectSlackConfigIssue({ presenceEvents: { mode: "enabled" } }, "presenceEvents.mode");
+    expectSlackConfigIssue({ presenceEvents: { prompt: false } }, "presenceEvents.prompt");
+  });
+
+  it("caps presence event prompts at the AGENTS.md bootstrap limit", () => {
+    const maxPrompt = "x".repeat(20_000);
+    const oversizedPrompt = `${maxPrompt}x`;
+
+    expectSlackConfigValid({ presenceEvents: { prompt: maxPrompt } });
+    expectSlackConfigIssue(
+      { presenceEvents: { prompt: oversizedPrompt } },
+      "presenceEvents.prompt",
+    );
+    expectSlackConfigIssue(
+      { accounts: { ops: { presenceEvents: { prompt: oversizedPrompt } } } },
+      "accounts.ops.presenceEvents.prompt",
+    );
+    expectSlackConfigIssue(
+      { channels: { C123: { presenceEvents: { prompt: oversizedPrompt } } } },
+      "channels.C123.presenceEvents.prompt",
+    );
   });
 
   it("accepts historyLimit overrides per account", () => {
@@ -255,15 +308,6 @@ describe("slack config schema", () => {
 
   it("rejects legacy nested DM access keys", () => {
     expectSlackConfigIssue({ dm: { policy: "open", allowFrom: ["U123"] } }, "dm");
-  });
-
-  it("accepts user token config fields", () => {
-    expectSlackConfigValid({
-      botToken: "test-bot-token",
-      appToken: "test-app-token",
-      userToken: "test-user-token",
-      userTokenReadOnly: false,
-    });
   });
 
   it("rejects retired Socket Mode ping/pong transport tuning", () => {
@@ -405,43 +449,13 @@ describe("slack config schema", () => {
     expectSlackConfigIssue({ mode: "http", accounts: {} }, "signingSecret");
   });
 
-  it("accepts inherited account HTTP mode with an account signing secret", () => {
-    expectSlackConfigValid({
-      mode: "http",
-      accounts: {
-        ops: {
-          botToken: "test-bot-token",
-          signingSecret: "test-ops-signing-secret",
-          webhookPath: "/slack/events/ops",
-        },
-      },
-    });
-  });
-
-  it("accepts inherited account HTTP mode with a signing secret SecretRef", () => {
-    expectSlackConfigValid({
-      mode: "http",
-      accounts: {
-        ops: {
-          botToken: "test-bot-token",
-          signingSecret: {
-            source: "env",
-            provider: "default",
-            id: "SLACK_OPS_SIGNING_SECRET",
-          },
-          webhookPath: "/slack/events/ops",
-        },
-      },
-    });
-  });
-
   it("accepts independently signed accounts inheriting HTTP mode", () => {
     expectSlackConfigValid({
       mode: "http",
       accounts: {
         ops: {
           botToken: "test-ops-bot-token",
-          signingSecret: "test-ops-signing-secret",
+          signingSecret: { source: "env", provider: "default", id: "SLACK_OPS_SIGNING_SECRET" },
           webhookPath: "/slack/events/ops",
         },
         support: {

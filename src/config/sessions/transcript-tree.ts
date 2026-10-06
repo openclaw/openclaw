@@ -12,7 +12,7 @@ type SessionTranscriptTreeEntry = {
   appendMode?: "side";
 };
 
-type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
+export type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
   entry: T;
   index: number;
 };
@@ -136,19 +136,19 @@ function parseParentlessCanonicalEntry(
 
 function resolveCanonicalParentId<T>(
   parentId: string | null,
-  byId: ReadonlyMap<string, SessionTranscriptTreeNode<T>>,
+  byId: Pick<ReadonlyMap<string, SessionTranscriptTreeNode<T>>, "get">,
 ): string | null {
-  const seen = new Set<string>();
+  let seen: Set<string> | undefined;
   let currentId = parentId;
   while (currentId !== null) {
-    if (seen.has(currentId)) {
+    if (seen?.has(currentId)) {
       return currentId;
     }
-    seen.add(currentId);
     const parent = byId.get(currentId);
     if (!parent || !isSessionTranscriptLeafControl(parent.entry)) {
       return currentId;
     }
+    (seen ??= new Set()).add(currentId);
     // Leaf controls are omitted from selected paths, so descendants must point
     // through the marker to its normalized visible parent.
     currentId = parent.parentId;
@@ -163,9 +163,44 @@ function resolveCanonicalParentId<T>(
  * older appenders. Treat those rows as a linear continuation of the current
  * append cursor so a later leaf control can still address their full history.
  */
-export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTranscriptTree<T> {
+type TranscriptNavigationSet = { has(id: string): boolean; add(id: string): void; clear(): void };
+
+/** Storage belongs to the caller: runtime uses memory, migration uses its disposable spool. */
+export type SessionTranscriptNavigationStorage<T> = {
+  byId: {
+    get(id: string): SessionTranscriptTreeNode<T> | undefined;
+    has(id: string): boolean;
+    set(id: string, node: SessionTranscriptTreeNode<T>): void;
+  };
+  addNode(node: SessionTranscriptTreeNode<T>): void;
+  resetDescendantIds: TranscriptNavigationSet;
+  invalidLeafControlIds: TranscriptNavigationSet;
+};
+
+export function scanSessionTranscriptTree<T>(entries: Iterable<T>): SessionTranscriptTree<T> {
   const nodes: SessionTranscriptTreeNode<T>[] = [];
   const byId = new Map<string, SessionTranscriptTreeNode<T>>();
+  const navigation = scanSessionTranscriptNavigation(entries, {
+    byId,
+    addNode: (node) => nodes.push(node),
+    resetDescendantIds: new Set(),
+    invalidLeafControlIds: new Set(),
+  });
+  return { nodes, byId, ...navigation };
+}
+
+/** Resolves the active branch leaf from the same transcript tree used by branch listing. */
+export function resolveSessionTranscriptActiveLeafEntryId(
+  events: readonly unknown[],
+): string | undefined {
+  return scanSessionTranscriptTree(events).leafId ?? undefined;
+}
+
+export function scanSessionTranscriptNavigation<T>(
+  entries: Iterable<T>,
+  storage: SessionTranscriptNavigationStorage<T>,
+): Omit<SessionTranscriptTree<T>, "nodes" | "byId"> {
+  const { byId, resetDescendantIds, invalidLeafControlIds } = storage;
   let leafId: string | null = null;
   let appendParentId: string | null = null;
   let hasLeafControl = false;
@@ -173,10 +208,10 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
   let hasExplicitLeafUpdate = false;
   let hasInvalidLeafControl = false;
   let latestResetId: string | undefined;
-  const resetDescendantIds = new Set<string>();
-  const invalidLeafControlIds = new Set<string>();
 
-  for (const [index, entry] of entries.entries()) {
+  let nextIndex = 0;
+  for (const entry of entries) {
+    const index = nextIndex++;
     let explicitTreeEntry = parseSessionTranscriptTreeEntry(entry);
     if (
       latestResetId &&
@@ -213,7 +248,7 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
       };
       // Invalid controls are transparent structural markers. Descendants can
       // repair through their raw parent, but navigation state does not change.
-      nodes.push(node);
+      storage.addNode(node);
       byId.set(node.id, node);
       continue;
     }
@@ -251,7 +286,7 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
       continue;
     }
     const node: SessionTranscriptTreeNode<T> = { ...treeEntry, entry, index };
-    nodes.push(node);
+    storage.addNode(node);
     byId.set(node.id, node);
     if (isRecord(entry) && entry.type === "reset") {
       latestResetId = node.id;
@@ -278,8 +313,6 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
   }
 
   return {
-    nodes,
-    byId,
     leafId,
     appendParentId,
     hasLeafControl,
@@ -304,38 +337,79 @@ export function selectSessionTranscriptActiveEntries<T, R>(params: {
     return [...params.entries];
   }
   const activePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
-  const activeEntries = activePath.flatMap((node) => {
-    const entry = params.entries[node.index];
+  return [
+    ...selectSessionTranscriptActiveEntryIndexes({
+      tree,
+      entryCount: params.entries.length,
+      recordAt: (index) => records[index],
+      readPath: (leafId) =>
+        leafId === tree.leafId ? activePath : selectSessionTranscriptTreePathNodes(tree, leafId),
+    }),
+  ].flatMap((index) => {
+    const entry = params.entries[index];
     return entry === undefined ? [] : [entry];
   });
-  const firstActiveNode = activePath[0];
+}
+
+/** Selection policy is shared by memory readers and bounded, disk-backed archive readers. */
+export function* selectSessionTranscriptActiveEntryIndexes<T>(params: {
+  tree: Pick<SessionTranscriptTree<T>, "hasExplicitLeafUpdate" | "leafId">;
+  entryCount: number;
+  recordAt(index: number): unknown;
+  readPath(leafId: string | null): Iterable<SessionTranscriptTreeNode<T>>;
+}): Generator<number> {
+  if (!params.tree.hasExplicitLeafUpdate) {
+    for (let index = 0; index < params.entryCount; index += 1) {
+      yield index;
+    }
+    return;
+  }
+  const activePath = params.readPath(params.tree.leafId);
+  let firstActiveNode: SessionTranscriptTreeNode<T> | undefined;
+  for (const node of activePath) {
+    firstActiveNode = node;
+    break;
+  }
   for (let index = (firstActiveNode?.index ?? 0) - 1; index >= 0; index -= 1) {
-    const record = records[index];
+    const record = params.recordAt(index);
     if (!isRecord(record) || (record.type !== "compaction" && record.type !== "reset")) {
       continue;
-    }
-    const entry = params.entries[index];
-    if (entry === undefined) {
-      return activeEntries;
     }
     if (record.type === "reset") {
       const resetId = readNonEmptyString(record.id);
       const firstKeptEntryId = readNonEmptyString(record.firstKeptEntryId);
       if (resetId && firstKeptEntryId) {
-        const resetPath = selectSessionTranscriptTreePathNodes(tree, resetId);
-        const keptStart = resetPath.findIndex((node) => node.id === firstKeptEntryId);
-        if (keptStart >= 0) {
-          const retainedResetPath = resetPath.slice(keptStart).flatMap((node) => {
-            const retained = params.entries[node.index];
-            return retained === undefined ? [] : [retained];
-          });
-          return [...retainedResetPath, ...activeEntries];
+        let kept = false;
+        for (const node of params.readPath(resetId)) {
+          kept ||= node.id === firstKeptEntryId;
+          if (kept) {
+            yield node.index;
+          }
+        }
+        if (kept) {
+          break;
         }
       }
     }
-    return [entry, ...activeEntries];
+    yield index;
+    break;
   }
-  return activeEntries;
+  for (const node of params.readPath(params.tree.leafId)) {
+    yield node.index;
+  }
+}
+
+export function selectSessionTranscriptTreeTipNodes<T>(tree: SessionTranscriptTree<T>) {
+  const referencedParents = new Set(
+    tree.nodes.flatMap((node) =>
+      isSessionTranscriptLeafControl(node.entry) || node.parentId === null ? [] : [node.parentId],
+    ),
+  );
+  return tree.nodes.filter(
+    (node) =>
+      !isSessionTranscriptLeafControl(node.entry) &&
+      (node.id === tree.leafId || !referencedParents.has(node.id)),
+  );
 }
 
 /** Select one normalized path, retaining a reachable suffix after missing ancestors. */
@@ -343,27 +417,36 @@ export function selectSessionTranscriptTreePathNodes<T>(
   tree: SessionTranscriptTree<T>,
   leafId: string | null,
 ): SessionTranscriptTreeNode<T>[] {
-  if (leafId === null) {
-    return [];
-  }
   const path: SessionTranscriptTreeNode<T>[] = [];
-  const seen = new Set<string>();
-  let currentId: string | null = leafId;
+  const valid = visitSessionTranscriptTreePathNodes(tree.byId, leafId, new Set(), (node) => {
+    path.push(node);
+  });
+  return valid ? path.toReversed() : [];
+}
+
+/** Visits leaf to root. Callers must discard every visited node when a cycle is found. */
+export function visitSessionTranscriptTreePathNodes<T>(
+  byId: Pick<SessionTranscriptNavigationStorage<T>["byId"], "get">,
+  leafId: string | null,
+  seen: Pick<TranscriptNavigationSet, "has" | "add">,
+  visit: (node: SessionTranscriptTreeNode<T>) => void,
+): boolean {
+  let currentId = leafId;
   while (currentId) {
     if (seen.has(currentId)) {
-      return [];
+      return false;
     }
     seen.add(currentId);
-    const current = tree.byId.get(currentId);
+    const current = byId.get(currentId);
     if (!current) {
       break;
     }
     if (!isSessionTranscriptLeafControl(current.entry)) {
-      path.unshift(current);
+      visit(current);
     }
     currentId = current.parentId;
   }
-  return path;
+  return true;
 }
 
 /** Merge normalized paths in original file order and expose their retained parent links. */
@@ -401,17 +484,17 @@ export function mergeSessionTranscriptVisiblePathWithOpaqueAppendPath<T>(params:
 } {
   const nodes = mergeSessionTranscriptTreePaths([params.visiblePath]);
   const selectedIds = new Set(nodes.map((node) => node.id));
-  const opaqueSuffix: SessionTranscriptTreeNode<T>[] = [];
-  for (let index = params.appendPath.length - 1; index >= 0; index -= 1) {
-    const node = params.appendPath[index];
+  let opaqueStart = params.appendPath.length;
+  for (; opaqueStart > 0; opaqueStart -= 1) {
+    const node = params.appendPath[opaqueStart - 1];
     if (!node || selectedIds.has(node.id) || isCanonicalSessionTranscriptEntry(node.entry)) {
       break;
     }
-    opaqueSuffix.unshift(node);
   }
 
   let selectedParentId = nodes.at(-1)?.id ?? null;
-  for (const node of opaqueSuffix) {
+  for (let index = opaqueStart; index < params.appendPath.length; index += 1) {
+    const node = params.appendPath[index]!;
     nodes.push({ ...node, selectedParentId });
     selectedIds.add(node.id);
     selectedParentId = node.id;

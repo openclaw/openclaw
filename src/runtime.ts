@@ -1,4 +1,3 @@
-// Re-exports terminal runtime helpers used by CLI command implementations.
 import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
 import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
 import { loggingState } from "./logging/state.js";
@@ -31,7 +30,7 @@ function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.OPENCLAW_TEST_RUNTIME_LOG === "1") {
     return true;
   }
-  const maybeMockedLog = console.log as unknown as { mock?: unknown };
+  const maybeMockedLog = console.log as typeof console.log & { mock?: unknown };
   return typeof maybeMockedLog.mock === "object";
 }
 
@@ -92,7 +91,7 @@ function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdou
     },
     writeStdout,
     writeJson: (value: unknown, space = 2) => {
-      writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
+      writeStdout(JSON.stringify(value, undefined, space > 0 ? space : undefined));
     },
   };
 }
@@ -151,7 +150,7 @@ export function writeRuntimeJson(
     runtime.writeJson(value, space);
     return;
   }
-  runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+  runtime.log(JSON.stringify(value, undefined, space > 0 ? space : undefined));
 }
 
 export function writeRuntimeStdout(runtime: RuntimeEnv | OutputRuntimeEnv, value: string): void {

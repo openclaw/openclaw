@@ -21,22 +21,26 @@ type ClickClackDiscussionRouteResolution =
   | { state: "revoked" }
   | { state: "active"; route: ClickClackDiscussionRoute };
 
-export function resolveClickClackDiscussionRoute(params: {
+export async function resolveClickClackDiscussionRoute(params: {
   runtime: PluginRuntime;
-  config: CoreConfig;
   accountId: string;
   serverBaseUrl: string;
   workspaceId: string;
   channelId: string;
-}): ClickClackDiscussionRouteResolution {
+}): Promise<ClickClackDiscussionRouteResolution> {
+  const store = getClickClackDiscussionBindingStore(params.runtime);
+  let matched = store.getByChannel(params.serverBaseUrl, params.channelId);
+  let pending = false;
+  if (!matched) {
+    pending = await hasPendingDiscussionOpenForDestination(params);
+    matched = store.getByChannel(params.serverBaseUrl, params.channelId);
+  }
   if (isClickClackDiscussionChannelRevoked(params)) {
     return { state: "revoked" };
   }
-  const store = getClickClackDiscussionBindingStore(params.runtime);
-  const matched = store.getByChannel(params.serverBaseUrl, params.channelId);
   if (!matched) {
     return {
-      state: hasPendingDiscussionOpenForDestination(params) ? "revoked" : "unbound",
+      state: pending ? "revoked" : "unbound",
     };
   }
   if (matched.binding.accountId !== params.accountId) {
@@ -45,7 +49,9 @@ export function resolveClickClackDiscussionRoute(params: {
   if (matched.binding.serverBaseUrl !== params.serverBaseUrl.replace(/\/+$/u, "")) {
     return { state: "revoked" };
   }
-  if (resolveDiscussionBindingAccount(params.config, matched.binding).state !== "active") {
+  // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
+  const config = params.runtime.config.current() as CoreConfig;
+  if (resolveDiscussionBindingAccount(config, matched.binding).state !== "active") {
     return { state: "revoked" };
   }
   let binding: ClickClackDiscussionBinding | undefined;

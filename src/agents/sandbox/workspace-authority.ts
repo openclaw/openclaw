@@ -20,15 +20,15 @@ import {
 } from "../tool-policy.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import type { SandboxToolPolicy } from "./types.js";
 
-type WorkspaceToolPolicy = { allow?: string[]; deny?: string[] };
-type RestrictiveWorkspaceToolPolicy = WorkspaceToolPolicy & { allow: string[] };
+type RestrictiveWorkspaceToolPolicy = SandboxToolPolicy & { allow: string[] };
 
 const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "apply_patch",
   "edit",
   "exec",
-  "image",
+  "view_image",
   "process",
   "read",
   "session_status",
@@ -36,14 +36,14 @@ const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "sessions_list",
   "sessions_search",
   "sessions_yield",
-  "update_plan",
+  "progress_card",
   "web_fetch",
   "web_search",
   "write",
 ]);
 
 function findUnconfinedAllowedTool(
-  policies: Array<WorkspaceToolPolicy | undefined>,
+  policies: Array<SandboxToolPolicy | undefined>,
   confinedToolNames: ReadonlySet<string>,
 ) {
   const candidatePolicy = policies
@@ -73,8 +73,8 @@ function resolveWorkspaceToolPolicies(params: {
   sessionKey: string;
   modelProvider: string;
   modelId: string;
-  sandboxPolicy: WorkspaceToolPolicy;
-}): Array<WorkspaceToolPolicy | undefined> {
+  sandboxPolicy: SandboxToolPolicy;
+}): Array<SandboxToolPolicy | undefined> {
   const effective = resolveEffectiveToolPolicy({
     config: params.config,
     agentId: params.agentId,
@@ -161,7 +161,7 @@ export function resolveSandboxWorkspaceAuthority(params: {
   let confinementError: string | undefined;
   if (backend !== "docker" && backend !== "podman") {
     confinementError = "target sandbox backend does not provide local workspace confinement.";
-  } else if (sandbox.scope !== "session") {
+  } else if (runtime.sandboxRequired || sandbox.scope !== "session") {
     confinementError = "target sandbox is not exclusive to this worker session.";
   } else if (
     sandbox.docker.dangerouslyAllowExternalBindSources === true ||
@@ -179,7 +179,7 @@ export function resolveSandboxWorkspaceAuthority(params: {
     const sessionExecHost = normalizeExecTarget(rawSessionExecHost);
     const execHost =
       sessionExecHost ??
-      resolveAgentConfig(params.config, runtime.agentId)?.tools?.exec?.host ??
+      agentConfig?.tools?.exec?.host ??
       params.config.tools?.exec?.host ??
       "auto";
     if (!confinementError && rawSessionExecHost && !sessionExecHost) {
@@ -233,7 +233,7 @@ export function resolveSandboxWorkspaceAuthority(params: {
   }
   return {
     sandboxed: true,
-    workspaceAccess: sandbox.workspaceAccess,
+    workspaceAccess: runtime.sandboxRequired ? runtime.workspaceAccess : sandbox.workspaceAccess,
     ...(confinementError ? { confinementError } : {}),
   };
 }

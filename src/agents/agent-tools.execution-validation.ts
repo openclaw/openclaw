@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type ToolExecutionValidator = (params: unknown) => void | Promise<void>;
 type ScopedToolExecutionValidator = {
@@ -6,7 +7,11 @@ type ScopedToolExecutionValidator = {
   validate: ToolExecutionValidator;
 };
 
-const executionValidators = new AsyncLocalStorage<ScopedToolExecutionValidator>();
+// SDK and host chunks must validate through the same per-invocation context.
+const executionValidators = resolveGlobalSingleton(
+  Symbol.for("openclaw.toolExecutionValidationContext"),
+  () => new AsyncLocalStorage<ScopedToolExecutionValidator>(),
+);
 
 /** Keep per-call validation inside the policy wrapper's final execution boundary. */
 export async function runWithToolExecutionValidation<T>(

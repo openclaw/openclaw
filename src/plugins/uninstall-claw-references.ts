@@ -1,5 +1,8 @@
-import { readClawPackageRefs, type PersistedClawPackageRef } from "../claws/provenance.js";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { readClawPackageOwnership } from "../claws/provenance-async.js";
+import type { PersistedClawPackageRef } from "../claws/provenance.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 
 function clawPackageRefMatchesPluginInstall(
@@ -10,26 +13,29 @@ function clawPackageRefMatchesPluginInstall(
   if (ref.kind !== "plugin" || ref.source !== "clawhub" || record.source !== "clawhub") {
     return false;
   }
-  const installedRef =
-    record.clawhubPackage ?? record.spec?.replace(/^clawhub:/i, "").replace(/@[^@]+$/, "");
+  const installedRef = record.clawhubPackage ?? parseClawHubPluginSpec(record.spec ?? "")?.name;
   return (installedRef ?? pluginId) === ref.ref;
 }
 
 /** Explain Claw dependents without blocking the operator-owned uninstall. */
-export function collectClawPluginUninstallWarnings(params: {
+export async function collectClawPluginUninstallWarnings(params: {
   pluginId: string;
   installRecord?: PluginInstallRecord;
   env?: OpenClawStateDatabaseOptions["env"];
-}): string[] {
+}): Promise<string[]> {
   const installRecord = params.installRecord;
   if (!installRecord || installRecord.source !== "clawhub") {
     return [];
   }
-  const refs = readClawPackageRefs({
-    kind: "plugin",
-    source: "clawhub",
-    ...(params.env ? { env: params.env } : {}),
-  }).filter(
+  let packageRefs: PersistedClawPackageRef[];
+  try {
+    ({ packageRefs } = await readClawPackageOwnership(params.env ? { env: params.env } : {}));
+  } catch (error) {
+    return [
+      `Could not inspect Claw references for plugin "${params.pluginId}": ${coerceErrorMessage(error)}`,
+    ];
+  }
+  const refs = packageRefs.filter(
     (ref) =>
       ref.status !== "rolled_back" &&
       clawPackageRefMatchesPluginInstall(ref, params.pluginId, installRecord),

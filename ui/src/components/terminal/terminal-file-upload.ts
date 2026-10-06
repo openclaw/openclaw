@@ -1,22 +1,17 @@
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { MAX_TERMINAL_UPLOAD_BYTES } from "../../../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import type {
+  TerminalUploadPathStyle,
+  TerminalUploadResult,
+} from "../../../../packages/gateway-protocol/src/schema/terminal.ts";
 import { t } from "../../i18n/index.ts";
-
-// Keep this client guard aligned with the gateway protocol's 16 MiB limit so
-// oversized files never expand into a WebSocket base64 payload.
-const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
+import { bytesToBase64 } from "../../lib/bytes-base64.ts";
+import type { TerminalGatewayClient } from "./terminal-connection.ts";
 
 type TerminalUploadFile = { name: string; contentBase64: string };
-type TerminalUploadResult = { path: string; size: number };
-
-type TerminalUploadClient = {
-  request<T = unknown>(
-    method: string,
-    params?: unknown,
-    options?: { signal?: AbortSignal },
-  ): Promise<T>;
-};
 
 export async function uploadTerminalFile(
-  client: TerminalUploadClient,
+  client: Pick<TerminalGatewayClient, "request">,
   sessionId: string,
   file: TerminalUploadFile,
   signal?: AbortSignal,
@@ -31,17 +26,39 @@ export async function encodeTerminalUpload(file: File): Promise<string> {
   if (file.size > MAX_TERMINAL_UPLOAD_BYTES) {
     throw new Error(t("terminal.uploadTooLarge", { file: file.name }));
   }
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const chunks: string[] = [];
-  const chunkSize = 32 * 1024;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)));
-  }
-  return btoa(chunks.join(""));
+  return bytesToBase64(new Uint8Array(await file.arrayBuffer()));
 }
 
-/** Quotes one staged path for the shell that owns the active terminal. */
-export function quoteTerminalUploadPath(filePath: string, shell: string): string {
+function quotePosixUploadPath(filePath: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/u.test(filePath)) {
+    return filePath;
+  }
+  return `'${filePath.replaceAll("'", "'\\''")}'`;
+}
+
+/** Uses the admitted receiver's path contract, keeping shell checks intact. */
+export function quoteTerminalUploadPath(
+  filePath: string,
+  shell: string,
+  uploadPathStyle?: TerminalUploadPathStyle,
+): string {
+  if (uploadPathStyle === "native") {
+    if (containsAsciiControlCharacter(filePath)) {
+      throw new Error(t("terminal.uploadInvalidNativePath"));
+    }
+    if (/^(?:[a-z]:[\\/]|\\\\)/iu.test(filePath)) {
+      if (filePath.includes('"')) {
+        throw new Error(t("terminal.uploadInvalidNativePath"));
+      }
+      // Native CLI parsers recognize Windows paths before POSIX unescaping.
+      return `"${filePath}"`;
+    }
+    if (!filePath.startsWith("/")) {
+      throw new Error(t("terminal.uploadInvalidNativePath"));
+    }
+    // Native path readers remove outer quotes and backslash escapes, not shell quote concatenation.
+    return `"${filePath.replace(/[\\"$`]/gu, "\\$&")}"`;
+  }
   const shellName = shell.split(/[\\/]/u).pop()?.toLowerCase() ?? "";
   if (/^(?:pwsh|powershell)(?:\.exe)?$/u.test(shellName)) {
     return `'${filePath.replaceAll("'", "''")}'`;
@@ -56,8 +73,5 @@ export function quoteTerminalUploadPath(filePath: string, shell: string): string
   if (!posixShell) {
     throw new Error(t("terminal.uploadUnsupportedShell", { shell: shellName || shell }));
   }
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/u.test(filePath)) {
-    return filePath;
-  }
-  return `'${filePath.replaceAll("'", "'\\''")}'`;
+  return quotePosixUploadPath(filePath);
 }

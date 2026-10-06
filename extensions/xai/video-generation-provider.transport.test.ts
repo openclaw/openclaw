@@ -1,7 +1,10 @@
-// xAI transport proof covers real provider HTTP request-policy forwarding.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
+
+vi.hoisted(() => vi.resetModules());
+vi.unmock("openclaw/plugin-sdk/provider-http");
 
 const resolveApiKeyForProviderMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -15,15 +18,10 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-async function buildTransportProofProvider() {
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
   vi.resetModules();
-  vi.doUnmock("openclaw/plugin-sdk/provider-http");
-  vi.doMock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-    resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-  }));
-  const { buildXaiVideoGenerationProvider } = await import("./video-generation-provider.js");
-  return buildXaiVideoGenerationProvider();
-}
+});
 
 type CapturedRequest = {
   body: string;
@@ -124,7 +122,7 @@ describe("xai video generation provider transport", () => {
 
   it("uses configured policy for xAI API requests without leaking headers to video downloads", async () => {
     const server = await startXaiVideoServer();
-    const provider = await buildTransportProofProvider();
+    const provider = buildXaiVideoGenerationProvider();
 
     const result = await provider.generateVideo({
       provider: "xai",
@@ -178,7 +176,7 @@ describe("xai video generation provider transport", () => {
     "blocks %s loopback xAI video requests before reaching the server",
     async (policyName, requestPolicy) => {
       const server = await startXaiVideoServer();
-      const provider = await buildTransportProofProvider();
+      const provider = buildXaiVideoGenerationProvider();
 
       await expect(
         provider.generateVideo({
@@ -196,7 +194,12 @@ describe("xai video generation provider transport", () => {
             },
           } as never,
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(
+        expect.objectContaining({
+          name: "SsrFBlockedError",
+          message: expect.stringContaining("private/internal/special-use IP address"),
+        }),
+      );
 
       expect(server.requests).toHaveLength(0);
     },

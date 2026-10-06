@@ -1,19 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/**
- * Channel ingress identity adapter helpers.
- *
- * Builds stable sender identity descriptors and normalizes matchable allowlist material.
- */
+import {
+  identifierAuthenticationFrom,
+  meetsIdentifierAuthentication,
+  type IdentifierAuthentication,
+} from "./identifier-authentication.js";
 import type {
-  ChannelIngressAdapter,
-  ChannelIngressAdapterEntry,
   ChannelIngressIdentityDescriptor,
   ChannelIngressIdentityField,
   ChannelIngressIdentitySubjectInput,
-  ChannelIngressSubject,
   StableChannelIngressIdentityParams,
 } from "./runtime-types.js";
-import type { InternalMatchMaterial } from "./types.js";
+import type {
+  InternalChannelIngressAdapter,
+  NormalizedIngressEntry,
+  NormalizedIngressSubject,
+} from "./types.js";
 
 type ResolvedIdentityField = Required<Pick<ChannelIngressIdentityField, "key" | "kind">> &
   Omit<ChannelIngressIdentityField, "key" | "kind">;
@@ -22,21 +23,52 @@ type ResolvedIdentityField = Required<Pick<ChannelIngressIdentityField, "key" | 
 export function defineStableChannelIngressIdentity(
   params: StableChannelIngressIdentityParams = {},
 ): ChannelIngressIdentityDescriptor {
-  const { entryIdPrefix, resolveEntryId, aliases, isWildcardEntry, matchEntry, ...primary } =
-    params;
+  const {
+    entryIdPrefix,
+    resolveEntryId,
+    aliases,
+    isWildcardEntry,
+    matchEntry,
+    resolveParticipant,
+    ...primary
+  } = params;
   return {
     primary,
     aliases,
     isWildcardEntry,
     matchEntry,
+    resolveParticipant,
     resolveEntryId:
       resolveEntryId ??
       (entryIdPrefix ? ({ entryIndex }) => `${entryIdPrefix}-${entryIndex + 1}` : undefined),
   };
 }
 
-function defaultNormalize(value: string): string {
-  return value;
+/** Classify configured entries without needing a sender or granting admission. */
+export function identityEntryAuthenticationClassifier(
+  identity: ChannelIngressIdentityDescriptor | StableChannelIngressIdentityParams,
+) {
+  const descriptor =
+    "primary" in identity ? identity : defineStableChannelIngressIdentity(identity);
+  const fields = identityFields(descriptor);
+  const isWildcardEntry = descriptor.isWildcardEntry ?? ((value: string) => value === "*");
+  return (raw: string): IdentifierAuthentication | undefined => {
+    if (isWildcardEntry(raw)) {
+      return undefined;
+    }
+    let strongest: IdentifierAuthentication | undefined;
+    // An entry accepted by a stable field does not depend solely on its alias match.
+    for (const field of fields) {
+      if (!normalizeFieldValue(field, raw, "entry")) {
+        continue;
+      }
+      const authentication = fieldAuthentication(field, raw, fieldDangerous(field, raw));
+      if (strongest === undefined || meetsIdentifierAuthentication(authentication, strongest)) {
+        strongest = authentication;
+      }
+    }
+    return strongest;
+  };
 }
 
 function normalizeFieldValue(
@@ -46,14 +78,24 @@ function normalizeFieldValue(
 ): string | null {
   const normalize =
     mode === "entry"
-      ? (field.normalizeEntry ?? field.normalize ?? defaultNormalize)
-      : (field.normalizeSubject ?? field.normalize ?? defaultNormalize);
-  const normalized = normalize(value);
+      ? (field.normalizeEntry ?? field.normalize)
+      : (field.normalizeSubject ?? field.normalize);
+  const normalized = normalize ? normalize(value) : value;
   return normalized == null ? null : normalized.trim() || null;
 }
 
 function fieldDangerous(field: ResolvedIdentityField, value: string): boolean | undefined {
   return typeof field.dangerous === "function" ? field.dangerous(value) : field.dangerous;
+}
+
+function fieldAuthentication(
+  field: ResolvedIdentityField,
+  value: string,
+  dangerous: boolean | undefined,
+): IdentifierAuthentication {
+  const authentication =
+    typeof field.authentication === "function" ? field.authentication(value) : field.authentication;
+  return identifierAuthenticationFrom({ authentication, dangerous });
 }
 
 function identityFields(identity: ChannelIngressIdentityDescriptor): ResolvedIdentityField[] {
@@ -73,10 +115,6 @@ function identityFields(identity: ChannelIngressIdentityDescriptor): ResolvedIde
   return fields;
 }
 
-function identityMatchKey(entry: Pick<ChannelIngressAdapterEntry, "kind" | "value">): string {
-  return `${entry.kind}:${entry.value}`;
-}
-
 function adapterEntry(params: {
   identity: ChannelIngressIdentityDescriptor;
   field: ResolvedIdentityField;
@@ -84,8 +122,9 @@ function adapterEntry(params: {
   entry: string;
   entryIndex: number;
   value: string;
-  fallbackSuffix?: string;
-}): ChannelIngressAdapterEntry {
+  wildcard?: boolean;
+}): NormalizedIngressEntry {
+  const dangerous = fieldDangerous(params.field, params.entry);
   return {
     opaqueEntryId:
       params.identity.resolveEntryId?.({
@@ -93,17 +132,20 @@ function adapterEntry(params: {
         entryIndex: params.entryIndex,
         fieldKey: params.field.key,
         fieldIndex: params.fieldIndex,
-      }) ?? `entry-${params.entryIndex + 1}:${params.fallbackSuffix ?? params.field.key}`,
+      }) ?? `entry-${params.entryIndex + 1}:${params.wildcard ? "wildcard" : params.field.key}`,
     kind: params.field.kind,
     value: params.value,
-    dangerous: fieldDangerous(params.field, params.entry),
+    identityFieldKey: params.field.key,
+    ...(params.wildcard ? { wildcard: true } : {}),
+    authentication: fieldAuthentication(params.field, params.entry, dangerous),
+    dangerous,
     sensitivity: params.field.sensitivity,
   };
 }
 
 export function createIdentityAdapter(
   identity: ChannelIngressIdentityDescriptor,
-): ChannelIngressAdapter {
+): InternalChannelIngressAdapter {
   const fields = identityFields(identity);
   const isWildcardEntry = identity.isWildcardEntry ?? ((value: string) => value === "*");
   return {
@@ -118,7 +160,7 @@ export function createIdentityAdapter(
               entry,
               entryIndex,
               value: "*",
-              fallbackSuffix: "wildcard",
+              wildcard: true,
             }),
           ];
         }
@@ -137,25 +179,55 @@ export function createIdentityAdapter(
       };
     },
     matchSubject({ subject, entries, context }) {
-      const subjectKeys = new Set(
-        subject.identifiers.flatMap((identifier) => {
-          const field = fields.find((candidate) => candidate.kind === identifier.kind);
-          if (!field) {
-            return [];
-          }
-          const value = normalizeFieldValue(field, identifier.value, "subject");
-          return value ? [identityMatchKey({ kind: identifier.kind, value })] : [];
-        }),
-      );
-      const matchedEntryIds = entries
-        .filter((entry) => {
-          const fallback = entry.value === "*" || subjectKeys.has(identityMatchKey(entry));
-          return identity.matchEntry?.({ subject, entry, context }) ?? fallback;
-        })
-        .map((entry) => entry.opaqueEntryId);
+      const normalizedSubjects = subject.identifiers.flatMap((identifier) => {
+        const field = fields.find(
+          (candidate) =>
+            candidate.key === identifier.opaqueId && candidate.kind === identifier.kind,
+        );
+        if (!field) {
+          return [];
+        }
+        const value = normalizeFieldValue(field, identifier.value, "subject");
+        return value ? [{ identifier, value }] : [];
+      });
+      const matchedPairs = entries.flatMap((entry) => {
+        const legacyMatch = identity.matchEntry?.({ subject, entry, context });
+        if (legacyMatch === false) {
+          return [];
+        }
+        const candidates = entry.wildcard
+          ? normalizedSubjects.filter(({ identifier }) => identifier.kind === fields[0]?.kind)
+          : normalizedSubjects.filter(
+              ({ identifier, value }) =>
+                identifier.opaqueId === entry.identityFieldKey &&
+                identifier.kind === entry.kind &&
+                value === entry.value,
+            );
+        if (candidates.length === 0) {
+          // A legacy positive whole-subject matcher has no exact subject provenance. Preserve
+          // its shipped asserted behavior, but never reinterpret it as a stronger claim.
+          return legacyMatch === true || entry.wildcard
+            ? [
+                {
+                  opaqueEntryId: entry.opaqueEntryId,
+                  opaqueSubjectId:
+                    legacyMatch === true ? "legacy-subject-match" : "wildcard-subject",
+                  subjectAuthentication: "asserted" as const,
+                },
+              ]
+            : [];
+        }
+        return candidates.map(({ identifier }) => ({
+          opaqueEntryId: entry.opaqueEntryId,
+          opaqueSubjectId: identifier.opaqueId,
+          subjectAuthentication: identifier.authentication,
+        }));
+      });
+      const matchedEntryIds = [...new Set(matchedPairs.map((pair) => pair.opaqueEntryId))];
       return {
         matched: matchedEntryIds.length > 0,
         matchedEntryIds,
+        matchedPairs,
       };
     },
   };
@@ -164,20 +236,28 @@ export function createIdentityAdapter(
 export function createIdentitySubject(
   identity: ChannelIngressIdentityDescriptor,
   input: ChannelIngressIdentitySubjectInput,
-): ChannelIngressSubject {
+): NormalizedIngressSubject {
   const fields = identityFields(identity);
-  const identifiers: InternalMatchMaterial[] = fields.flatMap((field, index) => {
+  const identifiers: NormalizedIngressSubject["identifiers"] = fields.flatMap((field, index) => {
     const rawValue = index === 0 ? input.stableId : input.aliases?.[field.key];
     if (rawValue == null) {
       return [];
     }
     const value = String(rawValue);
+    const dangerous = fieldDangerous(field, value);
+    // A supplied map owns every per-message claim; omitted fields must not inherit
+    // a stronger static declaration from the identity descriptor.
+    const authentication =
+      input.authentication !== undefined
+        ? (input.authentication[field.key] ?? "unverified")
+        : fieldAuthentication(field, value, dangerous);
     return [
       {
         opaqueId: field.key,
         kind: field.kind,
         value,
-        dangerous: fieldDangerous(field, value),
+        authentication,
+        dangerous,
         sensitivity: field.sensitivity,
       },
     ];

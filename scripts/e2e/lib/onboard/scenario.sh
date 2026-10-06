@@ -3,6 +3,7 @@ set -euo pipefail
 trap "" PIPE
 export TERM=xterm-256color
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/onboard/first-agent-flow.sh
 OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY="${OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY:-0}"
 if [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
@@ -163,9 +164,15 @@ run_wizard_cmd() {
   local log_path="$OPENCLAW_E2E_LOG_DIR/${case_name}.log"
   WIZARD_LOG_PATH="$log_path"
   export WIZARD_LOG_PATH
-  # Run under script to keep an interactive TTY for clack prompts.
-  openclaw_e2e_run_script_with_pty "$command" "$log_path" <"$input_fifo" >/dev/null 2>&1 &
+  # Anchor the FIFO before forking so a fast-exiting reader cannot strand open().
+  if ! exec 3<>"$input_fifo"; then
+    cleanup_wizard_case
+    return 1
+  fi
+  # Open stdin before dropping the inherited anchor; only the driver keeps a writer.
+  openclaw_e2e_run_script_with_pty "$command" "$log_path" <"$input_fifo" 3>&- >/dev/null 2>&1 &
   wizard_pid=$!
+  # Restore write-only semantics so an exited wizard still produces EPIPE.
   if ! exec 3>"$input_fifo"; then
     cleanup_wizard_case
     return 1
@@ -242,11 +249,43 @@ send_skills_flow() {
   send "" 2.0
 }
 
+wait_for_model_auth_prompt() {
+  local timeout_s="${1:-45}"
+  local started_s="$SECONDS"
+  while true; do
+    if log_contains "Use Current model?"; then
+      printf '%s\n' "configured-model"
+      return 0
+    fi
+    if log_contains "Model/auth provider"; then
+      printf '%s\n' "provider-picker"
+      return 0
+    fi
+    if ((SECONDS - started_s >= timeout_s)); then
+      echo "Timeout waiting for model/auth prompt" >&2
+      if [ -n "${WIZARD_LOG_PATH:-}" ] && [ -f "$WIZARD_LOG_PATH" ]; then
+        tail -n 140 "$WIZARD_LOG_PATH" >&2 || true
+      fi
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
 send_guided_skip_ui_flow() {
+  local model_auth_prompt
+  wait_for_log "Help make OpenClaw better?" 120 || return $?
+  send $'\r' 0.8
+  wait_for_first_agent_prompt log_contains 120 0.8 || return $?
+  send $'\r' 0.8
   wait_for_log "How should I set things up?" 120 || return $?
   send $'\r' 0.8
-  wait_for_log "Use Current model?" 120 || return $?
+  model_auth_prompt="$(wait_for_model_auth_prompt 120)" || return $?
   send $'\r' 0.8
+  if [ "$model_auth_prompt" = "provider-picker" ]; then
+    wait_for_log "Use which detected AI?" 120 || return $?
+    send $'\r' 0.8
+  fi
 }
 
 validate_guided_skip_ui_log() {
@@ -309,18 +348,25 @@ run_case_guided_skip_ui() {
   mock_openai_pid=""
 }
 
-run_case_local_basic() {
-  set_isolated_openclaw_env local-basic
-  openclaw_e2e_run_logged local-basic node "$OPENCLAW_ENTRY" onboard \
+run_local_onboard() {
+  local case_name="$1"
+  shift
+  openclaw_e2e_run_logged "$case_name" node "$OPENCLAW_ENTRY" onboard \
     --non-interactive \
     --accept-risk \
     --flow quickstart \
     --mode local \
+    "$@" \
     --skip-channels \
     --skip-skills \
     --skip-daemon \
     --skip-ui \
     --skip-health
+}
+
+run_case_local_basic() {
+  set_isolated_openclaw_env local-basic
+  run_local_onboard local-basic
 
   validate_local_basic_log "$OPENCLAW_E2E_LAST_LOG_PATH"
 
@@ -342,20 +388,11 @@ run_case_local_auth_refs() {
   export OPENAI_API_KEY="sk-openclaw-onboard-auth-ref-e2e"
   export OPENCLAW_GATEWAY_TOKEN="openclaw-onboard-gateway-ref-e2e"
 
-  openclaw_e2e_run_logged local-auth-refs node "$OPENCLAW_ENTRY" onboard \
-    --non-interactive \
-    --accept-risk \
-    --flow quickstart \
-    --mode local \
+  run_local_onboard local-auth-refs \
     --auth-choice openai-api-key \
     --secret-input-mode ref \
     --gateway-auth token \
-    --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
-    --skip-channels \
-    --skip-skills \
-    --skip-daemon \
-    --skip-ui \
-    --skip-health
+    --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN
 
   node scripts/e2e/lib/release-scenarios/assertions.mjs \
     assert-openai-env-ref \
@@ -367,22 +404,23 @@ run_case_local_auth_refs() {
 run_case_local_password() {
   set_isolated_openclaw_env local-password
 
-  openclaw_e2e_run_logged local-password node "$OPENCLAW_ENTRY" onboard \
-    --non-interactive \
-    --accept-risk \
-    --flow quickstart \
-    --mode local \
+  run_local_onboard local-password \
     --auth-choice skip \
     --gateway-auth password \
-    --gateway-password "openclaw-onboard-password-e2e" \
-    --skip-channels \
-    --skip-skills \
-    --skip-daemon \
-    --skip-ui \
-    --skip-health
+    --gateway-password "openclaw-onboard-password-e2e"
 
   assert_onboard_config local-password
   echo "QA_ASSERT cli.gateway-auth-storage.password pass"
+}
+
+run_case_multi_agent() {
+  set_isolated_openclaw_env multi-agent
+  node scripts/e2e/lib/onboard/write-config.mjs multi-agent "$OPENCLAW_CONFIG_PATH"
+
+  run_local_onboard multi-agent --auth-choice skip
+
+  assert_onboard_config multi-agent
+  echo "QA_ASSERT cli.multi-agent-onboarding pass"
 }
 
 run_case_remote_non_interactive() {
@@ -403,17 +441,7 @@ run_case_reset() {
   set_isolated_openclaw_env reset-config
   node scripts/e2e/lib/onboard/write-config.mjs reset "$OPENCLAW_CONFIG_PATH"
 
-  openclaw_e2e_run_logged reset-config node "$OPENCLAW_ENTRY" onboard \
-    --non-interactive \
-    --accept-risk \
-    --flow quickstart \
-    --mode local \
-    --reset \
-    --skip-channels \
-    --skip-skills \
-    --skip-daemon \
-    --skip-ui \
-    --skip-health
+  run_local_onboard reset-config --reset
 
   assert_onboard_config reset
   echo "QA_ASSERT cli.targeted-reconfiguration.reset pass"
@@ -444,7 +472,7 @@ validate_local_basic_log() {
 }
 
 run_selected_cases() {
-  local selected_cases="${OPENCLAW_ONBOARD_E2E_CASES:-guided-skip-ui,local-basic,remote-non-interactive,reset,channels,skills}"
+  local selected_cases="${OPENCLAW_ONBOARD_E2E_CASES:-guided-skip-ui,local-basic,multi-agent,remote-non-interactive,reset,channels,skills}"
   local case_name
   local -a cases=()
   IFS="," read -r -a cases <<<"$selected_cases"
@@ -454,6 +482,7 @@ run_selected_cases() {
       local-basic) run_case_local_basic ;;
       local-auth-refs) run_case_local_auth_refs ;;
       local-password) run_case_local_password ;;
+      multi-agent) run_case_multi_agent ;;
       remote-non-interactive) run_case_remote_non_interactive ;;
       reset) run_case_reset ;;
       channels) run_case_channels ;;

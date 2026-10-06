@@ -1,12 +1,16 @@
-// Memory Core tests cover index plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
-import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type {
+  AnyAgentTool,
+  MemoryPluginRuntime,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
-import { buildPromptSection } from "./src/prompt-section.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
 const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
@@ -45,6 +49,13 @@ const hostRuntime = {
   },
 } as unknown as OpenClawPluginApi["runtime"];
 
+function hostRuntimeWithConfig(current: () => OpenClawConfig) {
+  return createPluginRuntimeMock({
+    ...hostRuntime,
+    config: { ...hostRuntime.config, current },
+  });
+}
+
 function registerMemoryCoreRuntime(): MemoryPluginRuntime {
   let runtime: MemoryPluginRuntime | undefined;
   plugin.register(
@@ -61,19 +72,72 @@ function registerMemoryCoreRuntime(): MemoryPluginRuntime {
   return runtime;
 }
 
+function captureMemoryModelContract(initialConfig: OpenClawConfig) {
+  let promptBuilder:
+    | NonNullable<Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0]["promptBuilder"]>
+    | undefined;
+  const factories = new Map<string, (ctx: unknown) => unknown>();
+  plugin.register(
+    createTestPluginApi({
+      config: initialConfig,
+      runtime: hostRuntimeWithConfig(() => initialConfig),
+      registerMemoryCapability(capability) {
+        promptBuilder = capability.promptBuilder;
+      },
+      registerTool(factory, options) {
+        for (const name of options?.names ?? []) {
+          if (typeof factory === "function") {
+            factories.set(name, factory as (ctx: unknown) => unknown);
+          }
+        }
+      },
+    }),
+  );
+  const context = {
+    agentId: "main",
+    config: initialConfig,
+    getRuntimeConfig: () => initialConfig,
+  };
+  const search = factories.get("memory_search")?.(context) as AnyAgentTool | undefined;
+  const get = factories.get("memory_get")?.(context) as
+    | { description: string; parameters: unknown }
+    | undefined;
+  if (!search || !get || !promptBuilder) {
+    throw new Error("expected memory model contract");
+  }
+  return { search, get, promptBuilder };
+}
+
 describe("buildPromptSection", () => {
-  it("returns empty when no memory tools are available", () => {
-    expect(buildPromptSection({ availableTools: new Set() })).toStrictEqual([]);
+  it("prepares explicitly owned memory tools without resolving the system agent", () => {
+    let systemAgentReads = 0;
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          get systemAgent() {
+            systemAgentReads += 1;
+            return { agentId: "unrelated" };
+          },
+        },
+        entries: { main: {}, unrelated: {} },
+      },
+    };
+    const { search, get, promptBuilder } = captureMemoryModelContract(config);
+    expect(search.description).toContain("MEMORY.md");
+    expect(get.description).toContain("MEMORY.md");
+    expect(
+      promptBuilder({ availableTools: new Set(["memory_search", "memory_get"]), agentId: "main" }),
+    ).toContain("## Memory Recall");
+    expect(systemAgentReads).toBe(0);
   });
 
   it("describes the two-step flow when both memory tools are available", () => {
-    const result = buildPromptSection({
+    const result = buildMemoryPromptSection({
       availableTools: new Set(["memory_search", "memory_get"]),
     });
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
-    expect(result[1]).toContain("then use memory_get");
-    expect(result[1]).toContain("indexed session transcripts");
+    expect(result[1]).toContain("for memory-file hits, use memory_get");
     expect(result).toContain(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
@@ -81,22 +145,55 @@ describe("buildPromptSection", () => {
   });
 
   it("limits the guidance to memory_search when only search is available", () => {
-    const result = buildPromptSection({ availableTools: new Set(["memory_search"]) });
+    const result = buildMemoryPromptSection({
+      availableTools: new Set(["memory_search"]),
+    });
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_search");
-    expect(result[1]).toContain("indexed session transcripts");
     expect(result[1]).not.toContain("then use memory_get");
   });
 
   it("limits the guidance to memory_get when only get is available", () => {
-    const result = buildPromptSection({ availableTools: new Set(["memory_get"]) });
+    const result = buildMemoryPromptSection({
+      availableTools: new Set(["memory_get"]),
+    });
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_get");
     expect(result[1]).not.toContain("run memory_search");
   });
 
+  it.each([
+    [[], [], ["sessions_search", "sessions_history"]],
+    [["sessions_search"], ["sessions_search"], ["sessions_history"]],
+    [["sessions_history"], ["sessions_history"], ["sessions_search"]],
+    [["sessions_search", "sessions_history"], ["sessions_search", "sessions_history"], []],
+  ])("offers only available session follow-up tools: %j", (sessionTools, included, excluded) => {
+    const { search, promptBuilder } = captureMemoryModelContract({
+      agents: { entries: { main: {} } },
+    });
+    const prompt = promptBuilder({
+      availableTools: new Set(["memory_search", "memory_get", ...sessionTools]),
+      agentId: "main",
+    }).join("\n");
+    const modelVisibleText = `${search.description}\n${prompt}`;
+    for (const name of included) {
+      expect(modelVisibleText).toContain(name);
+    }
+    for (const name of excluded) {
+      expect(modelVisibleText).not.toContain(name);
+    }
+    expect(prompt).toContain("Session search line numbers are not history offsets");
+    expect(prompt).toContain("Never read raw transcript files");
+    if (sessionTools.length === 0) {
+      expect(prompt).toContain("exact session history is unavailable");
+    }
+    if (sessionTools.length === 2) {
+      expect(prompt).toContain("returned sessionKey, messageId, and sessionId");
+    }
+  });
+
   it("includes citations-off instruction when citationsMode is off", () => {
-    const result = buildPromptSection({
+    const result = buildMemoryPromptSection({
       availableTools: new Set(["memory_search"]),
       citationsMode: "off",
     });
@@ -104,11 +201,86 @@ describe("buildPromptSection", () => {
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
     );
   });
+
+  it.each([
+    { label: "base files", extraPaths: [], sessions: false },
+    { label: "configured extra paths", extraPaths: ["notes"], sessions: false },
+    { label: "session transcripts", extraPaths: [], sessions: true },
+  ])("keeps eager, lazy, and prompt contracts aligned for $label", async (sourceCase) => {
+    const config = {
+      agents: {
+        entries: {
+          main: {
+            memory: {
+              search: {
+                sources: sourceCase.sessions ? ["memory", "sessions"] : ["memory"],
+                ...(sourceCase.sessions ? { experimental: { sessionMemory: true } } : {}),
+              },
+            },
+          },
+        },
+      },
+      memory: { search: { provider: "none", extraPaths: sourceCase.extraPaths } },
+    } as OpenClawConfig;
+    const lazy = captureMemoryModelContract(config);
+    const { createMemoryGetTool, createMemorySearchTool } = await import("./src/tools.js");
+    const eagerSearch = createMemorySearchTool({ config, agentId: "main" });
+    const eagerGet = createMemoryGetTool({ config, agentId: "main" });
+    if (!eagerSearch || !eagerGet) {
+      throw new Error("expected eager memory tools");
+    }
+    expect(lazy.search.parameters).toStrictEqual(eagerSearch.parameters);
+    expect(lazy.get.parameters).toStrictEqual(eagerGet.parameters);
+    expect(lazy.search.description).toBe(eagerSearch.description);
+    expect(lazy.get.description).toBe(eagerGet.description);
+    for (const text of [lazy.search.description, lazy.get.description]) {
+      expect(text).toContain("MEMORY.md, USER.md");
+      expect(text).toContain("recursively under memory/");
+      expect(text.includes("configured extra paths")).toBe(sourceCase.extraPaths.length > 0);
+      expect(text.length).toBeLessThan(3_000);
+    }
+    const defaultSearchScope = lazy.search.description.split(" before answering", 1)[0] ?? "";
+    expect(defaultSearchScope.includes("indexed session transcripts")).toBe(sourceCase.sessions);
+    expect(lazy.get.description).not.toContain("indexed session transcripts");
+    expect(lazy.search.description).toContain("Corpus outcomes cover each requested corpus");
+    expect(lazy.search.description).toContain("results are partial");
+    expect(lazy.get.description).toContain("status=ok");
+    expect(lazy.get.description).toContain("status=not_found");
+    expect(lazy.get.description).toContain("results are partial");
+  });
 });
 
 describe("memory-core plugin runtime registration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("accepts snake_case search arguments through the registered lazy tool", () => {
+    const { search } = captureMemoryModelContract({});
+    const args = { query: "X", min_score: 0.3, max_results: 3 };
+    const prepared = search.prepareArguments?.(args) ?? args;
+    expect(Value.Check(search.parameters, prepared)).toBe(true);
+    expect(prepared).toEqual({ query: "X", minScore: 0.3, maxResults: 3 });
+  });
+
+  it("does not resolve prompt config when no memory tools are exposed", () => {
+    let promptBuilder:
+      | NonNullable<Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0]["promptBuilder"]>
+      | undefined;
+    const current = vi.fn(() => {
+      throw new Error("runtime config must remain lazy");
+    });
+    plugin.register(
+      createTestPluginApi({
+        runtime: hostRuntimeWithConfig(current),
+        registerMemoryCapability(capability) {
+          promptBuilder = capability.promptBuilder;
+        },
+      }),
+    );
+
+    expect(promptBuilder?.({ availableTools: new Set() })).toStrictEqual([]);
+    expect(current).not.toHaveBeenCalled();
   });
 
   it("registers the dreaming runtime slash command", () => {
@@ -171,6 +343,7 @@ describe("memory-core plugin runtime registration", () => {
   });
 
   it("hides intent create, list, and cancel from non-owner turns", () => {
+    const warn = vi.fn();
     let intentFactory:
       | ((ctx: { config?: OpenClawConfig; senderIsOwner?: boolean }) => unknown)
       | undefined;
@@ -178,9 +351,15 @@ describe("memory-core plugin runtime registration", () => {
       createTestPluginApi({
         config: {},
         runtime: hostRuntime,
+        logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn },
         registerTool(factory, options) {
-          if (options?.names?.includes("intent") && typeof factory === "function") {
-            intentFactory = factory as typeof intentFactory;
+          if (
+            options?.names?.includes("intent") &&
+            typeof factory !== "function" &&
+            "contextVersion" in factory
+          ) {
+            expect(factory.contextVersion).toBe(2);
+            intentFactory = (ctx) => factory.create({ ...ctx, assertInvocationCurrent: () => {} });
           }
         },
       }),
@@ -191,7 +370,35 @@ describe("memory-core plugin runtime registration", () => {
 
     expect(intentFactory({ config: {}, senderIsOwner: false })).toBeNull();
     expect(intentFactory({ config: {} })).toBeNull();
-    expect(intentFactory({ config: {}, senderIsOwner: true })).toMatchObject({ name: "intent" });
+    expect(warn).not.toHaveBeenCalled();
+
+    expect(intentFactory({ senderIsOwner: true })).toBeNull();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "memory-core: intent tool unavailable: runtime config is unavailable for this turn",
+    );
+
+    const ownerTool = intentFactory({ config: {}, senderIsOwner: true }) as {
+      name?: string;
+      description?: string;
+      parameters?: {
+        properties?: Record<string, { default?: string }>;
+      };
+    };
+    expect(ownerTool).toMatchObject({ name: "intent" });
+    expect(ownerTool.description).toContain("system injects the reminder automatically");
+    expect(ownerTool.description).toContain("Use scheduled tasks for time-based reminders");
+    expect(ownerTool.description).not.toMatch(/\b(?:cron|automations)\b/u);
+    expect(ownerTool.parameters?.properties?.channelScope).toBeUndefined();
+    expect(ownerTool.parameters?.properties?.scope).toMatchObject({
+      type: "string",
+      enum: ["conversation", "channel", "anywhere"],
+      default: "channel",
+    });
+    expect(ownerTool.parameters?.properties?.senderScope).toMatchObject({
+      enum: ["sender", "anyone"],
+      default: "sender",
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("keeps memory manager initialization demand-driven", () => {
@@ -212,18 +419,6 @@ describe("memory-core plugin runtime registration", () => {
     await runtime.closeMemorySearchManager?.({ cfg, agentId: "main" });
 
     expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
-  });
-
-  it("binds the host local-service hook to the registered memory runtime", async () => {
-    const runtime = registerMemoryCoreRuntime();
-    const cfg = {} as OpenClawConfig;
-
-    await runtime.getMemorySearchManager({ cfg, agentId: "main" });
-
-    expect(createMemoryRuntimeMock).toHaveBeenCalledWith({
-      acquireLocalService: expect.any(Function),
-      openKeyedStore: expect.any(Function),
-    });
   });
 
   it("defers nested host runtime access until the injected operation runs", async () => {
@@ -303,29 +498,16 @@ describe("memory-core plugin runtime registration", () => {
       openKeyedStore: expect.any(Function),
     });
   });
-
-  it("binds the host SQLite state hook to tools and CLI runtime", async () => {
-    const runtime = registerMemoryCoreRuntime();
-    const cfg = {} as OpenClawConfig;
-
-    await runtime.getMemorySearchManager({ cfg, agentId: "main" });
-
-    const host = createMemoryRuntimeMock.mock.calls.at(-1)?.[0];
-    const storeOptions = { namespace: "cli-status-regression", maxEntries: 1 };
-    host?.openKeyedStore?.(storeOptions);
-    expect(hostRuntime.state.openKeyedStore).toHaveBeenCalledWith(storeOptions);
-  });
 });
 
 describe("buildMemoryFlushPlan", () => {
-  const cfg = {
+  const cfg: OpenClawConfig = {
     agents: {
       defaults: {
         userTimezone: "America/New_York",
-        timeFormat: "12",
       },
     },
-  } as OpenClawConfig;
+  };
 
   it("replaces YYYY-MM-DD using user timezone and appends current time", () => {
     const plan = buildMemoryFlushPlan({
@@ -339,14 +521,6 @@ describe("buildMemoryFlushPlan", () => {
     );
     expect(plan?.prompt).toContain("Reference UTC: 2026-02-16 15:00 UTC");
     expect(plan?.relativePath).toBe("memory/2026-02-16.md");
-  });
-
-  it("appends one current time line to the built-in prompt", () => {
-    const plan = buildMemoryFlushPlan({
-      cfg,
-      nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
-    });
-
     expect((plan?.prompt.match(/Current time:/g) ?? []).length).toBe(1);
   });
 

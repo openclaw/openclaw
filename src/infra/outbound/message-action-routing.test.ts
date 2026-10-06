@@ -1,7 +1,6 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type {
   ChannelMessageActionContext,
@@ -18,125 +17,21 @@ import {
   resetMessageActionRunnerMocks,
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
+  useActionHubPluginFixture,
+  readFirstPluginCall,
+  readPluginCall,
+  readLastPluginCall,
+  readRecordField,
+  expectRecordFields,
+  createEnabledMessageActionConfig,
 } from "./message-action-runner.test-helpers.js";
-
-const requireRecord = createRequireRecord("record", "expected-non-array-record");
-const requireLabeledRecord = createRequireRecord("record", "expected-label");
-
-function readFirstPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  const [mockCall] = mock.mock.calls;
-  const call = mockCall?.[0];
-  return requireRecord(call);
-}
-
-function readPluginCall(
-  mock: { mock: { calls: unknown[][] } },
-  callIndex: number,
-): Record<string, unknown> {
-  const mockCall = mock.mock.calls[callIndex];
-  const call = mockCall?.[0];
-  return requireRecord(call);
-}
-
-function readLastPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  return readPluginCall(mock, mock.mock.calls.length - 1);
-}
-
-function readRecordField(record: Record<string, unknown>, key: string, label: string) {
-  const value = record[key];
-  return requireLabeledRecord(value, label);
-}
-
-function expectRecordFields(
-  record: Record<string, unknown>,
-  expected: Record<string, unknown>,
-  label: string,
-) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(value);
-  }
-}
 
 describe("runMessageAction plugin dispatch", () => {
   beforeEach(() => {
     resetMessageActionRunnerMocks();
   });
   describe("alias-based plugin action dispatch", () => {
-    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        params,
-      }),
-    );
-
-    const actionHubPlugin: ChannelPlugin = {
-      id: "actionhub",
-      meta: {
-        id: "actionhub",
-        label: "Action Hub",
-        selectionLabel: "Action Hub",
-        docsPath: "/channels/actionhub",
-        blurb: "Action Hub action dispatch test plugin.",
-      },
-      capabilities: { chatTypes: ["direct", "channel"] },
-      config: createAlwaysConfiguredPluginConfig(),
-      messaging: {
-        targetPrefixes: ["actionhub", "actionhub-alias"],
-        normalizeTarget: (raw) => raw.replace(/^actionhub-alias:/i, "actionhub:"),
-        targetResolver: {
-          looksLikeId: () => true,
-        },
-      },
-      actions: {
-        describeMessageTool: () => ({
-          actions: [
-            "pin",
-            "unpin",
-            "list-pins",
-            "member-info",
-            "channel-info",
-            "edit",
-            "thread-create",
-            "thread-reply",
-          ],
-        }),
-        messageActionTargetAliases: {
-          edit: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          pin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          unpin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-        },
-        supportsAction: ({ action }) =>
-          action === "pin" ||
-          action === "unpin" ||
-          action === "list-pins" ||
-          action === "member-info" ||
-          action === "channel-info" ||
-          action === "edit" ||
-          action === "thread-create" ||
-          action === "thread-reply",
-        handleAction,
-      },
-    };
-
-    beforeEach(() => {
-      setTestPlugin(actionHubPlugin, "actionhub");
-      handleAction.mockClear();
-    });
-
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-      vi.unstubAllEnvs();
-    });
+    const { handleAction, plugin: actionHubPlugin } = useActionHubPluginFixture();
     it.each([
       { action: "unpin" as const, alias: "chatId", messageId: "om_unpin" },
       { action: "edit" as const, alias: "chat_id", messageId: "om_edit" },
@@ -187,13 +82,7 @@ describe("runMessageAction plugin dispatch", () => {
     it("infers the trusted current target for resource-referenced edits", async () => {
       setTestPlugin(actionHubPlugin, "actionhub", "bundled");
       await runMessageAction({
-        cfg: {
-          channels: {
-            actionhub: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("actionhub"),
         action: "edit",
         params: {
           channel: "actionhub",
@@ -223,13 +112,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("uses capability authorization instead of ambient routing for local plugin actions", async () => {
-      const cfg = {
-        channels: {
-          actionhub: {
-            enabled: true,
-          },
-        },
-      } as OpenClawConfig;
+      const cfg = createEnabledMessageActionConfig("actionhub");
 
       await expect(
         runMessageAction({
@@ -299,13 +182,7 @@ describe("runMessageAction plugin dispatch", () => {
 
     it("canonicalizes channelId-backed execution targets after host authorization", async () => {
       await runMessageAction({
-        cfg: {
-          channels: {
-            actionhub: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("actionhub"),
         action: "channel-info",
         params: {
           channel: "actionhub",
@@ -335,13 +212,7 @@ describe("runMessageAction plugin dispatch", () => {
 
     it("canonicalizes the execution target only after host authorization", async () => {
       await runMessageAction({
-        cfg: {
-          channels: {
-            actionhub: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("actionhub"),
         action: "pin",
         params: {
           channel: "actionhub",
@@ -371,13 +242,7 @@ describe("runMessageAction plugin dispatch", () => {
 
     it("preserves a trusted canonical sibling for a typed external current target", async () => {
       await runMessageAction({
-        cfg: {
-          channels: {
-            actionhub: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("actionhub"),
         action: "pin",
         params: {
           channel: "actionhub",
@@ -430,13 +295,7 @@ describe("runMessageAction plugin dispatch", () => {
       );
 
       await runMessageAction({
-        cfg: {
-          channels: {
-            actionhub: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("actionhub"),
         action: "pin",
         params: {
           channel: "actionhub",
@@ -495,19 +354,14 @@ describe("runMessageAction plugin dispatch", () => {
         },
         actions: {
           describeMessageTool: () => ({ actions: ["channel-delete", "channel-info"] }),
+          providerOwnedReadGates: true,
           supportsAction: ({ action }) => action === "channel-delete" || action === "channel-info",
           requiresTrustedRequesterSender: ({ action, toolContext }) =>
             Boolean(toolContext) && action === "channel-delete",
           handleAction: handleDiscordAction,
         },
       };
-      const cfg = {
-        channels: {
-          discord: {
-            enabled: true,
-          },
-        },
-      } as OpenClawConfig;
+      const cfg = createEnabledMessageActionConfig("discord");
 
       setTestPlugin(discordPlugin, "discord", "bundled");
 
@@ -603,13 +457,7 @@ describe("runMessageAction plugin dispatch", () => {
       );
 
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "react",
         params: {
           channel: "gatewaychat",

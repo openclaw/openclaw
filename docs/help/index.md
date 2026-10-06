@@ -24,13 +24,14 @@ Fastest path to unstuck, by symptom:
 
 - [Environment variables](/help/environment) - where OpenClaw loads env vars and precedence
 - [Diagnostics flags](/diagnostics/flags) - runtime diagnostics and verbose modes
-- [Node + tsx crash](/debug/node-issue) - specific Node / tsx runtime crash scenarios
+- [Node and tsx startup errors](/help/debugging#node-and-tsx-startup-errors) - capture runtime versions and the stack trace for startup failures
 
 ## Testing
 
 - [Testing](/help/testing) - test suites and Docker runners
 - [Update and plugin tests](/help/testing-updates-plugins) - package update, migration, and plugin install validation
 - [Live tests](/help/testing-live) - network-touching provider and CLI smokes
+- [Scripts](/help/scripts) - helper scripts under `scripts/` and when to prefer the CLI
 
 ## Community and meta
 

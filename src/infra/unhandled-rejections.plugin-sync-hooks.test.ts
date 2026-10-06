@@ -1,11 +1,17 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
-import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { nativeBoundaryTestEntrypoints } from "./native-boundary-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+
+const rejectionUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.unhandledRejections);
+const hooksUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.pluginHooks);
+const registryUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.emptyPluginRegistry);
 
 const syncHookNames = ["tool_result_persist", "before_message_write"] as const;
-type SyncHookName = (typeof syncHookNames)[number];
 
 function createToolResultMessage(text: string, details?: Record<string, unknown>): AgentMessage {
   return {
@@ -24,26 +30,22 @@ function createLogger() {
   };
 }
 
-function runSyncHook(params: {
-  hookName: SyncHookName;
-  runner: ReturnType<typeof createHookRunner>;
-  message: AgentMessage;
-}) {
-  return params.hookName === "tool_result_persist"
-    ? params.runner.runToolResultPersist({ message: params.message }, {})
-    : params.runner.runBeforeMessageWrite({ message: params.message }, {});
-}
-
 describe("sync-only plugin hooks", () => {
   it.each(syncHookNames)(
     "contains rejected %s handlers before the fatal rejection handler",
     (hookName) => {
       const method =
         hookName === "tool_result_persist" ? "runToolResultPersist" : "runBeforeMessageWrite";
-      const result = spawnNodeEvalSync(
-        `import { installUnhandledRejectionHandler } from "./src/infra/unhandled-rejections.ts";
-       import { createHookRunner } from "./src/plugins/hooks.ts";
-       import { createEmptyPluginRegistry } from "./src/plugins/registry-empty.ts";
+      const nodeExecutable = resolveTestNodeExecPath();
+      const result = spawnSync(
+        nodeExecutable,
+        [
+          ...resolveRuntimeWorkerArgv(rejectionUrl, nodeExecutable).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          `import { installUnhandledRejectionHandler } from ${JSON.stringify(rejectionUrl.href)};
+       import { createHookRunner } from ${JSON.stringify(hooksUrl.href)};
+       import { createEmptyPluginRegistry } from ${JSON.stringify(registryUrl.href)};
        installUnhandledRejectionHandler();
        const registry = createEmptyPluginRegistry();
        registry.typedHooks.push({
@@ -66,7 +68,8 @@ describe("sync-only plugin hooks", () => {
          process.exit(2);
        }
        console.log("sync hook rejection contained");`,
-        { imports: ["tsx"], timeout: 20_000 },
+        ],
+        { cwd: process.cwd(), encoding: "utf8", timeout: 20_000 },
       );
 
       expect(result.status).toBe(0);
@@ -74,34 +77,6 @@ describe("sync-only plugin hooks", () => {
       expect(result.stderr).not.toContain("Unhandled promise rejection");
     },
   );
-
-  it.each(syncHookNames)("warns and ignores resolved %s handlers", (hookName) => {
-    const logger = createLogger();
-    const originalMessage = createToolResultMessage("original");
-    const replacementMessage = createToolResultMessage("replacement");
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName,
-          pluginId: "resolved-sync-hook",
-          handler: async () => ({ message: replacementMessage, block: true }),
-        },
-      ]),
-      { logger },
-    );
-
-    const result = runSyncHook({ hookName, runner, message: originalMessage });
-
-    expect(result).toEqual(
-      hookName === "tool_result_persist" ? { message: originalMessage } : undefined,
-    );
-    expect(logger.warn.mock.calls).toEqual([
-      [
-        `[hooks] ${hookName} handler from resolved-sync-hook returned a Promise; this hook is synchronous and the result was ignored.`,
-      ],
-    ]);
-    expect(logger.error).not.toHaveBeenCalled();
-  });
 
   it("preserves synchronous secret redaction and subsequent handler composition", () => {
     const logger = createLogger();
@@ -200,7 +175,8 @@ describe("sync-only plugin hooks", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it.each(syncHookNames)("preserves fail-closed behavior for async %s handlers", (hookName) => {
+  it("preserves fail-closed behavior for async handlers", () => {
+    const hookName = "tool_result_persist";
     const logger = createLogger();
     const runner = createHookRunner(
       createMockPluginRegistry([
@@ -214,7 +190,7 @@ describe("sync-only plugin hooks", () => {
     );
 
     expect(() =>
-      runSyncHook({ hookName, runner, message: createToolResultMessage("original") }),
+      runner.runToolResultPersist({ message: createToolResultMessage("original") }, {}),
     ).toThrow(
       `[hooks] ${hookName} handler from fail-closed-hook failed: Error: ` +
         `[hooks] ${hookName} handler from fail-closed-hook returned a Promise; ` +

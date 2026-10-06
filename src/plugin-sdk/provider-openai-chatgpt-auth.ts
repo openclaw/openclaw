@@ -1,7 +1,7 @@
 // OpenAI ChatGPT auth helpers normalize OAuth session data for provider plugins.
 import { safeParseJsonRecord } from "../../packages/normalization-core/src/json-coercion.js";
 import { resolveExpiresAtMsFromEpochSeconds } from "../../packages/normalization-core/src/number-coercion.js";
-import { asNonArrayRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { asNonArrayRecord as readRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 
 const OPENAI_CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
@@ -20,7 +20,7 @@ export type OpenAICodexAuthIdentity = {
    */
   chatgptPlanType?: string;
   /**
-   * Profile email from the OpenAI token profile claim when available.
+   * Profile email from the OpenAI token profile claim or credential fallback.
    */
   email?: string;
   /**
@@ -44,10 +44,6 @@ export function decodeOpenAICodexJwtPayload(token: string): Record<string, unkno
   }
 }
 
-function readRecord(value: unknown): Record<string, unknown> {
-  return asNonArrayRecord(value);
-}
-
 /**
  * Resolves stable account/profile metadata from OpenAI Codex OAuth access-token claims.
  */
@@ -60,11 +56,15 @@ export function resolveOpenAICodexAuthIdentity(params: {
    * Account id supplied by the import source when the access token omits one.
    */
   accountId?: string;
+  /**
+   * Email supplied by the credential when the access token omits one.
+   */
+  email?: string | null;
 }): OpenAICodexAuthIdentity {
   const payload = decodeOpenAICodexJwtPayload(params.access);
   const auth = readRecord(payload?.[OPENAI_CODEX_AUTH_CLAIM]);
   const profile = readRecord(payload?.[OPENAI_CODEX_PROFILE_CLAIM]);
-  const email = normalizeOptionalString(profile.email);
+  const email = normalizeOptionalString(profile.email) ?? normalizeOptionalString(params.email);
   const accountId = params.accountId ?? normalizeOptionalString(auth.chatgpt_account_id);
   const chatgptPlanType = normalizeOptionalString(auth.chatgpt_plan_type);
   if (email) {
@@ -76,14 +76,17 @@ export function resolveOpenAICodexAuthIdentity(params: {
     };
   }
 
+  const issuer = normalizeOptionalString(payload?.iss);
+  const subject = normalizeOptionalString(payload?.sub);
   const stableSubject =
     // Prefer account-scoped user ids over generic JWT subject so imports keep
     // profile names stable across token refreshes and provider migrations.
     normalizeOptionalString(auth.chatgpt_account_user_id) ??
     normalizeOptionalString(auth.chatgpt_user_id) ??
     normalizeOptionalString(auth.user_id) ??
-    normalizeOptionalString(payload?.sub) ??
-    accountId;
+    // The OIDC-stable issuer/subject pair matches the shipped extension derivation.
+    // Keep bare subject as the last resort for issuer-less tokens.
+    (issuer && subject ? `${issuer}|${subject}` : subject);
   return {
     ...(accountId ? { accountId } : {}),
     ...(chatgptPlanType ? { chatgptPlanType } : {}),

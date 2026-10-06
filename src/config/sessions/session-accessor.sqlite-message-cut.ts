@@ -1,54 +1,71 @@
 import { randomUUID } from "node:crypto";
+import { isMainThread } from "node:worker_threads";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
-import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
+import { readMessageWorkContext } from "../../chat/work-context.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { invalidateSessionBranchCache } from "./session-accessor.sqlite-branches.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
-  collectSessionEntryLookupKeys,
+  commitSqliteSessionDeletion,
+  runSqliteSessionDeletionTransaction,
+  withSqliteSessionContextReset,
+} from "./session-accessor.sqlite-deletion.js";
+import { retainPreparedSessionSharingFacts } from "./session-accessor.sqlite-entry-cache-publication-state.js";
+import {
   readSessionEntryRow,
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
-  getSessionKysely,
-  normalizeSqliteSessionKey,
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
-  SessionBranchListParams,
-  SessionBranchListResult,
-  SessionBranchSummary,
   SessionBranchSwitchMutationParams,
   SessionBranchSwitchMutationResult,
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
 } from "./session-accessor.types.js";
+import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
-import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
+import { extractEditorText } from "./session-message-cut-content.js";
+import type { SessionMessageCutIntent } from "./session-message-cut.types.js";
+import {
+  markSessionTranscriptIndexDirtyInTransaction,
+  reconcileSessionTranscriptIndexInTransaction,
+  SYNC_REBUILD_MAX_BYTES,
+  SYNC_REBUILD_MAX_ROWS,
+} from "./session-transcript-index.js";
+import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import {
   isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
-  type SessionTranscriptTree,
+  selectSessionTranscriptTreeTipNodes,
 } from "./transcript-tree.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 type MessageCut = {
+  status: "cut";
   editorText?: string;
   editorAttachments?: Array<{ mimeType: string; data: string }>;
   editorMediaRefs?: Array<{ path: string; contentType: string }>;
@@ -64,107 +81,6 @@ type SessionTranscriptMutationResult =
 type SessionTranscriptMutationMode = "fork" | "rewind" | "switch";
 type SessionEntryExpectedState = Pick<SessionEntry, "lifecycleRevision" | "sessionId">;
 
-const BRANCH_HEADLINE_MAX_CHARS = 120;
-const SESSION_BRANCH_CACHE_MAX_ENTRIES = 32;
-
-type SessionBranchCacheEntry = {
-  branches: SessionBranchSummary[];
-  generation: string | null;
-  maxSeq: number | null;
-};
-
-// Branch listing must not scale with transcript size on every request. Appends advance max(seq),
-// while every in-place or replacement path rotates generation; cap the validated LRU at 32 sessions.
-const sessionBranchCache = new Map<string, SessionBranchCacheEntry>();
-
-function sessionBranchCacheKey(databasePath: string, sessionId: string): string {
-  return `${databasePath}\0${sessionId}`;
-}
-
-function cloneSessionBranchSummaries(branches: readonly SessionBranchSummary[]) {
-  return branches.map((branch) => ({ ...branch }));
-}
-
-function readSessionBranchWatermark(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-): Pick<SessionBranchCacheEntry, "generation" | "maxSeq"> {
-  const db = getSessionKysely(database.db);
-  const maxSeq = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => eb.fn.max<number>("seq").as("max_seq"))
-      .where("session_id", "=", sessionId),
-  )?.max_seq;
-  const generation = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_rewrite_watermarks")
-      .select("generation")
-      .where("session_id", "=", sessionId),
-  )?.generation;
-  return { generation: generation ?? null, maxSeq: maxSeq ?? null };
-}
-
-function loadSessionBranchSummaries(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-): SessionBranchSummary[] {
-  const cacheKey = sessionBranchCacheKey(database.path, sessionId);
-  const watermark = readSessionBranchWatermark(database, sessionId);
-  const cached = sessionBranchCache.get(cacheKey);
-  if (cached?.generation === watermark.generation && cached.maxSeq === watermark.maxSeq) {
-    sessionBranchCache.delete(cacheKey);
-    sessionBranchCache.set(cacheKey, cached);
-    return cloneSessionBranchSummaries(cached.branches);
-  }
-
-  const branches = summarizeSessionBranches(loadTranscriptEventsFromDatabase(database, sessionId));
-  sessionBranchCache.delete(cacheKey);
-  sessionBranchCache.set(cacheKey, { ...watermark, branches });
-  pruneMapToMaxSize(sessionBranchCache, SESSION_BRANCH_CACHE_MAX_ENTRIES);
-  return cloneSessionBranchSummaries(branches);
-}
-
-function invalidateSessionBranchCache(databasePath: string, sessionIds: readonly string[]): void {
-  for (const sessionId of uniqueStrings(sessionIds)) {
-    sessionBranchCache.delete(sessionBranchCacheKey(databasePath, sessionId));
-  }
-}
-
-export async function listSessionBranches(
-  params: SessionBranchListParams,
-): Promise<SessionBranchListResult> {
-  const sourceKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
-  const resolved = resolveSqliteScope({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    sessionKey: sourceKey,
-    ...(params.storePath ? { storePath: params.storePath } : {}),
-  });
-  try {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const currentEntry = readSessionEntryRow(database, sourceKey)?.entry;
-    if (!currentEntry?.sessionId) {
-      return { status: "missing-session" };
-    }
-    return {
-      status: "ok",
-      branches: loadSessionBranchSummaries(database, currentEntry.sessionId),
-    };
-  } catch {
-    return { status: "failed" };
-  }
-}
-
-/** Resolves the active branch leaf from the same transcript tree used by branch listing. */
-export function resolveSessionTranscriptActiveLeafEntryId(
-  events: readonly TranscriptEvent[],
-): string | undefined {
-  return scanSessionTranscriptTree(events).leafId ?? undefined;
-}
-
 export async function rewindSessionToMessage(
   params: SessionMessageCutMutationParams,
   expectedState?: SessionEntryExpectedState,
@@ -177,6 +93,20 @@ export async function forkSessionAtMessage(
   expectedState?: SessionEntryExpectedState,
 ): Promise<SessionMessageCutMutationResult | { status: "conflict" }> {
   return await mutateSqliteSessionAtMessage(params, "fork", expectedState);
+}
+
+/** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
+export async function forkSessionAtMessageWithPreconditions(
+  params: SessionMessageCutMutationParams & { targetKey: string },
+  expectedState: SessionEntryExpectedState | undefined,
+  preconditions: { sourceRepositoryWorkspaceId: string },
+): Promise<SessionMessageCutMutationResult | { status: "conflict" }> {
+  return await mutateSqliteSessionAtMessage(
+    params,
+    "fork",
+    expectedState,
+    preconditions.sourceRepositoryWorkspaceId,
+  );
 }
 
 export async function switchSessionBranch(
@@ -194,6 +124,7 @@ function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "fork" | "rewind",
   expectedState?: SessionEntryExpectedState,
+  sourceRepositoryWorkspaceId?: string,
 ): Promise<SessionMessageCutMutationResult | { status: "conflict" }>;
 function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
@@ -205,17 +136,67 @@ async function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
+  sourceRepositoryWorkspaceId?: string,
 ): Promise<SessionTranscriptMutationResult> {
-  const canonicalSourceKey = normalizeSqliteSessionKey(params.sessionKey);
-  const sourceKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
+  const canonicalSourceKey = normalizeStoreSessionKey(params.sessionKey);
+  const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
   const targetKey =
-    mode === "fork" ? normalizeSqliteSessionKey(params.targetKey ?? params.sessionKey) : sourceKey;
+    mode === "fork" ? normalizeStoreSessionKey(params.targetKey ?? params.sessionKey) : sourceKey;
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.env ? { env: params.env } : {}),
     sessionKey: sourceKey,
     ...(params.storePath ? { storePath: params.storePath } : {}),
   });
+  const intent: SessionMessageCutIntent = {
+    canonicalSourceKey,
+    creation: params.creation ? structuredClone(params.creation) : undefined,
+    forkWorkspace: params.forkWorkspace ? structuredClone(params.forkWorkspace) : undefined,
+    entryId: params.entryId,
+    expectedState,
+    mode,
+    repositoryWorkspaceId: params.repositoryWorkspaceId,
+    sourceKey,
+    targetKey,
+  };
+  const options = toDatabaseOptions(resolved);
+  if (isMainThread && supportsOpenClawAgentDatabaseExecution(options)) {
+    const pathname = resolveOpenClawAgentSqlitePath(options);
+    const source = readDatabasePathIdentitySync(pathname);
+    if (intent.expectedState) {
+      intent.expectedState = { ...intent.expectedState };
+    }
+    const env = captureSessionTranscriptStorageEnvironment(resolved.env ?? process.env);
+    const selection =
+      !intent.expectedState && source.key.startsWith("file:")
+        ? retainPreparedSessionSharingFacts({
+            databaseIdentity: source.key,
+            sessionKey: sourceKey,
+            acquiring: true,
+          })
+        : undefined;
+    try {
+      const { mutateSessionHistoryInWorker } = await import("./session-message-cut.js");
+      return await mutateSessionHistoryInWorker(
+        { ...params, env },
+        { ...resolved, env, path: pathname },
+        { ...intent, mode },
+        source,
+        (prepared, assertCurrent) =>
+          mutatePreparedSqliteSessionAtMessage(
+            { ...params, env },
+            { ...resolved, env },
+            prepared,
+            assertCurrent,
+            sourceRepositoryWorkspaceId,
+          ),
+        selection,
+        sourceRepositoryWorkspaceId,
+      );
+    } finally {
+      selection?.release();
+    }
+  }
   const preparedEntry = readSessionEntryRow(
     openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
     sourceKey,
@@ -228,53 +209,96 @@ async function mutateSqliteSessionAtMessage(
           lifecycleRevision: preparedEntry.lifecycleRevision,
         }
       : undefined);
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    let previousIdentity = new Map<string, SessionEntry>();
-    let currentIdentity = new Map<string, SessionEntry>();
-    let databasePath: string | undefined;
-    const result = runOpenClawAgentWriteTransaction((database) => {
-      databasePath = database.path;
-      const identityKeys = uniqueStrings([
-        ...collectSessionEntryLookupKeys(database, sourceKey),
-        ...collectSessionEntryLookupKeys(database, targetKey),
-      ]);
-      previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
-        entryId: params.entryId,
-        canonicalSourceKey,
-        creation: params.creation,
-        mode,
-        expectedState: preparedExpectedState,
-        sourceKey,
-        targetKey,
-      });
-      currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      return mutationResult;
-    }, toDatabaseOptions(resolved));
-    if (result.status === "created" && databasePath) {
-      invalidateSessionBranchCache(databasePath, [
-        ...[...previousIdentity.values()].flatMap((entry) =>
-          entry.sessionId ? [entry.sessionId] : [],
-        ),
-        ...(result.entry.sessionId ? [result.entry.sessionId] : []),
-      ]);
-    }
-    emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
-    return result;
-  });
+  if (preparedEntry?.sessionId) {
+    params.commitGuard?.();
+    const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
+    await restoreSessionColdTranscript({
+      ...params,
+      agentId: resolved.agentId,
+      sessionId: preparedEntry.sessionId,
+    });
+  }
+  const mutate = (assertPreparedCurrent?: () => void) =>
+    mutatePreparedSqliteSessionAtMessage(
+      params,
+      resolved,
+      { ...intent, expectedState: preparedExpectedState },
+      assertPreparedCurrent,
+      sourceRepositoryWorkspaceId,
+    );
+  return mode !== "fork" && preparedEntry
+    ? await withSqliteSessionContextReset(
+        resolved,
+        { sessionKey: sourceKey, entry: preparedEntry },
+        mutate,
+      )
+    : await mutate();
 }
 
-function mutateSqliteSessionAtMessageInTransaction(
+function mutatePreparedSqliteSessionAtMessage(
+  params: SessionMessageCutMutationParams,
+  resolved: ResolvedSqliteScope,
+  intent: SessionMessageCutIntent,
+  assertPreparedCurrent?: () => void,
+  sourceRepositoryWorkspaceId?: string,
+): Promise<SessionTranscriptMutationResult> {
+  return runExclusiveSqliteSessionWrite(
+    resolved,
+    async () => {
+      let previousIdentity = new Map<string, SessionEntry>();
+      const { databasePath, result, publish } = runSqliteSessionDeletionTransaction(
+        (database) => {
+          assertPreparedCurrent?.();
+          params.commitGuard?.();
+          const identityKeys = uniqueStrings([
+            ...collectSessionEntryLookupKeys(intent.sourceKey),
+            ...collectSessionEntryLookupKeys(intent.targetKey),
+          ]);
+          previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
+          const mutationResult = mutateSqliteSessionAtMessageInTransaction(
+            database,
+            resolved,
+            intent,
+            { sourceRepositoryWorkspaceId },
+          );
+          const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+          return {
+            databasePath: database.path,
+            result: mutationResult,
+            publish: prepareSessionIdentityPublication(
+              database,
+              resolved.agentId,
+              previousIdentity,
+              currentIdentity,
+            ),
+          };
+        },
+        toDatabaseOptions(resolved),
+        { operationLabel: "session.transcript.message-cut" },
+      );
+      if (result.status === "created") {
+        invalidateSessionBranchCache(databasePath, [
+          ...[...previousIdentity.values()].flatMap((entry) =>
+            entry.sessionId ? [entry.sessionId] : [],
+          ),
+          ...(result.entry.sessionId ? [result.entry.sessionId] : []),
+        ]);
+      }
+      publish();
+      return result;
+    },
+    "session.message-cut.mutate",
+  );
+}
+
+export function mutateSqliteSessionAtMessageInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ResolvedSqliteScope,
-  params: {
-    canonicalSourceKey: string;
-    creation?: SessionMessageCutMutationParams["creation"];
-    entryId: string;
-    expectedState: SessionEntryExpectedState | undefined;
-    mode: SessionTranscriptMutationMode;
-    sourceKey: string;
-    targetKey: string;
+  params: SessionMessageCutIntent,
+  projection?: {
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
+    sourceRepositoryWorkspaceId?: string;
   },
 ): SessionTranscriptMutationResult {
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
@@ -288,9 +312,21 @@ function mutateSqliteSessionAtMessageInTransaction(
   ) {
     return { status: "conflict" };
   }
+  if (
+    projection?.sourceRepositoryWorkspaceId !== undefined &&
+    currentEntry.repositoryWorkspaceId !== projection.sourceRepositoryWorkspaceId
+  ) {
+    throw new Error("Repository workspace changed before session fork");
+  }
+  // Local cuts rotate transcript identity and clear harness ownership. Locked
+  // history must instead stay with its native owner, even without an upstream link.
+  assertModelSelectionUnlocked(
+    currentEntry,
+    "Session history changes are unavailable while model selection is locked.",
+  );
   const events = loadTranscriptEventsFromDatabase(database, currentEntry.sessionId);
   const cut = params.mode === "switch" ? undefined : resolveMessageCut(events, params.entryId);
-  if (cut && "status" in cut) {
+  if (cut && cut.status !== "cut") {
     return cut;
   }
   if (params.mode === "switch") {
@@ -298,6 +334,18 @@ function mutateSqliteSessionAtMessageInTransaction(
     if (tipStatus) {
       return { status: tipStatus };
     }
+  }
+  if (
+    params.mode === "fork" &&
+    currentEntry.repositoryWorkspaceId &&
+    (!params.repositoryWorkspaceId ||
+      params.repositoryWorkspaceId === currentEntry.repositoryWorkspaceId)
+  ) {
+    throw new Error("Repository session fork requires its own prepared workspace");
+  }
+
+  if (params.mode !== "fork") {
+    commitSqliteSessionDeletion(params.sourceKey, currentEntry);
   }
 
   const nextSessionId = randomUUID();
@@ -309,9 +357,10 @@ function mutateSqliteSessionAtMessageInTransaction(
   const header = createSessionTranscriptHeader({
     cwd: readTranscriptHeaderCwd(events),
     sessionId: nextSessionId,
+    version: findSessionTranscriptHeader(events)?.version ?? MIN_READABLE_SESSION_VERSION,
   });
   const nextEvents =
-    params.mode === "fork" && cut && !("status" in cut)
+    params.mode === "fork" && cut
       ? [header, ...cut.prefix]
       : [
           header,
@@ -324,9 +373,23 @@ function mutateSqliteSessionAtMessageInTransaction(
             targetId: params.mode === "switch" ? params.entryId : (cut?.parentId ?? null),
           },
         ];
-  appendTranscriptEventsInTransaction(database, targetScope, nextEvents);
-  if (params.mode !== "fork") {
+  let copiedBytes = 0;
+  const rebuildSynchronously =
+    params.mode !== "fork" &&
+    nextEvents.length <= SYNC_REBUILD_MAX_ROWS &&
+    nextEvents.every((event) => {
+      copiedBytes += JSON.stringify(event).length;
+      return copiedBytes <= SYNC_REBUILD_MAX_BYTES;
+    });
+  if (params.mode !== "fork" && !rebuildSynchronously) {
+    ensureTranscriptSessionRoot(database, targetScope, Date.parse(header.timestamp));
+    markSessionTranscriptIndexDirtyInTransaction(database.db, nextSessionId);
+  }
+  appendTranscriptEventsInTransaction(database, targetScope, nextEvents, projection);
+  if (rebuildSynchronously) {
     reconcileSessionTranscriptIndexInTransaction(database.db, nextSessionId);
+  } else if (params.mode !== "fork") {
+    projection?.onProjectionReconcileNeeded?.();
   }
 
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
@@ -345,8 +408,15 @@ function mutateSqliteSessionAtMessageInTransaction(
           : undefined,
       nextSessionId,
     }),
+    ...(params.mode === "fork" ? params.forkWorkspace : {}),
     ...(params.mode === "fork" && params.creation
       ? buildSessionCreationStamp(params.creation)
+      : {}),
+    ...(params.mode === "fork" && params.repositoryWorkspaceId
+      ? { repositoryWorkspaceId: params.repositoryWorkspaceId }
+      : {}),
+    ...(currentEntry.incognito === true || isIncognitoSessionKey(params.canonicalSourceKey)
+      ? { incognito: true as const }
       : {}),
   };
   writeSessionEntry(database, params.targetKey, nextEntry);
@@ -354,13 +424,9 @@ function mutateSqliteSessionAtMessageInTransaction(
     status: "created",
     key: params.targetKey,
     entry: nextEntry,
-    ...(cut && !("status" in cut) && cut.editorText ? { editorText: cut.editorText } : {}),
-    ...(cut && !("status" in cut) && cut.editorAttachments
-      ? { editorAttachments: cut.editorAttachments }
-      : {}),
-    ...(cut && !("status" in cut) && cut.editorMediaRefs
-      ? { editorMediaRefs: cut.editorMediaRefs }
-      : {}),
+    ...(cut?.editorText ? { editorText: cut.editorText } : {}),
+    ...(cut?.editorAttachments ? { editorAttachments: cut.editorAttachments } : {}),
+    ...(cut?.editorMediaRefs ? { editorMediaRefs: cut.editorMediaRefs } : {}),
   };
 }
 
@@ -376,77 +442,10 @@ function validateBranchTip(
   if (isSessionTranscriptLeafControl(target.entry)) {
     return "not-branch-tip";
   }
-  if (!sessionBranchTipNodes(tree).some((node) => node.id === entryId)) {
+  if (!selectSessionTranscriptTreeTipNodes(tree).some((node) => node.id === entryId)) {
     return "not-branch-tip";
   }
   return tree.leafId === entryId ? "already-active" : undefined;
-}
-
-function summarizeSessionBranches(events: readonly TranscriptEvent[]): SessionBranchSummary[] {
-  const tree = scanSessionTranscriptTree(events);
-  return sessionBranchTipNodes(tree)
-    .toSorted(
-      (left, right) =>
-        Number(right.id === tree.leafId) - Number(left.id === tree.leafId) ||
-        right.index - left.index,
-    )
-    .map((node) => summarizeSessionBranch(tree, node.id));
-}
-
-function sessionBranchTipNodes(tree: SessionTranscriptTree<TranscriptEvent>) {
-  const referencedParents = new Set(
-    tree.nodes.flatMap((node) =>
-      isSessionTranscriptLeafControl(node.entry) || node.parentId === null ? [] : [node.parentId],
-    ),
-  );
-  return tree.nodes.filter(
-    (node) =>
-      !isSessionTranscriptLeafControl(node.entry) &&
-      (node.id === tree.leafId || !referencedParents.has(node.id)),
-  );
-}
-
-function summarizeSessionBranch(
-  tree: SessionTranscriptTree<TranscriptEvent>,
-  leafEntryId: string,
-): SessionBranchSummary {
-  const path = selectSessionTranscriptTreePathNodes(tree, leafEntryId);
-  const messages = path.flatMap((node) => {
-    const record = asRecord(node.entry);
-    return record?.type === "message" ? [record] : [];
-  });
-  const headline = messages
-    .toReversed()
-    .map((record) => extractHeadlineText(record.message))
-    .find((value): value is string => value !== undefined);
-  const timestamp = asRecord(tree.byId.get(leafEntryId)?.entry)?.timestamp;
-  return {
-    leafEntryId,
-    headline: truncateBranchHeadline(headline ?? ""),
-    messageCount: messages.length,
-    ...(typeof timestamp === "string" && timestamp.trim() ? { updatedAt: timestamp } : {}),
-    active: tree.leafId === leafEntryId,
-  };
-}
-
-function extractHeadlineText(messageValue: unknown): string | undefined {
-  const message = asRecord(messageValue);
-  if (message?.role !== "user" && message?.role !== "assistant") {
-    return undefined;
-  }
-  const text =
-    message.role === "assistant"
-      ? extractAssistantPhaseText(message)
-      : extractEditorText(message.content ?? message.text);
-  const normalized = text?.replace(/\s+/g, " ").trim();
-  return normalized || undefined;
-}
-
-function truncateBranchHeadline(value: string): string {
-  const characters = Array.from(value);
-  return characters.length <= BRANCH_HEADLINE_MAX_CHARS
-    ? value
-    : `${characters.slice(0, BRANCH_HEADLINE_MAX_CHARS - 1).join("")}…`;
 }
 
 function resolveMessageCut(
@@ -482,7 +481,8 @@ function resolveMessageCut(
   const editorAttachments = extractEditorAttachments(message.content);
   const editorMediaRefs = extractEditorMediaRefs(message);
   return {
-    editorText: extractEditorText(message.content),
+    status: "cut",
+    editorText: readMessageWorkContext(message)?.text ?? extractEditorText(message.content),
     ...(editorAttachments ? { editorAttachments } : {}),
     ...(editorMediaRefs ? { editorMediaRefs } : {}),
     parentId: target.parentId,
@@ -496,6 +496,7 @@ function cloneMessageCutSessionEntry(params: {
   forkSource?: NonNullable<SessionEntry["forkSource"]>;
   nextSessionId: string;
 }): SessionEntry {
+  // Rewind keeps retired history references so cleanup cannot orphan old transcripts.
   const baseEntry = params.forked
     ? inheritSessionSelection(params.currentEntry)
     : params.currentEntry;
@@ -507,6 +508,7 @@ function cloneMessageCutSessionEntry(params: {
     systemSent: false,
     abortedLastRun: false,
     lifecycleRunId: undefined,
+    lastRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
@@ -522,9 +524,10 @@ function cloneMessageCutSessionEntry(params: {
     // A rotated transcript cannot resume provider/runtime identity from the old tail.
     // Clear transcript-derived accounting too so the next turn rebuilds canonical state.
     contextTokens: undefined,
+    contextTokensSource: undefined,
     contextBudgetStatus: undefined,
     compactionCount: undefined,
-    compactionCheckpoints: undefined,
+    transcriptByteCompactionLatch: undefined,
     memoryFlush: undefined,
     cliSessionBindings: undefined,
     cliSessionIds: undefined,
@@ -544,22 +547,6 @@ function cloneMessageCutSessionEntry(params: {
       ? { forkSource: params.forkSource, parentSessionKey: params.forkSource.sessionKey }
       : {}),
   };
-}
-
-function extractEditorText(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .flatMap((block) => {
-      const record = asRecord(block);
-      return record?.type === "text" && typeof record.text === "string" ? [record.text] : [];
-    })
-    .join("");
-  return text || undefined;
 }
 
 // Gateway-written inline images are already size-capped at send time; these bounds
@@ -596,7 +583,15 @@ function extractEditorMediaRefs(
   }
   const refs = media.flatMap((entry) => {
     const record = asRecord(entry);
-    const mediaPath = typeof record?.path === "string" ? record.path.trim() : "";
+    const mediaUrl = typeof record?.url === "string" ? record.url.trim() : undefined;
+    const mediaPath =
+      mediaUrl === undefined
+        ? typeof record?.path === "string"
+          ? record.path.trim()
+          : ""
+        : /^media:\/\//i.test(mediaUrl)
+          ? mediaUrl
+          : "";
     const contentType = record?.contentType;
     return mediaPath && typeof contentType === "string" && contentType.startsWith("image/")
       ? [{ path: mediaPath, contentType }]

@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getUserProfileDisplay } from "../state/user-profiles.js";
-import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
+import { getUserProfileDisplay } from "../state/user-profile-list.js";
+import type { UserProfileDisplay } from "../state/user-profiles.types.js";
+import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 
 export type CurrentUserProfileDisplay =
   | {
@@ -14,19 +15,25 @@ export type CurrentUserProfileDisplay =
 
 export type CurrentUserProfileDisplayResolver = (senderId: string) => CurrentUserProfileDisplay;
 
-export function resolveCurrentUserProfileDisplay(senderId: string): CurrentUserProfileDisplay {
+export function resolveCurrentUserProfileDisplay(
+  senderId: string,
+  readDisplay: (id: string) => UserProfileDisplay | undefined = getUserProfileDisplay,
+): CurrentUserProfileDisplay {
   try {
-    const profile = getUserProfileDisplay(senderId);
+    const profile = readDisplay(senderId);
+    if (!profile) {
+      return { kind: "unresolved" };
+    }
     const label = normalizeOptionalString(profile.displayName);
     return {
       kind: "resolved",
       profileId: profile.id,
       ...(label ? { label } : {}),
-      avatarUrl: formatUserProfileAvatarPath(profile.id, profile.avatarRevision),
+      avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.avatarRevision),
       hasUploadedAvatar: profile.hasAvatar,
     };
   } catch {
-    // Durable ids can also be channel sender ids; only profile ids resolve here.
+    // A missing or deleted profile remains unresolved; raw senders never reach this lookup.
     return { kind: "unresolved" };
   }
 }

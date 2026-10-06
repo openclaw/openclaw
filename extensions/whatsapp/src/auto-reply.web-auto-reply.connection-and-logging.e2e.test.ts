@@ -3,11 +3,14 @@ import "./test-helpers.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as waitForLogTick } from "node:timers/promises";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { extractErrorCode, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { getActiveWebListener } from "./active-listener.js";
 import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
@@ -30,11 +33,7 @@ import {
 } from "./auto-reply/deliver-reply.js";
 import { buildInboundLine } from "./auto-reply/monitor/message-line.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
-import {
-  createTestLegacyFlatWebInboundMessage,
-  createTestWebInboundMessage,
-} from "./inbound/test-message.test-helper.js";
-import type { WebInboundMessageInput } from "./inbound/types.js";
+import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 import { waitForWaConnection } from "./session.js";
 
 type DrainSelectionEntry = {
@@ -102,6 +101,37 @@ async function waitForScriptedListeners(
     },
     { timeout: 250, interval: 2 },
   );
+}
+
+// The async file transport's flush promise is not exposed through the plugin SDK.
+async function waitForLogText(
+  filePath: string,
+  text: string,
+  signal: AbortSignal,
+): Promise<string> {
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const content = await withinTest(
+        fs.readFile(filePath, "utf8").catch((error: unknown) => {
+          if (extractErrorCode(error) === "ENOENT") {
+            return "";
+          }
+          throw error;
+        }),
+        signal,
+      );
+      if (content.includes(text)) {
+        return content;
+      }
+      await waitForLogTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`Timed out waiting for ${text} in ${filePath}`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 describe("web auto-reply connection", () => {
@@ -829,105 +859,46 @@ describe("web auto-reply connection", () => {
     scenario.assertAfterRun?.(context);
   });
 
-  it("passes the global inbound debounce into the live listener", async () => {
-    const capture = createWebListenerFactoryCapture();
+  it.each([undefined, 75])(
+    "keeps live debounce config and explicit transport override (%s)",
+    async (debounceMs) => {
+      const capture = createWebListenerFactoryCapture();
 
-    setLoadConfigMock({
-      messages: {
-        inbound: {
-          debounceMs: 250,
+      setLoadConfigMock({
+        messages: {
+          inbound: {
+            debounceMs: 250,
+          },
         },
-      },
-      channels: {
-        whatsapp: {
-          accounts: {
-            work: {
-              authDir: "/tmp/work",
+        channels: {
+          whatsapp: {
+            accounts: {
+              work: {
+                authDir: "/tmp/work",
+              },
             },
           },
         },
-      },
-    } as OpenClawConfig);
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "work",
-      },
-    );
-
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
-
-  it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
-    const capture = createWebListenerFactoryCapture();
-    const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
-    const resolver = vi.fn().mockResolvedValue(undefined);
-
-    await monitorWebChannel(false, capture.listenerFactory as never, false, resolver);
-    const onMessage = requireOnMessage(capture.getOnMessage());
-    const msg = createTestLegacyFlatWebInboundMessage({
-      from: "+1",
-      conversationId: "+1",
-      chatId: "+1",
-      to: "+2",
-      accessControlPassed: false,
-      reply,
-    });
-
-    expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
-    expect(
-      capture
-        .getLastOptions()
-        ?.shouldDebounce?.(createTestWebInboundMessage({ payload: { body: "   " } })),
-    ).toBe(false);
-    expect(
-      capture.getLastOptions()?.shouldDebounce?.(
-        createTestWebInboundMessage({
-          payload: {
-            body: "/stop\n\n[whatsapp attachment unavailable]",
-            commandBody: "/stop",
-          },
-          platform: { sendComposing, reply, sendMedia },
-        }),
-      ),
-    ).toBe(false);
-    await onMessage(msg);
-
-    expect(resolver).not.toHaveBeenCalled();
-    expect(reply).not.toHaveBeenCalled();
-    await expect(
-      onMessage({
-        event: { id: "canonical-no-admission" },
-        payload: { body: "canonical" },
-        platform: {
-          chatJid: "+3",
-          recipientJid: "+4",
-          sendComposing,
-          reply,
-          sendMedia,
+      } as OpenClawConfig);
+      await monitorWebChannel(
+        false,
+        capture.listenerFactory as never,
+        false,
+        async () => ({ text: "ok" }),
+        undefined,
+        undefined,
+        {
+          accountId: "work",
+          debounceMs,
         },
-        from: "+3",
-        conversationId: "+3",
-        accountId: "default",
-        chatType: "direct",
-      }),
-    ).rejects.toThrow(/missing admission facts/);
+      );
 
-    expect(reply).not.toHaveBeenCalled();
-    await expect(
-      onMessage({
-        ...msg,
-        id: "partial-msg",
-        payload: { body: "partial nested" },
-      } as unknown as WebInboundMessageInput),
-    ).rejects.toThrow(/legacy flat or canonical nested/);
-  });
+      resetLoadConfigMock();
+      expect(capture.getLastOptions()?.debounceMs).toBe(debounceMs);
+      expect(capture.getLastOptions()?.cfg.messages?.inbound?.debounceMs).toBe(250);
+      expect(capture.getLastOptions()?.loadConfig).toEqual(expect.any(Function));
+    },
+  );
 
   it("raises the process listener budget before opening the web listener", async () => {
     const originalMax = process.getMaxListeners();
@@ -947,11 +918,8 @@ describe("web auto-reply connection", () => {
   });
 
   it("builds separate timestamped inbound envelopes without batching", () => {
-    const cfg = {} as OpenClawConfig;
     const buildLine = (body: string, id: string, timestamp: number) =>
       buildInboundLine({
-        cfg,
-        agentId: "main",
         envelope: { timezone: "utc" },
         msg: createTestWebInboundMessage({
           event: { id, timestamp },
@@ -971,28 +939,24 @@ describe("web auto-reply connection", () => {
 
     expect(firstBody).toMatch(
       new RegExp(
-        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(firstTimestamp)}\\] \\+1: \\[openclaw\\] first`,
+        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(firstTimestamp)}\\] \\+1: first`,
       ),
     );
     expect(firstBody).not.toContain("second");
     expect(secondBody).toMatch(
       new RegExp(
-        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(secondTimestamp)}\\] \\+1: \\[openclaw\\] second`,
+        `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(secondTimestamp)}\\] \\+1: second`,
       ),
     );
     expect(secondBody).not.toContain("first");
   });
 
-  it("emits heartbeat logs with connection metadata", async () => {
+  it("emits heartbeat logs with connection metadata", async ({ signal }) => {
     vi.useFakeTimers();
     const logPath = `/tmp/openclaw-heartbeat-${crypto.randomUUID()}.log`;
     setLoggerOverride({ level: "trace", file: logPath });
 
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
 
     const controller = new AbortController();
     const listenerFactory = vi.fn(async () => {
@@ -1022,17 +986,13 @@ describe("web auto-reply connection", () => {
     await run.catch(() => {});
     vi.useRealTimers();
 
-    let content = "";
-    await vi.waitFor(async () => {
-      content = await fs.readFile(logPath, "utf-8").catch(() => "");
-      expect(content).toMatch(/web-heartbeat/);
-    });
+    const content = await waitForLogText(logPath, "web-heartbeat", signal);
     expect(content).toMatch(/web-heartbeat/);
     expect(content).toMatch(/connectionId/);
     expect(content).toMatch(/messagesHandled/);
   });
 
-  it("logs outbound replies to file", async () => {
+  it("logs outbound replies to file", async ({ signal }) => {
     const logPath = `/tmp/openclaw-log-test-${crypto.randomUUID()}.log`;
     setLoggerOverride({ level: "trace", file: logPath });
     const spies = createWebInboundDeliverySpies();
@@ -1060,11 +1020,7 @@ describe("web auto-reply connection", () => {
       connectionId: "conn-file-log",
     });
 
-    let content = "";
-    await vi.waitFor(async () => {
-      content = await fs.readFile(logPath, "utf-8").catch(() => "");
-      expect(content).toMatch(/web-auto-reply/);
-    });
+    const content = await waitForLogText(logPath, "web-auto-reply", signal);
     expect(content).toMatch(/web-auto-reply/);
     expect(content).toMatch(/auto/);
   });

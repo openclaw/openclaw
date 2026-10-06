@@ -1,13 +1,11 @@
 // Memory Core plugin module owns persisted vector completeness state.
 import type { DatabaseSync } from "node:sqlite";
-import {
-  MEMORY_INDEX_META_TABLE,
-  type MemoryVectorIndexState,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { MEMORY_INDEX_META_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import type { MemoryVectorIndexState } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 const VECTOR_REBUILD_META_KEY = "memory_vector_rebuild_v1";
 
-function vectorTableExists(db: DatabaseSync, tableName: string): boolean {
+export function memoryTableExists(db: DatabaseSync, tableName: string): boolean {
   return Boolean(
     db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName),
   );
@@ -49,7 +47,7 @@ export function resolvePersistedMemoryVectorIndexState(params: {
   if (row?.value === "1") {
     return { state: "incomplete" };
   }
-  if (!vectorTableExists(params.db, params.vectorTable)) {
+  if (!memoryTableExists(params.db, params.vectorTable)) {
     return params.metaVectorDims && params.hasSemanticChunks
       ? { state: "incomplete" }
       : { state: "empty" };

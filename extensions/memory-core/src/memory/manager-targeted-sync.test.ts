@@ -1,5 +1,5 @@
-// Memory Core tests cover manager targeted sync plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   markMemoryTargetArchiveFilesDirty,
   runMemoryTargetedSessionSync,
@@ -24,18 +24,21 @@ describe("memory targeted session sync", () => {
     const activateFallbackProvider = vi.fn(async () => true);
     const syncArchiveFiles = vi
       .fn()
-      .mockRejectedValueOnce(new Error("embedding backend failed"))
+      .mockRejectedValueOnce(
+        createMemoryEmbeddingOperationError({
+          operation: "batch",
+          cause: "embedding backend failed",
+        }),
+      )
       .mockResolvedValueOnce(undefined);
     const sessionsDirtyFiles = new Set(["/tmp/targeted-fallback.jsonl", "/tmp/other-dirty.jsonl"]);
 
     const result = await runMemoryTargetedSessionSync({
       hasSessionSource: true,
       targetArchiveFiles: new Set(["/tmp/targeted-fallback.jsonl"]),
-      reason: "post-compaction",
       progress: undefined,
       sessionsDirtyFiles,
       syncArchiveFiles,
-      shouldFallbackOnError: () => true,
       activateFallbackProvider,
     });
 
@@ -46,71 +49,31 @@ describe("memory targeted session sync", () => {
       targetArchiveFiles: ["/tmp/targeted-fallback.jsonl"],
       progress: undefined,
     });
-    expect(result).toEqual({ handled: true, sessionsDirty: true });
+    expect(result).toEqual({
+      handled: true,
+      sessionsDirty: true,
+      failure: { error: expect.objectContaining({ message: "embedding backend failed" }) },
+    });
     expect(sessionsDirtyFiles.has("/tmp/targeted-fallback.jsonl")).toBe(true);
     expect(sessionsDirtyFiles.has("/tmp/other-dirty.jsonl")).toBe(true);
   });
 
-  it("preserves the full-retry dirty marker after targeted cleanup", async () => {
-    const syncArchiveFiles = vi.fn(async () => undefined);
-    const sessionsDirtyFiles = new Set(["/tmp/targeted-full-retry.jsonl"]);
-
+  it.each([
+    { marker: "full-retry", dirtyState: { sessionsFullRetryDirty: true } },
+    { marker: "source reconciliation", dirtyState: { sessionsReconcileDirty: true } },
+  ])("preserves the $marker dirty marker after targeted cleanup", async ({ dirtyState }) => {
+    const sessionsDirtyFiles = new Set(["/tmp/targeted-cleanup.jsonl"]);
     const result = await runMemoryTargetedSessionSync({
       hasSessionSource: true,
-      targetArchiveFiles: new Set(["/tmp/targeted-full-retry.jsonl"]),
-      reason: "post-compaction",
+      targetArchiveFiles: new Set(sessionsDirtyFiles),
       progress: undefined,
-      sessionsFullRetryDirty: true,
-      sessionsDirtyFiles,
-      syncArchiveFiles,
-      shouldFallbackOnError: () => false,
-      activateFallbackProvider: async () => false,
-    });
-
-    expect(result).toEqual({ handled: true, sessionsDirty: true });
-    expect(sessionsDirtyFiles.size).toBe(0);
-  });
-
-  it("preserves source reconciliation after targeted cleanup", async () => {
-    const sessionsDirtyFiles = new Set(["/tmp/targeted-reconcile.jsonl"]);
-
-    const result = await runMemoryTargetedSessionSync({
-      hasSessionSource: true,
-      targetArchiveFiles: new Set(["/tmp/targeted-reconcile.jsonl"]),
-      reason: "post-compaction",
-      sessionsReconcileDirty: true,
+      ...dirtyState,
       sessionsDirtyFiles,
       syncArchiveFiles: async () => undefined,
-      shouldFallbackOnError: () => false,
       activateFallbackProvider: async () => false,
     });
 
     expect(result).toEqual({ handled: true, sessionsDirty: true });
     expect(sessionsDirtyFiles.size).toBe(0);
-  });
-
-  it("keeps a deferred target dirty until a later targeted sync commits", async () => {
-    const targetSessionPath = "/tmp/targeted-deferred.jsonl";
-    const sessionsDirtyFiles = new Set([targetSessionPath]);
-    const syncArchiveFiles = vi
-      .fn()
-      .mockResolvedValueOnce({ deferredSessionFiles: new Set([targetSessionPath]) })
-      .mockResolvedValueOnce({ deferredSessionFiles: new Set<string>() });
-    const runTargetedSync = async () =>
-      await runMemoryTargetedSessionSync({
-        hasSessionSource: true,
-        targetArchiveFiles: new Set([targetSessionPath]),
-        sessionsDirtyFiles,
-        syncArchiveFiles,
-        shouldFallbackOnError: () => false,
-        activateFallbackProvider: async () => false,
-      });
-
-    await expect(runTargetedSync()).resolves.toEqual({ handled: true, sessionsDirty: true });
-    expect(sessionsDirtyFiles).toEqual(new Set([targetSessionPath]));
-
-    await expect(runTargetedSync()).resolves.toEqual({ handled: true, sessionsDirty: false });
-    expect(sessionsDirtyFiles).toEqual(new Set());
-    expect(syncArchiveFiles).toHaveBeenCalledTimes(2);
   });
 });

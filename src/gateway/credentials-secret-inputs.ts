@@ -1,18 +1,18 @@
 // Gateway credential secret-input resolver.
 // Resolves SecretRefs before applying Gateway credential precedence rules.
+import {
+  cloneConfigWithResolutionFacts,
+  resolveConfigSecretRef,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { isSecretResolutionError } from "../secrets/resolve-errors.js";
 import { materializeSecretInput } from "../secrets/resolve-secret-input-string.js";
 import {
   GatewaySecretRefUnavailableError,
   resolveExplicitGatewayAuth,
   resolveGatewayCredentialsFromConfig,
   trimToUndefined,
-  type ExplicitGatewayAuth,
   type GatewayCredentialMode,
-  type GatewayCredentialPrecedence,
-  type GatewayRemoteCredentialFallback,
-  type GatewayRemoteCredentialPrecedence,
 } from "./credentials.js";
 import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
@@ -23,40 +23,34 @@ import {
   type SupportedGatewaySecretInputPath,
 } from "./secret-input-paths.js";
 
-type GatewayCredentialSecretInputOptions = {
-  config: OpenClawConfig;
-  explicitAuth?: ExplicitGatewayAuth;
-  urlOverride?: string;
-  urlOverrideSource?: "cli" | "env";
-  env?: NodeJS.ProcessEnv;
-  modeOverride?: GatewayCredentialMode;
-  localPrecedence?: GatewayCredentialPrecedence;
-  remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
-  remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
-  remoteTokenFallback?: GatewayRemoteCredentialFallback;
-  remotePasswordFallback?: GatewayRemoteCredentialFallback;
-};
-
-/** Internal options after explicit auth has been trimmed to real credential values. */
-type NormalizedGatewayCredentialSecretInputOptions = Omit<
-  GatewayCredentialSecretInputOptions,
-  "explicitAuth"
+type GatewayCredentialSecretInputOptions = Omit<
+  Parameters<typeof resolveGatewayCredentialsFromConfig>[0],
+  "cfg"
 > & {
-  explicitAuth: ExplicitGatewayAuth;
+  config: OpenClawConfig;
 };
 
-async function resolveGatewaySecretInputString(params: {
+async function resolveConfiguredGatewaySecretInput(params: {
   config: OpenClawConfig;
-  value: unknown;
-  path: string;
+  path: SupportedGatewaySecretInputPath;
   env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
+  const configuredValue = readGatewaySecretInputValue(params.config, params.path);
+  const ref = resolveConfigSecretRef({
+    config: params.config,
+    path: params.path,
+    value: configuredValue,
+    defaults: params.config.secrets?.defaults,
+  });
   const value = await materializeSecretInput({
     config: params.config,
-    value: params.value,
+    value: ref ?? configuredValue,
     env: params.env,
     normalize: trimToUndefined,
-    onResolveRefError: () => {
+    onResolveRefError: (error) => {
+      if (isSecretResolutionError(error) && error.code === "SECRET_REF_REDACTED_VALUE") {
+        throw error;
+      }
       throw new GatewaySecretRefUnavailableError(params.path);
     },
   });
@@ -71,32 +65,13 @@ function hasConfiguredGatewaySecretRef(
   path: SupportedGatewaySecretInputPath,
 ): boolean {
   return Boolean(
-    resolveSecretInputRef({
+    resolveConfigSecretRef({
+      config,
+      path,
       value: readGatewaySecretInputValue(config, path),
       defaults: config.secrets?.defaults,
-    }).ref,
+    }),
   );
-}
-
-function resolveGatewayCredentialsFromConfigOptions(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  options: NormalizedGatewayCredentialSecretInputOptions;
-}) {
-  const { cfg, env, options } = params;
-  return {
-    cfg,
-    env,
-    explicitAuth: options.explicitAuth,
-    urlOverride: options.urlOverride,
-    urlOverrideSource: options.urlOverrideSource,
-    modeOverride: options.modeOverride,
-    localPrecedence: options.localPrecedence,
-    remoteTokenPrecedence: options.remoteTokenPrecedence,
-    remotePasswordPrecedence: options.remotePasswordPrecedence ?? "env-first", // pragma: allowlist secret
-    remoteTokenFallback: options.remoteTokenFallback,
-    remotePasswordFallback: options.remotePasswordFallback,
-  } as const;
 }
 
 function localAuthModeAllowsGatewaySecretInputPath(params: {
@@ -120,7 +95,7 @@ function localAuthModeAllowsGatewaySecretInputPath(params: {
 }
 
 function canGatewaySecretInputPathWin(params: {
-  options: NormalizedGatewayCredentialSecretInputOptions;
+  options: GatewayCredentialSecretInputOptions;
   env: NodeJS.ProcessEnv;
   config: OpenClawConfig;
   path: SupportedGatewaySecretInputPath;
@@ -140,7 +115,7 @@ function canGatewaySecretInputPathWin(params: {
     return false;
   }
   const sentinel = `__OPENCLAW_GATEWAY_SECRET_REF_PROBE_${params.path.replaceAll(".", "_")}__`;
-  const probeConfig = structuredClone(params.config);
+  const probeConfig = cloneConfigWithResolutionFacts(params.config);
   for (const candidatePath of ALL_GATEWAY_SECRET_INPUT_PATHS) {
     if (!hasConfiguredGatewaySecretRef(probeConfig, candidatePath)) {
       continue;
@@ -159,13 +134,11 @@ function canGatewaySecretInputPathWin(params: {
     value: sentinel,
   });
   try {
-    const resolved = resolveGatewayCredentialsFromConfig(
-      resolveGatewayCredentialsFromConfigOptions({
-        cfg: probeConfig,
-        env: params.env,
-        options: params.options,
-      }),
-    );
+    const resolved = resolveGatewayCredentialsFromConfig({
+      ...params.options,
+      cfg: probeConfig,
+      env: params.env,
+    });
     const authMode = params.config.gateway?.auth?.mode;
     const tokenCanWin =
       resolved.token === sentinel &&
@@ -196,79 +169,44 @@ export function gatewaySecretInputPathCanWin(
   });
 }
 
-async function resolveConfiguredGatewaySecretInput(params: {
-  config: OpenClawConfig;
-  path: SupportedGatewaySecretInputPath;
-  env: NodeJS.ProcessEnv;
-}): Promise<string | undefined> {
-  return resolveGatewaySecretInputString({
-    config: params.config,
-    value: readGatewaySecretInputValue(params.config, params.path),
-    path: params.path,
-    env: params.env,
-  });
-}
-
-async function resolvePreferredGatewaySecretInputs(params: {
-  options: NormalizedGatewayCredentialSecretInputOptions;
-  env: NodeJS.ProcessEnv;
-  config: OpenClawConfig;
-}): Promise<OpenClawConfig> {
-  let nextConfig = params.config;
+/** Resolve only secret refs that can win, then select Gateway credentials. */
+export async function resolveGatewayCredentialsWithSecretInputs(
+  params: GatewayCredentialSecretInputOptions,
+): Promise<{ token?: string; password?: string }> {
+  const explicitAuth = resolveExplicitGatewayAuth(params.explicitAuth);
+  if (explicitAuth.token || explicitAuth.password) {
+    return explicitAuth;
+  }
+  const options = { ...params, explicitAuth };
+  const env = options.env ?? process.env;
+  const config = options.config;
+  let resolvedConfig = config;
   for (const path of ALL_GATEWAY_SECRET_INPUT_PATHS) {
-    if (
-      !canGatewaySecretInputPathWin({
-        options: params.options,
-        env: params.env,
-        config: nextConfig,
-        path,
-      })
-    ) {
+    if (!canGatewaySecretInputPathWin({ options, env, config: resolvedConfig, path })) {
       continue;
     }
-    if (nextConfig === params.config) {
-      nextConfig = structuredClone(params.config);
+    if (resolvedConfig === config) {
+      resolvedConfig = cloneConfigWithResolutionFacts(config);
     }
     try {
-      const resolvedValue = await resolveConfiguredGatewaySecretInput({
-        config: nextConfig,
+      const value = await resolveConfiguredGatewaySecretInput({
+        config: resolvedConfig,
         path,
-        env: params.env,
+        env,
       });
-      assignResolvedGatewaySecretInput({
-        config: nextConfig,
-        path,
-        value: resolvedValue,
-      });
-    } catch {
+      assignResolvedGatewaySecretInput({ config: resolvedConfig, path, value });
+    } catch (error) {
+      if (isSecretResolutionError(error) && error.code === "SECRET_REF_REDACTED_VALUE") {
+        throw error;
+      }
       // Keep scanning candidate paths so unresolved higher-priority refs do not
       // prevent valid fallback refs from being considered.
-      continue;
     }
   }
-  return nextConfig;
-}
-
-/** Resolve only secret refs that can win, then select Gateway credentials. */
-async function resolveGatewayCredentialsFromConfigWithSecretInputs(params: {
-  options: NormalizedGatewayCredentialSecretInputOptions;
-  env: NodeJS.ProcessEnv;
-}): Promise<{ token?: string; password?: string }> {
-  let resolvedConfig = await resolvePreferredGatewaySecretInputs({
-    options: params.options,
-    env: params.env,
-    config: params.options.config,
-  });
   const resolvedPaths = new Set<SupportedGatewaySecretInputPath>();
   for (;;) {
     try {
-      return resolveGatewayCredentialsFromConfig(
-        resolveGatewayCredentialsFromConfigOptions({
-          cfg: resolvedConfig,
-          env: params.env,
-          options: params.options,
-        }),
-      );
+      return resolveGatewayCredentialsFromConfig({ ...options, cfg: resolvedConfig, env });
     } catch (error) {
       if (!(error instanceof GatewaySecretRefUnavailableError)) {
         throw error;
@@ -277,42 +215,18 @@ async function resolveGatewayCredentialsFromConfigWithSecretInputs(params: {
       if (!isSupportedGatewaySecretInputPath(path) || resolvedPaths.has(path)) {
         throw error;
       }
-      if (resolvedConfig === params.options.config) {
-        resolvedConfig = structuredClone(params.options.config);
+      if (resolvedConfig === config) {
+        resolvedConfig = cloneConfigWithResolutionFacts(config);
       }
       // Resolve refs lazily on demand as a backstop for precedence cases the
       // optimistic scan skipped, but stop if the same path loops.
-      const resolvedValue = await resolveConfiguredGatewaySecretInput({
+      const value = await resolveConfiguredGatewaySecretInput({
         config: resolvedConfig,
         path,
-        env: params.env,
+        env,
       });
-      assignResolvedGatewaySecretInput({
-        config: resolvedConfig,
-        path,
-        value: resolvedValue,
-      });
+      assignResolvedGatewaySecretInput({ config: resolvedConfig, path, value });
       resolvedPaths.add(path);
     }
   }
-}
-
-/** Resolve Gateway credentials after materializing winning configured secret refs. */
-export async function resolveGatewayCredentialsWithSecretInputs(
-  params: GatewayCredentialSecretInputOptions,
-): Promise<{ token?: string; password?: string }> {
-  const options: NormalizedGatewayCredentialSecretInputOptions = {
-    ...params,
-    explicitAuth: resolveExplicitGatewayAuth(params.explicitAuth),
-  };
-  if (options.explicitAuth.token || options.explicitAuth.password) {
-    return {
-      token: options.explicitAuth.token,
-      password: options.explicitAuth.password,
-    };
-  }
-  return await resolveGatewayCredentialsFromConfigWithSecretInputs({
-    options,
-    env: params.env ?? process.env,
-  });
 }

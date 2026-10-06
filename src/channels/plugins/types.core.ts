@@ -1,26 +1,30 @@
-/**
- * Core channel plugin public types.
- *
- * Defines channel metadata, capabilities, action discovery, setup, status, and runtime contexts.
- */
 import type { TSchema } from "typebox";
+import type { AgentTool, AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type {
   GatewayClientMode,
   GatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import type { AgentTool, AgentToolResult } from "../../agents/runtime/index.js";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
-import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
+import type { IdentifierAuthentication } from "../message-access/identifier-authentication.js";
+import type {
+  ChannelMessageSendPollContext,
+  MessageReceipt,
+  MessageReceiptSourceResult,
+  OutboundReplyFacts,
+} from "../message/types.js";
+import type { ChannelProgressDraftCompositorSnapshot } from "../progress-draft-compositor.types.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
-import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
+import type { ChannelMessageActionName } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
@@ -49,6 +53,7 @@ export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => Chan
  */
 export type ChannelMessageActionDiscoveryContext = {
   cfg: OpenClawConfig;
+  chatType?: ChatType | null;
   currentChannelId?: string | null;
   currentChannelProvider?: string | null;
   currentThreadTs?: string | null;
@@ -96,12 +101,10 @@ export type ChannelMessageToolDiscovery = {
   mediaSourceParams?: ChannelMessageToolMediaSourceParams | null;
 };
 
-export type ChannelStatusIssue = {
+export type ChannelStatusIssue = SchemaContract<
+  Omit<NonNullable<ChannelsStatusResult["statusIssues"]>[number], "channel">
+> & {
   channel: ChannelId;
-  accountId: string;
-  kind: "intent" | "permissions" | "config" | "auth" | "runtime";
-  message: string;
-  fix?: string;
 };
 
 export type ChannelAccountState =
@@ -141,18 +144,14 @@ export type ChannelMeta = {
 };
 
 /** Snapshot row returned by channel status and lifecycle surfaces. */
-export type ChannelAccountSnapshot = {
-  accountId: string;
-  name?: string;
-  enabled?: boolean;
-  configured?: boolean;
+export type ChannelAccountSnapshot = SchemaContract<
+  Omit<
+    ChannelsStatusResult["channelAccounts"][string][number],
+    "healthState" | "credentialSource" | "audienceType" | "audience" | "webhookPath" | "webhookUrl"
+  >
+> & {
   statusState?: string;
-  linked?: boolean;
-  running?: boolean;
-  connected?: boolean;
   restartPending?: boolean;
-  reconnectAttempts?: number;
-  lastConnectedAt?: number | null;
   lastDisconnect?:
     | string
     | {
@@ -164,9 +163,7 @@ export type ChannelAccountSnapshot = {
     | null;
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
-  lastTransportActivityAt?: number | null;
   stateReason?: string;
-  lastError?: string | null;
   /**
    * Legacy channel-authored health label; channel plugins should publish `lifecycle` instead.
    * Core-derived policy writes remain supported. There is no removal date; removal awaits
@@ -185,20 +182,6 @@ export type ChannelAccountSnapshot = {
    */
   ingressUnavailable?: true;
   terminalDisconnect?: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastInboundAt?: number | null;
-  lastOutboundAt?: number | null;
-  busy?: boolean;
-  activeRuns?: number;
-  lastRunActivityAt?: number | null;
-  activeRunStartedAt?: number | null;
-  mode?: string;
-  dmPolicy?: string;
-  allowFrom?: string[];
-  tokenSource?: string;
-  botTokenSource?: string;
-  appTokenSource?: string;
   userTokenSource?: string;
   signingSecretSource?: string;
   tokenStatus?: string;
@@ -206,6 +189,7 @@ export type ChannelAccountSnapshot = {
   appTokenStatus?: string;
   signingSecretStatus?: string;
   userTokenStatus?: string;
+  apiCredentialStatus?: "available" | "configured_unavailable" | "missing";
   identity?: string;
   credentialSource?: string;
   secretSource?: string;
@@ -213,15 +197,6 @@ export type ChannelAccountSnapshot = {
   audience?: string;
   webhookPath?: string;
   webhookUrl?: string;
-  baseUrl?: string;
-  allowUnmentionedGroups?: boolean;
-  cliPath?: string | null;
-  dbPath?: string | null;
-  port?: number | null;
-  probe?: unknown;
-  lastProbeAt?: number | null;
-  audit?: unknown;
-  application?: unknown;
   bot?: unknown;
   publicKey?: string | null;
   profile?: unknown;
@@ -251,17 +226,6 @@ export type ChannelGroupContext = {
   senderE164?: string | null;
 };
 
-/** TTS voice delivery behavior advertised by a channel plugin. */
-/**
- * Container tokens (file-extension shape, no leading dot) that the host
- * TTS pipeline knows how to pre-transcode synthesized audio into.
- * Channels that benefit from a specific container — currently only
- * iMessage, which needs Apple's native voice-memo CAF descriptor — name
- * one here. Adding a new entry requires extending the host transcoder
- * recipe table in lockstep so a typed declaration cannot silently no-op.
- */
-type PreferredAudioFileFormat = "caf";
-
 export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
@@ -269,14 +233,12 @@ export type ChannelTtsVoiceDeliveryCapabilities = {
   /** Voice notes can carry the final reply text as a visible caption. */
   captionedFinalText?: boolean;
   /**
-   * Optional preferred audio container the channel wants for voice-memo
-   * delivery. When set and the host can transcode (e.g. `afconvert` on
-   * macOS), the TTS pipeline pre-encodes synthesized audio to this format
-   * before handing it to the channel. Useful for channels (such as
-   * iMessage) whose downstream attempts its own container conversion
-   * that races against the upload write and fails.
+   * Preferred file-extension token, without a leading dot, for host pre-transcoding.
+   * Conversion requires an available transcoder (e.g. `afconvert` on macOS).
+   * iMessage uses CAF for native voice memos to avoid a downstream conversion/upload race.
+   * New formats require a matching host transcoder recipe.
    */
-  preferAudioFileFormat?: PreferredAudioFileFormat;
+  preferAudioFileFormat?: "caf";
 };
 
 /** Static capability flags advertised by a channel plugin. */
@@ -284,6 +246,8 @@ export type ChannelCapabilities = {
   chatTypes: Array<ChatType | "thread">;
   polls?: boolean;
   reactions?: boolean;
+  /** Bot reactions per message; omitted means multiple independent emoji. */
+  reactionSlots?: "single" | "multiple";
   edit?: boolean;
   unsend?: boolean;
   reply?: boolean;
@@ -305,6 +269,7 @@ export type ChannelSecurityDmPolicy = {
   allowFromPath: string;
   approveHint: string;
   normalizeEntry?: (raw: string) => string;
+  classifyEntryAuthentication?: (raw: string) => IdentifierAuthentication | undefined;
 };
 
 export type ChannelSecurityContext<ResolvedAccount = unknown> = {
@@ -319,17 +284,12 @@ export type ChannelMentionAdapter = {
     cfg: OpenClawConfig | undefined;
     agentId?: string;
   }) => RegExp[];
-  stripPatterns?: (params: {
-    ctx: MsgContext;
-    cfg: OpenClawConfig | undefined;
-    agentId?: string;
-  }) => string[];
-  stripMentions?: (params: {
-    text: string;
-    ctx: MsgContext;
-    cfg: OpenClawConfig | undefined;
-    agentId?: string;
-  }) => string;
+  stripPatterns?: (
+    params: Parameters<NonNullable<ChannelMentionAdapter["stripRegexes"]>>[0],
+  ) => string[];
+  stripMentions?: (
+    params: Parameters<NonNullable<ChannelMentionAdapter["stripRegexes"]>>[0] & { text: string },
+  ) => string;
 };
 
 export type ChannelStreamingAdapter = {
@@ -352,6 +312,8 @@ type ChannelCrossContextPresentationFactory = (params: {
 
 type ChannelReplyTransport = {
   replyToId?: string | null;
+  /** Mark a channel-inferred target so outbound delivery can consume first-mode replies. */
+  replyToIdSource?: "implicit";
   threadId?: string | number | null;
 };
 
@@ -371,7 +333,7 @@ export type ChannelOutboundSessionRoute = {
     kind: ChatType;
     id: string;
   };
-  chatType: "direct" | "group" | "channel";
+  chatType: ChatType;
   from: string;
   to: string;
   threadId?: string | number;
@@ -395,7 +357,7 @@ export type ChannelThreadingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
     chatType?: string | null;
-  }) => "off" | "first" | "all" | "batched";
+  }) => ReplyToMode;
   /**
    * When replyToMode is "off", allow explicit reply tags/directives to keep replyToId.
    *
@@ -429,10 +391,14 @@ export type ChannelThreadingAdapter = {
   resolveReplyTransport?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
+    /** Originating inbound message in this routed channel; not an explicit reply target. */
+    currentMessageId?: string;
     threadId?: string | number | null;
     replyToId?: string | null;
     /** True when replyToId came from an explicit payload target or reply tag. */
     replyToIsExplicit?: boolean;
+    /** Existing payload intent to reply to the current conversation, not an arbitrary target. */
+    replyToCurrent?: boolean;
     replyDelivery?: ReplyDeliveryContext;
   }) => ChannelReplyTransport | null;
   resolveFocusedBinding?: (params: {
@@ -469,7 +435,7 @@ export type ChannelThreadingToolContext = {
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   hasRepliedRef?: { value: boolean };
   /** True when posting at the parent conversation root would leak a thread-originated reply. */
   sameChannelThreadRequired?: boolean;
@@ -489,6 +455,32 @@ export type ChannelMessagingAdapter = {
    * targets before plugin-specific normalization.
    */
   targetPrefixes?: readonly string[];
+  /** Re-resolve the current owner when channel behavior exceeds generic bindings. */
+  resolveConversationRouteOwner?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    conversation: {
+      kind: ChatType;
+      peerId: string;
+      /** Canonical delivery target when it differs from the routing peer. */
+      target?: string;
+      threadId?: string;
+      nativeChannelId?: string;
+      context?: {
+        parentPeerId?: string;
+        guildId?: string;
+        teamId?: string;
+        memberRoleIds?: string[];
+      };
+    };
+  }) =>
+    // `undefined` delegates to core, `null` denies ownership, and `unavailable`
+    // preserves temporary owner-store outages as retryable delivery failures.
+    | { kind: "agent"; agentId: string }
+    | { kind: "plugin"; pluginId: string; fallbackAgentId: string }
+    | { kind: "unavailable" }
+    | null
+    | undefined;
   /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
   directTargetStyle?: "user-prefixed";
   /** Equality rule for ids carried by prefixed outbound targets. */
@@ -501,7 +493,7 @@ export type ChannelMessagingAdapter = {
     sessionKey: string;
     ctx: MsgContext;
   }) => string | undefined;
-  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
+  deriveLegacySessionChatType?: (sessionKey: string) => ChatType | undefined;
   isLegacyGroupSessionKey?: (key: string) => boolean;
   canonicalizeLegacySessionKey?: (params: {
     key: string;
@@ -517,10 +509,9 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[];
-  resolveRemoteInboundAttachmentRoots?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => string[];
+  resolveRemoteInboundAttachmentRoots?: NonNullable<
+    ChannelMessagingAdapter["resolveInboundAttachmentRoots"]
+  >;
   /**
    * Bundled plugins that need inbound conversation resolution before runtime
    * bootstrap can mirror it through a top-level `thread-binding-api.ts` surface.
@@ -565,25 +556,14 @@ export type ChannelMessagingAdapter = {
    * `resolveSessionConversation(...)` does not return
    * `parentConversationCandidates`.
    */
-  resolveParentConversationCandidates?: (params: {
-    kind: "group" | "channel";
-    rawId: string;
-  }) => string[] | null;
+  resolveParentConversationCandidates?: (
+    params: Parameters<NonNullable<ChannelMessagingAdapter["resolveSessionConversation"]>>[0],
+  ) => string[] | null;
   resolveSessionTarget?: (params: {
     kind: "group" | "channel";
     id: string;
     threadId?: string | null;
   }) => string | undefined;
-  /**
-   * @deprecated Use `targetResolver` for target id normalization and
-   * `resolveOutboundSessionRoute` for session/thread identity. This remains for
-   * compatibility with older route parsing helpers.
-   */
-  parseExplicitTarget?: (params: { raw: string }) => {
-    to: string;
-    threadId?: string | number;
-    chatType?: ChatType;
-  } | null;
   /**
    * Lightweight chat-type inference used before directory lookup so plugins can
    * steer peer-vs-group resolution without reimplementing host search flow.
@@ -642,6 +622,8 @@ export type ChannelMessagingAdapter = {
     agentId: string;
     accountId?: string | null;
     target: string;
+    /** Identifies implicit operator delivery; other callers must supply their own destination. */
+    deliveryPurpose?: "heartbeat-owner";
     currentSessionKey?: string;
     resolvedTarget?: {
       to: string;
@@ -656,20 +638,19 @@ export type ChannelMessagingAdapter = {
 
 export type ChannelAgentPromptAdapter = {
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
-  messageToolCapabilities?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => string[] | undefined;
+  messageToolCapabilities?: (
+    params: Parameters<NonNullable<ChannelAgentPromptAdapter["messageToolHints"]>>[0],
+  ) => string[] | undefined;
+  /** Per-account formatting contract for agent turns whose visible text reaches this channel. */
   inboundFormattingHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
         text_markup: string;
         rules: string[];
       }
     | undefined;
-  reactionGuidance?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
+  reactionGuidance?: (
+    params: Parameters<NonNullable<ChannelAgentPromptAdapter["messageToolHints"]>>[0],
+  ) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";
@@ -684,14 +665,15 @@ export type ChannelDirectoryEntry = {
   raw?: unknown;
 };
 
-type ChannelMessageActionName = ChannelMessageActionNameFromList;
-
 /** Execution context passed to channel-owned actions on the shared `message` tool. */
 export type ChannelMessageActionContext = {
   channel: ChannelId;
   action: ChannelMessageActionName;
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  /** Host-prepared progress display state; never sourced from model-controlled params. */
+  progressSnapshot?: ChannelProgressDraftCompositorSnapshot;
+  reply?: OutboundReplyFacts;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -725,6 +707,17 @@ export type ChannelMessageActionContext = {
   toolContext?: ChannelThreadingToolContext;
   dryRun?: boolean;
   gatewayClientScopes?: readonly string[];
+  /**
+   * Server-owned fact: this caller receives proven-not-sent failures and resends
+   * them. Plugins forward it into durable sends so recovery does not replay too.
+   */
+  deliveryRetryOwner?: "caller";
+  /** Host-owned live authority check; never read from model-controlled params. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** Revalidate the same owner synchronously after waits and immediately before platform I/O. */
+  assertDirectAdapterHandoff?: () => void;
+  /** Ephemeral-authority sends must not enter replayable recovery. */
+  skipQueue?: boolean;
 };
 
 export type ChannelToolSend = {
@@ -757,6 +750,22 @@ export type ChannelMessageActionAdapter = {
   describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
+  /** Delegate conversation-read admission to the provider for registrations the host permits. */
+  providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
+  /**
+   * Opt into these host-fenced context actions for loader-verified official installs.
+   * Every provider request must captureChannelReadAuthority() at submission and
+   * invoke that check immediately before each I/O attempt, including queued retries.
+   * Does not extend conversation-read mutation authority or bypass provider policy.
+   */
+  readAuthorityActions?: readonly ChannelMessageActionName[];
+  /**
+   * Declare write actions that preserve the host's live request authority.
+   * Invoke assertDirectAdapterHandoff after asynchronous preparation and
+   * immediately before every provider request, including queued retries.
+   * Does not grant authority or bypass current requester/provider permissions.
+   */
+  writeAuthorityActions?: readonly ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {
@@ -778,12 +787,24 @@ export type ChannelMessageActionAdapter = {
         /**
          * Prove that provider-native aliases name the trusted current conversation.
          * Core consults this only for host-owned bundled registrations.
+         * @deprecated Prefer matchesCurrentConversationAsync for storage-backed matching.
+         * Keep this callback synchronous for hosts that predate the async companion.
          */
         matchesCurrentConversation?: (params: {
           args: Record<string, unknown>;
           accountId: string;
           toolContext: ChannelThreadingToolContext;
         }) => boolean;
+        /**
+         * Await provider-owned alias proof after host context and target checks.
+         * Preferred over the synchronous callback when present; false or rejection
+         * never falls back to the synchronous matcher.
+         */
+        matchesCurrentConversationAsync?: (params: {
+          args: Record<string, unknown>;
+          accountId: string;
+          toolContext: ChannelThreadingToolContext;
+        }) => Promise<boolean>;
       }
     >
   >;
@@ -814,26 +835,32 @@ export type ChannelMessageActionAdapter = {
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };
 
-export type ChannelPollResult = {
+export type ChannelPollResult = Pick<
+  MessageReceiptSourceResult,
+  "messageId" | "toJid" | "channelId" | "conversationId" | "pollId"
+> & {
   messageId: string;
-  toJid?: string;
-  channelId?: string;
-  conversationId?: string;
-  pollId?: string;
+  receipt?: MessageReceipt;
 };
 
 /** Shared poll input after core has normalized the common poll model. */
-export type ChannelPollContext = {
-  cfg: OpenClawConfig;
-  to: string;
-  poll: PollInput;
-  accountId?: string | null;
-  threadId?: string | null;
-  silent?: boolean;
-  isAnonymous?: boolean;
-  gatewayClientScopes?: readonly string[];
-  /** @internal Refresh durable timing before recipient-visible platform I/O. */
-  onPlatformSendDispatch?: () => Promise<void>;
+export type ChannelPollContext = Pick<
+  ChannelMessageSendPollContext,
+  | "cfg"
+  | "to"
+  | "poll"
+  | "accountId"
+  | "threadId"
+  | "silent"
+  | "isAnonymous"
+  | "gatewayClientScopes"
+  | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
+> & {
+  content?: string;
+  /** Trusted originating turn context for channel-owned delivery correlation. */
+  sessionKey?: string;
+  inboundEventKind?: InboundEventKind;
 };
 
 /** Minimal base for all channel probe results. Channel-specific probes extend this. */

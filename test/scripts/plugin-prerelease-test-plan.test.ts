@@ -1,29 +1,37 @@
 // Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join, matchesGlob } from "node:path";
+import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
 import { findLaneByName } from "../../scripts/lib/docker-e2e-plan.mts";
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import {
-  PLUGIN_PRERELEASE_REQUIRED_SURFACES,
+  resolveExtensionTestPlan,
+  resolveExtensionTestConfig,
+} from "../../scripts/lib/extension-test-plan.mts";
+import {
   assertPluginPrereleaseTestPlanComplete,
   createPluginPrereleaseTestPlan,
+  resolvePluginPrereleaseExtensionRuntime,
 } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowExpression, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
-const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
+const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type WorkflowStep = {
+  id?: string;
   env?: Record<string, string>;
   name?: string;
   run?: string;
   uses?: string;
   with?: Record<string, unknown>;
-};
-
-type WorkflowMatrixEntry = {
-  check_name?: string;
 };
 
 function readCiWorkflow() {
@@ -38,62 +46,6 @@ function readPluginPrereleaseWorkflow() {
   return parse(readFileSync(".github/workflows/plugin-prerelease.yml", "utf8"));
 }
 
-function readLiveE2eWorkflow() {
-  return parse(readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"));
-}
-
-function jobNeeds(job: { needs?: string | string[] }): string[] {
-  return Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : [];
-}
-
-function timeoutForProfile(
-  timeout: number | string | undefined,
-  profile: "beta" | "stable" | "full",
-): number {
-  if (typeof timeout === "number") {
-    return timeout;
-  }
-  if (timeout === "${{ matrix.group.timeout_minutes || 60 }}") {
-    return 60;
-  }
-  const match = timeout?.match(
-    /^\$\{\{ inputs\.(?:release_profile|release_test_profile) == 'full' && ([0-9]+) \|\| ([0-9]+) \}\}$/u,
-  );
-  if (!match) {
-    throw new Error(`Unsupported release timeout expression: ${String(timeout)}`);
-  }
-  return Number(profile === "full" ? match[1] : match[2]);
-}
-
-function pluginPrereleaseTimeoutFloor(profile: "beta" | "stable" | "full"): number {
-  const plugin = readPluginPrereleaseWorkflow();
-  const liveE2e = readLiveE2eWorkflow();
-  const preflight = plugin.jobs.preflight;
-  const dockerSuite = plugin.jobs["plugin-prerelease-docker-suite"];
-  const suite = plugin.jobs["plugin-prerelease-suite"];
-  const validateSelectedRef = liveE2e.jobs.validate_selected_ref;
-  const prepareImage = liveE2e.jobs.prepare_docker_e2e_image;
-  const imageReady = liveE2e.jobs.docker_e2e_image_ready;
-  const dockerLanes = liveE2e.jobs.validate_docker_lanes;
-
-  expect(jobNeeds(dockerSuite)).toContain("preflight");
-  expect(jobNeeds(prepareImage)).toEqual(["validate_selected_ref"]);
-  expect(jobNeeds(imageReady)).toEqual(["prepare_docker_e2e_image"]);
-  expect(jobNeeds(dockerLanes)).toEqual(
-    expect.arrayContaining(["prepare_docker_e2e_image", "docker_e2e_image_ready"]),
-  );
-  expect(jobNeeds(suite)).toContain("plugin-prerelease-docker-suite");
-
-  return [
-    timeoutForProfile(preflight["timeout-minutes"], profile),
-    timeoutForProfile(validateSelectedRef["timeout-minutes"], profile),
-    timeoutForProfile(prepareImage["timeout-minutes"], profile),
-    timeoutForProfile(imageReady["timeout-minutes"], profile),
-    timeoutForProfile(dockerLanes["timeout-minutes"], profile),
-    timeoutForProfile(suite["timeout-minutes"], profile),
-  ].reduce((total, value) => total + value, 0);
-}
-
 function getDockerLane(name: string) {
   const lane = findLaneByName(name);
   if (!lane) {
@@ -102,21 +54,185 @@ function getDockerLane(name: string) {
   return lane;
 }
 
-describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
-  it("covers every pre-release plugin skill surface in the plugin prerelease plan", () => {
-    const plan = assertPluginPrereleaseTestPlanComplete();
-
-    expect(plan.surfaces).toEqual(
-      [...PLUGIN_PRERELEASE_REQUIRED_SURFACES].toSorted((a, b) => a.localeCompare(b)),
-    );
+function pluginCandidateArtifactJson(selectedSha = "a".repeat(40)) {
+  return JSON.stringify({
+    packageArtifactName: "docker-e2e-package-123-1",
+    packageArtifactId: "456",
+    packageArtifactDigest: "b".repeat(64),
+    packageArtifactRunId: "123",
+    packageArtifactRunAttempt: "1",
+    packageFileName: "openclaw-current.tgz",
+    packageSourceSha: selectedSha,
+    packageSha256: "c".repeat(64),
+    packageVersion: "2026.8.1",
+    imageArtifactName: "docker-e2e-shared-images-123-1",
+    imageArtifactId: "789",
+    imageArtifactDigest: "d".repeat(64),
+    imageArtifactRunId: "123",
+    imageArtifactRunAttempt: "1",
+    imageArchiveSha256: "e".repeat(64),
   });
+}
+
+function runPluginPhaseValidation(params: {
+  candidateArtifactJson?: string;
+  expectedSha?: string;
+  fullReleaseValidation?: boolean;
+  phase: string;
+}) {
+  const workflow = readPluginPrereleaseWorkflow();
+  const step = workflow.jobs.preflight.steps.find(
+    (candidate: WorkflowStep) => candidate.name === "Validate phase inputs",
+  );
+  if (!step?.run) {
+    throw new Error("Missing plugin prerelease phase validation step");
+  }
+  return spawnSync("bash", ["-c", step.run], {
+    encoding: "utf8",
+    env: {
+      CANDIDATE_ARTIFACT_JSON: params.candidateArtifactJson ?? "",
+      EXPECTED_SHA: params.expectedSha ?? "",
+      FULL_RELEASE_VALIDATION: String(params.fullReleaseValidation ?? true),
+      PATH: process.env.PATH,
+      PHASE: params.phase,
+    },
+  });
+}
+
+function runPluginManifest(
+  phase: "all" | "candidate" | "independent",
+  eventName = "workflow_dispatch",
+) {
+  const workflow = readPluginPrereleaseWorkflow();
+  const step = workflow.jobs.preflight.steps.find(
+    (candidate: WorkflowStep) => candidate.name === "Build plugin prerelease manifest",
+  );
+  if (!step?.run) {
+    throw new Error("Missing plugin prerelease manifest step");
+  }
+  const root = tempDirs.make("openclaw-plugin-prerelease-phase-");
+  const outputPath = join(root, "github-output");
+  const result = spawnSync("bash", ["-c", step.run], {
+    encoding: "utf8",
+    env: {
+      FULL_RELEASE_VALIDATION: eventName === "schedule" ? "false" : "true",
+      GITHUB_EVENT_NAME: eventName,
+      GITHUB_OUTPUT: outputPath,
+      PATH: process.env.PATH,
+      PHASE: phase,
+    },
+  });
+  return {
+    output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "",
+    result,
+  };
+}
+
+function runPluginSummary(params: {
+  docker: string;
+  extensions: string;
+  inspector?: string;
+  node: string;
+  runDocker: boolean;
+  runExtensions: boolean;
+  runNode: boolean;
+  runNpmSecurity: boolean;
+  runStatic: boolean;
+  static: string;
+}) {
+  const workflow = readPluginPrereleaseWorkflow();
+  const step = workflow.jobs["plugin-prerelease-suite"].steps.find(
+    (candidate: WorkflowStep) => candidate.name === "Verify plugin prerelease suite",
+  );
+  if (!step?.run) {
+    throw new Error("Missing plugin prerelease summary step");
+  }
+  return spawnSync("bash", ["-c", step.run], {
+    encoding: "utf8",
+    env: {
+      DOCKER_RESULT: params.docker,
+      EXTENSIONS_RESULT: params.extensions,
+      INSPECTOR_RESULT: params.inspector ?? "skipped",
+      NODE_RESULT: params.node,
+      PATH: process.env.PATH,
+      RUN_DOCKER: String(params.runDocker),
+      RUN_EXTENSIONS: String(params.runExtensions),
+      RUN_NODE: String(params.runNode),
+      RUN_NPM_SECURITY: String(params.runNpmSecurity),
+      RUN_STATIC: String(params.runStatic),
+      SECURITY_RESULT: "success",
+      STATIC_RESULT: params.static,
+    },
+  });
+}
+
+describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
+  it.each([
+    {
+      name: "ordinary plugin validation",
+      fullReleaseValidation: false,
+      memory: true,
+      vitestArgs: [],
+      requiresBun: false,
+    },
+    {
+      name: "full release memory and database-worker groups",
+      fullReleaseValidation: true,
+      memory: true,
+      vitestArgs: [],
+      requiresBun: true,
+    },
+    {
+      name: "full release with an exact exclusion",
+      fullReleaseValidation: true,
+      memory: true,
+      vitestArgs: ["--exclude=extensions/memory-lancedb/config.test.ts"],
+      requiresBun: true,
+    },
+    {
+      name: "full release with an explicit report",
+      fullReleaseValidation: true,
+      memory: true,
+      vitestArgs: ["--reporter=json", "--outputFile=report.json"],
+      requiresBun: false,
+    },
+    {
+      name: "full release database-worker groups",
+      fullReleaseValidation: true,
+      memory: false,
+      vitestArgs: [],
+      requiresBun: false,
+    },
+  ])(
+    "selects runtime setup for $name",
+    async ({ fullReleaseValidation, memory, vitestArgs, requiresBun }) => {
+      const planGroups = [
+        {
+          config: "test/vitest/vitest.extension-database-workers.config.ts",
+          roots: ["extensions/memory-lancedb/index.test.ts"],
+        },
+        ...(memory
+          ? [
+              {
+                config: "test/vitest/vitest.extension-memory.config.ts",
+                roots: ["extensions/memory-lancedb"],
+              },
+            ]
+          : []),
+      ];
+
+      expect(
+        await resolvePluginPrereleaseExtensionRuntime({
+          planGroups,
+          fullReleaseValidation,
+          vitestArgs,
+        }),
+      ).toEqual({ test_runtime_policy: requiresBun ? "dual" : "node", requires_bun: requiresBun });
+    },
+  );
 
   it("runs the package and Docker product lanes through the existing scheduler", () => {
-    const plan = createPluginPrereleaseTestPlan();
-    const channelLaneScript = readFileSync(
-      "scripts/e2e/npm-onboard-channel-agent-docker.sh",
-      "utf8",
-    );
+    const plan = assertPluginPrereleaseTestPlanComplete();
 
     expect(plan.dockerLanes).toEqual([
       "npm-onboard-channel-agent",
@@ -142,10 +258,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     for (const lane of plan.dockerLanes) {
       expect(getDockerLane(lane).name).toBe(lane);
     }
-    expect(channelLaneScript).toContain("OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE");
-    expect(channelLaneScript).toContain("bash scripts/plugin-npm-publish.sh --pack");
-    expect(channelLaneScript).toContain("OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1");
-    expect(channelLaneScript).toContain("npm-pack:$container_package");
     const candidateLane = getDockerLane("npm-onboard-discord-candidate-channel-agent");
     expect(candidateLane.command).toContain("OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR");
     expect(candidateLane.command).toContain(
@@ -191,8 +303,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       live: false,
       name: "kitchen-sink-plugin",
       resources: ["npm"],
-      retryPatterns: [],
-      retries: 0,
       stateScenario: "empty",
       weight: 3,
     });
@@ -218,21 +328,19 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       sweepScript.indexOf("run_success_scenario()"),
       sweepScript.indexOf("run_failure_scenario()"),
     );
-    expect(successScenario.indexOf('plugins install "${install_args[@]}" --force')).toBeLessThan(
-      successScenario.indexOf("configure_kitchen_sink_runtime"),
-    );
-    expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
-      successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
-    );
+    const installIndex = successScenario.indexOf('plugins install "${install_args[@]}" --force');
+    const configureIndex = successScenario.indexOf("assertions.mjs configure-runtime");
+    const enableIndex = successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"');
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(configureIndex).toBeGreaterThan(installIndex);
+    expect(enableIndex).toBeGreaterThan(configureIndex);
     expect(successScenario).toContain('plugins inspect "$KITCHEN_SINK_ID" --runtime --json');
     expect(successScenario).toContain("plugins inspect --all --runtime --json");
     expect(sweepScript).toContain("run_failure_scenario");
     expect(assertionsScript).toContain("assertCutoverPreinstalled");
     expect(assertionsScript).toContain("record.source !== source");
     expect(assertionsScript).toContain("record.clawhubPackage !== packageName");
-    expect(assertionsScript).toContain("record.clawpackSha256");
     expect(assertionsScript).toContain("record.artifactKind");
-    expect(assertionsScript).toContain("record.npmIntegrity");
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain("expectedErrorMessages");
     expect(assertionsScript).toContain(
@@ -247,7 +355,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     );
     expect(script).toContain("docker_e2e_sample_stats_until_exit");
     expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
-    expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
+    expect(sweepScript).toContain("assertions.mjs scan-logs");
   });
 
   it("keeps kitchen-sink RPC coverage package-backed and resource-guarded", () => {
@@ -261,8 +369,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       live: false,
       name: "kitchen-sink-rpc",
       resources: ["service", "npm"],
-      retryPatterns: [],
-      retries: 0,
       stateScenario: "empty",
       timeoutMs: 1_500_000,
       weight: 3,
@@ -300,8 +406,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       live: false,
       name: "plugins",
       resources: ["npm", "service"],
-      retryPatterns: [],
-      retries: 0,
       stateScenario: "empty",
       weight: 6,
     });
@@ -309,10 +413,30 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(sweepScript).toContain("run_plugins_clawhub_scenario");
     expect(clawhubScript).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
-    expect(assertionsScript).toContain('node_modules", "openclaw');
     expect(fixtureServer).toContain('"is-number": "7.0.0"');
     expect(fixtureServer).toContain('openclaw: ">=2026.4.11"');
     expect(fixtureServer).toContain("/versions/${fixture.version}/artifact");
+  });
+
+  it("forwards validated frozen-target omissions to the selected shard adapters", () => {
+    const workflow = readPluginPrereleaseWorkflow();
+    const preflight = workflow.jobs.preflight;
+    const nodeStep = workflow.jobs["plugin-prerelease-node-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run release-only plugin Node shard",
+    );
+    const extensionStep = workflow.jobs["plugin-prerelease-extension-shard"].steps.find(
+      (step: WorkflowStep) => step.name === "Run extension shard",
+    );
+    expect(preflight.outputs.node_test_exclude_patterns_json).toBe(
+      "${{ steps.node_test_exclusions.outputs.patterns_json }}",
+    );
+    expect(nodeStep.env.NODE_TEST_EXCLUDE_PATTERNS_JSON).toBe(
+      "${{ needs.preflight.outputs.node_test_exclude_patterns_json }}",
+    );
+    expect(extensionStep.env.FRV_TEST_EXCLUDE_PATHS_JSON).toBe(
+      "${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}",
+    );
+    expect(extensionStep.run).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
   });
 
   it("wires the full plugin prerelease plan into its release workflow", () => {
@@ -331,9 +455,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       ".github/workflows/full-release-validation.yml",
       "utf8",
     );
-    const manifestScript = preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Build CI manifest",
-    ).run;
+    const manifestScript = readFileSync("scripts/ci-build-manifest.mjs", "utf8");
     const manifestEnv = preflight.steps.find(
       (step: WorkflowStep) => step.name === "Build CI manifest",
     ).env;
@@ -344,13 +466,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       (step: WorkflowStep) => step.name === "Build plugin prerelease manifest",
     ).env;
     const normalCiScript = releaseWorkflow.jobs.normal_ci.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch and monitor CI",
+      (step: WorkflowStep) => step.name === "Dispatch CI",
     ).run;
-    const pluginPrereleaseScript = releaseWorkflow.jobs.plugin_prerelease.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch and monitor plugin prerelease",
+    const pluginPrereleaseScript = releaseWorkflow.jobs.plugin_prerelease_candidate.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch plugin prerelease candidate phase",
     ).run;
-    const releaseChecksStep = releaseWorkflow.jobs.release_checks.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
+    const releaseChecksStep = releaseWorkflow.jobs.release_checks_candidate.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch release checks candidate phase",
     );
     const releaseChecksScript = releaseChecksStep.run;
     const buildDistStep = workflow.jobs["build-artifacts"].steps.find(
@@ -365,15 +487,18 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(preflight.outputs).not.toHaveProperty("run_plugin_prerelease_suite");
     expect(preflight.outputs).not.toHaveProperty("run_checks_node_extensions");
     expect(buildDistStep.env).toEqual({ NODE_OPTIONS: "--max-old-space-size=8192" });
+    expect(evaluateWorkflowRunner(staticShard["runs-on"])).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(staticShard["runs-on"], { eventName: "push" })).toBe(
+      "blacksmith-8vcpu-ubuntu-2404",
+    );
     expect(staticShard).toEqual({
       if: "needs.preflight.outputs.run_plugin_prerelease_static == 'true'",
-      name: "${{ matrix.check_name }}",
-      needs: ["preflight"],
+      name: "${{ matrix.check_name || 'plugin-prerelease-static-shard' }}",
+      needs: ["resolve_target", "preflight"],
       permissions: {
         contents: "read",
       },
-      "runs-on":
-        "${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}",
+      "runs-on": expect.any(String),
       steps: [
         {
           name: "Checkout",
@@ -382,7 +507,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
             "fetch-depth": 1,
             "fetch-tags": false,
             "persist-credentials": false,
-            ref: "${{ needs.preflight.outputs.checkout_revision }}",
+            ref: "${{ needs.resolve_target.outputs.checkout_revision }}",
             submodules: false,
           },
         },
@@ -390,6 +515,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
           name: "Setup Node environment",
           uses: "./.github/actions/setup-node-env",
           with: {
+            "cache-mode": "restore",
             "install-bun": "false",
           },
         },
@@ -441,88 +567,78 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       required: false,
       type: "string",
     });
-    expect(manifestEnv).toEqual({
+    expect(manifestEnv).toMatchObject({
       OPENCLAW_CI_CHANGED_PATHS_JSON:
         "${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}",
       OPENCLAW_CI_CHECKOUT_REVISION: "${{ steps.checkout_ref.outputs.sha }}",
       OPENCLAW_CI_DOCS_CHANGED:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.docs_scope.outputs.docs_changed }}",
       OPENCLAW_CI_DOCS_ONLY:
-        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only }}",
+        "${{ github.event_name == 'schedule' && 'false' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.docs_scope.outputs.docs_only }}",
       OPENCLAW_CI_EVENT_NAME: "${{ github.event_name }}",
       OPENCLAW_CI_HISTORICAL_TARGET: "${{ steps.historical_target.outputs.eligible || 'false' }}",
+      OPENCLAW_CI_RELEASE_GATE: "${{ inputs.release_gate && 'true' || 'false' }}",
       OPENCLAW_CI_RELEASE_CANDIDATE_TARGET:
         "${{ steps.release_candidate_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_TARGET_CONTEXT_TARGET:
         "${{ steps.target_context_target.outputs.eligible || 'false' }}",
       OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
-      OPENCLAW_CI_RUNNER_BACKEND: "${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}",
+      OPENCLAW_CI_RUNNER_PROFILE: "${{ steps.runner_profile.outputs.runner_profile }}",
+      OPENCLAW_CI_NODE_RUNNER_BACKEND: "${{ steps.runner_profile.outputs.node_runner_backend }}",
+      OPENCLAW_CI_QUALIFICATION: "${{ steps.runner_profile.outputs.ci_qualification }}",
+      OPENCLAW_CI_SHAPE: "${{ steps.runner_profile.outputs.ci_shape }}",
       OPENCLAW_CI_RUN_ANDROID:
-        "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && ((inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true')) || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
       OPENCLAW_CI_RUN_CONTROL_UI_I18N:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}",
       OPENCLAW_CI_RUN_IOS_BUILD:
-        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
       OPENCLAW_CI_RUN_MACOS:
-        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
+      OPENCLAW_CI_RUN_MACOS_NODE:
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos_node || 'false' }}",
       OPENCLAW_CI_RUN_NATIVE_I18N:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}",
       OPENCLAW_CI_RUN_NODE:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_node || 'false' }}",
       OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING:
-        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}",
       OPENCLAW_CI_RUN_NODE_FAST_ONLY:
-        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}",
       OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS:
-        "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}",
       OPENCLAW_CI_RUN_SKILLS_PYTHON:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}",
       OPENCLAW_CI_RUN_UI_TESTS:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}",
       OPENCLAW_CI_RUN_WINDOWS:
-        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}",
-      OPENCLAW_CI_WORKFLOW_REVISION: "${{ github.sha }}",
+        "${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}",
+      OPENCLAW_CI_WORKFLOW_REVISION: "${{ github.workflow_sha }}",
     });
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
     expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mts");
     expect(
-      workflow.jobs["check-shard"].strategy.matrix.include.find(
-        (entry: WorkflowMatrixEntry) => entry.check_name === "check-dependencies",
-      ),
-    ).toEqual({
-      check_name: "check-dependencies",
-      task: "dependencies",
-      // Concurrent Knip scans need cores and memory headroom.
-      runner: "blacksmith-32vcpu-ubuntu-2404",
-    });
-    expect(
       workflow.jobs["check-shard"].steps.find(
         (step: WorkflowStep) => step.name === "Run check shard",
       ).run,
     ).toContain("pnpm deadcode:ci");
-    expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_REF")');
-    expect(normalCiScript).toContain('args+=(-f historical_target_tag="$TARGET_CONTEXT_REF")');
-    expect(normalCiScript).toContain('args+=(-f target_context_ref="$TARGET_CONTEXT_REF")');
-    expect(normalCiScript).not.toContain('args+=(-f release_candidate_ref="$TARGET_CONTEXT_REF")');
     expect(releaseChecksStep.env?.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
     expect(releaseChecksScript).toContain('-f ref="$TARGET_SHA"');
     expect(releaseChecksScript).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
     expect(releaseChecksScript).toContain("args+=(-f allow_frozen_target_scenario_omissions=true)");
     expect(releaseWorkflowSource).toContain('--arg targetContextRef "$TARGET_CONTEXT_REF"');
     expect(releaseWorkflowSource).toContain("targetContextRef: $targetContextRef");
-    expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');
+    expect(normalCiScript).toContain('dispatch_child ci.yml "$dispatch_run_name" "${args[@]}"');
     const normalCiDispatchCase = normalCiScript.match(/^\s*ci\)\n([\s\S]*?)^\s*;;$/mu)?.[1];
-    expect(normalCiDispatchCase).toContain('dispatch_and_wait ci.yml "$dispatch_run_name"');
+    expect(normalCiDispatchCase).toContain('dispatch_child ci.yml "$dispatch_run_name"');
     expect(normalCiDispatchCase).not.toContain("full_release_validation=true");
-    expect(pluginPrereleaseScript).toContain(
-      'args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id")',
-    );
+    expect(pluginPrereleaseScript).toContain('-f phase="$PHASE"');
     expect(pluginPrereleaseScript).toContain(
       'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
     );
     expect(pluginPrereleaseScript).toContain(
-      'dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" "${args[@]}"',
+      'dispatch_child plugin-prerelease.yml "$dispatch_run_name" "${args[@]}"',
     );
     expect(pluginManifestScript).toContain("await import(");
     expect(pluginManifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mts"');
@@ -539,7 +655,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const pluginNodeShardScript = pluginWorkflow.jobs["plugin-prerelease-node-shard"].steps.find(
       (step: WorkflowStep) => step.name === "Run release-only plugin Node shard",
     ).run;
-    expect(pluginNodeShardScript).toContain('spawnSync("pnpm", ["test", "--", ...configs]');
+    expect(pluginNodeShardScript).toContain(
+      '".frv-tooling/scripts/frv-test-exclusions.mjs", "run", "--", "pnpm", "test", "--", ...configs',
+    );
     expect(pluginNodeShardScript).not.toContain("scripts/test-projects.mts");
     expect(pluginWorkflow.on.workflow_dispatch.inputs.target_ref).toEqual({
       default: "main",
@@ -553,6 +671,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       required: false,
       type: "boolean",
     });
+    expect(pluginWorkflow.on.workflow_dispatch.inputs.phase).toEqual({
+      default: "all",
+      description: "Plugin prerelease phase to run",
+      options: ["all", "independent", "candidate"],
+      required: false,
+      type: "choice",
+    });
     expect(pluginWorkflow.on.workflow_dispatch.inputs.dispatch_id).toEqual({
       description: "Optional parent workflow dispatch identifier",
       required: false,
@@ -560,30 +685,41 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       type: "string",
     });
     expect(pluginManifestEnv).toEqual({
-      EXPECTED_SHA: "${{ inputs.expected_sha }}",
+      NODE_TEST_EXCLUDE_PATTERNS_JSON: "${{ steps.node_test_exclusions.outputs.patterns_json }}",
+      EXTENSION_TEST_EXCLUDE_PATTERNS_JSON:
+        "${{ steps.node_test_exclusions.outputs.extension_patterns_json }}",
       FULL_RELEASE_VALIDATION: "${{ inputs.full_release_validation && 'true' || 'false' }}",
+      PHASE: "${{ github.event_name == 'schedule' && 'independent' || inputs.phase }}",
     });
     expect(pluginManifestScript).toContain(
       'const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";',
     );
+    expect(pluginManifestScript).toContain('const runIndependent = phase !== "candidate";');
+    expect(pluginManifestScript).toContain('const runCandidate = phase !== "independent";');
     expect(pluginManifestScript).toContain(
-      "const runDocker = fullReleaseValidation && dockerLanes.length > 0;",
+      "const runDocker = runCandidate && fullReleaseValidation && dockerLanes.length > 0;",
     );
     expect(pluginPreflight.outputs).toEqual({
-      checkout_revision: "${{ steps.manifest.outputs.checkout_revision }}",
       plugin_prerelease_docker_lanes:
         "${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}",
       plugin_prerelease_extension_matrix:
         "${{ steps.manifest.outputs.plugin_prerelease_extension_matrix }}",
       plugin_prerelease_node_matrix: "${{ steps.manifest.outputs.plugin_prerelease_node_matrix }}",
+      node_test_exclude_patterns_json: "${{ steps.node_test_exclusions.outputs.patterns_json }}",
+      extension_test_exclude_patterns_json:
+        "${{ steps.node_test_exclusions.outputs.extension_patterns_json }}",
       plugin_prerelease_static_matrix:
         "${{ steps.manifest.outputs.plugin_prerelease_static_matrix }}",
       run_plugin_prerelease_docker: "${{ steps.manifest.outputs.run_plugin_prerelease_docker }}",
       run_plugin_prerelease_extensions:
         "${{ steps.manifest.outputs.run_plugin_prerelease_extensions }}",
+      run_plugin_prerelease_inspector:
+        "${{ steps.manifest.outputs.run_plugin_prerelease_inspector }}",
       run_plugin_prerelease_node: "${{ steps.manifest.outputs.run_plugin_prerelease_node }}",
       run_plugin_prerelease_static: "${{ steps.manifest.outputs.run_plugin_prerelease_static }}",
       run_plugin_prerelease_suite: "${{ steps.manifest.outputs.run_plugin_prerelease_suite }}",
+      upgrade_baseline: "${{ steps.qualification_baselines.outputs.baseline }}",
+      upgrade_baselines: "${{ steps.qualification_baselines.outputs.baselines }}",
     });
     expect(staticShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}",
@@ -598,17 +734,27 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
     );
     expect(
-      extensionShard.steps.find((step: WorkflowStep) => step.name === "Run extension shard").run,
-    ).toContain("--retry=1");
+      extensionShard.steps.find(
+        (step: WorkflowStep) => step.name === "Setup pinned Bun test runtime",
+      ),
+    ).toMatchObject({
+      if: "matrix.requires_bun == true",
+      uses: "./.github/actions/setup-test-bun",
+    });
+    expect(
+      extensionShard.steps.find((step: WorkflowStep) => step.name === "Run extension shard").env
+        .OPENCLAW_CI_TEST_RUNTIME_POLICY,
+    ).toBe("${{ matrix.test_runtime_policy || 'node' }}");
     expect(inspector.name).toBe("plugin-prerelease-inspector");
-    expect(inspector.needs).toEqual(["preflight"]);
-    expect(inspector.if).toBe("needs.preflight.outputs.run_plugin_prerelease_suite == 'true'");
+    expect(inspector.needs).toEqual(["resolve_target", "preflight"]);
+    expect(inspector.if).toBe("needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'");
     expect(inspector["continue-on-error"]).toBe(true);
-    expect(inspector["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(inspector["runs-on"])).toBe("ubuntu-24.04");
     expect(inspector["timeout-minutes"]).toBe(30);
     expect(
       inspector.steps.find((step: WorkflowStep) => step.name === "Setup Node environment").with,
     ).toEqual({
+      "cache-mode": "restore",
       "install-bun": "false",
     });
     const inspectorRun = inspector.steps.find(
@@ -616,7 +762,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     );
     expect(inspectorRun.env).toEqual({
       OPENCLAW_PLUGIN_INSPECTOR_ROOT: ".artifacts/plugin-inspector",
-      OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.10",
+      OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.26",
     });
     expect(inspectorRun.run).toContain("extensions/");
     expect(inspectorRun.run).toContain(
@@ -645,7 +791,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(dockerSuite).toMatchObject({
       if: "${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}",
       name: "plugin-prerelease-docker-suite",
-      needs: ["preflight"],
+      needs: ["resolve_target", "preflight"],
       permissions: {
         actions: "read",
         contents: "read",
@@ -661,12 +807,29 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         include_repo_e2e: false,
         live_models_only: false,
         allow_unreleased_changelog: true,
-        ref: "${{ needs.preflight.outputs.checkout_revision }}",
+        ref: "${{ needs.resolve_target.outputs.checkout_revision }}",
         shared_image_artifact_namespace: "plugin-prerelease",
         shared_image_policy: "no-push-artifact",
         targeted_docker_lane_group_size: 2,
       },
     });
+    expect(dockerSuite.with.enable_prepublish_plugin_registry).toBe(true);
+    expect(
+      Object.keys(dockerSuite.with).filter((key) => key.startsWith("prepublish_plugin_registry_")),
+    ).toEqual([
+      "prepublish_plugin_registry_artifact_name",
+      "prepublish_plugin_registry_artifact_id",
+      "prepublish_plugin_registry_artifact_digest",
+      "prepublish_plugin_registry_artifact_run_id",
+      "prepublish_plugin_registry_artifact_run_attempt",
+      "prepublish_plugin_registry_manifest_sha256",
+    ]);
+    expect(dockerSuite.with.package_artifact_id).toBe(
+      "${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId || '' }}",
+    );
+    expect(dockerSuite.with.shared_image_artifact_id).toBe(
+      "${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}",
+    );
     expect(dockerSuite.secrets).toBeUndefined();
     expect(suite.needs).toEqual([
       "preflight",
@@ -681,6 +844,300 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     ).toContain("plugin-prerelease-inspector advisory result");
   });
 
+  it.each([
+    {
+      expected: {
+        docker: "true",
+        extensions: "true",
+        inspector: "true",
+        node: "true",
+        static: "true",
+      },
+      phase: "all",
+    },
+    {
+      expected: {
+        docker: "false",
+        extensions: "true",
+        inspector: "true",
+        node: "true",
+        static: "true",
+      },
+      phase: "independent",
+    },
+    {
+      expected: {
+        docker: "true",
+        extensions: "false",
+        inspector: "false",
+        node: "false",
+        static: "false",
+      },
+      phase: "candidate",
+    },
+  ] as const)("routes only the $phase plugin prerelease phase", ({ expected, phase }) => {
+    const { output, result } = runPluginManifest(phase);
+
+    expect(result.status, result.stderr).toBe(0);
+    for (const [lane, scheduled] of Object.entries(expected)) {
+      expect(output).toContain(`run_plugin_prerelease_${lane}=${scheduled}\n`);
+    }
+    if (phase === "independent") {
+      const matrixLine = expectDefined(
+        output.split("\n").find((line) => line.startsWith("plugin_prerelease_extension_matrix=")),
+        "extension matrix output",
+      );
+      const matrix = JSON.parse(matrixLine.slice(matrixLine.indexOf("=") + 1)) as {
+        include: {
+          extensions_csv: string;
+          requires_bun?: boolean;
+          task: string;
+          test_runtime_policy?: string;
+        }[];
+      };
+      const bunRows = matrix.include.filter((row) => row.requires_bun);
+      expect(
+        bunRows
+          .flatMap((row) => row.extensions_csv.split(",").filter((id) => id.startsWith("memory-")))
+          .toSorted(),
+      ).toEqual(["memory-lancedb", "memory-wiki"]);
+      expect(
+        bunRows.every(
+          (row) => row.task === "extensions-batch" && row.test_runtime_policy === "dual",
+        ),
+      ).toBe(true);
+      expect(
+        matrix.include
+          .filter((row) => row.task === "extensions-batch" && !row.requires_bun)
+          .every((row) => row.test_runtime_policy === "node"),
+      ).toBe(true);
+      const fileShardRows = matrix.include.filter((row) => row.task === "extension-file-shard");
+      expect(
+        fileShardRows.every(
+          (row) => !row.requires_bun && (row.test_runtime_policy ?? "node") === "node",
+        ),
+      ).toBe(true);
+      expect(fileShardRows).toContainEqual(
+        expect.objectContaining({
+          extensions_csv: "codex",
+          vitest_config: "test/vitest/vitest.extension-database-workers.config.ts",
+          includePatterns: expect.arrayContaining([
+            "extensions/codex/src/session-catalog-native-performance.test.ts",
+          ]),
+        }),
+      );
+    }
+  });
+
+  it("requires a complete immutable candidate for the plugin candidate phase", () => {
+    const selectedSha = "a".repeat(40);
+    const independent = runPluginPhaseValidation({
+      candidateArtifactJson: "",
+      phase: "independent",
+    });
+    const missing = runPluginPhaseValidation({
+      candidateArtifactJson: "",
+      expectedSha: selectedSha,
+      phase: "candidate",
+    });
+    const valid = runPluginPhaseValidation({
+      candidateArtifactJson: pluginCandidateArtifactJson(selectedSha),
+      expectedSha: selectedSha,
+      phase: "candidate",
+    });
+
+    expect(independent.status, independent.stderr).toBe(0);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain(
+      "phase=candidate requires the complete immutable package and Docker image artifact tuple.",
+    );
+    expect(valid.status, valid.stderr).toBe(0);
+  });
+
+  it("keeps hourly extension coverage with its complete release owner and required result", () => {
+    const workflow = readPluginPrereleaseWorkflow();
+    const context = {
+      eventName: "schedule" as const,
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/main",
+      sha: "a".repeat(40),
+      runAttempt: 1,
+    };
+    const evaluate = (value: string, overrides = {}) =>
+      evaluateWorkflowExpression(value.startsWith("${{") ? value : `\${{ ${value} }}`, {
+        ...context,
+        ...overrides,
+      });
+    expect(workflow.on.schedule).toEqual([{ cron: "37 * * * *" }]);
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(evaluate(workflow.jobs.resolve_target.if)).toBe(true);
+    expect(evaluate(workflow.jobs.resolve_target.if, { repository: "contributor/openclaw" })).toBe(
+      false,
+    );
+    expect(evaluate(workflow.jobs.resolve_target.if, { ref: "refs/heads/topic" })).toBe(false);
+    expect(
+      evaluate(workflow.jobs["plugin-prerelease-suite"].if, {
+        repository: "contributor/openclaw",
+        preflightOutputs: {},
+      }),
+    ).toBe(false);
+    const resolver = workflow.jobs.resolve_target.steps.find(
+      (step: WorkflowStep) => step.id === "resolve",
+    );
+    expect(evaluate(resolver.env.TARGET_REF)).toBe(context.sha);
+    expect(evaluate(resolver.env.EXPECTED_SHA)).toBe(context.sha);
+    expect(evaluate(workflow.concurrency.group)).toBe("plugin-prerelease-hourly-main");
+    expect(evaluate(workflow.concurrency.group, { sha: "b".repeat(40) })).toBe(
+      "plugin-prerelease-hourly-main",
+    );
+    expect(evaluate(workflow.concurrency["cancel-in-progress"])).toBe(false);
+    const validation = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.name === "Validate phase inputs",
+    );
+    expect(evaluate(validation.env.PHASE)).toBe("independent");
+    const exclusions = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.id === "node_test_exclusions",
+    );
+    expect(evaluate(exclusions.env.NODE_TEST_EXCLUDE_PATTERNS_JSON)).toBe("[]");
+    expect(evaluate(exclusions.env.EXTENSION_TEST_EXCLUDE_PATTERNS_JSON)).toBe("[]");
+    expect(workflow.jobs["plugin-prerelease-extension-shard"].strategy["max-parallel"]).toBe(12);
+
+    const hourly = runPluginManifest("independent", "schedule");
+    const release = runPluginManifest("independent");
+    expect(hourly.result.status, hourly.result.stderr).toBe(0);
+    expect(release.result.status, release.result.stderr).toBe(0);
+    const outputs = (output: string) =>
+      Object.fromEntries(
+        output
+          .trim()
+          .split("\n")
+          .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+      );
+    const selected = outputs(hourly.output);
+    const ownership = (matrix: string | undefined) =>
+      JSON.parse(expectDefined(matrix, "extension matrix")).include.map(
+        ({ requires_bun: _bun, test_runtime_policy: _runtime, ...row }: Record<string, unknown>) =>
+          row,
+      );
+    expect(ownership(selected.plugin_prerelease_extension_matrix)).toEqual(
+      ownership(outputs(release.output).plugin_prerelease_extension_matrix),
+    );
+    const rows: {
+      task: string;
+      extensions_csv: string;
+      includePatterns?: string[];
+      exclusion_configs: { config: string; includePatterns: string[] }[];
+      requires_bun?: boolean;
+      test_runtime_policy?: string;
+    }[] = JSON.parse(
+      expectDefined(selected.plugin_prerelease_extension_matrix, "hourly extension matrix"),
+    ).include;
+    expect(
+      rows.every((row) => !row.requires_bun && (row.test_runtime_policy ?? "node") === "node"),
+    ).toBe(true);
+    const extensionIds = new Set(rows.flatMap((row) => row.extensions_csv.split(",")));
+    for (const id of ["device-pair", "active-memory", "talk-voice"]) {
+      expect(extensionIds, id).toContain(id);
+    }
+    expect(listAvailableExtensionIds()).toContain("image-generation-core");
+    expect(resolveExtensionTestPlan({ targetArg: "image-generation-core" })).toMatchObject({
+      hasTests: false,
+      testFileCount: 0,
+    });
+    expect(extensionIds).not.toContain("image-generation-core");
+    const fileTargets = rows
+      .filter((row) => row.task === "extension-file-shard")
+      .flatMap((row) => row.includePatterns ?? []);
+    expect(new Set(fileTargets).size).toBe(fileTargets.length);
+    const sourceOnlyFile = "extensions/diffs/src/store.cleanup.test.ts";
+    expect(fileTargets).not.toContain(sourceOnlyFile);
+    for (const file of [sourceOnlyFile, "extensions/plugin-entry.cli-laziness.test.ts"]) {
+      const config = resolveExtensionTestConfig(file);
+      expect(
+        rows.filter((row) =>
+          row.exclusion_configs.some(
+            (group) =>
+              group.config === config &&
+              group.includePatterns.some((pattern) => matchesGlob(file, pattern)),
+          ),
+        ),
+        file,
+      ).toHaveLength(1);
+    }
+    expect(
+      rows.filter((row) =>
+        row.includePatterns?.includes("extensions/plugin-entry.cli-laziness.test.ts"),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        task: "extension-file-shard",
+        vitest_config: "test/vitest/vitest.extensions.config.ts",
+      }),
+    ]);
+    expect(selected.run_plugin_prerelease_extensions).toBe("true");
+    expect(selected.run_plugin_prerelease_suite).toBe("true");
+    for (const family of ["static", "node", "inspector", "docker"]) {
+      expect(selected[`run_plugin_prerelease_${family}`]).toBe("false");
+    }
+    for (const result of ["success", "failure", "cancelled", "skipped"]) {
+      const summary = runPluginSummary({
+        docker: "skipped",
+        extensions: result,
+        node: "skipped",
+        static: "skipped",
+        runDocker: false,
+        runExtensions: true,
+        runNode: false,
+        runNpmSecurity: false,
+        runStatic: false,
+      });
+      expect(summary.status).toBe(result === "success" ? 0 : 1);
+    }
+  });
+
+  it("validates only scheduled plugin jobs in each phase summary", () => {
+    const independent = runPluginSummary({
+      docker: "failure",
+      extensions: "success",
+      node: "success",
+      runDocker: false,
+      runExtensions: true,
+      runNode: true,
+      runNpmSecurity: true,
+      runStatic: true,
+      static: "success",
+    });
+    const candidate = runPluginSummary({
+      docker: "success",
+      extensions: "failure",
+      node: "failure",
+      runDocker: true,
+      runExtensions: false,
+      runNode: false,
+      runNpmSecurity: false,
+      runStatic: false,
+      static: "failure",
+    });
+    const failedCandidate = runPluginSummary({
+      docker: "failure",
+      extensions: "skipped",
+      node: "skipped",
+      runDocker: true,
+      runExtensions: false,
+      runNode: false,
+      runNpmSecurity: false,
+      runStatic: false,
+      static: "skipped",
+    });
+
+    expect(independent.status, independent.stderr).toBe(0);
+    expect(candidate.status, candidate.stderr).toBe(0);
+    expect(failedCandidate.status).toBe(1);
+    expect(`${failedCandidate.stdout}\n${failedCandidate.stderr}`).toContain(
+      "plugin-prerelease-docker ended with failure",
+    );
+  });
+
   it("keeps exact release tuples independent without cancelling adopted children", () => {
     const releaseChecksWorkflow = parse(
       readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
@@ -689,14 +1146,50 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
 
     expect(releaseChecksWorkflow.concurrency).toEqual({
       group:
-        "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}",
-      "cancel-in-progress": "${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}",
+        "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}-${{ inputs.release_profile == 'minimum' && 'beta' || inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
+      "cancel-in-progress": false,
+    });
+    expect(readPluginPrereleaseWorkflow().concurrency).toEqual({
+      group:
+        "${{ github.event_name == 'schedule' && 'plugin-prerelease-hourly-main' || format('plugin-prerelease-{0}-{1}-{2}', inputs.target_ref, github.sha, inputs.phase) }}",
+      "cancel-in-progress": "${{ github.event_name != 'schedule' && inputs.target_ref == 'main' }}",
     });
     expect(fullReleaseWorkflow.concurrency).toEqual({
       group:
-        "full-release-validation-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}",
+        "full-release-validation-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.release_profile == 'minimum' && 'beta' || inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
       "cancel-in-progress": false,
     });
+    for (const workflow of [fullReleaseWorkflow, releaseChecksWorkflow]) {
+      const coverageKey = (profile: string, soak: boolean) =>
+        workflow.concurrency.group.replace(
+          /\$\{\{\s*([\s\S]*?)\s*\}\}/gu,
+          (_: string, expression: string) =>
+            String(
+              runInNewContext(expression, {
+                github: { sha: "a".repeat(40) },
+                inputs: {
+                  expected_sha: "b".repeat(40),
+                  rerun_group: "all",
+                  phase: "candidate",
+                  release_profile: profile,
+                  run_release_soak: soak,
+                },
+              }),
+            ),
+        );
+      expect(
+        new Set([
+          coverageKey("beta", false),
+          coverageKey("beta", true),
+          coverageKey("stable", false),
+          coverageKey("full", false),
+        ]).size,
+      ).toBe(4);
+      expect(coverageKey("minimum", false)).toBe(coverageKey("beta", false));
+      for (const profile of ["stable", "full"]) {
+        expect(coverageKey(profile, false)).toBe(coverageKey(profile, true));
+      }
+    }
     expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.expected_sha).toEqual({
       description: "Optional full Validation SHA that ref must resolve to",
       required: false,
@@ -713,107 +1206,95 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(resolveTargetStep.run).toContain('--expected-sha "$EXPECTED_SHA"');
     expect(targetSummaryStep.run).toContain("- Validation SHA:");
     expect(targetSummaryStep.run).not.toContain("- Code SHA:");
-    expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
-    expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
-    expect(releaseChecksWorkflow.jobs.summary["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(releaseChecksWorkflow.jobs.resolve_target["runs-on"])).toBe(
+      "ubuntu-24.04",
+    );
+    expect(
+      evaluateWorkflowRunner(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]),
+    ).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(releaseChecksWorkflow.jobs.summary["runs-on"])).toBe(
+      "ubuntu-24.04",
+    );
     for (const jobName of [
-      "resolve_target",
-      "docker_runtime_assets_preflight",
       "normal_ci",
-      "plugin_prerelease",
+      "plugin_prerelease_independent",
+      "plugin_prerelease_candidate",
       "npm_telegram",
       "summary",
     ]) {
-      expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
+      expect(evaluateWorkflowRunner(fullReleaseWorkflow.jobs[jobName]["runs-on"])).toBe(
+        "ubuntu-24.04",
+      );
     }
-    expect(fullReleaseWorkflow.jobs.release_checks["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
-    expect(fullReleaseWorkflow.jobs.performance["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
-    expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(240);
-    expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual(["resolve_target", "evidence_reuse"]);
+    expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(15);
+    expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual([
+      "resolve_target",
+      "plugin_compatibility_readiness",
+      "evidence_reuse",
+    ]);
     expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
       "needs.resolve_target.result == 'success'",
     );
     expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
       "needs.evidence_reuse.outputs.reuse != 'true'",
     );
-    expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
-      "${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}",
-    );
-    expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
-    const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Verify Docker runtime-assets prune path",
-    );
-    expect(dockerPreflightStep).toBeDefined();
-    expect(dockerPreflightStep?.run).toContain("docker build");
-    expect(dockerPreflightStep?.run).toContain("--target runtime-assets");
-    expect(dockerPreflightStep?.run).toContain("timeout --kill-after=30s 15m docker build");
-    expect(dockerPreflightStep?.run).toContain(
-      '--build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex"',
-    );
-    expect(
-      fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.some(
-        (step: WorkflowStep) => step.name === "Build and smoke test final Docker runtime image",
-      ),
-    ).toBe(false);
-    const pluginMonitorTimeout = fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"];
-    const childTimeoutFloors = {
-      beta: pluginPrereleaseTimeoutFloor("beta"),
-      stable: pluginPrereleaseTimeoutFloor("stable"),
-      full: pluginPrereleaseTimeoutFloor("full"),
-    };
-    const parentTimeouts = {
-      beta: timeoutForProfile(pluginMonitorTimeout, "beta"),
-      stable: timeoutForProfile(pluginMonitorTimeout, "stable"),
-      full: timeoutForProfile(pluginMonitorTimeout, "full"),
-    };
-    expect(childTimeoutFloors).toEqual({ beta: 175, stable: 175, full: 205 });
-    expect(parentTimeouts).toEqual({ beta: 240, stable: 240, full: 300 });
-    for (const profile of ["beta", "stable", "full"] as const) {
-      expect(parentTimeouts[profile] - childTimeoutFloors[profile], profile).toBeGreaterThanOrEqual(
-        60,
-      );
+    for (const jobName of [
+      "plugin_prerelease_independent",
+      "plugin_prerelease_candidate",
+      "release_checks_independent",
+      "release_checks_candidate",
+      "npm_telegram",
+      "performance",
+    ]) {
+      expect(fullReleaseWorkflow.jobs[jobName]["timeout-minutes"], jobName).toBe(15);
     }
-    expect(fullReleaseWorkflow.jobs.release_checks["timeout-minutes"]).toBe(420);
-    expect(fullReleaseWorkflow.jobs.npm_telegram["timeout-minutes"]).toBe(
-      "${{ inputs.release_profile == 'full' && 360 || 120 }}",
-    );
-    expect(fullReleaseWorkflow.jobs.performance["timeout-minutes"]).toBe(360);
     const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
     expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
       description:
-        "Cancel each child workflow after its first failed job; false collects independent failures to completion",
+        "Cancel only an exact active child after its first blocking job; false drains all children and permits same-parent recovery",
       required: false,
       default: false,
       type: "boolean",
     });
     for (const [jobName, kind] of [
       ["normal_ci", "ci"],
-      ["plugin_prerelease", "plugin-prerelease"],
-      ["release_checks", "release-checks"],
+      ["plugin_prerelease_independent", "plugin-prerelease"],
+      ["plugin_prerelease_candidate", "plugin-prerelease"],
+      ["release_checks_independent", "release-checks"],
+      ["release_checks_candidate", "release-checks"],
       ["npm_telegram", "npm-telegram"],
     ] as const) {
-      const dispatch: WorkflowStep = fullReleaseWorkflow.jobs[jobName].steps[0];
+      const dispatch = expectDefined(
+        fullReleaseWorkflow.jobs[jobName].steps.find(
+          (step: WorkflowStep) => step.id === "dispatch",
+        ) as WorkflowStep | undefined,
+        `${jobName} dispatch step`,
+      );
       expect(dispatch.env?.CHILD_WORKFLOW_KIND).toBe(kind);
-      expect(dispatch.env?.FAIL_FAST).toBe("${{ inputs.fail_fast }}");
-      expect(dispatch.run).toContain('if [[ "$FAIL_FAST" != "true" ]]; then');
-      expect(dispatch.run).toContain("has failed child jobs before the workflow completed");
+      if (jobName.startsWith("release_checks_")) {
+        expect(dispatch.env?.FAIL_FAST).toBe("${{ inputs.fail_fast }}");
+        expect(dispatch.run).toContain('-f fail_fast="$FAIL_FAST"');
+      } else {
+        expect(dispatch.env).not.toHaveProperty("FAIL_FAST");
+      }
     }
-    expect(fullReleaseWorkflow.jobs.performance.steps[0].env).not.toHaveProperty("FAIL_FAST");
+    expect(
+      fullReleaseWorkflow.jobs.performance.steps.find(
+        (step: WorkflowStep) => step.id === "dispatch",
+      )?.env,
+    ).not.toHaveProperty("FAIL_FAST");
     expect(fullReleaseSource).toContain('-f fail_fast="$FAIL_FAST"');
-    expect(fullReleaseSource).toContain(
-      "npm-telegram-beta-e2e.yml has failed child jobs before the workflow completed; cancelling the remaining run.",
+    expect(fullReleaseSource).not.toContain(
+      "has failed child jobs before the workflow completed; cancelling the remaining run.",
     );
     expect(fullReleaseSource).not.toContain("trap cancel_child");
     expect(fullReleaseSource).not.toContain("cancel_child_on_failure");
     expect(fullReleaseSource).not.toContain("exit_on_parent_signal");
     expect(fullReleaseSource).not.toContain("disable_child_cleanup");
-    expect(fullReleaseSource).toContain(
-      "Parent cancellation leaves this child running; cancel it explicitly if no longer needed.",
-    );
+    expect(fullReleaseSource).not.toContain("cancel_child");
     expect(fullReleaseSource).toContain(
       'if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then',
     );
-    expect(fullReleaseSource).toContain("cancel_child\n              exit 1");
     expect(releaseChecksWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
       description: "Stop the Matrix QA lane after its first failed check or scenario",
       required: false,
@@ -850,7 +1331,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(captureInputs?.run).toContain('RELEASE_REF_INPUT" == "refs/heads/main"');
     expect(captureInputs?.run).toContain("release/[0-9]{4}");
     expect(captureInputs?.run).toContain("extended-stable/[0-9]{4}");
-    expect(captureInputs?.run).toContain("tideclaw/alpha/");
     expect(captureInputs?.run).toContain("refs/tags/");
     expect(captureInputs?.run).toContain("RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT");
     expect(captureInputs?.run).toContain("allow_unreleased_changelog=false");
@@ -874,8 +1354,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const summarizeTarget = fullReleaseWorkflow.jobs.resolve_target.steps.find(
       (step: WorkflowStep) => step.name === "Summarize target",
     );
-    const releaseChecksDispatch = fullReleaseWorkflow.jobs.release_checks.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
+    const releaseChecksDispatch = fullReleaseWorkflow.jobs.release_checks_candidate.steps.find(
+      (step: WorkflowStep) => step.name === "Dispatch release checks candidate phase",
     );
     expect(summarizeTarget?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
     expect(releaseChecksDispatch?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);

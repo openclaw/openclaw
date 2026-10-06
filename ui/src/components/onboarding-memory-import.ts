@@ -6,10 +6,11 @@ import type {
   MigrationsMemoryApplyResult,
   MigrationsMemoryPlanResult,
 } from "../../../packages/gateway-protocol/src/schema/migrations.js";
-import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
+import { generateUUID } from "../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../styles/onboarding-memory-import.css";
@@ -21,23 +22,6 @@ type ProviderResult =
   | { kind: "success"; result: MigrationsMemoryApplyResult }
   | { kind: "partial"; result: MigrationsMemoryApplyResult }
   | { kind: "error"; message: string };
-
-function toErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : typeof error === "string"
-      ? error
-      : t("onboarding.memoryImport.unknownError");
-}
-
-function createIdempotencyKey(): string {
-  if (typeof globalThis.crypto.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-  return [...globalThis.crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
-}
 
 function plannedItems(provider: MemoryMigrationProviderPlan) {
   return provider.items.filter((item) => item.status === "planned");
@@ -68,7 +52,7 @@ function setGuardDone() {
 }
 
 class OnboardingMemoryImport extends OpenClawLightDomElement {
-  @property({ attribute: false }) context?: ApplicationContext<RouteId>;
+  @property({ attribute: false }) context?: ApplicationContext;
   @property({ type: Boolean }) active = false;
 
   @state() private selectedByProvider: Record<string, boolean> = {};
@@ -76,21 +60,12 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
   @state() private results: Record<string, ProviderResult> = {};
   @state() private done = false;
   @state() private closed = false;
-  private agentsListRequest: ApplicationContext<RouteId>["agents"] | undefined;
+  private agentsListRequest: ApplicationContext["agents"] | undefined;
 
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
-    );
+    .watchStore(() => this.context?.gateway)
+    .watchStore(() => this.context?.agents)
+    .watchStore(() => this.context?.agentSelection);
 
   private readonly planTask = new Task(this, {
     args: () => {
@@ -247,7 +222,7 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
         const result = await client.request<MigrationsMemoryApplyResult>(
           "migrations.memory.apply",
           {
-            idempotencyKey: createIdempotencyKey(),
+            idempotencyKey: generateUUID(),
             agentId,
             providerId: provider.providerId,
             planFingerprint,
@@ -265,7 +240,10 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
       } catch (error) {
         this.results = {
           ...this.results,
-          [provider.providerId]: { kind: "error", message: toErrorMessage(error) },
+          [provider.providerId]: {
+            kind: "error",
+            message: formatUiError(error, t("onboarding.memoryImport.unknownError")),
+          },
         };
       }
     }
@@ -320,38 +298,44 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
             >
             <small>
               ${t("onboarding.memoryImport.plannedCount", { count: String(planned) })}
-              ${conflicts > 0
-                ? html`<span>
-                    ${t("onboarding.memoryImport.alreadyImported", {
-                      count: String(conflicts),
-                    })}
-                  </span>`
-                : nothing}
+              ${
+                conflicts > 0
+                  ? html`<span>
+                      ${t("onboarding.memoryImport.alreadyImported", {
+                        count: String(conflicts),
+                      })}
+                    </span>`
+                  : nothing
+              }
             </small>
           </span>
         </label>
         <div class="onboarding-memory-import__provider-status" aria-live="polite">
-          ${applying
-            ? t("onboarding.memoryImport.importingProvider")
-            : result?.kind === "success"
-              ? t("onboarding.memoryImport.providerResult", {
-                  migrated: String(result.result.summary.migrated),
-                  skipped: String(result.result.summary.skipped),
-                })
-              : result?.kind === "partial"
-                ? html`<span role="alert">
-                    ${t("onboarding.memoryImport.providerIncomplete", {
-                      conflicts: String(result.result.summary.conflicts),
-                      errors: String(result.result.summary.errors),
-                      migrated: String(result.result.summary.migrated),
-                      skipped: String(result.result.summary.skipped),
-                    })}
-                  </span>`
-                : result?.kind === "error"
+          ${
+            applying
+              ? t("onboarding.memoryImport.importingProvider")
+              : result?.kind === "success"
+                ? t("onboarding.memoryImport.providerResult", {
+                    migrated: String(result.result.summary.migrated),
+                    skipped: String(result.result.summary.skipped),
+                  })
+                : result?.kind === "partial"
                   ? html`<span role="alert">
-                      ${t("onboarding.memoryImport.providerError", { error: result.message })}
+                      ${t("onboarding.memoryImport.providerIncomplete", {
+                        conflicts: String(result.result.summary.conflicts),
+                        errors: String(result.result.summary.errors),
+                        migrated: String(result.result.summary.migrated),
+                        skipped: String(result.result.summary.skipped),
+                      })}
                     </span>`
-                  : nothing}
+                  : result?.kind === "error"
+                    ? html`<span role="alert">
+                        ${t("onboarding.memoryImport.providerError", {
+                          error: formatUiExternalText(result.message),
+                        })}
+                      </span>`
+                    : nothing
+          }
         </div>
       </li>
     `;
@@ -401,57 +385,63 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
           <header>
             <h2>${this.done ? t("onboarding.memoryImport.doneTitle") : title}</h2>
             <p>
-              ${this.done
-                ? t("onboarding.memoryImport.doneBody", {
-                    migrated: String(migrated),
-                    skipped: String(skipped),
-                  })
-                : body}
+              ${
+                this.done
+                  ? t("onboarding.memoryImport.doneBody", {
+                      migrated: String(migrated),
+                      skipped: String(skipped),
+                    })
+                  : body
+              }
             </p>
           </header>
           <ul>
             ${providers.map((provider) => this.renderProvider(provider))}
           </ul>
           <footer>
-            ${this.done
-              ? html`<button
-                  class="btn primary"
-                  type="button"
-                  data-test-id="onboarding-memory-import-continue"
-                  @click=${() => this.finish()}
-                >
-                  ${t("common.continue")}
-                </button>`
-              : html`
-                  <button
+            ${
+              this.done
+                ? html`<button
                     class="btn primary"
                     type="button"
-                    data-test-id="onboarding-memory-import-import"
-                    ?disabled=${selectedCount === 0 || this.applyingProviderId !== null}
-                    @click=${() => void this.importSelected()}
-                  >
-                    ${this.applyingProviderId
-                      ? t("common.importing")
-                      : t("onboarding.memoryImport.import")}
-                  </button>
-                  <button
-                    class="btn"
-                    type="button"
-                    data-test-id="onboarding-memory-import-skip"
-                    ?disabled=${this.applyingProviderId !== null}
+                    data-test-id="onboarding-memory-import-continue"
                     @click=${() => this.finish()}
                   >
-                    ${t("onboarding.memoryImport.skip")}
-                  </button>
-                  <button
-                    class="btn btn--ghost onboarding-memory-import__review"
-                    type="button"
-                    ?disabled=${this.applyingProviderId !== null}
-                    @click=${() => this.reviewDetails()}
-                  >
-                    ${t("onboarding.memoryImport.reviewDetails")}
-                  </button>
-                `}
+                    ${t("common.continue")}
+                  </button>`
+                : html`
+                    <button
+                      class="btn primary"
+                      type="button"
+                      data-test-id="onboarding-memory-import-import"
+                      ?disabled=${selectedCount === 0 || this.applyingProviderId !== null}
+                      @click=${() => void this.importSelected()}
+                    >
+                      ${
+                        this.applyingProviderId
+                          ? t("common.importing")
+                          : t("onboarding.memoryImport.import")
+                      }
+                    </button>
+                    <button
+                      class="btn"
+                      type="button"
+                      data-test-id="onboarding-memory-import-skip"
+                      ?disabled=${this.applyingProviderId !== null}
+                      @click=${() => this.finish()}
+                    >
+                      ${t("onboarding.memoryImport.skip")}
+                    </button>
+                    <button
+                      class="btn btn--ghost onboarding-memory-import__review"
+                      type="button"
+                      ?disabled=${this.applyingProviderId !== null}
+                      @click=${() => this.reviewDetails()}
+                    >
+                      ${t("onboarding.memoryImport.reviewDetails")}
+                    </button>
+                  `
+            }
           </footer>
         </section>
       </openclaw-modal-dialog>

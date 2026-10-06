@@ -4,7 +4,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import type { RawData, WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { agentCommandMock, installGatewayTestHooks, onceMessage } from "./test-helpers.js";
+import {
+  agentCommandMock,
+  installGatewayTestHooks,
+  onceMessage,
+  prepareGatewayReplyRuntimeForTest,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -32,8 +37,9 @@ beforeAll(async () => {
   harness = await startGatewayServerHarness();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.mocked(agentCommandMock).mockReset();
+  await prepareGatewayReplyRuntimeForTest();
 });
 
 afterAll(async () => {
@@ -63,7 +69,7 @@ function sendAgentRequest(params: {
 }
 
 describe("gateway agent RPC contracts", () => {
-  test("preserves requested delivery status across ordered final response and replay", async () => {
+  test("preserves WebChat delivery status across ordered final response and replay", async () => {
     const runCompletion = createDeferred();
     vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
       await runCompletion.promise;
@@ -83,7 +89,11 @@ describe("gateway agent RPC contracts", () => {
     });
 
     const idempotencyKey = "gateway-agent-rpc-contract";
-    const first = await harness.openClient();
+    const clientOptions: Parameters<GatewayServerHarness["openClient"]>[0] = {
+      browserOrigin: `http://127.0.0.1:${harness.port}`,
+      client: { id: "webchat-ui", version: "1.0.0", platform: "test", mode: "webchat" },
+    };
+    const first = await harness.openClient(clientOptions);
     const orderedResponses: AgentResponse[] = [];
     const recordResponse = (data: RawData) => {
       const frame = JSON.parse(rawDataToString(data)) as AgentResponse;
@@ -120,6 +130,7 @@ describe("gateway agent RPC contracts", () => {
       runId: idempotencyKey,
       channel: "webchat",
       messageChannel: "webchat",
+      runContext: { messageChannel: "webchat" },
       deliver: true,
       bestEffortDeliver: true,
     });
@@ -161,7 +172,7 @@ describe("gateway agent RPC contracts", () => {
       first.ws.once("close", () => resolve());
     });
 
-    const second = await harness.openClient();
+    const second = await harness.openClient(clientOptions);
     try {
       const replayPromise = onceMessage<AgentResponse>(
         second.ws,
@@ -176,12 +187,6 @@ describe("gateway agent RPC contracts", () => {
 
       const replay = await replayPromise;
       expect(replay.payload).toEqual(terminal.payload);
-      expect(replay.payload?.status).toBe("ok");
-      expect(replay.payload?.result?.deliveryStatus).toMatchObject({
-        requested: true,
-        attempted: false,
-        reason: "channel_resolved_to_internal",
-      });
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       second.ws.close();

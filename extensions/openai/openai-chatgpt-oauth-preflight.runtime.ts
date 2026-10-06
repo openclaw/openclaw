@@ -1,5 +1,6 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { inspectTlsCertificateError } from "openclaw/plugin-sdk/provider-http";
+import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const OPENAI_AUTH_PROBE_URL =
   "https://auth.openai.com/oauth/authorize?response_type=code&client_id=openclaw-preflight&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email";
@@ -12,10 +13,6 @@ type OpenAIOAuthTlsPreflightResult =
       code?: string;
       message: string;
     };
-
-function getErrorRecord(error: unknown): Record<string, unknown> | null {
-  return error && typeof error === "object" ? (error as Record<string, unknown>) : null;
-}
 
 function extractFailure(error: unknown): {
   code?: string;
@@ -30,8 +27,8 @@ function extractFailure(error: unknown): {
       kind: "tls-cert",
     };
   }
-  const root = getErrorRecord(error);
-  const rootCause = getErrorRecord(root?.cause);
+  const root = asNullableObjectRecord(error);
+  const rootCause = asNullableObjectRecord(root?.cause);
   const code = typeof rootCause?.code === "string" ? rootCause.code : undefined;
   const message =
     typeof rootCause?.message === "string"
@@ -49,25 +46,27 @@ function extractFailure(error: unknown): {
 export async function runOpenAIOAuthTlsPreflight(options?: {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<OpenAIOAuthTlsPreflightResult> {
   const timeoutMs = resolveTimerTimeoutMs(options?.timeoutMs, 5000);
   const fetchImpl = options?.fetchImpl ?? fetch;
+  options?.signal?.throwIfAborted();
+  options?.assertCurrent?.();
   let response: Response | undefined;
   try {
     response = await fetchImpl(OPENAI_AUTH_PROBE_URL, {
       method: "GET",
       redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: options?.signal
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
     });
     return { ok: true };
   } catch (error) {
-    const failure = extractFailure(error);
-    return {
-      ok: false,
-      kind: failure.kind,
-      code: failure.code,
-      message: failure.message,
-    };
+    options?.signal?.throwIfAborted();
+    options?.assertCurrent?.();
+    return { ok: false, ...extractFailure(error) };
   } finally {
     if (response?.bodyUsed !== true) {
       await response?.body?.cancel().catch(() => undefined);

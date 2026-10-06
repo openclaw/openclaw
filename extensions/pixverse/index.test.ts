@@ -1,6 +1,10 @@
-// Pixverse tests cover index plugin behavior.
-import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  capturePluginRegistration,
+  createQueuedWizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import {
   PIXVERSE_BASE_URL_BY_REGION,
   PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
@@ -21,9 +25,8 @@ function registerPixVerseProvider() {
   return provider;
 }
 
-function createRuntimeContext(
-  region: "international" | "cn",
-  config: Record<string, unknown> = {
+function createProxyConfig() {
+  return {
     models: {
       providers: {
         pixverse: {
@@ -33,40 +36,35 @@ function createRuntimeContext(
         },
       },
     },
+  };
+}
+
+function createRuntimeContext(
+  region: "international" | "cn",
+  config: ProviderAuthContext["config"] = {
+    ...createProxyConfig(),
+    agents: { entries: { main: {}, work: { workspace: "/tmp/pixverse-workspace" } } },
   },
 ) {
-  const select = vi.fn(async (params: { message: string }) => {
-    expect(params.message).toBe("Select PixVerse API region");
+  const { prompter, select, text } = createQueuedWizardPrompter();
+  select.mockImplementation(async (params) => {
+    expect(params).toHaveProperty("message", "Select PixVerse API region");
     return region;
   });
+  text.mockImplementation(async () => "pixverse-test-key");
   const ctx = {
     config,
     env: {},
-    prompter: {
-      intro: vi.fn(),
-      outro: vi.fn(),
-      note: vi.fn(),
-      select,
-      multiselect: vi.fn(),
-      text: vi.fn(async () => "pixverse-test-key"),
-      confirm: vi.fn(),
-      progress: vi.fn(() => ({
-        update: vi.fn(),
-        stop: vi.fn(),
-      })),
-    },
-    runtime: {
-      error: vi.fn(),
-      exit: vi.fn(),
-      log: vi.fn(),
-    },
+    workspaceDir: "/tmp/pixverse-workspace",
+    prompter,
+    runtime: createRuntimeSpies(),
     secretInputMode: "plaintext",
     isRemote: false,
-    openUrl: vi.fn(),
+    openUrl: vi.fn<ProviderAuthContext["openUrl"]>(),
     oauth: {
-      createVpsAwareHandlers: vi.fn(),
+      createVpsAwareHandlers: vi.fn<ProviderAuthContext["oauth"]["createVpsAwareHandlers"]>(),
     },
-  } as never;
+  } satisfies ProviderAuthContext;
   return { ctx, select };
 }
 
@@ -164,69 +162,40 @@ describe("pixverse plugin", () => {
     });
   });
 
-  it("preserves a custom base URL during non-interactive setup without an explicit region", async () => {
-    const auth = registerPixVerseProvider().auth?.[0];
-    if (!auth?.runNonInteractive) {
-      throw new Error("expected PixVerse non-interactive auth method");
-    }
-    const config = {
-      models: {
-        providers: {
-          pixverse: {
-            baseUrl: "https://proxy.example/openapi/v2",
-            models: [],
-            params: { quality: "720p" },
-          },
-        },
-      },
-    };
-
-    const result = await auth.runNonInteractive({
-      config,
+  it.each([
+    {
+      name: "preserves a custom base URL without an explicit region",
       opts: {},
-      env: {},
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-      resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" })),
-      toApiKeyCredential: vi.fn(() => null),
-    } as never);
-
-    expect(result?.models?.providers?.pixverse).toMatchObject({
       baseUrl: "https://proxy.example/openapi/v2",
-      params: { quality: "720p" },
       region: "international",
-    });
-  });
-
-  it("resets a custom base URL when non-interactive setup selects a region", async () => {
+    },
+    {
+      name: "resets a custom base URL when selecting a region",
+      opts: { pixverseRegion: "cn" },
+      baseUrl: PIXVERSE_BASE_URL_BY_REGION.cn,
+      region: "cn",
+    },
+  ])("non-interactive setup $name", async ({ opts, baseUrl, region }) => {
     const auth = registerPixVerseProvider().auth?.[0];
     if (!auth?.runNonInteractive) {
       throw new Error("expected PixVerse non-interactive auth method");
     }
-    const config = {
-      models: {
-        providers: {
-          pixverse: {
-            baseUrl: "https://proxy.example/openapi/v2",
-            models: [],
-            params: { quality: "720p" },
-          },
-        },
-      },
-    };
+    const config = createProxyConfig();
 
     const result = await auth.runNonInteractive({
+      authChoice: "pixverse-api-key",
       config,
-      opts: { pixverseRegion: "cn" },
-      env: {},
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-      resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" })),
+      baseConfig: config,
+      opts,
+      runtime: createRuntimeSpies(),
+      resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" as const })),
       toApiKeyCredential: vi.fn(() => null),
-    } as never);
+    });
 
     expect(result?.models?.providers?.pixverse).toMatchObject({
-      baseUrl: PIXVERSE_BASE_URL_BY_REGION.cn,
+      baseUrl,
       params: { quality: "720p" },
-      region: "cn",
+      region,
     });
   });
 });

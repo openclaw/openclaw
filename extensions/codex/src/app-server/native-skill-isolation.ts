@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveRequiredHomeDir, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { CodexAppServerClient } from "./client.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
@@ -16,23 +17,19 @@ const MAX_PERSONAL_SKILL_ENTRIES = 10_000;
 const nativeSkillIsolationByClient = new WeakMap<
   CodexAppServerClient,
   {
-    key: string;
-    result: Promise<CodexNativeSkillIsolation | undefined>;
-    settled: boolean;
-    signal?: AbortSignal;
+    revision: number;
+    snapshot?: {
+      key: string;
+      revision: number;
+      result: Promise<CodexNativeSkillIsolation | undefined>;
+      settled: boolean;
+      signal?: AbortSignal;
+    };
   }
 >();
 
 function isMissingPathError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
-function isPathWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-  );
 }
 
 async function canonicalizeExistingPath(candidate: string): Promise<string> {
@@ -72,13 +69,13 @@ async function collectPersonalSkillRealPaths(
     const realDefaultCodexHome = await canonicalizeExistingPath(defaultCodexHome);
     roots.push({
       dir: path.join(defaultCodexHome, "skills"),
-      onlyEscapedStateTargets: isPathWithin(realStateDir, realDefaultCodexHome),
+      onlyEscapedStateTargets: isPathInside(realStateDir, realDefaultCodexHome),
     });
   }
   const configuredCodexHome = codexHome?.trim() || process.env.CODEX_HOME?.trim();
   if (configuredCodexHome) {
     const realCodexHome = await canonicalizeExistingPath(configuredCodexHome);
-    const stateOwned = isPathWithin(realStateDir, realCodexHome);
+    const stateOwned = isPathInside(realStateDir, realCodexHome);
     roots.push({
       dir: path.join(configuredCodexHome, "skills"),
       // Direct descendants of a state-owned Codex home belong to this isolated instance.
@@ -98,7 +95,7 @@ async function collectPersonalSkillRealPaths(
   const recordSkillFile = async (filePath: string, onlyEscapedStateTargets: boolean) => {
     try {
       const skillRealPath = await fs.realpath(filePath);
-      if (!onlyEscapedStateTargets || !isPathWithin(realStateDir, skillRealPath)) {
+      if (!onlyEscapedStateTargets || !isPathInside(realStateDir, skillRealPath)) {
         skillPaths.add(skillRealPath);
       }
     } catch (error) {
@@ -147,46 +144,34 @@ async function collectPersonalSkillRealPaths(
           continue;
         }
         const entryPath = path.join(current.dir, entry.name);
-        if (entry.name === "SKILL.md" && entry.isFile()) {
-          await recordSkillFile(entryPath, current.onlyEscapedStateTargets);
-          continue;
-        }
+        let isFile = entry.isFile();
+        let isDirectory = entry.isDirectory();
         if (entry.isSymbolicLink()) {
           try {
             const stat = await fs.stat(entryPath);
-            if (entry.name === "SKILL.md" && stat.isFile()) {
-              await recordSkillFile(entryPath, current.onlyEscapedStateTargets);
-            } else if (stat.isDirectory()) {
-              if (current.depth < MAX_PERSONAL_SKILL_DEPTH) {
-                queue.push({
-                  dir: entryPath,
-                  depth: current.depth + 1,
-                  onlyEscapedStateTargets: current.onlyEscapedStateTargets,
-                });
-              } else {
-                complete = false;
-              }
-            }
+            isFile = stat.isFile();
+            isDirectory = stat.isDirectory();
           } catch (error) {
             if (!isMissingPathError(error)) {
               complete = false;
             }
+            continue;
           }
+        }
+        if (entry.name === "SKILL.md" && isFile) {
+          await recordSkillFile(entryPath, current.onlyEscapedStateTargets);
           continue;
         }
-        if (current.depth >= MAX_PERSONAL_SKILL_DEPTH) {
-          if (entry.isDirectory()) {
+        if (isDirectory) {
+          if (current.depth >= MAX_PERSONAL_SKILL_DEPTH) {
             complete = false;
+          } else {
+            queue.push({
+              dir: entryPath,
+              depth: current.depth + 1,
+              onlyEscapedStateTargets: current.onlyEscapedStateTargets,
+            });
           }
-          continue;
-        }
-        if (entry.isDirectory()) {
-          queue.push({
-            dir: entryPath,
-            depth: current.depth + 1,
-            onlyEscapedStateTargets: current.onlyEscapedStateTargets,
-          });
-          continue;
         }
       }
     } catch (error) {
@@ -218,25 +203,45 @@ export async function resolveCodexNativeSkillIsolation(params: {
     params.home?.trim() || process.env.HOME?.trim() || "",
     params.userProfile?.trim() || process.env.USERPROFILE?.trim() || "",
   ]);
-  const cached = nativeSkillIsolationByClient.get(params.client);
-  if (cached?.key === key && (cached.settled || cached.signal === params.signal)) {
-    const isolation = await cached.result;
-    params.signal?.throwIfAborted();
-    return isolation;
+  let cache = nativeSkillIsolationByClient.get(params.client);
+  if (!cache) {
+    cache = { revision: 0 };
+    nativeSkillIsolationByClient.set(params.client, cache);
+    const clientCache = cache;
+    params.client.addNotificationHandler((notification) => {
+      if (notification.method === "skills/changed") {
+        clientCache.revision += 1;
+        clientCache.snapshot = undefined;
+      }
+    });
   }
-  const result = resolveUncachedCodexNativeSkillIsolation(params);
-  const entry = { key, result, settled: false, signal: params.signal };
-  nativeSkillIsolationByClient.set(params.client, entry);
-  try {
-    const isolation = await result;
-    entry.settled = true;
+  for (;;) {
     params.signal?.throwIfAborted();
-    return isolation;
-  } catch (error) {
-    if (nativeSkillIsolationByClient.get(params.client)?.result === result) {
-      nativeSkillIsolationByClient.delete(params.client);
+    let snapshot = cache.snapshot;
+    if (snapshot?.key !== key || (!snapshot.settled && snapshot.signal !== params.signal)) {
+      snapshot = {
+        key,
+        revision: cache.revision,
+        result: resolveUncachedCodexNativeSkillIsolation(params),
+        settled: false,
+        signal: params.signal,
+      };
+      cache.snapshot = snapshot;
     }
-    throw error;
+    try {
+      const isolation = await snapshot.result;
+      snapshot.settled = true;
+      params.signal?.throwIfAborted();
+      // A notification can invalidate even a scan that has not settled yet.
+      if (snapshot.revision === cache.revision) {
+        return isolation;
+      }
+    } catch (error) {
+      if (cache.snapshot === snapshot) {
+        cache.snapshot = undefined;
+      }
+      throw error;
+    }
   }
 }
 
@@ -260,23 +265,24 @@ async function resolveUncachedCodexNativeSkillIsolation(
   if (process.platform === "win32") {
     homes.push(params.userProfile?.trim() || os.homedir());
   }
-  const personalSkills = await collectPersonalSkillRealPaths(
+  const { complete, skillPaths } = await collectPersonalSkillRealPaths(
     [...new Set(homes.map((home) => path.resolve(home)))],
     params.codexHome,
   );
-  const disabledUserSkillPaths = [
-    // Codex also labels explicit plugin and extra roots as user scope. Preserve those on a
-    // complete provenance scan; fall back to all user paths only when personal-root proof failed.
-    ...(personalSkills.complete
-      ? personalSkills.skillPaths
-      : new Set([
-          ...personalSkills.skillPaths,
-          ...response.data.flatMap((entry) =>
-            entry.skills.filter((skill) => skill.scope === "user").map((skill) => skill.path),
-          ),
-        ])),
-  ].toSorted((left, right) => left.localeCompare(right));
-  return { disabledUserSkillPaths };
+  // Codex also labels explicit plugin and extra roots as user scope. Preserve those on a
+  // complete provenance scan; fall back to all user paths only when personal-root proof failed.
+  if (!complete) {
+    for (const entry of response.data) {
+      for (const skill of entry.skills) {
+        if (skill.scope === "user") {
+          skillPaths.add(skill.path);
+        }
+      }
+    }
+  }
+  return {
+    disabledUserSkillPaths: [...skillPaths].toSorted((left, right) => left.localeCompare(right)),
+  };
 }
 
 /** Applies path-exact session rules after caller config so isolated user skills stay disabled. */

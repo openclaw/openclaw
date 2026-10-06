@@ -1,4 +1,3 @@
-// Telegram helper module supports message tool schema behavior.
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
 
@@ -15,6 +14,19 @@ export function createTelegramPollExtraToolSchemas() {
       Type.Boolean({
         description:
           "Send a public poll whose votes route into the originating agent conversation. Voter identities are visible.",
+      }),
+    ),
+  };
+}
+
+/** Schema additions for Telegram reactions through the existing react action. */
+export function createTelegramReactionEmojiSchema() {
+  return {
+    emoji: Type.Optional(
+      Type.String({
+        description:
+          'Telegram reaction emoji: use a supported Unicode reaction, or pass the numeric custom_emoji_id identifier returned by action:"emoji-list" directly as emoji. ' +
+          'Use action:"emoji-list" to inspect reactions allowed in the current chat; arbitrary Unicode may be rejected by Telegram.',
       }),
     ),
   };

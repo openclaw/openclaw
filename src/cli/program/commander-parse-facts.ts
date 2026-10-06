@@ -1,14 +1,12 @@
 // Facts Commander owns after parsing: the active path and which tokens became option values.
 import type { Command, Option } from "commander";
+import { getCommandHierarchy, getRootCommand } from "./command-tree.js";
 
 const activeErrorCommandByRoot = new WeakMap<Command, Command>();
+const lazyCommands = new WeakSet<Command>();
 
-function getCommandHierarchy(command: Command): Command[] {
-  const hierarchy: Command[] = [];
-  for (let current: Command | null = command; current; current = current.parent ?? null) {
-    hierarchy.unshift(current);
-  }
-  return hierarchy;
+export function markCommanderLazyCommand(command: Command): void {
+  lazyCommands.add(command);
 }
 
 function requiresFollowingValue(token: string, options: readonly Option[]): boolean {
@@ -35,11 +33,12 @@ function requiresFollowingValue(token: string, options: readonly Option[]): bool
   return false;
 }
 
-/** Return whether Commander consumed one of the supplied argv tokens as a required option value. */
-export function hasCommanderOptionValue(
+/** Match an argv token in its actual Commander role rather than its spelling alone. */
+export function hasCommanderOptionToken(
   command: Command,
   argv: readonly string[],
   tokens: ReadonlySet<string>,
+  kind: "flag" | "value",
 ): boolean {
   const hierarchy = getCommandHierarchy(command);
   const args = argv.slice(2);
@@ -58,10 +57,14 @@ export function hasCommanderOptionValue(
     // parses only the active command's options; ancestor flags there never reach pre-action.
     if (requiresFollowingValue(arg, hierarchy[commandIndex]?.options ?? [])) {
       const value = args[index + 1];
-      if (value && tokens.has(value)) {
+      if (kind === "value" && value && tokens.has(value)) {
         return true;
       }
       index += 1;
+      continue;
+    }
+    if (kind === "flag" && tokens.has(arg.split("=")[0] ?? arg)) {
+      return true;
     }
   }
   return false;
@@ -69,19 +72,33 @@ export function hasCommanderOptionValue(
 
 /** Return the registered command path for the exact Commander node handling an error or action. */
 export function getCommanderCommandPath(command: Command): string[] {
-  const commandPath: string[] = [];
-  for (let current: Command | null = command; current?.parent; current = current.parent) {
-    commandPath.unshift(current.name());
-  }
-  return commandPath;
+  return getCommandHierarchy(command)
+    .slice(1)
+    .map((current) => current.name());
 }
 
-function getRootCommand(command: Command): Command {
-  let root = command;
-  while (root.parent) {
-    root = root.parent;
+/** Resolve lazy help before classifying a possible child on Commander's active command node. */
+export function getCommanderSubcommandFact(
+  command: Command,
+  args: readonly string[],
+): { kind: "defer" } | { kind: "unknown"; name: string } | undefined {
+  const helpRequested = args.includes("-h") || args.includes("--help");
+  if (helpRequested && lazyCommands.has(command)) {
+    return { kind: "defer" };
   }
-  return root;
+  const firstArgument = command.args[0];
+  const matchesChild = command.commands.some(
+    (child) => child.name() === firstArgument || child.aliases().includes(firstArgument ?? ""),
+  );
+  if (
+    command.registeredArguments.length > 0 ||
+    firstArgument === undefined ||
+    firstArgument.startsWith("-") ||
+    matchesChild
+  ) {
+    return undefined;
+  }
+  return command.commands.length > 0 ? { kind: "unknown", name: firstArgument } : undefined;
 }
 
 /** Scope the exact Commander node synchronously emitting an error. */
@@ -102,4 +119,15 @@ export function setCommanderErrorCommand(command: Command): () => void {
 export function getCommanderErrorCommandPath(program: Command): string[] | undefined {
   const command = activeErrorCommandByRoot.get(getRootCommand(program));
   return command ? getCommanderCommandPath(command) : undefined;
+}
+
+/** Return visible children of the non-root command synchronously emitting a parse error. */
+export function getCommanderErrorCommandNames(program: Command): string[] | undefined {
+  const command = activeErrorCommandByRoot.get(getRootCommand(program));
+  return command && getCommanderCommandPath(command).length
+    ? command
+        .createHelp()
+        .visibleCommands(command)
+        .flatMap((child) => child.aliases().concat(child.name()))
+    : undefined;
 }

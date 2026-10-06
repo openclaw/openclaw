@@ -1,5 +1,4 @@
-// Memory Host SDK helper module supports batch error utils behavior.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type { EmbeddingBatchOutputLine } from "./batch-output.js";
 import { formatErrorMessage } from "./error-utils.js";
 
@@ -53,12 +52,11 @@ export function formatBatchErrorDetail(detail: string | undefined): string | und
   if (!detail) {
     return undefined;
   }
-  const formatted = formatErrorMessage(detail);
-  if (formatted.length <= BATCH_ERROR_DETAIL_MAX_CHARS) {
-    return formatted;
-  }
-  const prefixLength = BATCH_ERROR_DETAIL_MAX_CHARS - BATCH_ERROR_DETAIL_TRUNCATED_SUFFIX.length;
-  return `${truncateUtf16Safe(formatted, prefixLength)}${BATCH_ERROR_DETAIL_TRUNCATED_SUFFIX}`;
+  return truncateWithMarker(formatErrorMessage(detail), BATCH_ERROR_DETAIL_MAX_CHARS, {
+    marker: BATCH_ERROR_DETAIL_TRUNCATED_SUFFIX,
+    reserve: BATCH_ERROR_DETAIL_TRUNCATED_SUFFIX.length,
+    trimEnd: false,
+  });
 }
 
 /** Format a failed error-file read without hiding the underlying read problem. */

@@ -1,12 +1,13 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
-import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
+import {
+  handleChatAbortRequest,
+  handleChatAbortRequestWithLifecycle,
+} from "./chat-abort-handler.js";
 import {
   createActiveRun,
   createChatAbortContext,
   invokeChatAbortHandler,
 } from "./chat.abort.test-helpers.js";
-import { chatHandlers } from "./chat.js";
 
 export type AbortResponsePayload = { aborted?: boolean; runIds?: string[] };
 type AbortRespond = Awaited<ReturnType<typeof invokeChatAbortHandler>>;
@@ -20,7 +21,6 @@ export async function invokeAbort({
   preserveSideRuns,
   scopes = ["operator.write"],
   onAuthorizedAfterQueuedAbort,
-  excludeRunIds,
 }: {
   context: ReturnType<typeof createChatAbortContext>;
   sessionKey?: string;
@@ -30,17 +30,14 @@ export async function invokeAbort({
   preserveSideRuns?: boolean;
   scopes?: string[];
   onAuthorizedAfterQueuedAbort?: () => boolean;
-  excludeRunIds?: ReadonlySet<string>;
 }) {
   return await invokeChatAbortHandler({
-    handler:
-      onAuthorizedAfterQueuedAbort || excludeRunIds
-        ? (options) =>
-            handleChatAbortRequestWithLifecycle(options, {
-              onAuthorizedAfterQueuedAbort,
-              excludeRunIds,
-            })
-        : expectDefined(chatHandlers["chat.abort"], 'chatHandlers["chat.abort"] test invariant'),
+    handler: onAuthorizedAfterQueuedAbort
+      ? (options) =>
+          handleChatAbortRequestWithLifecycle(options, {
+            onAuthorizedAfterQueuedAbort,
+          })
+      : handleChatAbortRequest,
     context,
     request: {
       sessionKey,

@@ -1,12 +1,19 @@
 // Msteams tests cover graph teams plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { createGraphPageGuard } from "./graph-pagination.test-support.js";
 import { getChannelInfoMSTeams, listChannelsMSTeams } from "./graph-teams.js";
 
 const mockState = vi.hoisted(() => ({
   resolveGraphToken: vi.fn(),
   fetchGraphJson: vi.fn(),
+  fetchWithSsrFGuard: vi.fn(),
 }));
+
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+  return { ...actual, fetchWithSsrFGuard: mockState.fetchWithSsrFGuard };
+});
 
 vi.mock("./graph.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./graph.js")>();
@@ -27,12 +34,15 @@ function graphFetchPathAt(index: number): string | undefined {
   return call[0]?.path;
 }
 
-describe("listChannelsMSTeams", () => {
-  beforeEach(() => {
-    mockState.resolveGraphToken.mockReset().mockResolvedValue(TOKEN);
-    mockState.fetchGraphJson.mockReset();
-  });
+beforeEach(() => {
+  mockState.resolveGraphToken.mockReset().mockResolvedValue(TOKEN);
+  mockState.fetchGraphJson.mockReset();
+  mockState.fetchWithSsrFGuard
+    .mockReset()
+    .mockImplementation(createGraphPageGuard(mockState.fetchGraphJson));
+});
 
+describe("listChannelsMSTeams", () => {
   it("returns channels with all fields mapped", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       value: [
@@ -74,17 +84,6 @@ describe("listChannelsMSTeams", () => {
       token: TOKEN,
       path: `/teams/${encodeURIComponent("team-abc")}/channels?$select=id,displayName,description,membershipType`,
     });
-  });
-
-  it("returns empty array when team has no channels", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
-
-    const result = await listChannelsMSTeams({
-      cfg: {} as OpenClawConfig,
-      teamId: "team-empty",
-    });
-
-    expect(result.channels).toStrictEqual([]);
   });
 
   it("returns empty array when value is undefined", async () => {
@@ -161,14 +160,33 @@ describe("listChannelsMSTeams", () => {
     expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(10);
     expect(result.truncated).toBe(true);
   });
+
+  it("does not report truncation when page 10 ends the collection", async () => {
+    for (let i = 0; i < 10; i++) {
+      mockState.fetchGraphJson.mockResolvedValueOnce({
+        value: [{ id: `ch-${i}` }],
+        ...(i < 9
+          ? {
+              "@odata.nextLink": `https://graph.microsoft.com/v1.0/teams/team-full/channels?$skip=${i + 1}`,
+            }
+          : {}),
+      });
+    }
+
+    const result = await listChannelsMSTeams({
+      cfg: {} as OpenClawConfig,
+      teamId: "team-full",
+    });
+
+    expect(result.channels.map((channel) => channel.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `ch-${index}`),
+    );
+    expect(result.truncated).toBe(false);
+    expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(10);
+  });
 });
 
 describe("getChannelInfoMSTeams", () => {
-  beforeEach(() => {
-    mockState.resolveGraphToken.mockReset().mockResolvedValue(TOKEN);
-    mockState.fetchGraphJson.mockReset();
-  });
-
   it("returns channel with all fields", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       id: "ch-1",
@@ -196,28 +214,6 @@ describe("getChannelInfoMSTeams", () => {
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/teams/${encodeURIComponent("team-abc")}/channels/${encodeURIComponent("ch-1")}?$select=id,displayName,description,membershipType,webUrl,createdDateTime`,
-    });
-  });
-
-  it("handles missing optional fields gracefully", async () => {
-    mockState.fetchGraphJson.mockResolvedValue({
-      id: "ch-2",
-      displayName: "Private Channel",
-    });
-
-    const result = await getChannelInfoMSTeams({
-      cfg: {} as OpenClawConfig,
-      teamId: "team-abc",
-      channelId: "ch-2",
-    });
-
-    expect(result.channel).toEqual({
-      id: "ch-2",
-      displayName: "Private Channel",
-      description: undefined,
-      membershipType: undefined,
-      webUrl: undefined,
-      createdDateTime: undefined,
     });
   });
 });

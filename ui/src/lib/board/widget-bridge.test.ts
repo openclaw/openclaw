@@ -1,5 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
 import { BoardWidgetBridgeController } from "./widget-bridge.ts";
+
+vi.mock("../../components/mcp-app-security.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/mcp-app-security.ts")>()),
+  dispatchWidgetPrompt: vi.fn(),
+}));
+
+beforeEach(() => {
+  vi.useFakeTimers({ now: 1_000 });
+  vi.mocked(dispatchWidgetPrompt).mockReset().mockResolvedValue(true);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 type BoardWidgetBridgeRequest = Parameters<BoardWidgetBridgeController["handle"]>[0];
 
@@ -17,7 +33,6 @@ function setup(
   options: {
     confirmationRequired?: boolean;
     omitPromptDecision?: boolean;
-    now?: () => number;
   } = {},
 ) {
   const client = {
@@ -31,20 +46,64 @@ function setup(
     ),
   };
   const confirmPrompt = vi.fn(() => true);
-  const dispatchPrompt = vi.fn(() => true);
+  const dispatchPrompt = vi.mocked(dispatchWidgetPrompt);
   const controller = new BoardWidgetBridgeController({
     frame: document.createElement("iframe"),
     ticket: "ticket",
     client,
     rateKey: "widget",
     confirmPrompt,
-    dispatchPrompt,
-    now: options.now,
   });
   return { client, confirmPrompt, dispatchPrompt, controller };
 }
 
 describe("board widget bridge", () => {
+  it("opens HTTPS widget links in a new tab without opener or referrer access", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    const { controller, client } = setup();
+
+    await expect(
+      controller.handle(request("host.open", { url: "https://example.com/path" })),
+    ).resolves.toEqual({ ok: true });
+
+    expect(open).toHaveBeenCalledWith("https://example.com/path", "_blank", "noopener,noreferrer");
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("opens HTTP widget links through the safe host opener", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    const { controller } = setup();
+
+    await expect(
+      controller.handle(request("host.open", { url: "http://example.com/path" })),
+    ).resolves.toEqual({ ok: true });
+
+    expect(open).toHaveBeenCalledWith("http://example.com/path", "_blank", "noopener,noreferrer");
+  });
+
+  it.each(["javascript:alert(1)", "data:text/html,x", "/relative"])(
+    "rejects unsafe widget link destinations without opening %s",
+    async (url) => {
+      const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+      const { controller } = setup();
+
+      await expect(controller.handle(request("host.open", { url }))).rejects.toThrow(
+        "widget link url is invalid",
+      );
+      expect(open).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports when the browser blocks a widget link", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const { controller } = setup();
+
+    await expect(
+      controller.handle(request("host.open", { url: "https://example.com/path" })),
+    ).rejects.toThrow("widget link could not be opened");
+    expect(open).toHaveBeenCalledOnce();
+  });
+
   it("asks for per-click confirmation when prompt is not granted", async () => {
     const { controller, confirmPrompt, dispatchPrompt } = setup({ confirmationRequired: true });
 
@@ -57,6 +116,7 @@ describe("board widget bridge", () => {
       "Show details",
       "widget",
       confirmPrompt,
+      undefined,
     );
   });
 
@@ -73,6 +133,7 @@ describe("board widget bridge", () => {
       "Show details",
       "widget",
       undefined,
+      undefined,
     );
   });
 
@@ -88,6 +149,7 @@ describe("board widget bridge", () => {
       "Show details",
       "widget",
       confirmPrompt,
+      undefined,
     );
   });
 
@@ -126,8 +188,7 @@ describe("board widget bridge", () => {
   });
 
   it("coalesces identical state payloads for five seconds", async () => {
-    let nowMs = 1_000;
-    const { controller, client } = setup({ now: () => nowMs });
+    const { controller, client } = setup();
 
     await controller.handle(request("state.emit", { payload: { count: 1 } }));
     expect(await controller.handle(request("state.emit", { payload: { count: 1 } }))).toEqual({
@@ -135,7 +196,7 @@ describe("board widget bridge", () => {
       appended: false,
       coalesced: true,
     });
-    nowMs += 5_000;
+    vi.advanceTimersByTime(5_000);
     await controller.handle(request("state.emit", { payload: { count: 1 } }));
 
     expect(client.request).toHaveBeenCalledTimes(2);
@@ -146,7 +207,7 @@ describe("board widget bridge", () => {
   });
 
   it("coalesces an identical state payload across interleaved emissions", async () => {
-    const { controller, client } = setup({ now: () => 1_000 });
+    const { controller, client } = setup();
 
     await controller.handle(request("state.emit", { payload: { status: "first" } }));
     await controller.handle(request("state.emit", { payload: { status: "second" } }));
@@ -181,8 +242,7 @@ describe("board widget bridge", () => {
   });
 
   it("rate-limits varying state payloads at the trusted host", async () => {
-    let nowMs = 1_000;
-    const { controller, client } = setup({ now: () => nowMs });
+    const { controller, client } = setup();
 
     for (let count = 0; count < 12; count += 1) {
       await controller.handle(request("state.emit", { payload: { count } }));
@@ -191,7 +251,7 @@ describe("board widget bridge", () => {
       controller.handle(request("state.emit", { payload: { count: 12 } })),
     ).rejects.toThrow("rate limit exceeded");
 
-    nowMs += 60_000;
+    vi.advanceTimersByTime(60_000);
     await expect(
       controller.handle(request("state.emit", { payload: { count: 13 } })),
     ).resolves.toEqual({ ok: true });
@@ -199,11 +259,14 @@ describe("board widget bridge", () => {
     expect(client.request).toHaveBeenCalledTimes(13);
   });
 
-  it("maps read and cron requests to ticket-bound board RPCs", async () => {
+  it("maps read, action, and cron requests to ticket-bound board RPCs", async () => {
     const { controller, client } = setup();
 
     await controller.handle(
       request("data.read", { bindingId: "health", params: { probe: false } }),
+    );
+    await controller.handle(
+      request("action.run", { action: "example.resolve", params: { eventId: "event-1" } }),
     );
     await controller.handle(request("cron.trigger", { jobId: "job-1" }));
 
@@ -214,8 +277,22 @@ describe("board widget bridge", () => {
     });
     expect(client.request).toHaveBeenNthCalledWith(2, "board.action", {
       ticket: "ticket",
+      action: "example.resolve",
+      params: { eventId: "event-1" },
+    });
+    expect(client.request).toHaveBeenNthCalledWith(3, "board.action", {
+      ticket: "ticket",
       action: "cron.trigger",
       jobId: "job-1",
     });
+  });
+
+  it("rejects non-object action params", async () => {
+    const { controller, client } = setup();
+
+    await expect(
+      controller.handle(request("action.run", { action: "example.resolve", params: "bad" })),
+    ).rejects.toThrow("widget action params are invalid");
+    expect(client.request).not.toHaveBeenCalled();
   });
 });

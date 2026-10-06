@@ -1,8 +1,12 @@
 import { readFileSync } from "node:fs";
 import nodePath from "node:path";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
+import { collectErrorGraphCandidates, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OTEL_EXPORTER_OTLP_CERTIFICATE_ENV,
   OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE_ENV,
@@ -13,11 +17,6 @@ import type {
   OtelHttpAgentOptions,
   OtelSignalIdentifier,
 } from "./service-types.js";
-
-export function normalizeEndpoint(endpoint?: string): string | undefined {
-  const trimmed = endpoint?.trim();
-  return trimmed ? trimmed.replace(/\/+$/, "") : undefined;
-}
 
 const SIGNAL_QUALIFIED_OTLP_PATH_PATTERN = /\/v1\/(traces|metrics|logs)$/iu;
 
@@ -30,12 +29,12 @@ function appendOrReplaceSignalPath(value: string, path: string): string {
 
 function resolveSharedOtelUrl(endpoint: string, path: string): string {
   const endpointWithoutQueryOrFragment = endpoint.split(/[?#]/, 1)[0] ?? endpoint;
-  const matchedSignal = endpointWithoutQueryOrFragment
-    .replace(/\/+$/u, "")
-    .match(SIGNAL_QUALIFIED_OTLP_PATH_PATTERN)?.[1];
+  // Trim path separators here, never slash bytes belonging to a collector query.
+  const base = endpointWithoutQueryOrFragment.replace(/\/+$/u, "");
+  const matchedSignal = base.match(SIGNAL_QUALIFIED_OTLP_PATH_PATTERN)?.[1];
   const requestedSignal = path.slice(path.lastIndexOf("/") + 1);
   if (matchedSignal?.toLowerCase() === requestedSignal.toLowerCase()) {
-    return endpoint;
+    return endpoint === endpointWithoutQueryOrFragment ? base : endpoint;
   }
   if (/[?#]/u.test(endpoint)) {
     const url = new URL(endpoint);
@@ -45,11 +44,6 @@ function resolveSharedOtelUrl(endpoint: string, path: string): string {
   return appendOrReplaceSignalPath(endpoint, path);
 }
 
-function normalizeSignalEndpoint(endpoint?: string): string | undefined {
-  const trimmed = endpoint?.trim();
-  return trimmed || undefined;
-}
-
 export function resolveSignalOtelUrl(params: {
   signalEndpoint?: string;
   signalEnvEndpoint?: string;
@@ -57,11 +51,11 @@ export function resolveSignalOtelUrl(params: {
   endpoint?: string;
   path: string;
 }): string | undefined {
-  const signalEndpoint = normalizeSignalEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint);
+  const signalEndpoint = normalizeOptionalString(params.signalEndpoint ?? params.signalEnvEndpoint);
   const endpoint = signalEndpoint ?? params.endpoint;
   // OTLP parses nonblank env values verbatim even when explicit config takes precedence.
-  const signalEnvEndpoint = params.signalEnvEndpoint?.trim() ? params.signalEnvEndpoint : undefined;
-  const sharedEnvEndpoint = params.sharedEnvEndpoint?.trim() ? params.sharedEnvEndpoint : undefined;
+  const signalEnvEndpoint = readNonBlankString(params.signalEnvEndpoint);
+  const sharedEnvEndpoint = readNonBlankString(params.sharedEnvEndpoint);
   const consumedSharedEnvEndpoint = signalEnvEndpoint ? undefined : sharedEnvEndpoint;
   const appendedSharedEnvEndpoint = consumedSharedEnvEndpoint
     ? `${consumedSharedEnvEndpoint}${consumedSharedEnvEndpoint.endsWith("/") ? "" : "/"}${params.path}`
@@ -95,8 +89,8 @@ function readOtelEnvFile(params: {
 }): Buffer | undefined {
   const signalEnvName = `OTEL_EXPORTER_OTLP_${params.signalIdentifier}_${params.signalSuffix}`;
   const filePath =
-    normalizeOtelEnvValue(process.env[signalEnvName]) ??
-    normalizeOtelEnvValue(process.env[params.sharedEnvName]);
+    readNonBlankString(process.env[signalEnvName]) ??
+    readNonBlankString(process.env[params.sharedEnvName]);
   if (!filePath) {
     return undefined;
   }
@@ -111,10 +105,6 @@ function readOtelEnvFile(params: {
   throw new Error(
     `Configured OpenTelemetry ${params.label} file is missing, empty, or unreadable; refusing insecure export`,
   );
-}
-
-function normalizeOtelEnvValue(value: string | undefined): string | undefined {
-  return value?.trim() ? value : undefined;
 }
 
 export function resolveOtelHttpAgentOptions(params: {
@@ -165,16 +155,6 @@ export function resolveOtelHttpAgentOptions(params: {
   return (ca || cert || key) && new URL(url).protocol === "https:" ? agentOptions : undefined;
 }
 
-export function resolveSampleRate(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  if (value < 0 || value > 1) {
-    return undefined;
-  }
-  return value;
-}
-
 export function formatError(err: unknown): string {
   if (err instanceof Error) {
     return err.stack ?? err.message;
@@ -198,14 +178,6 @@ export function errorCategory(err: unknown): string {
   } catch {
     return "unknown";
   }
-}
-
-function readErrorName(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const name = (err as { name?: unknown }).name;
-  return typeof name === "string" && name.trim() ? name : undefined;
 }
 
 export function readErrorCode(err: unknown): string | number | undefined {

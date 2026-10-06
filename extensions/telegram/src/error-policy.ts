@@ -1,4 +1,3 @@
-// Telegram plugin module implements error policy behavior.
 import type {
   TelegramAccountConfig,
   TelegramDirectConfig,
@@ -10,14 +9,9 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { buildTelegramGroupPeerId, type TelegramThreadSpec } from "./bot/helpers.js";
 
 type TelegramErrorPolicy = "always" | "once" | "silent";
-
-type TelegramErrorConfig =
-  | TelegramAccountConfig
-  | TelegramDirectConfig
-  | TelegramGroupConfig
-  | TelegramTopicConfig;
 
 const errorCooldownStore = new Map<string, Map<string, number>>();
 const DEFAULT_ERROR_COOLDOWN_MS = 14400000;
@@ -38,29 +32,25 @@ export function resolveTelegramErrorPolicy(params: {
   policy: TelegramErrorPolicy;
   cooldownMs: number;
 } {
-  const configs: Array<TelegramErrorConfig | undefined> = [
-    params.accountConfig,
-    params.groupConfig,
-    params.topicConfig,
-  ];
-  let policy: TelegramErrorPolicy = "always";
-
-  for (const config of configs) {
-    if (config?.errorPolicy) {
-      policy = config.errorPolicy;
-    }
-  }
-
-  return { policy, cooldownMs: DEFAULT_ERROR_COOLDOWN_MS };
+  return {
+    policy:
+      params.topicConfig?.errorPolicy ||
+      params.groupConfig?.errorPolicy ||
+      params.accountConfig?.errorPolicy ||
+      "always",
+    cooldownMs: DEFAULT_ERROR_COOLDOWN_MS,
+  };
 }
 
 export function buildTelegramErrorScopeKey(params: {
   accountId: string;
   chatId: string | number;
-  threadId?: string | number | null;
+  threadSpec?: TelegramThreadSpec;
 }): string {
-  const threadId = params.threadId == null ? "main" : String(params.threadId);
-  return `${params.accountId}:${String(params.chatId)}:${threadId}`;
+  return `${params.accountId}:${buildTelegramGroupPeerId(
+    params.chatId,
+    params.threadSpec ?? { scope: "none" },
+  )}`;
 }
 
 export function shouldSuppressTelegramError(params: {
@@ -107,8 +97,4 @@ export function shouldSuppressTelegramError(params: {
   nextScopeStore.set(messageKey, nextExpiresAt);
   errorCooldownStore.set(scopeKey, nextScopeStore);
   return false;
-}
-
-export function isSilentErrorPolicy(policy: TelegramErrorPolicy): boolean {
-  return policy === "silent";
 }

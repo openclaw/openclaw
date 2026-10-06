@@ -1,13 +1,11 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createTopLevelChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveMSTeamsCredentials } from "./token.js";
 
-export type ResolvedMSTeamsAccount = {
-  accountId: string;
-  enabled: boolean;
-  configured: boolean;
-};
+export type ResolvedMSTeamsAccount = ReturnType<typeof resolveMSTeamsAccount>;
 
 export const msteamsMeta = {
   id: "msteams",
@@ -20,6 +18,34 @@ export const msteamsMeta = {
   order: 60,
 } as const;
 
+export function resolveMSTeamsAccount(cfg: OpenClawConfig) {
+  const config = cfg.channels?.msteams;
+  const credentials = resolveMSTeamsCredentials(config);
+  const certificatePath =
+    credentials?.type === "federated" && !credentials.useManagedIdentity
+      ? credentials.certificatePath
+      : undefined;
+  const certificate = certificatePath
+    ? tryReadSecretFileSync(certificatePath, "Microsoft Teams certificate", undefined, {
+        configPath: config?.certificatePath?.trim()
+          ? "channels.msteams.certificatePath"
+          : "env.MSTEAMS_CERTIFICATE_PATH",
+      })
+    : undefined;
+  const unavailable = certificate?.status === "configured_unavailable";
+  return {
+    accountId: DEFAULT_ACCOUNT_ID,
+    enabled: config?.enabled !== false,
+    configured: Boolean(credentials),
+    tokenStatus: !credentials
+      ? ("missing" as const)
+      : unavailable
+        ? ("configured_unavailable" as const)
+        : ("available" as const),
+    ...(unavailable ? { credentialDiagnostics: [certificate.diagnostic] } : {}),
+  };
+}
+
 export const msteamsConfigAdapter = createTopLevelChannelConfigAdapter<
   ResolvedMSTeamsAccount,
   {
@@ -28,11 +54,7 @@ export const msteamsConfigAdapter = createTopLevelChannelConfigAdapter<
   }
 >({
   sectionKey: "msteams",
-  resolveAccount: (cfg) => ({
-    accountId: DEFAULT_ACCOUNT_ID,
-    enabled: cfg.channels?.msteams?.enabled !== false,
-    configured: Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
-  }),
+  resolveAccount: resolveMSTeamsAccount,
   resolveAccessorAccount: ({ cfg }) => ({
     allowFrom: cfg.channels?.msteams?.allowFrom,
     defaultTo: cfg.channels?.msteams?.defaultTo,

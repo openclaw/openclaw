@@ -5,18 +5,8 @@ const MAX_MANAGER_REPLAY_KEYS = 10_000;
 /** Keep typical provider replay IDs near one raw persisted-record chunk. */
 export const MAX_CALL_REPLAY_KEYS = 500;
 
-function pruneOldestSetEntries(keys: Set<string>, maxEntries: number): void {
-  while (keys.size > maxEntries) {
-    const oldest = keys.values().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    keys.delete(oldest);
-  }
-}
-
-function pruneOldestMapEntries(keys: Map<string, symbol>, maxEntries: number): void {
-  while (keys.size > maxEntries) {
+function pruneOldestEntries(keys: Set<string> | Map<string, symbol>): void {
+  while (keys.size > MAX_MANAGER_REPLAY_KEYS) {
     const oldest = keys.keys().next().value;
     if (oldest === undefined) {
       break;
@@ -26,28 +16,20 @@ function pruneOldestMapEntries(keys: Map<string, symbol>, maxEntries: number): v
 }
 
 /** Remember one manager replay key without refreshing duplicate insertion order. */
-export function rememberManagerReplayKey(
-  keys: Set<string>,
-  key: string,
-  maxEntries = MAX_MANAGER_REPLAY_KEYS,
-): void {
+export function rememberManagerReplayKey(keys: Set<string>, key: string): void {
   keys.add(key);
-  pruneOldestSetEntries(keys, maxEntries);
+  pruneOldestEntries(keys);
 }
 
 /** Append one per-call replay key and retain only the newest bounded suffix. */
-export function appendCallReplayKey(
-  keys: string[],
-  key: string,
-  maxEntries = MAX_CALL_REPLAY_KEYS,
-): void {
+export function appendCallReplayKey(keys: string[], key: string): void {
   keys.push(key);
-  trimCallReplayKeys(keys, maxEntries);
+  trimCallReplayKeys(keys);
 }
 
 /** Normalize restored or externally constructed call replay history in place. */
-export function trimCallReplayKeys(keys: string[], maxEntries = MAX_CALL_REPLAY_KEYS): void {
-  const overflow = keys.length - maxEntries;
+export function trimCallReplayKeys(keys: string[]): void {
+  const overflow = keys.length - MAX_CALL_REPLAY_KEYS;
   if (overflow > 0) {
     keys.splice(0, overflow);
   }
@@ -60,14 +42,13 @@ export function trimCallReplayKeys(keys: string[], maxEntries = MAX_CALL_REPLAY_
 export function reserveRejectedProviderCall(
   calls: Map<string, symbol>,
   providerCallId: string,
-  maxEntries = MAX_MANAGER_REPLAY_KEYS,
 ): symbol | undefined {
   if (calls.has(providerCallId)) {
     return undefined;
   }
   const reservation = Symbol(providerCallId);
   calls.set(providerCallId, reservation);
-  pruneOldestMapEntries(calls, maxEntries);
+  pruneOldestEntries(calls);
   return reservation;
 }
 

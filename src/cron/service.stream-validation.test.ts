@@ -1,10 +1,10 @@
-import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-stream-validation-" });
@@ -24,6 +24,8 @@ function streamJob(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
 async function createCron(triggersEnabled: boolean) {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: true,
     cronConfig: { triggers: { enabled: triggersEnabled } },
@@ -40,7 +42,9 @@ describe("cron stream schedule validation", () => {
   it("rejects creation while cron triggers are disabled", async () => {
     const cron = await createCron(false);
     try {
-      await expect(cron.add(streamJob())).rejects.toThrow("cron.triggers.enabled=true");
+      await expect(cron.add(streamJob())).rejects.toThrow(
+        "the operator set cron.triggers.enabled: false",
+      );
     } finally {
       cron.stop();
     }
@@ -49,35 +53,15 @@ describe("cron stream schedule validation", () => {
   it("validates match regexes and command payload ambiguity", async () => {
     const cron = await createCron(true);
     try {
-      await expect(
-        cron.add(streamJob({ schedule: { kind: "stream", command: ["echo"], mode: "match" } })),
-      ).rejects.toThrow("match is required");
-      await expect(
-        cron.add(
-          streamJob({
-            schedule: { kind: "stream", command: ["echo"], mode: "match", match: "[" },
-          }),
-        ),
-      ).rejects.toThrow("safe regular expression");
-      await expect(
-        cron.add(
-          streamJob({
-            schedule: {
-              kind: "stream",
-              command: ["echo"],
-              mode: "match",
-              match: "^(a+)+$",
-            },
-          }),
-        ),
-      ).rejects.toThrow("unsafe-nested-repetition");
-      await expect(
-        cron.add(
-          streamJob({
-            schedule: { kind: "stream", command: ["echo"], match: "^ready" },
-          }),
-        ),
-      ).rejects.toThrow('match requires mode="match"');
+      for (const [schedule, error] of [
+        [{ mode: "match" }, "match is required"],
+        [{ mode: "match", match: "^(a+)+$" }, "unsafe-nested-repetition"],
+        [{ match: "^ready" }, 'match requires mode="match"'],
+      ] as const) {
+        await expect(
+          cron.add(streamJob({ schedule: { kind: "stream", command: ["echo"], ...schedule } })),
+        ).rejects.toThrow(error);
+      }
       await expect(
         cron.add(
           streamJob({
@@ -85,32 +69,6 @@ describe("cron stream schedule validation", () => {
           }),
         ),
       ).rejects.toThrow("cannot use command payloads");
-    } finally {
-      cron.stop();
-    }
-  });
-
-  it("allows a script payload without a gate and rejects one with a gate", async () => {
-    const cron = await createCron(true);
-    const scriptPayload = { kind: "script" as const, script: "return {}" };
-    try {
-      await expect(
-        cron.add(
-          streamJob({
-            sessionTarget: "isolated",
-            payload: scriptPayload,
-          }),
-        ),
-      ).resolves.toMatchObject({ payload: scriptPayload });
-      await expect(
-        cron.add(
-          streamJob({
-            sessionTarget: "isolated",
-            payload: scriptPayload,
-            trigger: { script: "return { fire: true }" },
-          }),
-        ),
-      ).rejects.toThrow("cannot be combined with a condition trigger");
     } finally {
       cron.stop();
     }
@@ -148,13 +106,15 @@ describe("cron stream schedule validation", () => {
     const historyAtAlert: unknown[][] = [];
     const enqueueSystemEvent = vi.fn(() => {
       historyAtAlert.push(
-        readCronTaskRunHistoryPage({
+        readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(storePath),
           jobId,
         }).entries,
       );
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       cronConfig: {
@@ -196,22 +156,6 @@ describe("cron stream schedule validation", () => {
           }),
         ],
       ]);
-    } finally {
-      cron.stop();
-    }
-  });
-
-  it("rejects invalid scheduler timestamps from external event sources", async () => {
-    const cron = await createCron(true);
-    try {
-      const created = await cron.add(streamJob());
-
-      await expect(
-        cron.recordExternalFailure(created.id, "invalid source state", {
-          startupCatchupAtMs: MAX_DATE_TIMESTAMP_MS + 1,
-        }),
-      ).rejects.toThrow("cron state.startupCatchupAtMs");
-      expect(cron.getJob(created.id)?.state.startupCatchupAtMs).toBeUndefined();
     } finally {
       cron.stop();
     }

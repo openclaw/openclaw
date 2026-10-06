@@ -4,9 +4,10 @@ import { listAgentEntriesWithSource, resolveDefaultAgentId } from "../agents/age
 import { resolveSandboxScope } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { runtimeSandboxSecretOwnerId } from "./runtime-sandbox-secret-owner.js";
 import {
-  collectRuntimeSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   type ResolverContext,
   type SecretAssignmentOwner,
   type SecretDefaults,
@@ -37,7 +38,7 @@ function collectAssignment(params: {
   inactiveReason: string;
   owner: SecretAssignmentOwner;
 }): void {
-  collectRuntimeSecretInputAssignment({
+  collectSecretInputAssignment({
     value: params.target[params.key],
     path: params.path,
     expected: "string",
@@ -57,6 +58,7 @@ export function collectAgentSandboxAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
+  agentId?: string;
 }): void {
   const rawAgents: unknown = params.config.agents;
   const agents = isRecord(rawAgents) ? rawAgents : undefined;
@@ -71,7 +73,9 @@ export function collectAgentSandboxAssignments(params: {
     entry,
     entryId: entry.id,
     agentPath:
-      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`,
+      source.kind === "entries"
+        ? appendConfigPathSegment("agents.entries", source.key)
+        : `agents.list[${source.index}]`,
   }));
   const activeDefaultKeys = new Set<SandboxSshSecretKey>();
   const seenAgentIds = new Set<string>();
@@ -102,12 +106,6 @@ export function collectAgentSandboxAssignments(params: {
           : typeof defaultsSandbox?.scope === "string"
             ? (defaultsSandbox.scope as "agent" | "session" | "shared")
             : undefined,
-      perSession:
-        typeof sandbox?.["perSession"] === "boolean"
-          ? sandbox["perSession"]
-          : typeof defaultsSandbox?.perSession === "boolean"
-            ? defaultsSandbox.perSession
-            : undefined,
     });
     // Existing registry entries remain inspectable/removable after an agent or its
     // sandbox is disabled, so SSH lifecycle credentials stay materialized while
@@ -122,29 +120,22 @@ export function collectAgentSandboxAssignments(params: {
     for (const key of SANDBOX_SSH_SECRET_KEYS) {
       const hasAgentOverride = Boolean(ssh && Object.hasOwn(ssh, key));
       if (hasAgentOverride && ssh) {
-        if (scope !== "shared") {
-          collectAssignment({
-            target: ssh,
-            key,
-            path: `${candidate.agentPath}.sandbox.ssh.${key}`,
-            defaults: params.defaults,
-            context: params.context,
-            active,
-            inactiveReason: "sandbox SSH backend is not configured for this agent.",
-            owner,
-          });
-          continue;
-        }
         collectAssignment({
           target: ssh,
           key,
           path: `${candidate.agentPath}.sandbox.ssh.${key}`,
           defaults: params.defaults,
           context: params.context,
-          active: false,
-          inactiveReason: "shared sandbox scope ignores agent SSH overrides.",
+          active: scope !== "shared" && active,
+          inactiveReason:
+            scope === "shared"
+              ? "shared sandbox scope ignores agent SSH overrides."
+              : "sandbox SSH backend is not configured for this agent.",
           owner,
         });
+        if (scope !== "shared") {
+          continue;
+        }
       }
 
       if (!defaultsSsh || !Object.hasOwn(defaultsSsh, key)) {
@@ -177,6 +168,10 @@ export function collectAgentSandboxAssignments(params: {
     // Unlisted agents and stale registry entries still resolve through defaults,
     // even when every current list entry overrides this credential.
     const active = defaultsBackend === "ssh";
+    const fallbackAgentId =
+      params.agentId === undefined
+        ? resolveDefaultAgentId(params.config)
+        : normalizeAgentId(params.agentId);
     collectAssignment({
       target: defaultsSsh,
       key,
@@ -185,7 +180,7 @@ export function collectAgentSandboxAssignments(params: {
       context: params.context,
       active,
       inactiveReason: "no enabled agent uses the sandbox SSH material.",
-      owner: sandboxSecretOwner(resolveDefaultAgentId(params.config), {
+      owner: sandboxSecretOwner(fallbackAgentId, {
         defaults: defaultsSandbox,
       }),
     });

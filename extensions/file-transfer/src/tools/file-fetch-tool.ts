@@ -1,22 +1,15 @@
-// File Transfer plugin module implements file fetch tool behavior.
 import crypto from "node:crypto";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
-import { appendFileTransferAudit } from "../shared/audit.js";
-import {
-  IMAGE_MIME_INLINE_SET,
-  TEXT_INLINE_MAX_BYTES,
-  TEXT_INLINE_MIME_SET,
-} from "../shared/mime.js";
-import { humanSize } from "../shared/params.js";
 import {
   FILE_FETCH_DEFAULT_MAX_BYTES,
   FILE_FETCH_HARD_MAX_BYTES,
-  FILE_FETCH_TOOL_DESCRIPTOR,
-  FILE_TRANSFER_SUBDIR,
-} from "./descriptors.js";
+} from "../shared/file-fetch-protocol.js";
+import { IMAGE_MIME_INLINE_SET, TEXT_INLINE_MAX_BYTES } from "../shared/mime.js";
+import { humanSize } from "../shared/params.js";
+import { FILE_FETCH_TOOL_DESCRIPTOR, FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
 
 export function createFileFetchTool(): AnyAgentTool {
@@ -29,7 +22,7 @@ export function createFileFetchTool(): AnyAgentTool {
         readPositiveIntegerParam(params, "maxBytes") ?? FILE_FETCH_DEFAULT_MAX_BYTES;
       const maxBytes = Math.max(1, Math.min(requestedMax, FILE_FETCH_HARD_MAX_BYTES));
 
-      const { nodeId, nodeDisplayName, payload, startedAt } = await invokeNodeToolPayload({
+      const { audit, payload } = await invokeNodeToolPayload({
         node,
         params,
         command: "file.fetch",
@@ -69,6 +62,7 @@ export function createFileFetchTool(): AnyAgentTool {
         mimeType,
         FILE_TRANSFER_SUBDIR,
         FILE_FETCH_HARD_MAX_BYTES,
+        canonicalPath,
       );
       const localPath = saved.path;
       const shortHash = sha256.slice(0, 12);
@@ -76,45 +70,33 @@ export function createFileFetchTool(): AnyAgentTool {
       // Extension-derived image MIME can accompany an empty payload when there
       // are no bytes to sniff. Keep those fetches on the saved-path text fallback.
       const isInlineImage = IMAGE_MIME_INLINE_SET.has(mimeType) && base64.length > 0;
-      const isInlineText = TEXT_INLINE_MIME_SET.has(mimeType) && size <= TEXT_INLINE_MAX_BYTES;
+      const isInlineText =
+        size <= TEXT_INLINE_MAX_BYTES &&
+        (mimeType.startsWith("text/") ||
+          mimeType === "application/json" ||
+          mimeType === "application/xml" ||
+          mimeType === "application/yaml");
 
-      const content: Array<
-        { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
-      > = [];
-      if (isInlineImage) {
-        content.push({ type: "image", data: base64, mimeType });
-      } else if (isInlineText) {
+      // Direct model adapters read content, not details. Keep the saved handles
+      // alongside every payload so follow-up operations need no extra lookup.
+      let summaryText = `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}\nmediaId: ${saved.id}`;
+      if (isInlineText) {
         const decodedText = buffer.toString("utf-8");
         const text = decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText;
-        const wrappedText = wrapExternalContent(
-          `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}\n\n--- contents ---\n${text}`,
-          { source: "unknown" },
-        );
-        content.push({
-          type: "text",
-          text: wrappedText,
-        });
-      } else {
-        const wrappedText = wrapExternalContent(
-          `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}`,
-          { source: "unknown" },
-        );
-        content.push({
-          type: "text",
-          text: wrappedText,
-        });
+        summaryText += `\n\n--- contents ---\n${text}`;
+      }
+      const content: Array<
+        { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+      > = [{ type: "text", text: wrapExternalContent(summaryText, { source: "unknown" }) }];
+      if (isInlineImage) {
+        content.push({ type: "image", data: base64, mimeType });
       }
 
-      await appendFileTransferAudit({
-        op: "file.fetch",
-        nodeId,
-        nodeDisplayName,
-        requestedPath: filePath,
+      await audit({
         canonicalPath,
         decision: "allowed",
         sizeBytes: size,
         sha256,
-        durationMs: Date.now() - startedAt,
       });
 
       return {

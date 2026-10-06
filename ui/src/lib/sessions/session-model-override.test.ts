@@ -2,13 +2,58 @@
 // Focused model-override lifecycle coverage; the main capability suite sits
 // at the max-lines cap.
 import { describe, expect, it, vi } from "vitest";
+import type { SessionsPatchResult } from "../../../../src/gateway/session-utils.types.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createSessionCapability } from "./index.ts";
-import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 describe("session model override lifecycle", () => {
-  it("clears optimistic and settled model overrides when its connection epoch retires", async () => {
+  it.each(["resolve", "reject"])(
+    "does not resurrect a deleted session's model when its pending patch %s",
+    async (outcome) => {
+      const pending = createDeferred<unknown>();
+      const key = "agent:main:main";
+      let patchCount = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.patch") {
+          return ++patchCount === 1 ? { ok: true, key, entry: {} } : pending.promise;
+        }
+        if (method === "sessions.delete") {
+          return { deleted: true };
+        }
+        if (method === "sessions.list") {
+          return sessionsResult([], 2);
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      const sessions = createTestSessionCapability(gateway);
+      await sessions.patch(key, { model: "openai/gpt-old" }, { deferListRefresh: true });
+      const operation = sessions.patch(
+        key,
+        { model: "openai/gpt-new" },
+        { deferListRefresh: true },
+      );
+      expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
+      await expect(sessions.delete(key)).resolves.toMatchObject({ deleted: true });
+      expect(sessions.state.modelOverrides).toEqual({});
+      if (outcome === "resolve") {
+        pending.resolve({ ok: true, key, entry: {} });
+        await operation;
+      } else {
+        pending.reject(new Error("model rejected"));
+        await expect(operation).rejects.toThrow("model rejected");
+      }
+      expect(sessions.state.modelOverrides).toEqual({});
+      sessions.dispose();
+    },
+  );
+
+  it("retains a confirmed patch without publishing its retired optimistic state", async () => {
     const stalePatch = createDeferred<unknown>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
@@ -24,11 +69,10 @@ describe("session model override lifecycle", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const key = "agent:main:main";
     const inactiveKey = "agent:main:inactive";
-    sessions.setModelOverride(key, "openai/gpt-old");
-    sessions.setModelOverride(inactiveKey, "openai/gpt-old-account");
+    const inactiveOperation = sessions.patch(inactiveKey, { model: "openai/gpt-old-account" });
 
     const operation = sessions.patch(key, { model: "openai/gpt-new" });
     expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-new");
@@ -36,10 +80,15 @@ describe("session model override lifecycle", () => {
     publish(false);
     expect(sessions.state.modelOverrides).toEqual({});
     publish(true);
-    stalePatch.resolve({});
+    stalePatch.resolve({ ok: true, path: "", key, entry: {} });
 
-    await expect(operation).resolves.toBeNull();
+    await expect(operation).resolves.toMatchObject({ ok: true, key });
+    await inactiveOperation;
     expect(sessions.state.modelOverrides).toEqual({});
+    expect(sessions.state.error).toContain("completed on the previous connection");
+    expect(
+      request.mock.calls.filter(([method]) => method === "sessions.list").length,
+    ).toBeGreaterThan(0);
     sessions.dispose();
   });
 
@@ -62,7 +111,7 @@ describe("session model override lifecycle", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await expect(sessions.patch(key, { model: "openai/gpt-new" })).resolves.toMatchObject({
       ok: true,
@@ -92,16 +141,15 @@ describe("session model override lifecycle", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const key = "agent:main:main";
-    sessions.setModelOverride(key, "openai/gpt-old");
 
     const operation = sessions.patch(
       key,
       { model: "openai/gpt-new" },
       { waitFor: priorPatch.promise },
     );
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-old");
+    expect(sessions.state.modelOverrides[key]).toBeUndefined();
     expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
 
     publish(false);
@@ -113,4 +161,175 @@ describe("session model override lifecycle", () => {
     expect(sessions.state.modelOverrides[key]).toBeUndefined();
     sessions.dispose();
   });
+
+  it.each(["selected", "default"] as const)(
+    "keeps a confirmed %s model after failed reads, then admits an external change",
+    async (selection) => {
+      const key = "agent:main:main";
+      let failReads = false;
+      let model = "gpt-5.4";
+      let updatedAt = 1;
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.patch") {
+          return {
+            ok: true,
+            key,
+            path: "",
+            entry: {
+              sessionId: "main-session",
+              updatedAt: 2,
+              modelOverrideSource: selection === "default" ? "default" : "user",
+            },
+            resolved: {
+              modelProvider: "openai",
+              model: "gpt-5.5",
+              ...(selection === "selected"
+                ? {
+                    thinkingLevel: "high",
+                    thinkingLevels: [{ id: "high", label: "High" }],
+                    contextWindow: "large",
+                    contextWindows: [{ id: "large", label: "Large", contextWindow: 200_000 }],
+                  }
+                : {}),
+            },
+          } satisfies SessionsPatchResult;
+        }
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method === "sessions.list") {
+          if (failReads) {
+            throw new Error("roster unavailable");
+          }
+          return sessionsResult(
+            [
+              {
+                key,
+                kind: "direct",
+                sessionId: "main-session",
+                updatedAt,
+                model,
+                modelProvider: "openai",
+                modelOverrideSource: "user",
+                thinkingLevel: "low",
+                contextWindow: "standard",
+              },
+            ],
+            updatedAt,
+          );
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      const sessions = createTestSessionCapability(gateway);
+      await sessions.refresh({ force: true });
+      failReads = true;
+      await sessions.patch(key, {
+        model: selection === "default" ? null : "openai/gpt-5.5",
+      });
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        modelOverrideSource: selection === "default" ? null : "user",
+      });
+      expect(sessions.state.modelOverrides).toEqual({});
+      expect(sessions.state.error).toContain("roster unavailable");
+      expect(sessions.state.result?.sessions[0]).toMatchObject(
+        selection === "selected"
+          ? {
+              thinkingLevel: "high",
+              contextWindow: "large",
+              thinkingLevels: [{ id: "high", label: "High" }],
+            }
+          : { thinkingLevel: "low", contextWindow: "standard" },
+      );
+      failReads = false;
+      model = "gpt-5.4";
+      updatedAt = 3;
+      await sessions.refresh({ force: true });
+      expect(sessions.state.result?.sessions[0]?.model).toBe("gpt-5.4");
+      sessions.dispose();
+    },
+  );
+
+  it.each(["replacement", "newer-fails", "newer-succeeds"] as const)(
+    "fences a confirmed model receipt during %s",
+    async (scenario) => {
+      const key = "agent:main:main";
+      const first = createDeferred<unknown>();
+      const second = createDeferred<unknown>();
+      let patchCount = 0;
+      let failReads = false;
+      let sessionId = "main-session";
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.patch") {
+          return ++patchCount === 1 ? first.promise : second.promise;
+        }
+        if (method === "sessions.subscribe") {
+          return { subscribed: true };
+        }
+        if (method === "sessions.list") {
+          if (failReads) {
+            throw new Error("roster unavailable");
+          }
+          return sessionsResult(
+            [
+              {
+                key,
+                kind: "direct",
+                sessionId,
+                updatedAt: sessionId === "main-session" ? 1 : 3,
+                model: "gpt-5.4",
+                modelProvider: "openai",
+              },
+            ],
+            1,
+          );
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      const sessions = createTestSessionCapability(gateway);
+      await sessions.refresh({ force: true });
+      const operation = sessions.patch(key, { model: "openai/gpt-5.5" });
+      if (scenario === "replacement") {
+        sessionId = "replacement-session";
+        await sessions.refresh({ force: true });
+        expect(sessions.state.result?.sessions[0]?.sessionId).toBe(sessionId);
+      }
+      const newer =
+        scenario !== "replacement" ? sessions.patch(key, { model: "openai/gpt-5.4" }) : null;
+      failReads = true;
+      if (scenario === "newer-succeeds") {
+        second.resolve({
+          ok: true,
+          key,
+          path: "",
+          entry: { sessionId, updatedAt: 3, modelOverrideSource: "user" },
+          resolved: { modelProvider: "openai", model: "gpt-5.4" },
+        } satisfies SessionsPatchResult);
+        await newer;
+      }
+      first.resolve({
+        ok: true,
+        key,
+        path: "",
+        entry: { sessionId: "main-session", updatedAt: 2, modelOverrideSource: "user" },
+        resolved: { modelProvider: "openai", model: "gpt-5.5" },
+      } satisfies SessionsPatchResult);
+      await operation;
+      if (newer && scenario === "newer-fails") {
+        expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.4");
+        const rejected = expect(newer).rejects.toThrow("model rejected");
+        second.reject(new Error("model rejected"));
+        await rejected;
+      }
+      expect(sessions.state.modelOverrides).toEqual({});
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        sessionId,
+        model: scenario === "newer-fails" ? "gpt-5.5" : "gpt-5.4",
+      });
+      sessions.dispose();
+    },
+  );
 });

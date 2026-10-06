@@ -1,5 +1,6 @@
 // Gmail watcher lifecycle tests cover start, stop, and restart behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 
 const { startGmailWatcherMock } = vi.hoisted(() => ({
   startGmailWatcherMock: vi.fn(),
@@ -30,21 +31,22 @@ describe("startGmailWatcherWithLogs", () => {
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
   });
 
-  it("passes cancellation state to watcher startup", async () => {
-    const isCancelled = vi.fn(() => true);
+  it("passes cancellation and schedule ownership to watcher startup", async () => {
+    const scheduler = createTestGatewayScheduler();
     const abortController = new AbortController();
+    abortController.abort();
     startGmailWatcherMock.mockResolvedValue({ started: false, reason: "startup cancelled" });
 
     await startGmailWatcherWithLogs({
       cfg: {},
       log,
-      isCancelled,
       signal: abortController.signal,
+      scheduler,
     });
 
     expect(startGmailWatcherMock).toHaveBeenCalledWith(
       {},
-      { isCancelled, signal: abortController.signal },
+      { signal: abortController.signal, scheduler },
     );
   });
 
@@ -52,6 +54,7 @@ describe("startGmailWatcherWithLogs", () => {
     startGmailWatcherMock.mockResolvedValue({ started: true, reason: undefined });
 
     await startGmailWatcherWithLogs({
+      scheduler: createTestGatewayScheduler(),
       cfg: {},
       log,
     });
@@ -65,6 +68,7 @@ describe("startGmailWatcherWithLogs", () => {
     startGmailWatcherMock.mockResolvedValue({ started: false, reason: "auth failed" });
 
     await startGmailWatcherWithLogs({
+      scheduler: createTestGatewayScheduler(),
       cfg: {},
       log,
     });
@@ -79,6 +83,7 @@ describe("startGmailWatcherWithLogs", () => {
     });
 
     await startGmailWatcherWithLogs({
+      scheduler: createTestGatewayScheduler(),
       cfg: {},
       log,
     });
@@ -91,6 +96,7 @@ describe("startGmailWatcherWithLogs", () => {
     const onSkipped = vi.fn();
 
     await startGmailWatcherWithLogs({
+      scheduler: createTestGatewayScheduler(),
       cfg: {},
       log,
       onSkipped,
@@ -104,6 +110,7 @@ describe("startGmailWatcherWithLogs", () => {
     startGmailWatcherMock.mockRejectedValue(new Error("boom"));
 
     await startGmailWatcherWithLogs({
+      scheduler: createTestGatewayScheduler(),
       cfg: {},
       log,
     });

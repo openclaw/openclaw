@@ -1,118 +1,109 @@
-/** Worker-thread entrypoint for serialized audit writes and retention maintenance. */
-import { parentPort, workerData } from "node:worker_threads";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { pruneExpiredAuditEvents, recordAuditEvent } from "./audit-event-store.js";
-import type { AuditEventInput } from "./audit-event-types.js";
 import {
-  pruneExpiredExecutionDecisionFacts,
-  recordExecutionDecisionFact,
+  runWithOpenClawStateBusyTimeout,
+  type OpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
+import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+  WorkerOperations,
+} from "../state/worker-operation-registry.js";
+import { listAuditEventsInDatabase } from "./audit-event-read.kernel.js";
+import {
+  pruneExpiredAuditEventsInDatabase,
+  recordAuditEventInDatabase,
+} from "./audit-event-store.js";
+import type { AuditEventListQuery } from "./audit-event-types.js";
+import { isOutboundMessageProgressInput } from "./audit-event-types.js";
+import {
+  formatAuditWriterError,
+  formatAuditWriterRequestError,
+} from "./audit-event-writer.errors.js";
+import type {
+  AuditMaintenanceFamily,
+  AuditWriterRequest,
+  AuditWriterResult,
+} from "./audit-event-writer.types.js";
+import {
+  pruneExpiredExecutionDecisionFactsInDatabase,
+  recordExecutionDecisionFactInDatabase,
 } from "./execution-decision-facts.js";
+import { processExecutionDecisionWorkInDatabase } from "./execution-decision-work.js";
 import {
-  processExecutionIdentityAdmissionWork,
-  pruneExpiredExecutionIdentityContexts,
+  processExecutionIdentityAdmissionWorkInDatabase,
+  pruneExpiredExecutionIdentityContextsInDatabase,
 } from "./execution-identity-context.js";
+import {
+  pruneExpiredOutboundMessageProgressInDatabase,
+  recordOutboundMessageProgressInDatabase,
+} from "./message-delivery-progress-store.js";
 
-const AUDIT_MAINTENANCE_INTERVAL_MS = 60 * 60_000;
-
-type AuditWriterRequest =
-  | { type: "record-event"; input: AuditEventInput }
-  | { type: "record-execution-identity"; work: unknown }
-  | { type: "record-execution-decision"; receipt: unknown }
-  | { type: "stop" };
-
-const stateDir =
-  workerData && typeof workerData === "object" && typeof workerData.stateDir === "string"
-    ? workerData.stateDir
-    : undefined;
-if (!parentPort || !stateDir) {
-  throw new Error("audit event writer requires a parent port and state directory");
-}
-const port = parentPort;
-const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-
-function executionIdentityFailureMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (
-    message.includes("audit identity key is missing") ||
-    message.includes("audit identity key is corrupt")
-  ) {
-    return "audit execution identity key unavailable";
-  }
-  if (message.includes("execution identity context conflict")) {
-    return "audit execution identity context conflict";
-  }
-  if (message.includes("execution identity recovery evidence unavailable")) {
-    return "audit execution identity recovery evidence unavailable";
-  }
-  if (
-    message.includes("admission envelope") ||
-    message.includes("admission work") ||
-    message.includes("admission token")
-  ) {
-    return "audit execution identity envelope rejected";
-  }
-  return "audit execution identity persistence failed";
-}
-
-function reportMaintenance(): void {
+// Keep the first open inside the fail-fast busy-timeout and contention boundary.
+function executeAuditAttempt(
+  { stateOptions, open }: WorkerOperationContext,
+  execute: (
+    database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
+  ) => AuditWriterResult,
+  formatError: (error: unknown) => string,
+): AuditWriterResult {
+  const options = stateOptions();
   try {
-    pruneExpiredAuditEvents({ database });
+    return runWithOpenClawStateBusyTimeout(
+      () => execute({ ...options, database: open() }),
+      options,
+      0,
+    );
   } catch (error) {
-    port.postMessage({ type: "maintenance-error", error: String(error) });
-  }
-  try {
-    pruneExpiredExecutionIdentityContexts({ database });
-  } catch (error) {
-    port.postMessage({ type: "maintenance-error", error: String(error) });
-  }
-  try {
-    pruneExpiredExecutionDecisionFacts({ database });
-  } catch (error) {
-    port.postMessage({ type: "maintenance-error", error: String(error) });
+    if (isOpenClawStateWriteContentionError(error)) {
+      return { status: "retry" };
+    }
+    return { status: "settled", error: formatError(error) };
   }
 }
 
-reportMaintenance();
-const maintenanceTimer = setInterval(reportMaintenance, AUDIT_MAINTENANCE_INTERVAL_MS);
-port.postMessage({ type: "ready" });
+export const auditOperations = {
+  "audit.events.list": (input: AuditEventListQuery, { open }) =>
+    listAuditEventsInDatabase(open().db, input),
+  "audit.writer.prune": (input: AuditMaintenanceFamily, context) =>
+    executeAuditAttempt(
+      context,
+      (database) => {
+        const maintenance = {
+          events: pruneExpiredAuditEventsInDatabase,
+          identity: pruneExpiredExecutionIdentityContextsInDatabase,
+          decisions: pruneExpiredExecutionDecisionFactsInDatabase,
+          progress: pruneExpiredOutboundMessageProgressInDatabase,
+        }[input];
+        return { status: "settled", deleted: maintenance({ database }) };
+      },
+      formatAuditWriterError,
+    ),
+  "audit.writer.process": (request: AuditWriterRequest, context) =>
+    executeAuditAttempt(
+      context,
+      (database) => {
+        if (request.type === "record-event") {
+          if (isOutboundMessageProgressInput(request.input)) {
+            recordOutboundMessageProgressInDatabase(request.input, database);
+          } else {
+            recordAuditEventInDatabase(request.input, database);
+          }
+        } else if (request.type === "record-execution-identity") {
+          processExecutionIdentityAdmissionWorkInDatabase(request.work, database);
+        } else if (request.type === "record-execution-decision-work") {
+          processExecutionDecisionWorkInDatabase(request.work, database);
+        } else {
+          recordExecutionDecisionFactInDatabase(request.receipt, database);
+        }
+        return { status: "settled" };
+      },
+      (error) => formatAuditWriterRequestError(request, error),
+    ),
+} satisfies WorkerOperationHandlers;
 
-port.on("message", (message: AuditWriterRequest) => {
-  if (message.type === "record-event") {
-    try {
-      recordAuditEvent(message.input, database);
-      port.postMessage({ type: "recorded" });
-    } catch (error) {
-      port.postMessage({ type: "record-error", error: String(error) });
-    }
-    return;
-  }
-  if (message.type === "record-execution-identity") {
-    try {
-      processExecutionIdentityAdmissionWork(message.work, database);
-      port.postMessage({ type: "recorded" });
-    } catch (error) {
-      port.postMessage({ type: "record-error", error: executionIdentityFailureMessage(error) });
-    }
-    return;
-  }
-  if (message.type === "record-execution-decision") {
-    try {
-      recordExecutionDecisionFact(message.receipt, database);
-      port.postMessage({ type: "recorded" });
-    } catch {
-      port.postMessage({ type: "record-error", error: "audit execution decision rejected" });
-    }
-    return;
-  }
-  clearInterval(maintenanceTimer);
-  reportMaintenance();
-  try {
-    // The Gateway may still own a live connection. Leave WAL reset to the
-    // final lifecycle owner instead of waiting on or invalidating its readers.
-    closeOpenClawStateDatabase({ checkpointMode: "PASSIVE" });
-  } catch (error) {
-    port.postMessage({ type: "maintenance-error", error: String(error) });
-  }
-  port.postMessage({ type: "stopped" });
-  port.close();
-});
+export type AuditWorkerOperations = WorkerOperations<typeof auditOperations>;
+export type AuditWriterOperations = Pick<
+  AuditWorkerOperations,
+  "audit.writer.process" | "audit.writer.prune"
+>;

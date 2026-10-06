@@ -1,10 +1,6 @@
-/**
- * Public channel ingress runtime types.
- *
- * Defines identity descriptors, resolver inputs, route access, and resolved access results.
- */
 import type { AccessGroupConfig } from "../../config/types.access-groups.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
+import type { IdentifierAuthentication } from "./identifier-authentication.js";
 import type {
   AccessGroupMembershipFact,
   AccessGraphGate,
@@ -16,20 +12,10 @@ import type {
   ChannelIngressState,
   ChannelIngressStateInput,
   IngressReasonCode,
-  InternalChannelIngressAdapter,
   InternalChannelIngressSubject,
   InternalNormalizedEntry,
   RouteGateFacts,
 } from "./types.js";
-
-/** Redacted subject identity assembled from a stable id plus optional platform aliases. */
-export type ChannelIngressSubject = InternalChannelIngressSubject;
-
-/** Normalized allowlist entry material produced by a channel identity adapter. */
-export type ChannelIngressAdapterEntry = InternalNormalizedEntry;
-
-/** Adapter used by the ingress resolver to normalize entries and match subjects. */
-export type ChannelIngressAdapter = InternalChannelIngressAdapter;
 
 /** Describes one identity field used for stable ids or platform-specific aliases. */
 export type ChannelIngressIdentityField = {
@@ -43,7 +29,11 @@ export type ChannelIngressIdentityField = {
   normalizeEntry?: (value: string) => string | null | undefined;
   /** Normalizes inbound subject values for this identity field. */
   normalizeSubject?: (value: string) => string | null | undefined;
-  /** Marks identifiers as dangerous in diagnostics, for example mutable display names. */
+  /** Static strength of this identity field. `verified` requires owning-boundary metadata. */
+  authentication?:
+    | IdentifierAuthentication
+    | ((value: string) => IdentifierAuthentication | undefined);
+  /** @deprecated Use `authentication: "mutable"`. Remove in the next Plugin SDK major. */
   dangerous?: boolean | ((value: string) => boolean | undefined);
   /** Redaction hint for diagnostics and access graph consumers. */
   sensitivity?: "normal" | "pii";
@@ -56,6 +46,10 @@ export type ChannelIngressIdentityAlias = ChannelIngressIdentityField & {
 
 /** Identity contract for a channel resolver. Plugins provide platform normalization here. */
 export type ChannelIngressIdentityDescriptor = {
+  /** Product identity: only when the plugin can prove the remote issuer and identifier kind. */
+  resolveParticipant?: (
+    subject: ChannelIngressIdentitySubjectInput,
+  ) => { domain: string; idKind: string; id: string } | undefined;
   /** Primary stable identity field. Prefer immutable sender ids when the platform has one. */
   primary: ChannelIngressIdentityField;
   /** Additional identifiers that can match legacy or platform-specific allowlist entries. */
@@ -64,8 +58,8 @@ export type ChannelIngressIdentityDescriptor = {
   isWildcardEntry?: (value: string) => boolean;
   /** Optional custom match hook for platform-specific identity equivalence. */
   matchEntry?: (params: {
-    subject: ChannelIngressSubject;
-    entry: ChannelIngressAdapterEntry;
+    subject: InternalChannelIngressSubject;
+    entry: InternalNormalizedEntry;
     context: "dm" | "group" | "route" | "command";
   }) => boolean | undefined;
   /** Generates stable redacted entry ids for diagnostics. */
@@ -79,7 +73,10 @@ export type ChannelIngressIdentityDescriptor = {
 
 /** Convenience input for defining a stable identity descriptor with optional aliases. */
 export type StableChannelIngressIdentityParams = ChannelIngressIdentityField &
-  Pick<ChannelIngressIdentityDescriptor, "aliases" | "isWildcardEntry" | "matchEntry"> & {
+  Pick<
+    ChannelIngressIdentityDescriptor,
+    "aliases" | "isWildcardEntry" | "matchEntry" | "resolveParticipant"
+  > & {
     /** Prefix used for generated entry ids when `resolveEntryId` is omitted. */
     entryIdPrefix?: string;
     /** Custom entry-id generator used in redacted diagnostics. */
@@ -92,6 +89,8 @@ export type ChannelIngressIdentitySubjectInput = {
   stableId?: string | number | null;
   /** Optional identity aliases keyed by `ChannelIngressIdentityAlias.key`. */
   aliases?: Record<string, string | number | null | undefined>;
+  /** Per-message claims keyed by the exact identity field key. */
+  authentication?: Record<string, IdentifierAuthentication | undefined>;
 };
 
 /** Minimal config subset consumed by the ingress resolver. */
@@ -139,9 +138,9 @@ export type ChannelIngressContextBinding = {
   agentId: string;
   /** Final dispatch or route session selected by the channel producer. */
   sessionKey: string;
-  /** Stable transport message id when the event has one. */
+  /** Final message id used by the host context, after any transport ID mapping. */
   messageId?: string;
-  /** Native transport conversation id when it differs from the canonical conversation id. */
+  /** Match the host context's reply or conversation nativeChannelId, including when it equals id. */
   nativeChannelId?: string;
   /** Final inbound event classification used by the host context. */
   inboundEventKind: InboundEventKind;
@@ -257,7 +256,9 @@ export type CreateChannelIngressResolverParams = Pick<
   defaultGroupPolicy?: ChannelIngressPolicyInput["groupPolicy"];
   /** Default group allowlist fallback behavior. */
   groupAllowFromFallbackToAllowFrom?: boolean;
-  /** Mutable identifier matching policy for this resolver. */
+  /** Weakest exact-pair identifier claim allowed to authorize. */
+  minIdentifierAuthentication?: ChannelIngressPolicyInput["minIdentifierAuthentication"];
+  /** @deprecated Maps to `minIdentifierAuthentication`; remove in the next Plugin SDK major. */
   mutableIdentifierMatching?: ChannelIngressPolicyInput["mutableIdentifierMatching"];
 };
 
@@ -277,7 +278,7 @@ export type ChannelIngressResolverMessageParams = Omit<
   | "command"
 > & {
   /** Event facts or presets; defaults to a normal inbound message event. */
-  event?: ChannelIngressEventInput | ChannelIngressEventPresetInput;
+  event?: ChannelIngressEventPresetInput;
   /** DM policy override for this event. */
   dmPolicy?: ChannelIngressPolicyInput["dmPolicy"];
   /** Group policy override for this event. */
@@ -285,7 +286,7 @@ export type ChannelIngressResolverMessageParams = Omit<
   /** Additional policy fields merged with resolver defaults. */
   policy?: Partial<Omit<ChannelIngressPolicyInput, "dmPolicy" | "groupPolicy">>;
   /** Command gate input, preset, or false to suppress command checks. */
-  command?: ChannelMessageIngressCommandInput | ChannelIngressCommandPresetInput | false;
+  command?: ChannelIngressCommandPresetInput | false;
 };
 
 /** Reusable high-level ingress resolver for message, command, and event surfaces. */

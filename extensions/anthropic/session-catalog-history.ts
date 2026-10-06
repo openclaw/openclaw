@@ -1,6 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { createEmptyTransportUsage } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
@@ -40,14 +41,7 @@ function importedClaudeMessage(
     api: "anthropic-messages",
     provider: CLAUDE_CLI_BACKEND_ID,
     model: "native-history",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createEmptyTransportUsage(),
     stopReason: "stop",
   } as AgentMessage;
 }
@@ -70,10 +64,10 @@ export async function importClaudeHistory(params: {
         continue;
       }
       // The idempotency key rides on the message so recovery re-imports dedupe.
-      const message = {
-        ...(imported as unknown as Record<string, unknown>),
+      const message: AgentMessage & { idempotencyKey: string } = {
+        ...imported,
         idempotencyKey: `claude-catalog:${params.threadId}:${item.uuid ?? index}`,
-      } as unknown as AgentMessage;
+      };
       await transcript.appendMessage({
         message,
         idempotencyLookup: "scan",

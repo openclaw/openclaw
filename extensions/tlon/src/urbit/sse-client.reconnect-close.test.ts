@@ -1,7 +1,8 @@
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UrbitSSEClient } from "./sse-client.js";
 
 const proofCookie = "urbauth-~zod=synthetic-reconnect-proof";
@@ -14,13 +15,13 @@ type UrbitChannelProof = {
   unauthorizedRequests: number;
 };
 
-async function startUrbitChannelServer(options: { holdStream?: boolean } = {}) {
+async function startUrbitChannelServer(holdStreamAfter = Number.POSITIVE_INFINITY) {
   const proof: UrbitChannelProof = {
     baseUrl: "",
     requests: [],
     unauthorizedRequests: 0,
   };
-  const heldStreams = new Set<ServerResponse>();
+  let streamRequests = 0;
   const server = createServer((request, response) => {
     if (!(request.headers.cookie ?? "").includes(proofCookie)) {
       proof.unauthorizedRequests += 1;
@@ -33,9 +34,7 @@ async function startUrbitChannelServer(options: { holdStream?: boolean } = {}) {
         "Cache-Control": "no-cache",
         "Content-Type": "text/event-stream",
       });
-      if (options.holdStream) {
-        heldStreams.add(response);
-        response.once("close", () => heldStreams.delete(response));
+      if (++streamRequests >= holdStreamAfter) {
         response.write(": connected\n\n");
       } else {
         response.end();
@@ -54,36 +53,12 @@ async function startUrbitChannelServer(options: { holdStream?: boolean } = {}) {
   return proof;
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() >= deadline) {
-      throw new Error("Timed out waiting for the real Tlon SSE reconnect lifecycle");
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 5);
-    });
-  }
-}
-
-async function expectPromptReconnectSettlement(reconnect: Promise<void>) {
-  let deadline: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const outcome = await Promise.race([
-      reconnect.then(() => "settled" as const),
-      new Promise<"timed out">((resolve) => {
-        deadline = setTimeout(() => resolve("timed out"), 250);
-      }),
-    ]);
-    expect(outcome).toBe("settled");
-  } finally {
-    if (deadline !== undefined) {
-      clearTimeout(deadline);
-    }
-  }
-}
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+});
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   await Promise.all(
     runningServers.splice(0).map(
@@ -97,23 +72,28 @@ afterEach(async () => {
 });
 
 describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
-  it("settles a real SSE reconnect when the monitor stops receiving", async () => {
+  it("settles a real SSE reconnect when the monitor stops receiving", async ({ signal }) => {
     const proof = await startUrbitChannelServer();
-    const logs: string[] = [];
+    const retryScheduled = Promise.withResolvers<void>();
     const onReconnect = vi.fn();
     const client = new UrbitSSEClient(proof.baseUrl, proofCookie, {
       ship: "zod",
       ssrfPolicy: { allowPrivateNetwork: true },
       lookupFn: lookupLoopback,
-      reconnectDelay: 400,
-      logger: { log: (message) => logs.push(message) },
+      logger: {
+        log: (message) => {
+          if (message.includes("in 1000ms")) {
+            retryScheduled.resolve();
+          }
+        },
+      },
       onReconnect,
     });
     const reconnectSpy = vi.spyOn(client, "attemptReconnect");
 
     try {
       await client.connect();
-      await waitFor(() => logs.some((message) => message.includes("in 400ms")));
+      await withinTest(retryScheduled.promise, signal);
       const reconnect = reconnectSpy.mock.results[0]?.value as Promise<void> | undefined;
       if (!reconnect) {
         throw new Error("The real SSE stream did not enter its reconnect backoff");
@@ -121,7 +101,7 @@ describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
 
       const requestsBeforeStop = proof.requests.length;
       client.stopReceiving();
-      await expectPromptReconnectSettlement(reconnect);
+      await withinTest(reconnect, signal);
 
       expect(onReconnect).not.toHaveBeenCalled();
       expect(proof.requests).toHaveLength(requestsBeforeStop);
@@ -135,29 +115,29 @@ describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
     }
   });
 
-  it("settles the real ten-second retry cooldown when the monitor stops receiving", async () => {
-    const proof = await startUrbitChannelServer({ holdStream: true });
+  it("settles the real ten-second retry cooldown when the monitor stops receiving", async ({
+    signal,
+  }) => {
+    const proof = await startUrbitChannelServer(1);
     const logs: string[] = [];
     const onReconnect = vi.fn();
     const client = new UrbitSSEClient(proof.baseUrl, proofCookie, {
       ship: "zod",
       ssrfPolicy: { allowPrivateNetwork: true },
       lookupFn: lookupLoopback,
-      maxReconnectAttempts: 1,
-      reconnectDelay: 20,
       logger: { log: (message) => logs.push(message) },
       onReconnect,
     });
 
     try {
       await client.connect();
-      client.reconnectAttempts = client.maxReconnectAttempts;
+      client.reconnectAttempts = 10;
       const reconnect = client.attemptReconnect();
       expect(logs.some((message) => message.includes("Waiting 10s"))).toBe(true);
 
       const requestsBeforeStop = proof.requests.length;
       client.stopReceiving();
-      await expectPromptReconnectSettlement(reconnect);
+      await withinTest(reconnect, signal);
 
       expect(onReconnect).not.toHaveBeenCalled();
       expect(proof.requests).toHaveLength(requestsBeforeStop);
@@ -167,23 +147,28 @@ describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
     }
   });
 
-  it("settles a real pending reconnect when the public client closes", async () => {
+  it("settles a real pending reconnect when the public client closes", async ({ signal }) => {
     const proof = await startUrbitChannelServer();
-    const logs: string[] = [];
+    const retryScheduled = Promise.withResolvers<void>();
     const onReconnect = vi.fn();
     const client = new UrbitSSEClient(proof.baseUrl, proofCookie, {
       ship: "zod",
       ssrfPolicy: { allowPrivateNetwork: true },
       lookupFn: lookupLoopback,
-      reconnectDelay: 400,
-      logger: { log: (message) => logs.push(message) },
+      logger: {
+        log: (message) => {
+          if (message.includes("in 1000ms")) {
+            retryScheduled.resolve();
+          }
+        },
+      },
       onReconnect,
     });
     const reconnectSpy = vi.spyOn(client, "attemptReconnect");
 
     try {
       await client.connect();
-      await waitFor(() => logs.some((message) => message.includes("in 400ms")));
+      await withinTest(retryScheduled.promise, signal);
       const reconnect = reconnectSpy.mock.results[0]?.value as Promise<void> | undefined;
       if (!reconnect) {
         throw new Error("The real SSE stream did not enter its reconnect backoff");
@@ -191,7 +176,7 @@ describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
 
       await client.close();
       const requestsAfterClose = proof.requests.length;
-      await expectPromptReconnectSettlement(reconnect);
+      await withinTest(reconnect, signal);
 
       expect(onReconnect).not.toHaveBeenCalled();
       expect(proof.requests).toHaveLength(requestsAfterClose);
@@ -201,28 +186,37 @@ describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
     }
   });
 
-  it("still reconnects an uninterrupted authenticated SSE stream", async () => {
-    const proof = await startUrbitChannelServer();
-    let reconnects = 0;
+  it("still reconnects an uninterrupted authenticated SSE stream", async ({ signal }) => {
+    const proof = await startUrbitChannelServer(2);
+    const retryScheduled = Promise.withResolvers<void>();
+    const onReconnect = vi.fn();
     const client = new UrbitSSEClient(proof.baseUrl, proofCookie, {
       ship: "zod",
       ssrfPolicy: { allowPrivateNetwork: true },
       lookupFn: lookupLoopback,
-      reconnectDelay: 25,
-      onReconnect: (reconnectingClient) => {
-        reconnects += 1;
-        reconnectingClient.autoReconnect = false;
+      onReconnect,
+      logger: {
+        log: (message) => {
+          if (message.includes("in 1000ms")) {
+            retryScheduled.resolve();
+          }
+        },
       },
     });
+    const reconnectSpy = vi.spyOn(client, "attemptReconnect");
 
     try {
       await client.connect();
-      await waitFor(() => reconnects === 1);
-      await waitFor(
-        () =>
-          proof.requests.filter((request) => request.startsWith("GET /~/channel/")).length === 2,
-      );
-      expect(reconnects).toBe(1);
+      await withinTest(retryScheduled.promise, signal);
+      const reconnect = reconnectSpy.mock.results[0]?.value as Promise<void> | undefined;
+      if (!reconnect) {
+        throw new Error("The real SSE stream did not enter its reconnect backoff");
+      }
+      await vi.advanceTimersByTimeAsync(999);
+      expect(onReconnect).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await withinTest(reconnect, signal);
+      expect(onReconnect).toHaveBeenCalledOnce();
       expect(
         proof.requests.filter((request) => request.startsWith("GET /~/channel/")),
       ).toHaveLength(2);

@@ -1,9 +1,7 @@
-// Control UI view dispatches config form schema node rendering.
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import {
-  shouldStageStructuredDraft,
-  structuredDraftInitialValue,
+  resolveStructuredDraftInitialValue,
   type ConfigFormStructuredDraftProps,
 } from "./config-form-structured-draft.ts";
 import { renderArray, renderObject } from "./config-form.node.collection.ts";
@@ -12,10 +10,9 @@ import { renderNumberInput, renderSelect, renderTextInput } from "./config-form.
 import {
   renderFieldRow,
   isAnySchema,
-  renderRestoreDefaultButton,
+  isSecretRefObject,
   renderSchemaDefaultDescription,
   renderSegmentedControl,
-  renderTags,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
 import {
@@ -23,21 +20,33 @@ import {
   matchesNodeSearch,
   resolveConfigFieldMeta as resolveFieldMeta,
 } from "./config-form.search.ts";
-import { configFieldId, pathKey, schemaType } from "./config-form.shared.ts";
+import { hintForPath, pathKey, schemaType } from "./config-form.shared.ts";
 import { renderSettingsToggle, renderSettingsToggleRow } from "./settings-ui.ts";
 
 export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typeof nothing {
   const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
   const type = schemaType(schema);
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help } = resolveFieldMeta(path, schema, hints);
   const key = pathKey(path);
   const criteria = params.searchCriteria;
 
-  if (unsupported.has(key)) {
+  if (
+    unsupported.has(key) ||
+    [...unsupported].some((pattern) => {
+      if (!pattern.includes("*")) {
+        return false;
+      }
+      const segments = pattern.split(".");
+      // Use the original segments: dynamic model/provider keys may contain dots.
+      return (
+        segments.length === path.length &&
+        segments.every((segment, index) => segment === "*" || segment === String(path[index]))
+      );
+    })
+  ) {
     return renderFieldRow({
       label,
-      tags: [],
       showLabel: true,
       control: nothing,
       error: t("configForm.unsupportedNode"),
@@ -50,10 +59,10 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
   ) {
     return nothing;
   }
-  const structuredDraftValue = structuredDraftInitialValue(params);
-  if (shouldStageStructuredDraft(params, structuredDraftValue)) {
+  const structuredDraftValue = resolveStructuredDraftInitialValue(params);
+  if (structuredDraftValue !== undefined) {
     const props: ConfigFormStructuredDraftProps = {
-      identity: configFieldId(path, "structured-draft"),
+      identity: JSON.stringify(path.filter((segment) => typeof segment === "string")),
       sourceIdentity: params.sourceIdentity ?? value,
       initialValue: structuredDraftValue,
       params,
@@ -67,7 +76,24 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
     `;
   }
 
-  // Handle anyOf/oneOf unions
+  const renderOptions = (options: unknown[], nullable = false) =>
+    options.length > 5 || nullable
+      ? renderSelect({ ...params, options })
+      : renderFieldRow({
+          label,
+          help,
+          defaultDescription: renderSchemaDefaultDescription(schema, value),
+          showLabel,
+          control: renderSegmentedControl({
+            options,
+            resolvedValue: value !== undefined ? value : schema.default,
+            disabled,
+            ariaLabel: label,
+            descriptionId: params.descriptionId,
+            onSelect: (option) => onPatch(path, option),
+          }),
+        });
+
   if (schema.anyOf || schema.oneOf) {
     const variants = schema.anyOf ?? schema.oneOf ?? [];
     const nonNull = variants.filter(
@@ -83,57 +109,40 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       return selectedSchema ? renderNode({ ...params, schema: selectedSchema }) : nothing;
     }
 
-    // Check if it's a set of literal values (enum-like)
-    const extractLiteral = (variant: (typeof nonNull)[number]): unknown => {
-      if (variant.const !== undefined) {
-        return variant.const;
-      }
-      if (variant.enum && variant.enum.length === 1) {
-        return variant.enum[0];
-      }
-      return undefined;
-    };
-    const literals = nonNull.map(extractLiteral);
+    const literals = nonNull.map((variant) =>
+      variant.const !== undefined
+        ? variant.const
+        : variant.enum?.length === 1
+          ? variant.enum[0]
+          : undefined,
+    );
     const allLiterals = literals.every((literal) => literal !== undefined);
 
-    if (allLiterals && literals.length > 0 && literals.length <= 5) {
-      // Use segmented control for small sets
-      const resolvedValue = value !== undefined ? value : schema.default;
-      return renderFieldRow({
-        label,
-        help,
-        defaultDescription: renderSchemaDefaultDescription(schema, value),
-        tags,
-        showLabel,
-        control: html`
-          ${renderSegmentedControl({
-            options: literals,
-            resolvedValue,
-            disabled,
-            ariaLabel: label,
-            onSelect: (literal) => onPatch(path, literal),
-          })}
-          ${renderRestoreDefaultButton(params)}
-        `,
-      });
+    if (allLiterals && literals.length > 0) {
+      return renderOptions(literals);
     }
 
-    if (allLiterals && literals.length > 5) {
-      // Use dropdown for larger sets
-      return renderSelect({ ...params, options: literals });
-    }
-
-    // Handle mixed primitive types
-    const primitiveTypes = new Set(nonNull.map((variant) => schemaType(variant)).filter(Boolean));
     const normalizedTypes = new Set(
-      [...primitiveTypes].map((variantType) =>
-        variantType === "integer" ? "number" : variantType,
-      ),
+      nonNull.flatMap((variant) => {
+        const variantType = schemaType(variant);
+        return variantType ? [variantType === "integer" ? "number" : variantType] : [];
+      }),
     );
 
     if (
+      params.maskSensitive === true &&
+      Array.isArray(schema.type) &&
+      normalizedTypes.size === 2 &&
+      normalizedTypes.has("string") &&
+      normalizedTypes.has("object") &&
+      (value === undefined || typeof value === "string" || isSecretRefObject(value))
+    ) {
+      return renderTextInput({ ...params, inputType: "text" });
+    }
+
+    if (
       [...normalizedTypes].every((variantType) =>
-        ["string", "number", "boolean"].includes(variantType as string),
+        ["string", "number", "boolean"].includes(variantType),
       )
     ) {
       const hasString = normalizedTypes.has("string");
@@ -155,48 +164,28 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       }
     }
 
-    // Complex union (e.g. array | object) — render as JSON textarea
     return renderJsonTextarea(params);
   }
 
-  // Enum - use segmented for small, dropdown for large
+  // Nullable enums use the dropdown's distinct null and unset choices.
   if (schema.enum) {
-    const options = schema.enum;
-    if (options.length <= 5) {
-      const resolvedValue = value !== undefined ? value : schema.default;
-      return renderFieldRow({
-        label,
-        help,
-        defaultDescription: renderSchemaDefaultDescription(schema, value),
-        tags,
-        showLabel,
-        control: html`
-          ${renderSegmentedControl({
-            options,
-            resolvedValue,
-            disabled,
-            ariaLabel: label,
-            onSelect: (option) => onPatch(path, option),
-          })}
-          ${renderRestoreDefaultButton(params)}
-        `,
-      });
-    }
-    return renderSelect({ ...params, options });
+    return renderOptions(schema.enum, schema.nullable && schema.enumIncludesNull);
   }
 
-  // Object type - collapsible section
   if (type === "object") {
     return renderObject(params, renderNode);
   }
 
-  // Array type
   if (type === "array") {
     return renderArray(params, renderNode);
   }
 
-  // Boolean - toggle row
   if (type === "boolean") {
+    // A placeholder names an optional boolean's inherited state; a toggle
+    // cannot distinguish an unset override from an explicit false.
+    if (!params.isRequired && hintForPath(path, hints)?.placeholder) {
+      return renderSelect({ ...params, options: [true, false] });
+    }
     const displayValue =
       typeof value === "boolean"
         ? value
@@ -204,13 +193,33 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
           ? schema.default
           : false;
     const onChange = (checked: boolean) => onPatch(path, checked);
+    if (params.compact) {
+      return renderFieldRow({
+        label,
+        help,
+        showLabel,
+        control: html`<input
+          type="checkbox"
+          aria-label=${label}
+          aria-describedby=${params.descriptionId ?? nothing}
+          .checked=${displayValue}
+          ?disabled=${disabled}
+          @change=${(event: Event) => {
+            // SAFETY: Lit binds this handler directly to the native checkbox.
+            const input = event.currentTarget as HTMLInputElement;
+            if (onChange(input.checked) === false) {
+              input.checked = displayValue;
+            }
+          }}
+        />`,
+      });
+    }
     if (!showLabel) {
       // Control-only contexts (array items, map values) have no visible title,
       // so the switch keeps its accessible name from the field label.
       return renderFieldRow({
         label,
         help,
-        tags,
         showLabel,
         control: renderSettingsToggle({
           checked: displayValue,
@@ -221,10 +230,10 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       });
     }
     const description =
-      help || tags.length > 0 || schema.default !== undefined
+      help || schema.default !== undefined
         ? html`
             ${help ?? nothing} ${help && schema.default !== undefined ? html`<br />` : nothing}
-            ${renderSchemaDefaultDescription(schema, value)}${renderTags(tags)}
+            ${renderSchemaDefaultDescription(schema, value)}
           `
         : undefined;
     return renderSettingsToggleRow({
@@ -233,16 +242,13 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       checked: displayValue,
       disabled,
       onChange,
-      actions: renderRestoreDefaultButton(params),
     });
   }
 
-  // Number/Integer
   if (type === "number" || type === "integer") {
     return renderNumberInput(params);
   }
 
-  // String
   if (type === "string") {
     return renderTextInput({ ...params, inputType: "text" });
   }
@@ -251,10 +257,8 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
     return renderJsonTextarea(params);
   }
 
-  // Fallback
   return renderFieldRow({
     label,
-    tags: [],
     showLabel: true,
     control: nothing,
     error: t("configForm.unsupportedType", { type: String(type) }),

@@ -1,11 +1,12 @@
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { page, userEvent } from "vitest/browser";
 import type {
   SkillWorkshopEvaluation,
   SkillWorkshopMode,
   SkillWorkshopProposal,
 } from "../../lib/skill-workshop/index.ts";
-import { createSkillWorkshopHistoryScanState } from "./state.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import type { SkillWorkshopProps } from "./view-types.ts";
 import { renderSkillWorkshop } from "./view.ts";
 
@@ -70,6 +71,7 @@ const evaluation: SkillWorkshopEvaluation = {
 
 const proposal: SkillWorkshopProposal = {
   key: "proposal-1",
+  kind: "update",
   slug: "inbox-cleaner",
   name: "Inbox Cleaner",
   oneLine: "Clean inbox triage",
@@ -83,7 +85,7 @@ const proposal: SkillWorkshopProposal = {
   recencyGroup: "today",
   ageLabel: "now",
   supportFiles: [],
-  isNew: false,
+  bodyLoaded: true,
 };
 
 function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
@@ -93,14 +95,16 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
       canApply: true,
       canRevise: true,
       canReject: true,
-      canScanHistory: true,
     },
     loading: false,
     error: null,
     inspectingKey: null,
     proposals: [proposal],
+    installedSkills: [],
+    installedSelection: { status: "idle" },
+    onSelectInstalled: vi.fn(),
+    onRetryInstalled: vi.fn(),
     selectedKey: proposal.key,
-    statusFilter: "pending",
     query: "",
     filePreviewKey: null,
     filePreviewQuery: "",
@@ -110,12 +114,10 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     actionNotice: null,
     revisionKey: null,
     revisionDraft: "",
+    revisionRecoveryActive: false,
     assistantName: "OpenClaw",
     workshopAgentName: "Research",
     selfLearning: null,
-    historyScan: createSkillWorkshopHistoryScanState(),
-    counts: { all: 1, pending: 1, applied: 0, rejected: 0, quarantined: 0, stale: 0 },
-    onStatusFilterChange: vi.fn(),
     onRetry: vi.fn(),
     onQueryChange: vi.fn(),
     onFilePreviewQueryChange: vi.fn(),
@@ -134,19 +136,110 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     onPreviewFile: vi.fn(),
     onClosePreview: vi.fn(),
     onSelfLearningToggle: vi.fn(),
-    onHistoryScan: vi.fn(),
   };
 }
 
 describe("Skill Workshop evaluation results (browser)", () => {
-  it.each(["board", "today"] as const)(
-    "renders attributed completed, error, and block results with an Evaluate command in %s",
-    async (mode) => {
+  it.each(["submitting", "recovering"])(
+    "keeps revision instructions available when Escape is pressed while %s",
+    async (phase) => {
+      const container = document.createElement("div");
+      const props = propsFor("suggestions");
+      props.revisionKey = proposal.key;
+      props.revisionDraft = "Add rollback guidance.";
+      props.actionBusy = phase === "submitting" ? { key: proposal.key, action: "revise" } : null;
+      props.revisionRecoveryActive = phase === "recovering";
+      document.body.append(container);
+
+      try {
+        render(renderSkillWorkshop(props), container);
+        const { modal, dialog } = await getRenderedModalDialog(container);
+        await expect
+          .element(page.getByRole("textbox", { name: "Revise suggestion", exact: true }))
+          .toHaveValue(props.revisionDraft);
+        const dismissal = new Promise<Event>((resolve) => {
+          modal.addEventListener("modal-cancel", resolve, { once: true });
+        });
+
+        await userEvent.keyboard("{Escape}");
+
+        expect((await dismissal).defaultPrevented).toBe(true);
+        expect(dialog.open).toBe(true);
+        expect(props.onRevisionCancel).not.toHaveBeenCalled();
+
+        props.actionBusy = null;
+        props.revisionRecoveryActive = false;
+        render(renderSkillWorkshop(props), container);
+        await userEvent.keyboard("{Escape}");
+
+        expect(props.onRevisionCancel).toHaveBeenCalledOnce();
+        await expect.poll(() => dialog.open).toBe(false);
+      } finally {
+        render(nothing, container);
+        container.remove();
+      }
+    },
+  );
+
+  it.each([800, 390])("keeps embedded images within the suggestion card at %spx", async (width) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1600;
+    canvas.height = 20;
+    const container = document.createElement("div");
+    container.style.width = `${width}px`;
+    const props = propsFor("suggestions");
+    props.proposals = [{ ...proposal, body: `![Diagram](${canvas.toDataURL()})` }];
+    document.body.append(container);
+    try {
+      render(renderSkillWorkshop(props), container);
+      const image = container.querySelector<HTMLImageElement>(".sidebar-markdown img")!;
+      await vi.waitFor(() => expect(image.complete).toBe(true));
+      expect(image.naturalWidth).toBe(1600);
+      const card = container.querySelector(".sw-body-card")!.getBoundingClientRect();
+      expect(image.getBoundingClientRect().right).toBeLessThanOrEqual(card.right);
+      expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
+  it.each([
+    ["suggestions", "apply", ".sw-action-bar .sw-btn--primary", "onApply"],
+    ["suggestions", "reject", ".sw-action-bar .sw-btn--danger", "onReject"],
+  ] as const)(
+    "captures the rendered revision when %s %s is chosen",
+    async (mode, _action, selector, callbackName) => {
       const container = document.createElement("div");
       const props = propsFor(mode);
-      if (mode === "today") {
-        container.style.width = "390px";
+      document.body.append(container);
+
+      try {
+        render(renderSkillWorkshop(props), container);
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+
+        const actionButton = container.querySelector<HTMLButtonElement>(selector);
+        expect(actionButton).toBeInstanceOf(HTMLButtonElement);
+        actionButton?.click();
+        expect(props[callbackName]).toHaveBeenCalledWith({
+          proposalId: "proposal-1",
+          expectedRevisionHash: DRAFT_HASH,
+        });
+      } finally {
+        render(nothing, container);
+        container.remove();
       }
+    },
+  );
+
+  it.each([800, 390])(
+    "renders attributed evaluator results and an Evaluate command at %spx",
+    async (width) => {
+      const container = document.createElement("div");
+      const props = propsFor("suggestions");
+      container.style.width = `${width}px`;
       document.body.append(container);
 
       try {
@@ -181,9 +274,7 @@ describe("Skill Workshop evaluation results (browser)", () => {
         expect(text).toContain("Policy checks passed.");
         expect(text).toContain("Revise");
         expect(text).toContain("Clarify the activation trigger.");
-        if (mode === "today") {
-          expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
-        }
+        expect(container.scrollWidth).toBeLessThanOrEqual(container.clientWidth);
       } finally {
         render(nothing, container);
         container.remove();

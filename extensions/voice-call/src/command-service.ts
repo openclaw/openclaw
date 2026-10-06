@@ -1,25 +1,11 @@
 // Voice Call command service owns operations shared by gateway and model-tool adapters.
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import type { CallMode } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
-import type { CallRecord } from "./types.js";
-
-type VoiceCallStatus = Pick<
-  CallRecord,
-  | "callId"
-  | "providerCallId"
-  | "provider"
-  | "direction"
-  | "state"
-  | "startedAt"
-  | "answeredAt"
-  | "endedAt"
-  | "endReason"
->;
+import type { CallRecord, OutboundCallOptions } from "./types.js";
 
 export class VoiceCallCommandInputError extends Error {}
 
-function toVoiceCallStatus(call: CallRecord): VoiceCallStatus {
+function toVoiceCallStatus(call: CallRecord) {
   return {
     callId: call.callId,
     ...(call.providerCallId !== undefined ? { providerCallId: call.providerCallId } : {}),
@@ -79,7 +65,6 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
     const request = await resolveCallMessage(callId, message);
     return {
       rt: request.rt,
-      callId: request.callId,
       run: async () => {
         const result = await request.rt.manager.continueCall(request.callId, request.message);
         requireSuccess(result, "continue failed");
@@ -92,14 +77,9 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
     prepareContinue,
 
     async initiate(
-      params: {
+      params: OutboundCallOptions & {
         to?: string;
-        message?: string;
-        mode?: CallMode;
         sessionKey?: string;
-        dtmfSequence?: string;
-        requesterSessionKey?: string;
-        agentId?: string;
       },
       missingToMessage = "to required",
     ) {
@@ -151,9 +131,13 @@ export function createVoiceCallCommandService(ensureRuntime: () => Promise<Voice
       return { success: true };
     },
 
-    async endCall(callId?: string) {
+    async endCall(
+      callId?: string,
+      execution?: { runtime?: VoiceCallRuntime; assertAuthority?: () => void },
+    ) {
       const resolvedCallId = requireInput(callId, "callId required");
-      const rt = await ensureRuntime();
+      const rt = execution?.runtime ?? (await ensureRuntime());
+      execution?.assertAuthority?.();
       const result = await rt.manager.endCall(resolvedCallId);
       requireSuccess(result, "end failed");
       return { success: true };

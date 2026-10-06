@@ -1,6 +1,9 @@
 // Session reset policy resolves automatic freshness for direct, group, and thread sessions.
+import {
+  asFiniteNumber,
+  asFiniteNumberInRange,
+} from "@openclaw/normalization-core/number-coercion";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
-import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
 export type SessionResetMode = "none" | "daily" | "idle";
 type SessionStaleReason = Exclude<SessionResetMode, "none">;
@@ -22,17 +25,15 @@ export type SessionFreshness = {
 
 const DEFAULT_RESET_MODE: SessionResetMode = "none";
 const DEFAULT_RESET_AT_HOUR = 4;
+const DEFAULT_IDLE_MINUTES = 0;
 
 /** Returns the most recent daily reset boundary for the supplied wall-clock time. */
 function resolveDailyResetAtMs(now: number, atHour: number): number {
-  const normalizedAtHour = normalizeResetAtHour(atHour);
-  const resetAt = new Date(now);
-  resetAt.setHours(normalizedAtHour, 0, 0, 0);
-  if (now < resetAt.getTime()) {
-    // Before today's reset hour, the active reset boundary is yesterday's scheduled reset.
-    resetAt.setDate(resetAt.getDate() - 1);
-  }
-  return resetAt.getTime();
+  const hour = normalizeResetAtHour(atHour);
+  const today = new Date(now).setHours(hour, 0, 0, 0);
+  // Resolve each calendar day's authored hour from now; reusing today's date
+  // can carry a spring-forward adjustment into yesterday.
+  return now < today ? new Date(now).setHours(hour - 24, 0, 0, 0) : today;
 }
 
 /** Resolves the effective reset policy for direct, group, or thread sessions. */
@@ -122,13 +123,7 @@ export function evaluateSessionFreshness(params: {
 }
 
 function resolveTimestamp(value: number | undefined, now?: number): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  if (typeof now === "number" && Number.isFinite(now) && value > now) {
-    return undefined;
-  }
-  return value;
+  return asFiniteNumberInRange(value, { min: 0, max: asFiniteNumber(now) });
 }
 
 function normalizeResetAtHour(value: number | undefined): number {
@@ -136,14 +131,5 @@ function normalizeResetAtHour(value: number | undefined): number {
     return DEFAULT_RESET_AT_HOUR;
   }
   const normalized = Math.floor(value);
-  if (!Number.isFinite(normalized)) {
-    return DEFAULT_RESET_AT_HOUR;
-  }
-  if (normalized < 0) {
-    return 0;
-  }
-  if (normalized > 23) {
-    return 23;
-  }
-  return normalized;
+  return normalized < 0 ? 0 : Math.min(normalized, 23);
 }

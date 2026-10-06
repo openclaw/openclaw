@@ -1,3 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { resolveChannelConfigActivationFacts } from "../config/channel-config-activation.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { diffConfigPaths } from "./config-diff.js";
 import type { GatewayReloadPlan } from "./config-reload-plan.js";
 
 export function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolean {
@@ -17,9 +22,25 @@ export function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolea
   );
 }
 
-/** Skip broad auth scans unless a reload can change provider availability. */
-export function shouldRewarmProviderAuthState(plan: GatewayReloadPlan): boolean {
-  return plan.reloadPlugins || plan.changedPaths.some(isProviderAuthRelevantReloadPath);
+/** Auth changes must replace prepared owners instead of advancing their config in place. */
+export function doesReloadAffectProviderAuth(
+  plan: GatewayReloadPlan,
+  previousConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): boolean {
+  return (
+    plan.reloadPlugins ||
+    plan.changedPaths.some(isProviderAuthRelevantReloadPath) ||
+    diffConfigPaths(previousConfig, nextConfig).some(isProviderAuthRelevantReloadPath) ||
+    !isDeepStrictEqual(
+      collectConfiguredModelRefs(previousConfig),
+      collectConfiguredModelRefs(nextConfig),
+    ) ||
+    !isDeepStrictEqual(
+      resolveChannelConfigActivationFacts(previousConfig),
+      resolveChannelConfigActivationFacts(nextConfig),
+    )
+  );
 }
 
 const PROVIDER_AUTH_RELEVANT_CONFIG_ROOTS = new Set([
@@ -76,9 +97,6 @@ function isProviderAuthRelevantReloadPath(path: string): boolean {
   if (PROVIDER_AUTH_RELEVANT_CONFIG_ROOTS.has(head)) {
     return true;
   }
-  if (head === "agent" && second === "model") {
-    return true;
-  }
   if (head !== "agents") {
     return false;
   }
@@ -98,7 +116,6 @@ function isProviderAuthRelevantReloadPath(path: string): boolean {
 export function reloadPlanNeedsRecovery(plan: GatewayReloadPlan): boolean {
   return (
     plan.restartCron ||
-    plan.restartHealthMonitor ||
     plan.restartGmailWatcher ||
     plan.reloadPlugins ||
     plan.restartChannels.size > 0 ||

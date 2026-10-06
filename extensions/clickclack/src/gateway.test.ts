@@ -1,6 +1,6 @@
-// Clickclack tests cover gateway plugin behavior.
 import { EventEmitter } from "node:events";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedClickClackAccount } from "./types.js";
 
@@ -61,6 +61,7 @@ vi.mock("./resolve.js", () => ({
 }));
 
 import { startClickClackGatewayAccount } from "./gateway.js";
+import { ClickClackHttpError } from "./http-client.js";
 
 function createGatewayContext(
   abortSignal: AbortSignal,
@@ -94,6 +95,14 @@ function createGatewayContext(
       >,
     setStatus,
   };
+}
+
+async function startGateway(options: { commandMenu?: boolean } = {}) {
+  const abort = new AbortController();
+  const ctx = createGatewayContext(abort.signal, options);
+  const run = startClickClackGatewayAccount(ctx);
+  await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+  return { abort, ctx, run };
 }
 
 function createBacklogEvent(index: number, type = "channel.updated") {
@@ -161,31 +170,10 @@ describe("ClickClack gateway", () => {
     });
   });
 
-  it("uses the private API base for REST and realtime startup", async () => {
-    const socket = new FakeSocket();
-    mocks.client.websocket.mockReturnValue(socket);
-    const abort = new AbortController();
-    const run = startClickClackGatewayAccount(createGatewayContext(abort.signal));
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
-
-    expect(mocks.createClickClackClient).toHaveBeenCalledWith({
-      baseUrl: "http://127.0.0.1:8484",
-      token: "test-token",
-    });
-
-    abort.abort();
-    await run;
-  });
-
   it("publishes ready only after the realtime socket opens", async () => {
     const socket = new FakeSocket();
     mocks.client.websocket.mockReturnValue(socket);
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, ctx, run } = await startGateway();
     expect(ctx.setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
 
     socket.emit("open");
@@ -203,17 +191,10 @@ describe("ClickClack gateway", () => {
     await run;
   });
 
-  it.each([
-    { label: "unset", commandMenu: undefined },
-    { label: "enabled", commandMenu: true },
-  ])("syncs the native command menu before startup when $label", async ({ commandMenu }) => {
+  it("syncs the native command menu before startup by default", async () => {
     const socket = new FakeSocket();
     mocks.client.websocket.mockReturnValue(socket);
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal, { commandMenu });
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, ctx, run } = await startGateway();
 
     expect(mocks.client.setBotCommands).toHaveBeenCalledTimes(1);
     expect(mocks.client.me.mock.invocationCallOrder[0]).toBeLessThan(
@@ -233,11 +214,7 @@ describe("ClickClack gateway", () => {
   it("skips command menu sync when explicitly disabled", async () => {
     const socket = new FakeSocket();
     mocks.client.websocket.mockReturnValue(socket);
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal, { commandMenu: false });
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, run } = await startGateway({ commandMenu: false });
 
     expect(mocks.client.setBotCommands).not.toHaveBeenCalled();
 
@@ -247,33 +224,34 @@ describe("ClickClack gateway", () => {
 
   it.each([
     {
-      label: "missing command scope",
-      error: { status: 403 },
+      label: "workspace command permission rejection",
+      error: new ClickClackHttpError(
+        403,
+        "workspace role no longer permits command updates",
+        new Headers(),
+      ),
       level: "warn" as const,
-      message: "ClickClack command menu sync skipped: bot token lacks commands:write",
+      message:
+        "[default] ClickClack command menu sync skipped: ClickClack 403: workspace role no longer permits command updates; verify token/workspace command permissions or set commandMenu: false if menus are not needed",
     },
     {
       label: "older server",
       error: { status: 404 },
       level: "debug" as const,
       message:
-        "ClickClack command menu sync skipped: server does not support /api/bots/self/commands",
+        "[default] ClickClack command menu sync skipped: server does not support /api/bots/self/commands",
     },
     {
       label: "network failure",
       error: new Error("network unavailable"),
       level: "warn" as const,
-      message: "ClickClack command menu sync failed: network unavailable",
+      message: "[default] ClickClack command menu sync failed: network unavailable",
     },
   ])("continues startup after $label", async ({ error, level, message }) => {
     mocks.client.setBotCommands.mockRejectedValueOnce(error);
     const socket = new FakeSocket();
     mocks.client.websocket.mockReturnValue(socket);
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, ctx, run } = await startGateway();
 
     expect(ctx.log?.[level]).toHaveBeenCalledWith(message);
     expect(ctx.setStatus).toHaveBeenCalledWith({
@@ -296,11 +274,7 @@ describe("ClickClack gateway", () => {
     });
     const socket = new FakeSocket();
     mocks.client.websocket.mockReturnValue(socket);
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, run } = await startGateway();
 
     expect(mocks.client.eventPage).toHaveBeenCalledWith("workspace-1", { includeTail: true });
     expect(mocks.client.websocket).toHaveBeenCalledWith("workspace-1", "cursor-501");
@@ -321,11 +295,7 @@ describe("ClickClack gateway", () => {
       .mockResolvedValueOnce({ events: firstReconnectPage })
       .mockResolvedValueOnce({ events: [createBacklogEvent(501, "message.created")] });
     mocks.client.websocket.mockReturnValueOnce(firstSocket).mockReturnValueOnce(secondSocket);
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, run } = await startGateway();
     firstSocket.emit("close");
     await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(2));
 
@@ -394,11 +364,7 @@ describe("ClickClack gateway", () => {
           finishFirstEvent = resolve;
         }),
     );
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, run } = await startGateway();
 
     for (const index of [1, 2]) {
       emitMessageEvent(firstSocket, index);
@@ -422,6 +388,79 @@ describe("ClickClack gateway", () => {
     await run;
   });
 
+  it("does not dispatch queued websocket events after the account stops", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const firstDispatch = createDeferred<void>();
+    mocks.handleClickClackInbound.mockImplementationOnce(() => firstDispatch.promise);
+    const { abort, ctx, run } = await startGateway();
+    emitMessageEvent(socket, 1);
+    emitMessageEvent(socket, 2);
+    await waitForGatewayState(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledOnce());
+
+    abort.abort();
+    await run;
+    expect(ctx.setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lifecycle: "stopped" }),
+    );
+
+    firstDispatch.resolve();
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(mocks.client.message).toHaveBeenCalledOnce();
+    expect(mocks.handleClickClackInbound).toHaveBeenCalledOnce();
+  });
+
+  it.each(["authoritative message fetch", "sender access resolution"] as const)(
+    "does not begin an inbound turn when shutdown interrupts %s",
+    async (interruptedStep) => {
+      const socket = new FakeSocket();
+      mocks.client.websocket.mockReturnValue(socket);
+      const stepStarted = createDeferred<void>();
+      const releaseStep = createDeferred<void>();
+      const waitForShutdown = async () => {
+        stepStarted.resolve();
+        await releaseStep.promise;
+      };
+      if (interruptedStep === "authoritative message fetch") {
+        mocks.client.message.mockImplementationOnce(async () => {
+          await waitForShutdown();
+          return { id: "msg-1", author_id: "human-1", channel_id: "chan-1" };
+        });
+      } else {
+        mocks.resolveClickClackInboundAccess.mockImplementationOnce(async () => {
+          await waitForShutdown();
+          return { shouldDispatch: true, commandAuthorized: true };
+        });
+      }
+      const abort = new AbortController();
+      const ctx = createGatewayContext(abort.signal);
+      const run = startClickClackGatewayAccount(ctx);
+
+      await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledOnce());
+      emitMessageEvent(socket, 1);
+      await stepStarted.promise;
+
+      abort.abort();
+      await run;
+      expect(ctx.setStatus).toHaveBeenLastCalledWith(
+        expect.objectContaining({ lifecycle: "stopped" }),
+      );
+
+      releaseStep.resolve();
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
+      if (interruptedStep === "authoritative message fetch") {
+        expect(mocks.resolveClickClackInboundAccess).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("replays a failed websocket event on reconnect without processing later queued events", async () => {
     const firstSocket = new FakeSocket();
     const secondSocket = new FakeSocket();
@@ -435,11 +474,7 @@ describe("ClickClack gateway", () => {
       .mockResolvedValueOnce({ events: [] });
     mocks.client.websocket.mockReturnValueOnce(firstSocket).mockReturnValueOnce(secondSocket);
     mocks.handleClickClackInbound.mockRejectedValueOnce(new Error("dispatch failed"));
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, ctx, run } = await startGateway();
 
     for (const index of [1, 2]) {
       emitMessageEvent(firstSocket, index);
@@ -472,11 +507,7 @@ describe("ClickClack gateway", () => {
       .mockResolvedValueOnce({ events: [] });
     mocks.client.websocket.mockReturnValueOnce(firstSocket).mockReturnValueOnce(secondSocket);
     mocks.client.message.mockRejectedValueOnce(new Error("message fetch failed"));
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, ctx, run } = await startGateway();
 
     emitMessageEvent(firstSocket, 1);
 
@@ -540,11 +571,7 @@ describe("ClickClack gateway", () => {
         hasAnyMention: false,
       },
     });
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, ctx, run } = await startGateway();
 
     emitMessageEvent(socket, 1);
 
@@ -588,10 +615,7 @@ describe("ClickClack gateway", () => {
         created_at: "2026-01-01T00:00:00.000Z",
       },
     });
-    const abort = new AbortController();
-    const run = startClickClackGatewayAccount(createGatewayContext(abort.signal));
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, run } = await startGateway();
     emitMessageEvent(socket, 1, { author_id: "other-bot" });
 
     await waitForGatewayState(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
@@ -603,11 +627,7 @@ describe("ClickClack gateway", () => {
   it("carries validated event correlation through the authoritative fetch and inbound turn", async () => {
     const socket = new FakeSocket();
     mocks.client.websocket.mockReturnValue(socket);
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, run } = await startGateway();
 
     emitMessageEvent(socket, 1, { correlation_id: "fakeco.case_1" });
 
@@ -629,11 +649,7 @@ describe("ClickClack gateway", () => {
   it("omits invalid payload correlation without dropping the event", async () => {
     const socket = new FakeSocket();
     mocks.client.websocket.mockReturnValue(socket);
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, run } = await startGateway();
 
     emitMessageEvent(socket, 1, { correlation_id: "bad correlation" });
 
@@ -650,11 +666,7 @@ describe("ClickClack gateway", () => {
     firstSocket.emitErrorOnClose = true;
     const secondSocket = new FakeSocket();
     mocks.client.websocket.mockReturnValueOnce(firstSocket).mockReturnValueOnce(secondSocket);
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, ctx, run } = await startGateway();
 
     firstSocket.emit("error", new Error("gateway dropped"));
 
@@ -714,11 +726,7 @@ describe("ClickClack gateway", () => {
     const socket = new FakeSocket();
     socket.emitErrorOnClose = true;
     mocks.client.websocket.mockReturnValue(socket);
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, ctx, run } = await startGateway();
 
     abort.abort();
     await run;
@@ -763,11 +771,7 @@ describe("ClickClack gateway", () => {
     mocks.client.websocket.mockReturnValueOnce(firstSocket).mockReturnValueOnce(secondSocket);
     const rejection = { code: "ECONNRESET", retryable: true };
     mocks.resolveClickClackInboundAccess.mockRejectedValueOnce(rejection);
-    const abort = new AbortController();
-    const ctx = createGatewayContext(abort.signal);
-    const run = startClickClackGatewayAccount(ctx);
-
-    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    const { abort, ctx, run } = await startGateway();
 
     emitMessageEvent(firstSocket, 1);
 

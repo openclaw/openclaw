@@ -1,9 +1,98 @@
-// Gateway connection detail builder for CLI/user-facing target diagnostics.
+import { createHash } from "node:crypto";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
+import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import { isLoopbackHost, isSecureWebSocketUrl } from "./net.js";
+
+export type GatewaySshRoute = {
+  target: string;
+  remotePort: number;
+  identity?: string;
+  hostKeyPolicy?: "strict" | "openssh";
+};
+
+/** Resolve the forwarded Gateway port independently of the local tunnel port. */
+export function resolveGatewaySshRemotePort(
+  config: OpenClawConfig,
+  gatewayUrl = config.gateway?.remote?.url,
+): number {
+  if (config.gateway?.remote?.remotePort !== undefined) {
+    return config.gateway.remote.remotePort;
+  }
+  const url = gatewayUrl?.trim();
+  if (url && URL.canParse(url)) {
+    // A non-default scheme preserves explicit :80/:443 that WHATWG strips
+    // from ws/wss URLs; a missing port still falls back to gateway.port.
+    const port = new URL(url.replace(/^wss?:/iu, "openclaw-ssh:")).port;
+    if (port) {
+      return Number(port);
+    }
+  }
+  return resolveGatewayPort(config);
+}
+
+/** Select credential ownership independently of an SSH tunnel's reusable local port. */
+export function resolveGatewayDeviceAuthRoute(params: {
+  config: OpenClawConfig;
+  url: string;
+  remote: boolean;
+  configuredRemote?: boolean;
+  tlsFingerprint?: string;
+  sshRoute?: GatewaySshRoute;
+}): { deviceAuthScope?: string; sshTunnel?: GatewaySshRoute; bound: boolean } {
+  if (!params.remote) {
+    return { bound: false };
+  }
+  const url = params.url.trim();
+  const deviceAuthScope = gatewayOriginScope(url);
+  if (!URL.canParse(url)) {
+    return { deviceAuthScope, bound: false };
+  }
+  const parsed = new URL(url);
+  if (!isLoopbackHost(parsed.hostname)) {
+    return { deviceAuthScope, bound: true };
+  }
+  const remote = params.config.gateway?.remote;
+  const configuredTarget = normalizeOptionalString(remote?.sshTarget);
+  const identity = normalizeOptionalString(remote?.sshIdentity);
+  const configuredSshRoute =
+    params.configuredRemote &&
+    configuredTarget &&
+    remote?.transport !== "direct" &&
+    remote?.url?.trim() === url
+      ? {
+          target: configuredTarget,
+          remotePort: resolveGatewaySshRemotePort(params.config, url),
+          ...(identity ? { identity } : {}),
+          ...(remote.sshHostKeyPolicy ? { hostKeyPolicy: remote.sshHostKeyPolicy } : {}),
+        }
+      : undefined;
+  const sshRoute = params.sshRoute ?? configuredSshRoute;
+  if (sshRoute) {
+    const sshTunnel = { ...sshRoute, target: sshRoute.target.trim() };
+    // Match native selected-route ownership. The client must own this SSH
+    // transport; the selected alias alone does not authenticate a local listener.
+    const route = `${sshTunnel.target}:gateway-port:${sshTunnel.remotePort}`;
+    return {
+      deviceAuthScope: `remote:ssh:${createHash("sha256").update(route).digest("hex")}`,
+      sshTunnel,
+      bound: true,
+    };
+  }
+  const fingerprint = normalizeTlsFingerprint(params.tlsFingerprint);
+  if (parsed.protocol === "wss:" && fingerprint) {
+    return {
+      deviceAuthScope: `remote:tls:${createHash("sha256")
+        .update(`${deviceAuthScope}:tls-sha256:${fingerprint}`)
+        .digest("hex")}`,
+      bound: true,
+    };
+  }
+  return { deviceAuthScope, bound: false };
+}
 
 /** Resolved gateway target plus redacted display text for diagnostics. */
 export type GatewayConnectionDetails = {
@@ -45,6 +134,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+    serviceTargetUrl?: string;
   } = {},
   resolvers: GatewayConnectionDetailResolvers = {},
 ): GatewayConnectionDetails {
@@ -53,7 +143,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     options.configPath ??
     resolvers.resolveConfigPath?.(process.env) ??
     resolveConfigPath(process.env);
-  const isRemoteMode = config.gateway?.mode === "remote";
+  const isRemoteMode = options.localPortOverride === undefined && config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort =
@@ -64,27 +154,33 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
   const cliUrlOverride = normalizeOptionalString(options.url);
+  const serviceUrl = normalizeOptionalString(options.serviceTargetUrl);
   const envUrlOverride =
-    cliUrlOverride || options.ignoreEnvUrlOverride || options.localPortOverride !== undefined
+    cliUrlOverride ||
+    serviceUrl ||
+    options.ignoreEnvUrlOverride ||
+    options.localPortOverride !== undefined
       ? undefined
       : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const remoteUrl = normalizeOptionalString(remote?.url);
-  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
+  const remoteMisconfigured = isRemoteMode && !urlOverride && !serviceUrl && !remoteUrl;
   const urlSourceHint =
     options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);
-  const url = urlOverride || remoteUrl || localUrl;
+  const url = urlOverride || serviceUrl || remoteUrl || localUrl;
   const displayUrl = redactSensitiveUrlLikeString(url);
   const urlSource = urlOverride
     ? urlSourceHint === "env"
       ? "env OPENCLAW_GATEWAY_URL"
       : "cli --url"
-    : remoteUrl
-      ? "config gateway.remote.url"
-      : remoteMisconfigured
-        ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
-  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
+    : serviceUrl
+      ? "service target"
+      : remoteUrl
+        ? "config gateway.remote.url"
+        : remoteMisconfigured
+          ? "missing gateway.remote.url (fallback local)"
+          : "local loopback";
+  const bindDetail = !urlOverride && (serviceUrl || !remoteUrl) ? `Bind: ${bindMode}` : undefined;
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;

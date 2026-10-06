@@ -4,11 +4,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isSecretRef,
   LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX,
-  resolveSecretInputRef,
+  parseSecretRef,
 } from "../../config/types.secrets.js";
+import { canResolveEnvSecretRefInReadOnlyPath } from "../../plugin-sdk/secret-ref-readonly.internal.js";
 import {
+  isBuiltInDefaultSecretProviderRef,
   isValidSecretRef,
-  resolveDefaultSecretProviderAlias,
   SINGLE_VALUE_FILE_REF_ID,
 } from "../../secrets/ref-contract.js";
 import {
@@ -17,6 +18,7 @@ import {
   SECRETREF_ENV_HEADER_MARKER_PREFIX,
 } from "../model-auth-markers.js";
 import { hasUsableOAuthCredential, resolveTokenExpiryState } from "./credential-state.js";
+import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import type { AuthProfileCredential } from "./types.js";
 
 type ReadOnlyCredentialAvailability = boolean | undefined;
@@ -41,20 +43,21 @@ export function resolveSecretRefReadOnlyAvailability(
   if (!isSecretRef(value) || !isValidSecretRef(value)) {
     return false;
   }
-  const source = cfg.secrets?.providers?.[value.provider];
-  const isImplicitProvider =
-    (value.source === "env" && value.provider === resolveDefaultSecretProviderAlias(cfg, "env")) ||
-    (value.source === "store" &&
-      value.provider === resolveDefaultSecretProviderAlias(cfg, "store"));
-  if ((!source && !isImplicitProvider) || (source && source.source !== value.source)) {
-    return false;
-  }
   if (value.source === "env") {
-    return source?.source === "env" && source.allowlist && !source.allowlist.includes(value.id)
-      ? false
-      : hasSecret(env[value.id])
-        ? true
-        : undefined;
+    if (
+      !canResolveEnvSecretRefInReadOnlyPath({
+        cfg,
+        provider: value.provider,
+        id: value.id,
+      })
+    ) {
+      return false;
+    }
+    return hasSecret(env[value.id]) ? true : undefined;
+  }
+  const source = cfg.secrets?.providers?.[value.provider];
+  if (source?.source !== value.source && !isBuiltInDefaultSecretProviderRef(cfg, value)) {
+    return false;
   }
   if (
     value.source === "file" &&
@@ -72,11 +75,8 @@ function resolveSecretInputReadOnlyAvailability(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): ReadOnlyCredentialAvailability {
-  const { ref } = resolveSecretInputRef({
-    value,
-    refValue,
-    defaults: cfg.secrets?.defaults,
-  });
+  const ref =
+    parseSecretRef(refValue, cfg.secrets?.defaults) ?? parseSecretRef(value, cfg.secrets?.defaults);
   if (ref) {
     return resolveSecretRefReadOnlyAvailability(ref, cfg, env);
   }
@@ -114,6 +114,9 @@ export function resolveStoredCredentialReadOnlyAvailability(params: {
   }
   if (hasUsableOAuthCredential(credential, { now })) {
     return true;
+  }
+  if (isOAuthRefreshFence(credential)) {
+    return false;
   }
   // Refresh material is runnable only when the caller owns a refresh path.
   // Ref-only OAuth may hydrate from the runtime snapshot, so it stays unknown.

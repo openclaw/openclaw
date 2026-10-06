@@ -7,11 +7,7 @@ import {
   type GatewayGuildDeleteDispatchData,
   type GatewayVoiceStateUpdateDispatchData,
 } from "discord-api-types/v10";
-
-export type DiscordGatewayVoiceStateTransition = {
-  current: APIVoiceState;
-  previous?: APIVoiceState;
-};
+import type { DiscordGatewayVoiceStateTransition } from "./plugin-contract.js";
 
 export class DiscordGatewayVoiceStateCache {
   private readonly statesByGuild = new Map<string, Map<string, APIVoiceState>>();
@@ -22,10 +18,10 @@ export class DiscordGatewayVoiceStateCache {
     this.transitionsByState = new WeakMap();
   }
 
-  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] {
+  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] | null {
     const states = this.statesByGuild.get(guildId);
     if (!states) {
-      return [];
+      return null;
     }
     const result: APIVoiceState[] = [];
     for (const state of states.values()) {

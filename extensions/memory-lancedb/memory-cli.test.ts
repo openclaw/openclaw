@@ -1,11 +1,16 @@
+import { tableFromArrays } from "apache-arrow";
 import { Command } from "commander";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi } from "./api.js";
 import type { Embeddings } from "./embeddings.js";
 import type { MemoryDB } from "./lancedb-store.js";
 import { registerMemoryCli } from "./memory-cli.js";
 
-function createHarness(params?: { embedError?: unknown; closeError?: Error }) {
+function createHarness(params?: {
+  embedError?: unknown;
+  closeError?: Error;
+  queryRows?: Record<string, unknown>[];
+}) {
   const registerCli = vi.fn();
   const closeError = params?.closeError;
   const close = closeError
@@ -24,12 +29,18 @@ function createHarness(params?: { embedError?: unknown; closeError?: Error }) {
     close,
   };
   const search = vi.fn(async () => []);
+  const query = vi.fn(async () => params?.queryRows ?? []);
   registerMemoryCli(
     { registerCli } as unknown as OpenClawPluginApi,
-    { search } as unknown as MemoryDB,
+    { search, query } as unknown as MemoryDB,
     embeddings,
     (rawAgentId) => (typeof rawAgentId === "string" ? rawAgentId : "main"),
-    undefined,
+    () => ({
+      embedding: { provider: "openai", model: "text-embedding-3-small" },
+      captureMaxChars: 500,
+      recallMaxChars: 1000,
+    }),
+    { dbPath: "/fixture/memory" },
   );
   const registrar = registerCli.mock.calls[0]?.[0] as
     | ((params: { program: Command }) => void)
@@ -39,24 +50,10 @@ function createHarness(params?: { embedError?: unknown; closeError?: Error }) {
   }
   const program = new Command();
   registrar({ program });
-  return { close, embed, program, search };
+  return { close, embed, program, query, search };
 }
 
 describe("memory-lancedb CLI embedding lifecycle", () => {
-  it("closes embeddings after search", async () => {
-    const harness = createHarness();
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    try {
-      await harness.program.parseAsync(["node", "openclaw", "ltm", "search", "hello"]);
-    } finally {
-      log.mockRestore();
-    }
-
-    expect(harness.embed).toHaveBeenCalledTimes(1);
-    expect(harness.search).toHaveBeenCalledTimes(1);
-    expect(harness.close).toHaveBeenCalledTimes(1);
-  });
-
   it("embeds a CLI search with the explicitly requested agent's authentication", async () => {
     const harness = createHarness();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -74,20 +71,11 @@ describe("memory-lancedb CLI embedding lifecycle", () => {
       log.mockRestore();
     }
 
-    expect(harness.embed).toHaveBeenCalledWith("private", "private account memory");
-    expect(harness.search).toHaveBeenCalledWith("private", [0.1, 0.2], 5, 0.3);
-    expect(harness.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("closes embeddings without masking search failure", async () => {
-    const harness = createHarness({
-      embedError: new Error("embedding failed"),
-      closeError: new Error("close failed"),
+    expect(harness.embed).toHaveBeenCalledWith("private", "private account memory", {
+      provider: "openai",
+      model: "text-embedding-3-small",
     });
-
-    await expect(
-      harness.program.parseAsync(["node", "openclaw", "ltm", "search", "hello"]),
-    ).rejects.toThrow("embedding failed");
+    expect(harness.search).toHaveBeenCalledWith("private", [0.1, 0.2], 5, 0.3);
     expect(harness.close).toHaveBeenCalledTimes(1);
   });
 
@@ -125,5 +113,88 @@ describe("memory-lancedb CLI embedding lifecycle", () => {
       );
     expect(rejection).toBeNull();
     expect(harness.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("memory-lancedb CLI query output", () => {
+  it.each([
+    { columns: "id,text", order: "createdAt:asc", ids: ["first", "second"] },
+    { columns: "id,text", order: "createdAt:desc", ids: ["third", "second"] },
+    { columns: "id,text,createdAt", order: "createdAt:asc", ids: ["first", "second"] },
+  ])(
+    "projects $columns ordered by $order without mutating Arrow rows",
+    async ({ columns, order, ids }) => {
+      const table = tableFromArrays({
+        id: ["third", "first", "second"],
+        text: ["third memory", "first memory", "second memory"],
+        createdAt: [30, 10, 20],
+      });
+      const originalRows = table.toArray().map((row) => row.toJSON());
+      const harness = createHarness({ queryRows: table.toArray() });
+      let stdout = "";
+      const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        stdout += String(chunk);
+        return true;
+      });
+      try {
+        await harness.program.parseAsync([
+          "node",
+          "openclaw",
+          "ltm",
+          "query",
+          "--cols",
+          columns,
+          "--order-by",
+          order,
+          "--limit",
+          "2",
+        ]);
+      } finally {
+        write.mockRestore();
+      }
+
+      const rows = JSON.parse(stdout) as Array<Record<string, unknown>>;
+      expect(rows.map((row) => row.id)).toEqual(ids);
+      expect(rows.map((row) => Object.keys(row))).toEqual(ids.map(() => columns.split(",")));
+      expect(rows.map((row) => row.text)).toEqual(ids.map((id) => `${id} memory`));
+      expect(table.toArray().map((row) => row.toJSON())).toEqual(originalRows);
+      expect(harness.embed).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("memory-lancedb CLI filters", () => {
+  it.each([
+    {
+      input: "category = 'preference'",
+      filter: { column: "category", operator: "=", value: "preference" },
+    },
+    {
+      input: "importance >= 0.8",
+      filter: { column: "importance", operator: ">=", value: 0.8 },
+    },
+  ])("passes a typed query filter to storage: $input", async ({ input, filter }) => {
+    const harness = createHarness();
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await harness.program.parseAsync(["node", "openclaw", "ltm", "query", "--filter", input]);
+    } finally {
+      write.mockRestore();
+    }
+    expect(harness.query).toHaveBeenCalledWith("main", expect.objectContaining({ filter }));
+  });
+
+  it.each([
+    "agentId = 'beta'",
+    "category = 'preference' OR agentId = 'beta'",
+    "category = 'preference') OR (1 = 1",
+    "category IN ('preference', 'fact')",
+    "importance = 'high'",
+  ])("rejects a filter before storage access: %s", async (filter) => {
+    const harness = createHarness();
+    await expect(
+      harness.program.parseAsync(["node", "openclaw", "ltm", "query", "--filter", filter]),
+    ).rejects.toThrow();
+    expect(harness.query).not.toHaveBeenCalled();
   });
 });

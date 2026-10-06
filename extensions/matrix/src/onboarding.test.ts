@@ -26,48 +26,6 @@ vi.mock("./matrix/deps.js", () => ({
 describe("matrix onboarding", () => {
   installMatrixOnboardingEnvRestoreHooks();
 
-  it("offers env shortcut for non-default account when scoped env vars are present", async () => {
-    installMatrixTestRuntime();
-    installMatrixScopedEnvShortcut();
-
-    const confirmMessages: string[] = [];
-    const prompter = createMatrixEnvShortcutAddAccountPrompter({
-      onConfirm: (message) => {
-        confirmMessages.push(message);
-        return message.startsWith("Matrix env vars detected");
-      },
-    });
-
-    const result = await runMatrixInteractiveConfigure({
-      cfg: createConfiguredMatrixDefaultAccountConfig(),
-      prompter,
-      shouldPromptAccountIds: true,
-      configured: true,
-    });
-
-    expect(result).not.toBe("skip");
-    if (result !== "skip") {
-      const opsAccount = result.cfg.channels?.["matrix"]?.accounts?.ops as
-        | {
-            enabled?: boolean;
-            homeserver?: string;
-            accessToken?: string;
-          }
-        | undefined;
-      expect(result.accountId).toBe("ops");
-      expect(opsAccount?.enabled).toBe(true);
-      expect(opsAccount?.homeserver).toBeUndefined();
-      expect(opsAccount?.accessToken).toBeUndefined();
-    }
-    expect(
-      confirmMessages.some((message) =>
-        message.startsWith(
-          "Matrix env vars detected (MATRIX_OPS_HOMESERVER (+ auth vars)). Use env values?",
-        ),
-      ),
-    ).toBe(true);
-  });
-
   it("routes env-shortcut add-account flow through Matrix invite auto-join setup", async () => {
     installMatrixTestRuntime();
     installMatrixScopedEnvShortcut();
@@ -105,6 +63,8 @@ describe("matrix onboarding", () => {
     expect(result.accountId).toBe("ops");
     const opsAccount = result.cfg.channels?.matrix?.accounts?.ops;
     expect(opsAccount?.enabled).toBe(true);
+    expect(opsAccount?.homeserver).toBeUndefined();
+    expect(opsAccount?.accessToken).toBeUndefined();
     expect(opsAccount?.groupPolicy).toBe("allowlist");
     expect(opsAccount?.groups?.["!ops-room:example.org"]?.enabled).toBe(true);
     expect(opsAccount?.autoJoin).toBe("allowlist");
@@ -449,7 +409,7 @@ describe("matrix onboarding", () => {
       onText: async (message) => {
         if (message === "Matrix invite auto-join allowlist (comma-separated)") {
           inviteAllowlistPrompts += 1;
-          return inviteAllowlistPrompts === 1 ? "Project Room" : "#ops:example.org";
+          return inviteAllowlistPrompts === 1 ? "!, Project Room" : "#ops:example.org";
         }
         throw new Error(`unexpected text prompt: ${message}`);
       },
@@ -470,9 +430,90 @@ describe("matrix onboarding", () => {
     expect(result.cfg.channels?.matrix?.autoJoin).toBe("allowlist");
     expect(result.cfg.channels?.matrix?.autoJoinAllowlist).toEqual(["#ops:example.org"]);
     expect(notes.join("\n")).toContain(
-      "Use only stable Matrix invite targets for auto-join: !roomId:server, #alias:server, or *.",
+      "Use only stable Matrix invite targets for auto-join: !roomId:server (or the suffixless !roomId form on room version 12+), #alias:server, or *.",
     );
-    expect(notes.join("\n")).toContain("Invalid: Project Room");
+    expect(notes.join("\n")).toContain("Invalid: !, Project Room");
+  });
+
+  it("accepts a room version 12 auto-join target (no :server suffix) on the first entry", async () => {
+    // Room version 12 (MSC4291) dropped the trailing ":server" from room IDs.
+    installMatrixTestRuntime();
+    const notes: string[] = [];
+    let inviteAllowlistPrompts = 0;
+
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
+      notes,
+      inviteAutoJoin: "allowlist",
+      onText: async (message) => {
+        if (message === "Matrix invite auto-join allowlist (comma-separated)") {
+          inviteAllowlistPrompts += 1;
+          return "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70";
+        }
+        throw new Error(`unexpected text prompt: ${message}`);
+      },
+    });
+
+    const result = await runMatrixInteractiveConfigure({
+      cfg: createConfiguredMatrixTopLevelConfig(),
+      prompter,
+      configured: true,
+    });
+
+    expect(result).not.toBe("skip");
+    if (result === "skip") {
+      return;
+    }
+
+    expect(inviteAllowlistPrompts).toBe(1);
+    expect(result.cfg.channels?.matrix?.autoJoin).toBe("allowlist");
+    expect(result.cfg.channels?.matrix?.autoJoinAllowlist).toEqual([
+      "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70",
+    ]);
+  });
+
+  it("advertises the suffixless Room v12 form in the invite auto-join placeholder", async () => {
+    installMatrixTestRuntime();
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
+      inviteAutoJoin: "allowlist",
+      onText: async (message) =>
+        message === "Matrix invite auto-join allowlist (comma-separated)" ? "#ops:example.org" : "",
+    });
+
+    await runMatrixInteractiveConfigure({
+      cfg: createConfiguredMatrixTopLevelConfig(),
+      prompter,
+      configured: true,
+    });
+
+    const invitePromptCall = vi
+      .mocked(prompter.text)
+      .mock.calls.find(
+        ([options]) => options.message === "Matrix invite auto-join allowlist (comma-separated)",
+      );
+    expect(invitePromptCall?.[0].placeholder).toBe("!roomId:server, !roomId, #alias:server, *");
+  });
+
+  it("advertises the suffixless Room v12 form in the group room setup placeholder", async () => {
+    installMatrixTestRuntime();
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
+      configureRoomsAccess: true,
+      roomsAllowlist: "!ops-room:example.org",
+    });
+
+    await runMatrixInteractiveConfigure({
+      cfg: createConfiguredMatrixTopLevelConfig(),
+      prompter,
+      configured: true,
+    });
+
+    const roomsPromptCall = vi
+      .mocked(prompter.text)
+      .mock.calls.find(
+        ([options]) => options.message === "Matrix rooms allowlist (comma-separated)",
+      );
+    expect(roomsPromptCall?.[0].placeholder).toBe(
+      "!roomId:server, !roomId, #alias:server, Project Room",
+    );
   });
 
   it("reports account-scoped DM config keys for named accounts", () => {

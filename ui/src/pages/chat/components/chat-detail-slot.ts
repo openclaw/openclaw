@@ -1,59 +1,68 @@
 import { html, type TemplateResult } from "lit";
+import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
+import { t } from "../../../i18n/index.ts";
+import { ensureLazySidebarElement } from "../chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
+import { selectedChatSessionRow } from "../chat-state-route.ts";
 import type { ChatProps } from "../chat-view.ts";
-import type { SidebarLayout } from "../sidebar-layout.ts";
-import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
-import "./chat-sidebar.ts";
+import { openSlot } from "../sidebar-layout.ts";
+import "./chat-tool-output.ts";
+import { assistantMediaPolicyKey } from "./chat-message-media.ts";
+import { selectSessionWorkspacePreview } from "./chat-session-workspace-state.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
-import { resetTaskDetail } from "./chat-task-detail-state.ts";
-import { renderTaskDetailPanel } from "./chat-task-detail.ts";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
-
-// Region close collapses the detail slot but leaves sidebarContent set, so
-// "task content exists" is not "panel visible"; consumers (panel render, rail
-// open-row highlight) must gate on the layout, not the content.
-export function detailSlotOpen(layout: SidebarLayout): boolean {
-  return layout.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"));
-}
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 export function renderChatDetailSlot(params: {
-  backgroundTasks: BackgroundTasksProps;
   chat: ChatProps;
   content: SidebarContent;
-  fullMessageLoader: SidebarFullMessageLoader | null;
   host: ChatPageHost;
-  layout: SidebarLayout;
-  transcript: ChatTranscriptController;
+  requestUpdate: () => void;
 }): TemplateResult {
   const { content, host } = params;
-  if (content.kind === "task") {
-    if (!detailSlotOpen(params.layout)) {
-      resetTaskDetail(host);
-      return html``;
-    }
-    return renderTaskDetailPanel({
-      backgroundTasks: params.backgroundTasks,
-      chat: params.chat,
-      host,
-      task: params.backgroundTasks.tasks?.find((task) => task.id === content.taskId) ?? undefined,
-      transcript: params.transcript,
-    });
+  if (content.kind === "tool-output") {
+    return html`<openclaw-chat-tool-output
+      class="chat-sidebar"
+      .content=${content}
+      .loadFullMessage=${params.chat.loadFullAssistantMessage ?? null}
+      .connectionEpoch=${params.chat.connectionEpoch}
+    ></openclaw-chat-tool-output>`;
   }
-  resetTaskDetail(host);
+  const panelLoad = ensureLazySidebarElement("detail-panel", params.requestUpdate);
+  if (panelLoad !== undefined) {
+    return panelLoad ?? renderPanelLoadingSkeleton("review", t("common.loading"));
+  }
   return html`<openclaw-chat-detail-panel
     class="chat-sidebar"
     .content=${content}
-    .loadFullMessage=${params.fullMessageLoader}
+    .fileNavigation=${content.kind === "file" ? (content.navigation ?? null) : null}
+    .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
+    .attachmentRuntime=${{
+      sessionKey: params.chat.sessionKey,
+      agentId: params.chat.currentAgentId ?? params.chat.fullMessageAgentId,
+      policyKey: assistantMediaPolicyKey(params.chat.selectedSession, params.chat.mediaPolicyEpoch),
+      authToken: params.chat.assistantAttachmentAuthToken,
+      connectionEpoch: params.chat.connectionEpoch,
+      resourceBasePath: params.chat.resourceBasePath,
+      resolveArtifactDownload: params.chat.resolveArtifactDownload,
+    }}
+    .basePath=${params.chat.basePath ?? ""}
     .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
     .embedSandboxMode=${host.embedSandboxMode}
     .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
-    .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
+    .githubContext=${{ githubRepo: params.chat.githubRepo, githubRepositories: params.chat.githubRepositories }}
+    .onOpenWorkspaceFile=${(target: MarkdownFileLinkTarget) =>
       openSessionWorkspaceFile(host, target)}
-    .onRevealInWorkspace=${(path: string) => revealSessionWorkspaceFile(host, path)}
+    .onOpenSessionLink=${params.chat.onOpenSessionLink}
+    .onRevealInWorkspace=${(path: string) => {
+      revealSessionWorkspaceFile(host, path);
+      selectSessionWorkspacePreview(host, null);
+      host.updateSidebarLayout(openSlot(host.sidebarLayout, "workspace"));
+    }}
     .onOpenImage=${(item: Parameters<typeof host.handleOpenImage>[0]) =>
       host.handleOpenImage(item, host.beginImageOpen())}
     .embedded=${true}
-    @chat-detail-panel-close=${() => host.handleCloseSidebar()}
+    @chat-detail-panel-close=${() =>
+      host.handleCloseSidebar(content.kind === "attachment" ? "workspace" : "detail")}
   ></openclaw-chat-detail-panel>`;
 }

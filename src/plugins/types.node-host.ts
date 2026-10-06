@@ -11,7 +11,20 @@ export type OpenClawPluginNodeHostCommandAvailabilityContext = {
 export type OpenClawPluginNodeHostCommandIo = {
   emitChunk(chunk: string): Promise<void>;
   onInput(callback: (payloadJSON: string) => void): void;
+  /** Complete binary messages; available when the node host dispatches a duplex command. */
+  frames?: {
+    send(message: Uint8Array): Promise<void>;
+    onMessage(listener: (message: Uint8Array) => void | Promise<void>): () => void;
+  };
   signal: AbortSignal;
+};
+
+export type OpenClawPluginNodeWorkspace = {
+  workspaceDir: string;
+  environmentId: string;
+  sessionId: string;
+  ownerEpoch: number;
+  sessionKey: string;
 };
 
 export type OpenClawPluginNodeHostCommandContext = {
@@ -21,21 +34,40 @@ export type OpenClawPluginNodeHostCommandContext = {
   sessionKey?: string;
   /** Aborts when the Gateway cancels this specific node-host invocation. */
   signal?: AbortSignal;
+  /** Prepare local exec policy; call the returned guard synchronously immediately before spawn. */
+  prepareExecAuthorization?: (source: "human-approved" | "session-full") => () => void;
+  /** @deprecated Use acquireManagedWorkspaceAsync; retained for synchronous plugin compatibility. */
+  acquireManagedWorkspace?: (request: OpenClawPluginNodeWorkspace) => {
+    workspaceDir: string;
+    /** Stable HOME owned and validated by this exact prepared workspace binding. */
+    homeDir?: string;
+    release: () => void;
+  };
+  /** Protect an exact node-owned workspace after durable worker-backed binding validation. */
+  acquireManagedWorkspaceAsync?: (request: OpenClawPluginNodeWorkspace) => Promise<{
+    workspaceDir: string;
+    homeDir?: string;
+    release: () => void;
+  }>;
 };
 
 type OpenClawPluginNodeHostCommandBase = {
   command: string;
   cap?: string;
   dangerous?: boolean;
+  /** Settle node-local startup before the initial capability declaration; registration stays synchronous. */
+  prepare?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => Promise<void> | void;
   /** Return false to omit this command and capability from the node declaration. */
   isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
-  /** Watch node-local availability and request a fresh Gateway declaration. */
+  /** Watch availability; node shutdown awaits the returned cleanup callback. */
   watchAvailability?: (
     context: OpenClawPluginNodeHostCommandAvailabilityContext,
     onChange: () => void,
-  ) => (() => void) | void;
+  ) => (() => void | Promise<void>) | void;
   /** Release command-owned state when the active Gateway connection closes. */
   onDisconnect?: () => Promise<void> | void;
+  /** Return false only when retained work and cleanup are idle; an absent hook defers auto-update. */
+  hasActiveWork?: () => boolean;
   /** Optional Computer Use declaration published with this command's node manifest. */
   computerUse?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => unknown;
   agentTool?: {
@@ -51,8 +83,8 @@ type OpenClawPluginNodeHostCommandBase = {
 export type OpenClawPluginNodeHostCommand = OpenClawPluginNodeHostCommandBase & {
   // Not a discriminated handle signature: a union of different arities makes
   // plain `command.handle(params)` uncallable for consumers holding the union.
-  // The node host enforces io presence for duplex commands at runtime.
-  duplex?: boolean;
+  // true requires IO; optional commands also retain their unary invocation.
+  duplex?: boolean | "optional";
   handle: (
     paramsJSON?: string | null,
     io?: OpenClawPluginNodeHostCommandIo,

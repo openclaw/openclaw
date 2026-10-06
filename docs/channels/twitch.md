@@ -158,6 +158,12 @@ Every account entry needs its own `accessToken` (the env var covers only the def
 
 `allowFrom` is a hard allowlist of Twitch user IDs. When it is set, `allowedRoles` is ignored; leave `allowFrom` unset to use role-based access instead.
 
+In the setup wizard, **Disabled** blocks all chat by writing an empty `allowFrom` list. **Open** removes the user ID allowlist and allows all roles. **Allowlist** keeps a nonempty user ID list; otherwise, it removes the empty override and allows moderators and VIPs. All three choices require an @mention.
+
+Choosing **Open** or **Disabled** discards any previous user IDs. Switching back to **Allowlist** does not restore them; configure `allowFrom` again to restrict access to specific IDs.
+
+Existing configurations with no `allowFrom` and empty or absent `allowedRoles` remain open. There is no automatic migration because those values do not record whether Disabled was intended. Reselect **Disabled** in setup or configure `allowFrom: []` to block chat.
+
 **Available roles:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`.
 
 <Tabs>
@@ -227,6 +233,19 @@ Find yours with the [username to ID converter](https://www.streamweasels.com/too
 </Note>
 
 ## Troubleshooting
+
+### Execution identity audit
+
+With [execution identity collection](/gateway/audit#run-identity-inspection) enabled,
+a trusted native Twitch plugin attributes the run to the native Twitch sender,
+scoped to the configured account. The audit stores an opaque identity, not the raw
+Twitch user ID. Roles such as moderator authorize access; they do not replace
+the sender's identity. Missing native user IDs remain unknown even when a role or
+open policy allows a reply. External plugin installations do not gain trusted
+participant evidence through this path. Audit collection never changes these
+access decisions.
+
+### Connection and replies
 
 First, run diagnostic commands:
 
@@ -365,7 +384,7 @@ The agent can send Twitch messages through the message tool `send` action:
 }
 ```
 
-`to` is optional and defaults to the account's configured `channel`.
+When replying in a Twitch conversation, omit `to` to use the current conversation. Message-tool calls without a current conversation and CLI sends require an explicit target. Direct Gateway `message.action` sends can omit `to` to use the selected account's configured `channel`.
 
 ## Safety and ops
 
@@ -380,11 +399,12 @@ The agent can send Twitch messages through the message tool `send` action:
 
 - **500 characters** per message; longer replies are chunked at word boundaries.
 - Markdown is stripped before sending (Twitch chat is plain text; newlines become spaces).
+- Text that becomes empty after Markdown stripping, such as `---`, is recorded as intentionally not sent and does not count as a delivered message.
 - OpenClaw adds no rate limiting of its own; the Twurple chat client handles Twitch rate limits.
 
 ## Related
 
-- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channel routing](/channels/channel-routing) — session routing for messages
 - [Channels Overview](/channels) — all supported channels
 - [Groups](/channels/groups) — group chat behavior and mention gating
 - [Pairing](/channels/pairing) — DM authentication and pairing flow

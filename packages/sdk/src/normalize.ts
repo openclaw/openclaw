@@ -1,74 +1,13 @@
-// OpenClaw SDK helper module supports normalize behavior.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSdkLifecycleEventType } from "./run-terminal.js";
 import type { GatewayEvent, JsonObject, OpenClawEvent, OpenClawEventType } from "./types.js";
 
-function readLowerString(value: unknown): string | undefined {
-  return readNonEmptyString(value)?.toLowerCase();
-}
-
-function hasHardTimeoutMetadata(data: JsonObject, statusAlreadyTimeoutAttributed = false): boolean {
-  const timeoutPhase = readLowerString(data.timeoutPhase);
-  return (
-    (statusAlreadyTimeoutAttributed && data.providerStarted === true) ||
-    timeoutPhase === "preflight" ||
-    timeoutPhase === "provider" ||
-    timeoutPhase === "post_turn"
-  );
-}
-
-function isLifecycleCancellation(data: JsonObject): boolean {
-  const status = readLowerString(data.status);
-  const stopReason = readLowerString(data.stopReason);
-  return (
-    status === "aborted" ||
-    status === "cancelled" ||
-    status === "canceled" ||
-    status === "killed" ||
-    stopReason === "aborted" ||
-    stopReason === "cancelled" ||
-    stopReason === "canceled" ||
-    stopReason === "killed" ||
-    stopReason === "auth-revoked" ||
-    stopReason === "restart" ||
-    stopReason === "rpc" ||
-    stopReason === "user" ||
-    (data.aborted === true && stopReason === "stop")
-  );
-}
-
-function normalizeLifecycleEndEventType(data: JsonObject): OpenClawEventType {
-  const status = readLowerString(data.status);
-  const stopReason = readLowerString(data.stopReason);
-  const statusAlreadyTimeoutAttributed =
-    stopReason !== "restart" &&
-    (status === "timeout" || status === "timed_out" || data.aborted === true);
-  if (hasHardTimeoutMetadata(data, statusAlreadyTimeoutAttributed)) {
-    return "run.timed_out";
-  }
-  if (isLifecycleCancellation(data)) {
-    return "run.cancelled";
-  }
-  if (
-    status === "timeout" ||
-    status === "timed_out" ||
-    stopReason === "timeout" ||
-    stopReason === "timed_out"
-  ) {
-    return "run.timed_out";
-  }
-  if (data.aborted === true) {
-    return "run.timed_out";
-  }
-  return "run.completed";
-}
-
 function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
-  const stream = readNonEmptyString(payload.stream);
+  const stream = payload.stream;
   const data = asRecord(payload.data);
-  const phase = readNonEmptyString(data.phase);
-  const status = readNonEmptyString(data.status);
+  const { phase, status } = data;
 
   if (stream === "assistant") {
     return data.delta === true || typeof data.delta === "string"
@@ -82,17 +21,8 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
     if (phase === "start") {
       return "run.started";
     }
-    if (phase === "end") {
-      return normalizeLifecycleEndEventType(data);
-    }
-    if (phase === "error") {
-      if (hasHardTimeoutMetadata(data, false)) {
-        return "run.timed_out";
-      }
-      if (isLifecycleCancellation(data)) {
-        return "run.cancelled";
-      }
-      return "run.failed";
+    if (phase === "end" || phase === "error") {
+      return resolveSdkLifecycleEventType(data, phase);
     }
   }
   if (stream === "tool" || stream === "item" || stream === "command_output") {
@@ -103,9 +33,9 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
       return "tool.call.delta";
     }
     // Terminal tool/item events carry phase:"end" together with the real status, so a failed or
-    // blocked tool must be classified before the end/completed branch — otherwise phase:"end" wins
+    // blocked or skipped tool must precede the end/completed branch — otherwise phase:"end" wins
     // and failures are reported as tool.call.completed.
-    if (status === "failed" || status === "blocked") {
+    if (status === "failed" || status === "blocked" || status === "skipped") {
       return "tool.call.failed";
     }
     if (phase === "end" || status === "completed") {
@@ -119,19 +49,15 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
   if (stream === "patch") {
     return "artifact.updated";
   }
-  if (stream === "error") {
-    return "run.failed";
-  }
   return "raw";
 }
 
-function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
-  const payload = asRecord(event.payload);
-  switch (event.event) {
+function normalizeNamedEventType(event: string, payload: JsonObject): OpenClawEventType {
+  switch (event) {
     case "agent":
       return normalizeAgentEventType(payload);
     case "sessions.changed": {
-      const reason = readNonEmptyString(payload.reason);
+      const reason = payload.reason;
       if (reason === "create") {
         return "session.created";
       }
@@ -150,9 +76,6 @@ function normalizeNamedEventType(event: GatewayEvent): OpenClawEventType {
     case "exec.approval.resolved":
     case "plugin.approval.resolved":
       return "approval.resolved";
-    case "task.updated":
-    case "tasks.changed":
-      return "task.updated";
     default:
       return "raw";
   }
@@ -164,7 +87,6 @@ export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
   const runId = readNonEmptyString(payload.runId);
   const sessionId = readNonEmptyString(payload.sessionId);
   const sessionKey = readNonEmptyString(payload.sessionKey);
-  const taskId = readNonEmptyString(payload.taskId);
   const agentId = readNonEmptyString(payload.agentId);
   const ts = asFiniteNumber(payload.ts) ?? Date.now();
   const idParts = [event.seq ?? "local", event.event, runId, sessionKey, ts].filter(
@@ -175,11 +97,10 @@ export function normalizeGatewayEvent(event: GatewayEvent): OpenClawEvent {
     version: 1,
     id: idParts.join(":"),
     ts,
-    type: normalizeNamedEventType(event),
+    type: normalizeNamedEventType(event.event, payload),
     ...(runId ? { runId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
-    ...(taskId ? { taskId } : {}),
     ...(agentId ? { agentId } : {}),
     data: payload.data ?? payload,
     raw: event,

@@ -93,7 +93,7 @@ function expectAckReactionRuntimeOptions(
   }
 }
 
-export function requireReactionCall(
+function requireReactionCall(
   mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
   index: number,
 ) {
@@ -117,7 +117,7 @@ function expectReactionCallAt(
 ) {
   const call = requireReactionCall(mock, index);
   expect(call[0]).toBe(params?.channelId ?? "c1");
-  expect(call[1]).toBe(params?.messageId ?? "m1");
+  expect(call[1]).toBe(params?.messageId ?? "1001");
   expect(call[2]).toBe(emoji);
   expectAckReactionRuntimeOptions(call[3], params);
 }
@@ -164,16 +164,10 @@ export function getDeliveredFinalTexts(): string[] {
   });
 }
 
-export function expectFinalWithProgressReceipt(answer: string, ...parts: string[]) {
-  const text = getDeliveredFinalTexts()[0] ?? "";
-  const receiptStart = text.lastIndexOf("\n-# ");
-  expect(receiptStart).toBeGreaterThan(-1);
-  expect(text.slice(0, receiptStart)).toBe(answer);
-  const receipt = text.slice(receiptStart + 1);
-  for (const part of parts) {
-    expect(receipt).toContain(part);
-  }
-  expect(receipt).toContain("⏱️");
+// The final answer is delivered on its own: no synthesized activity receipt is
+// ever appended beneath it.
+export function expectFinalAnswerText(answer: string) {
+  expect(getDeliveredFinalTexts()[0] ?? "").toBe(answer);
 }
 
 export function expectFreshFinalText(text: string) {

@@ -1,12 +1,26 @@
 // Builds grouped Vitest duration reports or compares two grouped reports.
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pMap from "p-map";
+import {
+  booleanFlag,
+  parseFlagArgs,
+  requireOptionArgument,
+  stringFlag,
+  stringListFlag,
+  type FlagSpec,
+} from "./lib/arg-utils.mts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { coerceErrorMessage } from "./lib/error-format.mts";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   buildGroupedTestComparison,
@@ -17,8 +31,6 @@ import {
   renderGroupedTestReport,
 } from "./lib/test-group-report.mts";
 import { formatMs } from "./lib/vitest-report-cli-utils.mts";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
-import { resolveVitestNodeArgs } from "./run-vitest.mts";
 import {
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
@@ -31,7 +43,6 @@ const DEFAULT_TIMEOUT_KILL_GRACE_MS = 10_000;
 const DEFAULT_SPAWN_LOG_MAX_BYTES = 1024 * 1024 * 256;
 const DEFAULT_SPAWN_OUTPUT_MAX_BYTES = 1024 * 1024 * 64;
 const DEFAULT_SPAWN_OUTPUT_TAIL_BYTES = 1024 * 256;
-const PROCESS_GROUP_EXIT_POLL_MS = 25;
 
 type ProcessSignal = `SIG${string}`;
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -97,12 +108,6 @@ type RunVitestParams = TestGroupRunSpec &
     reportPath: string;
   };
 
-type TaskkillRunner = (
-  command: string,
-  args: string[],
-  options: { stdio: "ignore" },
-) => { error?: Error; status: number | null };
-
 function usage() {
   return [
     "Usage: node --import tsx scripts/test-group-report.mts [options] [-- <vitest args>]",
@@ -135,21 +140,51 @@ function usage() {
   ].join("\n");
 }
 
-function readRequiredValue(argv: string[], index: number, flag: string) {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
+type PositiveIntArgKey =
+  | "concurrency"
+  | "killGraceMs"
+  | "limit"
+  | "maxTestMs"
+  | "timeoutMs"
+  | "topFiles";
+
+const splitStringFlagOptions = { allowInline: false, rejectShortOptions: true } as const;
+
+function positiveIntFlag(flag: string, key: PositiveIntArgKey): FlagSpec<TestGroupReportArgs> {
+  return {
+    consume(argv, index) {
+      if (argv[index] !== flag) {
+        return null;
+      }
+      const value = parsePositiveInt(requireOptionArgument(argv, index, flag), flag);
+      return {
+        flag,
+        nextIndex: index + 1,
+        apply(args) {
+          args[key] = value;
+        },
+      };
+    },
+  };
 }
 
-function readPositiveIntValue(argv: string[], index: number, flag: string) {
-  return parsePositiveInt(readRequiredValue(argv, index, flag), flag);
-}
+const compareFlag: FlagSpec<TestGroupReportArgs> = {
+  consume(argv, index) {
+    if (argv[index] !== "--compare") {
+      return null;
+    }
+    const before = requireOptionArgument(argv, index, "--compare");
+    const after = requireOptionArgument(argv, index + 1, "--compare");
+    return {
+      flag: "--compare",
+      nextIndex: index + 2,
+      apply(args) {
+        args.compare = { before, after };
+      },
+    };
+  },
+};
 
-/**
- * Parses report, compare, and Vitest-run options for grouped test reports.
- */
 export function parseTestGroupReportArgs(argv: string[]) {
   const args: TestGroupReportArgs = {
     allowFailures: false,
@@ -168,122 +203,36 @@ export function parseTestGroupReportArgs(argv: string[]) {
     topFiles: 25,
     vitestArgs: [],
   };
-  const seenSingleValueFlags = new Set<string>();
-  const setSingleValueFlag = (flag: string, apply: () => void) => {
-    if (seenSingleValueFlags.has(flag)) {
-      throw new Error(`${flag} was provided more than once`);
-    }
-    seenSingleValueFlags.add(flag);
-    apply();
-  };
+  const separatorIndex = argv.indexOf("--");
+  const cliArgs = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  args.vitestArgs = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      args.vitestArgs = argv.slice(index + 1);
-      break;
-    }
-    if (arg === "--help") {
-      args.help = true;
-      continue;
-    }
-    if (arg === "--allow-failures") {
-      args.allowFailures = true;
-      continue;
-    }
-    if (arg === "--full-suite") {
-      args.fullSuite = true;
-      continue;
-    }
-    if (arg === "--no-rss") {
-      args.rss = false;
-      continue;
-    }
-    if (arg === "--config") {
-      args.configs.push(readRequiredValue(argv, index, "--config"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--compare") {
-      const before = readRequiredValue(argv, index, "--compare");
-      const after = readRequiredValue(argv, index + 1, "--compare");
-      setSingleValueFlag(arg, () => {
-        args.compare = { before, after };
-      });
-      index += 2;
-      continue;
-    }
-    if (arg === "--report") {
-      args.reports.push(readRequiredValue(argv, index, "--report"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--group-by") {
-      const value = readRequiredValue(argv, index, "--group-by");
-      setSingleValueFlag(arg, () => {
-        args.groupBy = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--output") {
-      const value = readRequiredValue(argv, index, "--output");
-      setSingleValueFlag(arg, () => {
-        args.output = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--limit") {
-      const value = readPositiveIntValue(argv, index, "--limit");
-      setSingleValueFlag(arg, () => {
-        args.limit = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--max-test-ms") {
-      const value = readPositiveIntValue(argv, index, "--max-test-ms");
-      setSingleValueFlag(arg, () => {
-        args.maxTestMs = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--timeout-ms") {
-      const value = readPositiveIntValue(argv, index, "--timeout-ms");
-      setSingleValueFlag(arg, () => {
-        args.timeoutMs = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--kill-grace-ms") {
-      const value = readPositiveIntValue(argv, index, "--kill-grace-ms");
-      setSingleValueFlag(arg, () => {
-        args.killGraceMs = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--concurrency") {
-      const value = readPositiveIntValue(argv, index, "--concurrency");
-      setSingleValueFlag(arg, () => {
-        args.concurrency = value;
-      });
-      index += 1;
-      continue;
-    }
-    if (arg === "--top-files") {
-      const value = readPositiveIntValue(argv, index, "--top-files");
-      setSingleValueFlag(arg, () => {
-        args.topFiles = value;
-      });
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unknown option: ${arg}`);
-  }
+  parseFlagArgs(
+    cliArgs,
+    args,
+    [
+      booleanFlag("--help", "help", true, { repeatable: true }),
+      booleanFlag("--allow-failures", "allowFailures", true, { repeatable: true }),
+      booleanFlag("--full-suite", "fullSuite", true, { repeatable: true }),
+      booleanFlag("--no-rss", "rss", false, { repeatable: true }),
+      stringListFlag("--config", "configs", splitStringFlagOptions),
+      compareFlag,
+      stringListFlag("--report", "reports", splitStringFlagOptions),
+      stringFlag("--group-by", "groupBy", splitStringFlagOptions),
+      stringFlag("--output", "output", splitStringFlagOptions),
+      positiveIntFlag("--limit", "limit"),
+      positiveIntFlag("--max-test-ms", "maxTestMs"),
+      positiveIntFlag("--timeout-ms", "timeoutMs"),
+      positiveIntFlag("--kill-grace-ms", "killGraceMs"),
+      positiveIntFlag("--concurrency", "concurrency"),
+      positiveIntFlag("--top-files", "topFiles"),
+    ],
+    {
+      onUnhandledArg(arg) {
+        throw new Error(`Unknown option: ${arg}`);
+      },
+    },
+  );
 
   if (!["area", "folder", "top"].includes(args.groupBy)) {
     throw new Error(`Unsupported --group-by value: ${args.groupBy}`);
@@ -335,60 +284,6 @@ function parseMaxRssBytes(output: string) {
   return null;
 }
 
-function hasErrorCode(error: unknown, code: string) {
-  return isRecord(error) && error.code === code;
-}
-
-export function signalTestGroupReportChild(
-  child: Pick<ChildProcess, "kill" | "pid">,
-  signal: ProcessSignal,
-  {
-    appendDiagnostic = () => {},
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    appendDiagnostic?: (message: string) => void;
-    platform?: typeof process.platform;
-    runTaskkill?: TaskkillRunner;
-    useProcessGroup?: boolean;
-  } = {},
-) {
-  if (useProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal as NodeJS.Signals);
-      return;
-    } catch (error) {
-      if (error && !hasErrorCode(error, "ESRCH")) {
-        appendDiagnostic(
-          `[test-group-report] failed to send ${signal} to process group: ${coerceErrorMessage(error)}\n`,
-        );
-      }
-    }
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    const args = ["/PID", String(child.pid), "/T"];
-    if (signal === "SIGKILL") {
-      args.push("/F");
-    }
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  child.kill(signal as NodeJS.Signals);
-}
-
-/**
- * Runs a command, captures text output, and terminates timed-out process groups.
- */
 export function spawnText(command: string, args: readonly string[], options: SpawnTextOptions) {
   const maxBuffer = options.maxBufferBytes ?? DEFAULT_SPAWN_OUTPUT_MAX_BYTES;
   const maxLogBytes = options.maxLogBytes ?? DEFAULT_SPAWN_LOG_MAX_BYTES;
@@ -422,7 +317,17 @@ export function spawnText(command: string, args: readonly string[], options: Spa
     let childClosedResult: SpawnTextResult | null = null;
     let waitingForKillGrace = false;
     const signalChild = (signal: ProcessSignal) =>
-      signalTestGroupReportChild(child, signal, { appendDiagnostic, useProcessGroup });
+      terminateManagedChild(child, signal as NodeJS.Signals, {
+        onChildSignalError(error) {
+          throw error;
+        },
+        onProcessGroupSignalError(error) {
+          appendDiagnostic(
+            `[test-group-report] failed to send ${signal} to process group: ${coerceErrorMessage(error)}\n`,
+          );
+        },
+        taskkillTimeoutMs: null,
+      });
     const parentSignalHandlers: { signal: ProcessSignal; handler: () => void }[] = [];
     const cleanupParentSignalHandlers = () => {
       for (const { signal, handler } of parentSignalHandlers) {
@@ -448,34 +353,15 @@ export function spawnText(command: string, args: readonly string[], options: Spa
       relayParentSignal("SIGINT");
       relayParentSignal("SIGTERM");
     }
-    const processGroupIsAlive = () => {
-      if (!useProcessGroup || typeof child.pid !== "number") {
-        return false;
-      }
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return Boolean(error && hasErrorCode(error, "EPERM"));
-      }
-    };
-    const waitForProcessGroupExit = async (timeoutMsToWait: number) => {
-      const deadlineAt = Date.now() + timeoutMsToWait;
-      while (Date.now() < deadlineAt) {
-        if (!processGroupIsAlive()) {
-          return true;
-        }
-        await new Promise((resolvePoll) => {
-          setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
-        });
-      }
-      return !processGroupIsAlive();
-    };
+    const processGroupIsAlive = () =>
+      inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm" }) === "live";
     const finishAfterProcessGroupCleanup = async (result: SpawnTextResult) => {
       const graceRemainingMs =
         killGraceDeadline === null ? killGraceMs : Math.max(0, killGraceDeadline - Date.now());
       if (graceRemainingMs > 0) {
-        await waitForProcessGroupExit(graceRemainingMs);
+        await waitForManagedProcessGroupExit(child, graceRemainingMs, {
+          errorPolicy: "alive-on-eperm",
+        });
       }
       if (settled) {
         return;
@@ -545,15 +431,7 @@ export function spawnText(command: string, args: readonly string[], options: Spa
       }
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
       const currentTail = target === "stderr" ? stderrTail : outputTail;
-      if (buffer.byteLength >= tailBytes) {
-        if (target === "stderr") {
-          stderrTail = buffer.subarray(buffer.byteLength - tailBytes);
-        } else {
-          outputTail = buffer.subarray(buffer.byteLength - tailBytes);
-        }
-        return;
-      }
-      let nextTail = Buffer.concat([currentTail, buffer]);
+      let nextTail = buffer.byteLength >= tailBytes ? buffer : Buffer.concat([currentTail, buffer]);
       if (nextTail.byteLength > tailBytes) {
         nextTail = nextTail.subarray(nextTail.byteLength - tailBytes);
       }
@@ -567,8 +445,6 @@ export function spawnText(command: string, args: readonly string[], options: Spa
       const buffer = Buffer.from(message, "utf8");
       if (logFd !== null) {
         fs.writeSync(logFd, buffer);
-        appendTail(buffer);
-        return;
       }
       appendTail(buffer);
     }
@@ -677,14 +553,6 @@ async function runVitestJsonReport(params: RunVitestParams) {
       // The JSON reporter can stay silent for the entire config. The profiler
       // owns the wall-clock timeout and process-group cleanup for this child.
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
-      NODE_OPTIONS: [
-        (params.env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS)?.trim(),
-        ...resolveVitestNodeArgs({ ...process.env, ...params.env }).filter(
-          (arg) => arg !== "--no-maglev",
-        ),
-      ]
-        .filter(Boolean)
-        .join(" "),
     },
     killGraceMs: params.killGraceMs,
     logPath: params.logPath,
@@ -740,7 +608,7 @@ function readReportInputs(entries: ReportInputEntry[]) {
   return { invalid, missing, reports };
 }
 
-function readGroupedReport(reportPath: fs.PathOrFileDescriptor) {
+function readGroupedReport(reportPath: string) {
   const report = JSON.parse(fs.readFileSync(reportPath, "utf8")) as unknown;
   validateGroupedReport(report, reportPath);
   return report;
@@ -750,119 +618,87 @@ function isFiniteNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function displayReportPath(reportPath: fs.PathOrFileDescriptor) {
-  return typeof reportPath === "string" || typeof reportPath === "number"
-    ? String(reportPath)
-    : reportPath.toString();
+function invalidGroupedReport(reportPath: string, reason: string): never {
+  throw new Error(`[test-group-report] invalid grouped report ${reportPath}: ${reason}`);
 }
 
 function validateCounter(
   counter: unknown,
-  reportPath: fs.PathOrFileDescriptor,
+  reportPath: string,
   fieldName: string,
   index: number | null = null,
-) {
+): asserts counter is Record<string, unknown> {
   const label = index === null ? fieldName : `${fieldName}[${index}]`;
-  const displayPath = displayReportPath(reportPath);
   if (!isRecord(counter)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: ${label} must be an object`,
-    );
+    invalidGroupedReport(reportPath, `${label} must be an object`);
   }
   for (const key of ["durationMs", "fileCount", "testCount"]) {
     if (!isFiniteNumber(counter[key])) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: ${label}.${key} must be a finite number`,
-      );
+      invalidGroupedReport(reportPath, `${label}.${key} must be a finite number`);
     }
   }
 }
 
 function validateCounterRows(
   report: Record<string, unknown>,
-  reportPath: fs.PathOrFileDescriptor,
+  reportPath: string,
   fieldName: string,
 ) {
-  const displayPath = displayReportPath(reportPath);
   const rows = report[fieldName];
   if (!Array.isArray(rows)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: ${fieldName} must be an array`,
-    );
+    invalidGroupedReport(reportPath, `${fieldName} must be an array`);
   }
   rows.forEach((row, index) => {
     validateCounter(row, reportPath, fieldName, index);
-    if (!isRecord(row) || typeof row.key !== "string" || !row.key) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: ${fieldName}[${index}].key must be a non-empty string`,
-      );
+    if (typeof row.key !== "string" || !row.key) {
+      invalidGroupedReport(reportPath, `${fieldName}[${index}].key must be a non-empty string`);
     }
   });
   return rows;
 }
 
-function validateTopFileRows(report: Record<string, unknown>, reportPath: fs.PathOrFileDescriptor) {
-  const displayPath = displayReportPath(reportPath);
+function validateTopFileRows(report: Record<string, unknown>, reportPath: string) {
   if (!Array.isArray(report.topFiles)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: topFiles must be an array`,
-    );
+    invalidGroupedReport(reportPath, "topFiles must be an array");
   }
   report.topFiles.forEach((row, index) => {
     if (!isRecord(row)) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: topFiles[${index}] must be an object`,
-      );
+      invalidGroupedReport(reportPath, `topFiles[${index}] must be an object`);
     }
     for (const key of ["config", "file", "group"]) {
       if (typeof row[key] !== "string" || !row[key]) {
-        throw new Error(
-          `[test-group-report] invalid grouped report ${displayPath}: topFiles[${index}].${key} must be a non-empty string`,
-        );
+        invalidGroupedReport(reportPath, `topFiles[${index}].${key} must be a non-empty string`);
       }
     }
     for (const key of ["durationMs", "testCount"]) {
       if (!isFiniteNumber(row[key])) {
-        throw new Error(
-          `[test-group-report] invalid grouped report ${displayPath}: topFiles[${index}].${key} must be a finite number`,
-        );
+        invalidGroupedReport(reportPath, `topFiles[${index}].${key} must be a finite number`);
       }
     }
   });
   return report.topFiles;
 }
 
-function validateRunRows(report: Record<string, unknown>, reportPath: fs.PathOrFileDescriptor) {
-  const displayPath = displayReportPath(reportPath);
+function validateRunRows(report: Record<string, unknown>, reportPath: string) {
   if (!Array.isArray(report.runs)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: runs must be an array`,
-    );
+    invalidGroupedReport(reportPath, "runs must be an array");
   }
   report.runs.forEach((row, index) => {
     if (!isRecord(row)) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: runs[${index}] must be an object`,
-      );
+      invalidGroupedReport(reportPath, `runs[${index}] must be an object`);
     }
     if (typeof row.config !== "string" && typeof row.label !== "string") {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: runs[${index}] must include config or label`,
-      );
+      invalidGroupedReport(reportPath, `runs[${index}] must include config or label`);
     }
     if (!isFiniteNumber(row.elapsedMs) || !isFiniteNumber(row.status)) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: runs[${index}] must include finite elapsedMs and status`,
-      );
+      invalidGroupedReport(reportPath, `runs[${index}] must include finite elapsedMs and status`);
     }
     if (
       row.maxRssBytes !== null &&
       row.maxRssBytes !== undefined &&
       !isFiniteNumber(row.maxRssBytes)
     ) {
-      throw new Error(
-        `[test-group-report] invalid grouped report ${displayPath}: runs[${index}].maxRssBytes must be finite when present`,
-      );
+      invalidGroupedReport(reportPath, `runs[${index}].maxRssBytes must be finite when present`);
     }
   });
   return report.runs;
@@ -870,42 +706,30 @@ function validateRunRows(report: Record<string, unknown>, reportPath: fs.PathOrF
 
 function validateGroupedReport(
   report: unknown,
-  reportPath: fs.PathOrFileDescriptor,
+  reportPath: string,
 ): asserts report is Record<string, unknown> & GroupedComparisonInput {
-  const displayPath = displayReportPath(reportPath);
   if (!isRecord(report)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: report must be an object`,
-    );
+    invalidGroupedReport(reportPath, "report must be an object");
   }
   if (report.command !== "test-group-report") {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: command must be test-group-report`,
-    );
+    invalidGroupedReport(reportPath, "command must be test-group-report");
   }
   if (typeof report.groupBy !== "string" || !["area", "folder", "top"].includes(report.groupBy)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: groupBy must be area, folder, or top`,
-    );
+    invalidGroupedReport(reportPath, "groupBy must be area, folder, or top");
   }
   validateCounter(report.totals, reportPath, "totals");
   const groups = validateCounterRows(report, reportPath, "groups");
   const configs = validateCounterRows(report, reportPath, "configs");
   const topFiles = validateTopFileRows(report, reportPath);
   if (!Array.isArray(report.slowTests)) {
-    throw new Error(
-      `[test-group-report] invalid grouped report ${displayPath}: slowTests must be an array`,
-    );
+    invalidGroupedReport(reportPath, "slowTests must be an array");
   }
   const runs = validateRunRows(report, reportPath);
   if (groups.length === 0 && configs.length === 0 && topFiles.length === 0 && runs.length === 0) {
-    throw new Error(`[test-group-report] invalid grouped report ${displayPath}: no evidence rows`);
+    invalidGroupedReport(reportPath, "no evidence rows");
   }
 }
 
-/**
- * Resolves JSON report and per-run artifact directories from an output path.
- */
 export function resolveReportArtifactDirs(outputPath: string) {
   const outputDir = path.dirname(outputPath);
   const outputExt = path.extname(outputPath);
@@ -951,9 +775,6 @@ function buildFullSuiteLeafRunPlans() {
   }
 }
 
-/**
- * Resolves explicit or full-suite Vitest config plans for report generation.
- */
 export function resolveRunPlans(args: TestGroupReportArgs): TestGroupRunPlan[] {
   if (args.reports.length > 0) {
     return [];
@@ -975,9 +796,6 @@ export function resolveRunPlans(args: TestGroupReportArgs): TestGroupRunPlan[] {
   }));
 }
 
-/**
- * Builds env for full-suite report runs, including per-config cache paths.
- */
 export function resolveFullSuiteVitestEnv(
   args: Pick<TestGroupReportArgs, "fullSuite">,
   env: NodeJS.ProcessEnv = process.env,
@@ -996,9 +814,6 @@ export function resolveFullSuiteVitestEnv(
   };
 }
 
-/**
- * Resolves bounded concurrency for grouped report run plans.
- */
 export function resolveRunPlanConcurrency(
   args: Pick<TestGroupReportArgs, "concurrency" | "fullSuite">,
   runPlanCount: number,
@@ -1035,9 +850,6 @@ export function resolveReportVitestArgs(
   return [...args.vitestArgs, "--isolate=true"];
 }
 
-/**
- * Builds concrete report run specs from parsed args and config plans.
- */
 export function resolveReportRunSpecs(
   args: TestGroupReportArgs,
   runPlans: TestGroupRunPlan[],
@@ -1107,16 +919,12 @@ export async function runReportPlans(params: {
       }
       const slug = sanitizePathSegment(plan.label);
       const run = await runVitest({
-        config: plan.config,
-        forwardedArgs: plan.forwardedArgs,
-        env: plan.env,
-        label: plan.label,
+        ...plan,
         logPath: path.join(params.logDir, `${slug}.log`),
         reportPath: path.join(params.reportDir, `${slug}.json`),
         rss: params.args.rss,
         timeoutMs: params.args.timeoutMs,
         killGraceMs: params.args.killGraceMs,
-        vitestArgs: plan.vitestArgs,
       });
       printRunLine(run);
       let includeEntry = true;
@@ -1264,10 +1072,17 @@ async function main() {
   console.log(renderGroupedTestReport(report, { limit: args.limit, topFiles: args.topFiles }));
   console.log(`[test-group-report] wrote ${path.relative(process.cwd(), output)}`);
 
-  if (args.maxTestMs !== null && report.slowTests.length > 0) {
-    console.error(
-      `[test-group-report] ${report.slowTests.length} tests exceeded ${formatMs(args.maxTestMs)}`,
-    );
+  const maxTestMs = args.maxTestMs;
+  if (
+    maxTestMs !== null &&
+    reportLimitViolations(
+      report.slowTests.map((test) => ({
+        file: test.file,
+        title: "Test duration budget",
+        message: `${test.fullName}: ${formatMs(test.durationMs)} exceeds ${formatMs(maxTestMs)}`,
+      })),
+    )
+  ) {
     process.exit(1);
   }
 

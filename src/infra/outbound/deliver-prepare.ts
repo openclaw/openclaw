@@ -1,27 +1,35 @@
-import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 // Finalizes outbound modifying policy before durable queue custody is created.
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { splitMediaFromOutput } from "../../media/parse.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import { throwIfAborted } from "./abort.js";
-import { createChannelHandler, resolveChannelOutboundDirectiveOptions } from "./deliver-channel.js";
-import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import { createChannelHandler } from "./deliver-channel.js";
+import type { ChannelHandler, DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { applyMessageSendingHook, applyReplyPayloadSendingHook } from "./deliver-hooks.js";
 import {
   buildPayloadSummary,
-  normalizeEmptyPayloadForDelivery,
   normalizePayloadsForChannelDelivery,
+  normalizeTransformedPayloadForDelivery,
   resolveOutboundMediaAccessForSend,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
-import { createOutboundPayloadPlan } from "./payloads.js";
+import { createOutboundPayloadPlan, createStructuredOutboundPayloadPlan } from "./payloads.js";
 import {
   PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
   type PreparedOutboundBatch,
   type PreparedOutboundBatchEntry,
 } from "./prepared-batch.js";
-import { createReplyToDeliveryPolicy } from "./reply-policy.js";
+import type { OutboundPayloadPlan } from "./reply-payload-parts.js";
+import { createReplyToDeliveryPolicy, normalizeOutboundReplyFacts } from "./reply-policy.js";
 
-export class OutboundPayloadPreparationError extends Error {
+class OutboundPayloadPreparationError extends Error {
   readonly sourceIndex: number;
   readonly payload: ReplyPayload;
 
@@ -46,6 +54,7 @@ function throwIfPreparationAborted(
 }
 
 async function createPreparationHandler(params: DeliverOutboundPayloadsParams) {
+  const reply = normalizeOutboundReplyFacts(params);
   return await createChannelHandler({
     cfg: params.cfg,
     agentId: params.session?.agentId,
@@ -53,15 +62,15 @@ async function createPreparationHandler(params: DeliverOutboundPayloadsParams) {
     to: params.to,
     deps: params.deps,
     accountId: params.accountId,
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
+    replyToId: reply?.replyToId,
+    replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
     formatting: params.formatting,
     threadId: params.threadId,
     identity: params.identity,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
     silent: params.silent,
-    mediaAccess: resolveOutboundMediaAccessForSend(params, params.channel, []),
+    mediaAccess: resolveOutboundMediaAccessForSend(params, []),
     gatewayClientScopes: params.gatewayClientScopes,
     conversationReadOrigin: params.conversationReadOrigin,
     preparedMessageId: params.preparedMessageId,
@@ -112,28 +121,106 @@ function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
   );
 }
 
+function preserveTransformedPayloadMetadata(
+  source: ReplyPayload,
+  payload: ReplyPayload,
+): ReplyPayload {
+  const transformedMetadata = getReplyPayloadMetadata(payload);
+  copyReplyPayloadMetadata(source, payload);
+  // The transform may have explicitly updated or cleared an owner-held fact.
+  return transformedMetadata ? setReplyPayloadMetadata(payload, transformedMetadata) : payload;
+}
+
+function projectMarkdownImages(payload: ReplyPayload): ReplyPayload {
+  const images = splitMediaFromOutput(payload.text ?? "", {
+    extractMediaDirectives: false,
+    extractAudioDirectives: false,
+    extractMarkdownImages: true,
+    preserveTrailingWhitespace: true,
+  });
+  if (!images.mediaUrls?.length) {
+    return payload;
+  }
+  // Preserve attachment associations without reapplying reply-lane policy to hook output.
+  const [mediaPlan] = createStructuredOutboundPayloadPlan([
+    {
+      mediaUrl: payload.mediaUrl ?? images.mediaUrls[0],
+      mediaUrls: [
+        ...(payload.mediaUrls ?? []),
+        ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+        ...images.mediaUrls,
+      ],
+      attachments: payload.attachments,
+    },
+  ]);
+  const media = expectDefined(mediaPlan, "Markdown images must produce a media payload").payload;
+  return copyReplyPayloadMetadata(payload, {
+    ...payload,
+    text: images.text,
+    mediaUrl: media.mediaUrl,
+    mediaUrls: media.mediaUrls,
+    ...(payload.attachments ? { attachments: media.attachments } : {}),
+  });
+}
+
+type OutboundPayloadPreparationOptions = {
+  onBeforeFirstModifier?: () => Promise<void>;
+  hookRunner?: HookRunner;
+};
+
 /**
  * Runs each modifier exactly once and returns the sole payload representation
  * eligible for durable persistence or provider delivery.
  */
 export async function prepareOutboundPayloadBatch(
   params: DeliverOutboundPayloadsParams,
-  options?: { onBeforeFirstModifier?: () => void },
+  options?: OutboundPayloadPreparationOptions,
 ): Promise<PreparedOutboundBatch> {
-  const directiveOptions = await resolveChannelOutboundDirectiveOptions({
-    cfg: params.cfg,
-    agentId: params.session?.agentId,
-    channel: params.channel,
-  });
+  const handler = await createPreparationHandler(params);
   const plan = createOutboundPayloadPlan(params.payloads, {
     cfg: params.cfg,
     sessionKey: params.session?.policyKey ?? params.session?.key,
     surface: params.channel,
     conversationType: params.session?.conversationType,
-    extractMarkdownImages: directiveOptions.extractMarkdownImages,
+    extractMarkdownImages: handler.extractMarkdownImages,
   });
+  return await prepareOutboundPlan(params, plan, handler, options);
+}
+
+export async function prepareStructuredOutboundPayloadBatch(
+  params: DeliverOutboundPayloadsParams,
+  plan: readonly OutboundPayloadPlan[],
+  options?: OutboundPayloadPreparationOptions,
+): Promise<PreparedOutboundBatch> {
   const handler = await createPreparationHandler(params);
-  const normalized = normalizePayloadsForChannelDelivery(plan, handler);
+  const channelPlan = handler.extractMarkdownImages
+    ? plan.flatMap((entry) => {
+        const payload = projectMarkdownImages(entry.payload);
+        if (payload === entry.payload) {
+          return [entry];
+        }
+        const [projected] = createStructuredOutboundPayloadPlan([payload]);
+        return projected ? [{ ...projected, sourceIndex: entry.sourceIndex }] : [];
+      })
+    : plan;
+  return await prepareOutboundPlan(
+    params,
+    channelPlan,
+    handler,
+    options,
+    preserveTransformedPayloadMetadata,
+  );
+}
+
+async function prepareOutboundPlan(
+  params: DeliverOutboundPayloadsParams,
+  plan: readonly OutboundPayloadPlan[],
+  handler: ChannelHandler,
+  options?: OutboundPayloadPreparationOptions,
+  preservePayloadMetadata?: (source: ReplyPayload, payload: ReplyPayload) => ReplyPayload,
+): Promise<PreparedOutboundBatch> {
+  const copyMetadata = preservePayloadMetadata ?? ((_source, payload) => payload);
+  const normalized = normalizePayloadsForChannelDelivery(plan, handler, preservePayloadMetadata);
   const normalizedIndexes = new Set(normalized.map((entry) => entry.index));
   const entries: PreparedOutboundBatchEntry[] = [];
   for (const [sourceIndex] of params.payloads.entries()) {
@@ -142,35 +229,37 @@ export async function prepareOutboundPayloadBatch(
     }
   }
 
-  const hookRunner = getGlobalHookRunner();
+  const hookRunner = options?.hookRunner ?? getGlobalHookRunner();
   const hasReplyPayloadSendingHooks =
     params.replyPayloadSendingHook !== undefined &&
     (hookRunner?.hasHooks("reply_payload_sending") ?? false);
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasModifyingHooks = hasReplyPayloadSendingHooks || hasMessageSendingHooks;
-  const { resolveCurrentReplyTo } = createReplyToDeliveryPolicy({
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
-  });
+  const { resolveCurrentReplyTo } = createReplyToDeliveryPolicy(params);
   const sessionKeyForHooks = params.mirror?.sessionKey ?? params.session?.key;
   let modifierBoundaryEntered = false;
 
   for (const { index: sourceIndex, payload } of normalized) {
     throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
     if (hasModifyingHooks && !modifierBoundaryEntered) {
-      options?.onBeforeFirstModifier?.();
+      await options?.onBeforeFirstModifier?.();
+      throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
       modifierBoundaryEntered = true;
     }
     let replyHookResult: Awaited<ReturnType<typeof applyReplyPayloadSendingHook>>;
     try {
-      replyHookResult = await applyReplyPayloadSendingHook({
-        hook: params.replyPayloadSendingHook,
-        payload,
-      });
+      replyHookResult = await applyReplyPayloadSendingHook(
+        {
+          hook: params.replyPayloadSendingHook,
+          payload,
+        },
+        hookRunner,
+      );
     } catch (error) {
       throw new OutboundPayloadPreparationError(error, sourceIndex, payload);
     }
-    throwIfPreparationAborted(params.abortSignal, sourceIndex, replyHookResult.payload);
+    const replyHookPayload = copyMetadata(payload, replyHookResult.payload);
+    throwIfPreparationAborted(params.abortSignal, sourceIndex, replyHookPayload);
     if (replyHookResult.cancelled) {
       entries.push({
         sourceIndex,
@@ -180,7 +269,13 @@ export async function prepareOutboundPayloadBatch(
       continue;
     }
 
-    const replyPayload = stripInternalRuntimeScaffoldingFromPayload(replyHookResult.payload);
+    let replyPayload = copyMetadata(
+      replyHookPayload,
+      stripInternalRuntimeScaffoldingFromPayload(replyHookPayload),
+    );
+    if (handler.extractMarkdownImages && replyHookResult.changed) {
+      replyPayload = projectMarkdownImages(replyPayload);
+    }
     let messageHookResult: Awaited<ReturnType<typeof applyMessageSendingHook>>;
     try {
       messageHookResult = await applyMessageSendingHook({
@@ -200,7 +295,8 @@ export async function prepareOutboundPayloadBatch(
       // escape here, and atomic preparation must attribute it before aborting.
       throw new OutboundPayloadPreparationError(error, sourceIndex, replyPayload);
     }
-    throwIfPreparationAborted(params.abortSignal, sourceIndex, messageHookResult.payload);
+    const messageHookPayload = copyMetadata(replyPayload, messageHookResult.payload);
+    throwIfPreparationAborted(params.abortSignal, sourceIndex, messageHookPayload);
     if (messageHookResult.cancelled) {
       const hookEffect =
         messageHookResult.cancelReason || messageHookResult.hookMetadata
@@ -222,17 +318,20 @@ export async function prepareOutboundPayloadBatch(
       continue;
     }
 
-    const postHookPayload = stripInternalRuntimeScaffoldingFromPayload(messageHookResult.payload);
+    let postHookPayload = copyMetadata(
+      messageHookPayload,
+      stripInternalRuntimeScaffoldingFromPayload(messageHookPayload),
+    );
+    if (handler.extractMarkdownImages && messageHookResult.contentRewritten) {
+      postHookPayload = projectMarkdownImages(postHookPayload);
+    }
     // Adapter normalization may project visible text into transport fields. Re-run it
     // after policy so durable custody cannot retain a stale pre-rewrite projection.
-    const normalizedPostHookPayload = handler.normalizePayload
-      ? handler.normalizePayload(postHookPayload)
-      : postHookPayload;
-    const preparedPayload = normalizedPostHookPayload
-      ? normalizeEmptyPayloadForDelivery(
-          stripInternalRuntimeScaffoldingFromPayload(normalizedPostHookPayload),
-        )
-      : null;
+    const preparedPayload = normalizeTransformedPayloadForDelivery(
+      postHookPayload,
+      handler,
+      copyMetadata,
+    );
     if (!preparedPayload) {
       entries.push({
         sourceIndex,
@@ -259,8 +358,11 @@ export async function prepareOutboundPayloadBatch(
     schemaVersion: PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
     sourcePayloadCount: params.payloads.length,
     channelNormalized: true,
-    ...(params.replyPayloadSendingHook?.runId
-      ? { runId: params.replyPayloadSendingHook.runId }
+    ...((params.runId ?? params.replyPayloadSendingHook?.runId)
+      ? { runId: params.runId ?? params.replyPayloadSendingHook?.runId }
+      : {}),
+    ...(params.executionIdentityToken
+      ? { executionIdentityToken: params.executionIdentityToken }
       : {}),
     entries,
   };

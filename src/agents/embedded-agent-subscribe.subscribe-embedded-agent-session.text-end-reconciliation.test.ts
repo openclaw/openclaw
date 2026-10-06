@@ -1,678 +1,483 @@
-// Text-end delivery, snapshot reconciliation, and replay de-duplication.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
-  createStubSessionHarness,
-  createTextEndBlockReplyHarness,
+  createSubscribedSessionHarness,
   emitAssistantTextDelta,
   emitAssistantTextEnd,
   extractTextPayloads,
 } from "./embedded-agent-subscribe.e2e-harness.js";
-import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
-import {
-  createOpenAiResponsesTextBlock,
-  createOpenAiResponsesTextEvent,
-  type OpenAiResponsesTextEventPhase,
-} from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
-describe("text_end snapshot reconciliation", () => {
-  function setupTextEndSubscription() {
-    // text_end block replies expose snapshot/delta merge behavior without the
-    // extra message-end terminal path.
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-
-    const emitDelta = (delta: string) => {
-      emitAssistantTextDelta({ emit, delta });
-    };
-
-    const emitTextEnd = (content: string) => {
-      emitAssistantTextEnd({ emit, content });
-    };
-
-    return { onBlockReply, subscription, emitDelta, emitTextEnd };
+type Options = Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId">;
+type NativeMessage = Pick<AssistantMessage, "role" | "content"> & {
+  api: string;
+  provider: string;
+  model: string;
+};
+function assistant(texts: string[]): NativeMessage {
+  return {
+    role: "assistant",
+    api: "google-generative-ai",
+    provider: "google",
+    model: "gemini-2.5-flash",
+    content: texts.map((text) => ({ type: "text", text })),
+  };
+}
+function setup(options: Options = {}) {
+  const onBlockReply = vi.fn();
+  const harness = createSubscribedSessionHarness({
+    runId: "run",
+    onBlockReply,
+    blockReplyBreak: "text_end",
+    ...options,
+  });
+  onTestFinished(() => harness.subscription.unsubscribe());
+  const { emit } = harness;
+  function nativeEvent(
+    type: "text_delta" | "text_end",
+    message: NativeMessage,
+    index: number,
+    text: string,
+  ) {
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: {
+        type,
+        contentIndex: index,
+        ...(type === "text_delta" ? { delta: text } : { content: text }),
+        partial: message,
+      },
+    });
   }
+  return {
+    ...harness,
+    onBlockReply,
+    texts: () => extractTextPayloads(onBlockReply.mock.calls),
+    start: () => emit({ type: "message_start", message: assistant([]) }),
+    delta: (texts: string[], index: number, delta = texts[index] ?? "") =>
+      nativeEvent("text_delta", assistant(texts), index, delta),
+    end: (texts: string[], index: number) =>
+      nativeEvent("text_end", assistant(texts), index, texts[index] ?? ""),
+    nativeEvent,
+    toolStart: (toolName: string, toolCallId: string, args: Record<string, unknown> = {}) =>
+      emit({ type: "tool_execution_start", toolName, toolCallId, args }),
+  };
+}
+const sentenceChunking = { minChars: 10, maxChars: 16, breakPreference: "sentence" as const };
 
+describe("native snapshot reconciliation", () => {
   it.each([
     {
-      name: "does not append when text_end content is a prefix of deltas",
-      delta: "Hello world",
-      content: "Hello",
-      expected: "Hello world",
+      name: "a vanished native scope",
+      prefix: "First",
+      old: "Second",
+      replacement: ["Replacement"],
+      terminal: "message_end",
+      corrected: "Replacement",
     },
     {
-      name: "does not append when text_end content is already contained",
-      delta: "Hello world",
-      content: "world",
-      expected: "Hello world",
+      name: "a native boundary now inside code",
+      prefix: "Use `",
+      old: "Old",
+      replacement: ["Use `", "new`"],
+      terminal: "text_end",
+      corrected: "Use `\nnew`",
     },
-    {
-      name: "appends suffix when text_end content extends deltas",
-      delta: "Hello",
-      content: "Hello world",
-      expected: "Hello world",
-    },
-  ])("$name", async ({ delta, content, expected }) => {
-    const { onBlockReply, subscription, emitDelta, emitTextEnd } = setupTextEndSubscription();
-
-    emitDelta(delta);
-    emitTextEnd(content);
-    await Promise.resolve();
-
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
-    });
-    expect(subscription.assistantTexts).toEqual([expected]);
+  ])("restarts after $name", async ({ prefix, old, replacement, terminal, corrected }) => {
+    const h = setup();
+    h.start();
+    const original = [prefix, old];
+    for (const [index, delta] of original.entries()) {
+      const texts = original.slice(0, index + 1);
+      h.delta(texts, index, delta);
+      h.end(texts, index);
+      await h.subscription.waitForPendingEvents();
+      expect(h.texts()).toEqual(texts);
+    }
+    h.end([prefix, ""], 1);
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual(original);
+    if (terminal === "message_end") {
+      h.emit({ type: "message_end", message: assistant(replacement) });
+    } else {
+      h.end(replacement, 1);
+    }
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual([...original, corrected]);
+    expect(h.onBlockReply).toHaveBeenCalledTimes(3);
   });
 
-  it("sends only the suffix when text_end block replies grow across assistant messages", async () => {
-    // After a tool call, providers can resend the full accumulated text; only
-    // the newly grown suffix should be emitted as a block reply.
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-
-    const emitAssistantSnapshot = (content: string) => {
-      emit({ type: "message_start", message: { role: "assistant" } });
-      emitAssistantTextEnd({ emit, content });
-    };
-    const emitToolStart = (toolCallId: string) => {
-      emit({
-        type: "tool_execution_start",
-        toolName: "browser",
-        toolCallId,
-        args: {},
-      });
-    };
-
-    emitAssistantSnapshot("Let me grab actual eBay prices:");
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
-    });
-
-    emitToolStart("tool-1");
-    await Promise.resolve();
-    emitAssistantSnapshot("Let me grab actual eBay prices:Let me grab actual prices from eBay:");
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalledTimes(2);
-    });
-
-    emitToolStart("tool-2");
-    await Promise.resolve();
-    emitAssistantSnapshot(
-      "Let me grab actual eBay prices:Let me grab actual prices from eBay:eBay blocks live pricing:",
-    );
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalledTimes(3);
-    });
-
-    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
-      "Let me grab actual eBay prices:",
-      "Let me grab actual prices from eBay:",
-      "eBay blocks live pricing:",
-    ]);
-    expect(subscription.assistantTexts).toEqual([
-      "Let me grab actual eBay prices:",
-      "Let me grab actual prices from eBay:",
-      "eBay blocks live pricing:",
-    ]);
-  });
-
-  it.each([
-    {
-      name: "keeps a full later reply that shares a prefix without an intervening tool call",
-      replies: ["OK", "OK, here's the detail"],
-    },
-    {
-      name: "keeps a full post-tool reply when the prior block is not a preamble",
-      replies: ["Checking...", "Checking... found X"],
-      toolCallId: "tool-post-check",
-    },
-    {
-      name: "keeps a full post-tool reply when the shared prefix is whitespace-separated",
-      replies: ["Checking:", "Checking: found X"],
-      toolCallId: "tool-post-check-colon",
-    },
-  ] satisfies Array<{ name: string; replies: [string, string]; toolCallId?: string }>)(
-    "$name",
-    async ({ replies, toolCallId }) => {
-      const onBlockReply = vi.fn();
-      const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-      const emitAssistantSnapshot = (content: string) => {
-        emit({ type: "message_start", message: { role: "assistant" } });
-        emitAssistantTextEnd({ emit, content });
-      };
-
-      emitAssistantSnapshot(replies[0]);
-      await vi.waitFor(() => {
-        expect(onBlockReply).toHaveBeenCalledTimes(1);
-      });
-      if (toolCallId) {
-        emit({ type: "tool_execution_start", toolName: "browser", toolCallId, args: {} });
-        await Promise.resolve();
+  it("preserves an orphan-close replacement after a drained raw prefix", async () => {
+    const onAgentEvent = vi.fn();
+    const h = setup({ onAgentEvent, blockReplyChunking: sentenceChunking });
+    const answer = "This is the complete visible answer.";
+    let raw = "";
+    h.start();
+    for (const [index, delta] of ["private chain. ", `</mm:think>${answer}`].entries()) {
+      raw += delta;
+      h.delta([raw], 0, delta);
+      await h.subscription.waitForPendingEvents();
+      if (index === 0) {
+        expect(h.texts()).toEqual(["private chain."]);
       }
-      emitAssistantSnapshot(replies[1]);
-      await vi.waitFor(() => {
-        expect(onBlockReply).toHaveBeenCalledTimes(2);
-      });
+    }
+    h.end([raw], 0);
+    await h.subscription.waitForPendingEvents();
+    const delivered = h.texts();
+    expect(delivered[0]).toBe("private chain.");
+    expect(delivered.slice(1).join(" ")).toBe(answer);
+    h.emit({ type: "message_end", message: assistant([raw]) });
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual(delivered);
+    expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
+      stream: "assistant",
+      data: { text: answer },
+    });
+  });
 
-      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(replies);
-      expect(subscription.assistantTexts).toEqual(replies);
+  it.each([
+    {
+      name: "withdraws only the last block",
+      prior: ["First."],
+      draft: "Draft",
+      final: "",
+      expected: "First.",
+      blocks: ["First."],
+      replyToId: undefined,
+    },
+    {
+      name: "replaces code with real reply intent",
+      prior: [],
+      draft: "```text\n[[reply_to:example-id]]\n```\n\nThe original draft continues here.",
+      final: "[[reply_to:replacement]]Corrected",
+      expected: "Corrected",
+      blocks: ["Corrected"],
+      replyToId: "replacement",
+    },
+  ])("terminal checkpoint $name", async ({ prior, draft, final, expected, blocks, replyToId }) => {
+    const onAgentEvent = vi.fn();
+    const h = setup({ onAgentEvent });
+    h.start();
+    const streamed = [...prior, draft];
+    for (const [index, text] of streamed.entries()) {
+      const partial = streamed.slice(0, index + 1);
+      h.delta(partial, index, text);
+      if (index < prior.length) {
+        h.end(partial, index);
+        await h.subscription.waitForPendingEvents();
+        expect(h.texts()).toEqual(prior.slice(0, index + 1));
+      }
+    }
+    expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
+      stream: "assistant",
+      data: { text: streamed.join("") },
+    });
+    onAgentEvent.mockClear();
+    h.end([...prior, final], prior.length);
+    await h.subscription.waitForPendingEvents();
+    expect({
+      events: onAgentEvent.mock.calls.map(([event]) => event),
+      blocks: h.texts(),
+      assistantTexts: h.subscription.assistantTexts,
+    }).toMatchObject({
+      events: [{ stream: "assistant", data: { text: expected, delta: "", replace: true } }],
+      blocks,
+      assistantTexts: blocks,
+    });
+    expect(h.onBlockReply).toHaveBeenCalledTimes(blocks.length);
+    if (replyToId) {
+      expect(h.onBlockReply.mock.calls.at(-1)?.[0]).toMatchObject({ replyToId, replyToTag: true });
+    }
+  });
+
+  it.each([
+    { name: "shortened", checkpoint: "Hello world. Next sentence.", tail: [] },
+    {
+      name: "corrected identical tail",
+      checkpoint: "Hello world. Hello world.",
+      tail: ["Hello world."],
+    },
+  ])("preserves delivered sentence chunks at a $name checkpoint", async ({ checkpoint, tail }) => {
+    const h = setup({ blockReplyChunking: sentenceChunking });
+    const first = "First block.";
+    const delivered = [first, "Hello world.", "Next sentence."];
+    h.start();
+    h.delta([first], 0);
+    h.end([first], 0);
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual([first]);
+    let second = "";
+    for (const delta of ["Hello world. ", "Next sentence. ", "Tail"]) {
+      second += delta;
+      h.delta([first, second], 1, delta);
+    }
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual(delivered);
+    expect(h.subscription.assistantTexts).toEqual(delivered);
+    h.end([first, checkpoint], 1);
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual([...delivered, ...tail]);
+    expect(h.subscription.assistantTexts).toEqual([...delivered, ...tail]);
+    expect(h.onBlockReply).toHaveBeenCalledTimes(delivered.length + tail.length);
+  });
+
+  it("keeps native code continuation fenced after a shortened open-fence checkpoint", async () => {
+    const h = setup({ blockReplyChunking: { minChars: 1, maxChars: 20 } });
+    const shortened = "```txt\nabc";
+    const continuation = "defghijklmnopqrstuvwxyz\n```";
+    const firstChunk = "```txt\nabcdefghi\n```";
+    h.start();
+    let text = "";
+    for (const delta of ["`", "``txt\n", "abc", "def", "ghi", "jklmnop"]) {
+      text += delta;
+      h.delta([text], 0, delta);
+    }
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual([firstChunk]);
+    h.end([shortened], 0);
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual([firstChunk]);
+    expect(h.onBlockReply).toHaveBeenCalledTimes(1);
+    h.delta([shortened, continuation], 1);
+    h.end([shortened, continuation], 1);
+    await h.subscription.waitForPendingEvents();
+    const delivered = h.texts();
+    expect(delivered[0]).toBe(firstChunk);
+    const bodies = delivered.slice(1).map((chunk) => {
+      expect(chunk.startsWith("```txt\n")).toBe(true);
+      expect(chunk.endsWith("\n```")).toBe(true);
+      expect(chunk.length).toBeLessThanOrEqual(20);
+      return chunk.slice("```txt\n".length, -"\n```".length).replaceAll("\n", "");
+    });
+    expect(bodies.join("")).toBe("defghijklmnopqrstuvwxyz");
+    h.emit({ type: "message_end", message: assistant([shortened, continuation]) });
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual(delivered);
+    expect(h.onBlockReply).toHaveBeenCalledTimes(delivered.length);
+  });
+
+  it("delivers identical text first seen in a distinct block at message_end", async () => {
+    const onAgentEvent = vi.fn();
+    const h = setup({ onAgentEvent });
+    h.start();
+    h.delta(["Same"], 0);
+    h.end(["Same"], 0);
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual(["Same"]);
+    expect(h.subscription.assistantTexts).toEqual(["Same"]);
+    h.emit({ type: "message_end", message: assistant(["Same", "Same"]) });
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual(["Same", "Same"]);
+    expect(h.subscription.assistantTexts).toEqual(["Same", "Same"]);
+    expect(h.onBlockReply).toHaveBeenCalledTimes(2);
+    expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
+      stream: "assistant",
+      data: { text: "Same\nSame" },
+    });
+  });
+
+  it("does not read future blocks from shared mutable text_end partials", async () => {
+    const onAgentEvent = vi.fn();
+    const h = setup({ onAgentEvent });
+    const partial: NativeMessage = {
+      ...assistant([]),
+      content: [
+        { type: "text", text: "First" },
+        { type: "thinking", thinking: "Private reasoning" },
+        { type: "text", text: "Second" },
+      ],
+    };
+    h.emit({ type: "message_start", message: partial });
+    for (const [index, text, expected] of [
+      [0, "First", ["First"]],
+      [2, "Second", ["First", "Second"]],
+    ] as const) {
+      h.nativeEvent("text_delta", partial, index, text);
+      h.nativeEvent("text_end", partial, index, text);
+      await h.subscription.waitForPendingEvents();
+      expect(h.texts()).toEqual(expected);
+      expect(h.subscription.assistantTexts).toEqual(expected);
+      expect(onAgentEvent.mock.calls.at(-1)?.[0]).toMatchObject({
+        stream: "assistant",
+        data: { text: expected.join("\n") },
+      });
+    }
+    h.emit({ type: "message_end", message: partial });
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual(["First", "Second"]);
+    expect(h.subscription.assistantTexts).toEqual(["First", "Second"]);
+    expect(h.onBlockReply).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: "reasoning tags",
+      chunks: ["<thi", "nk>sensitive reasoning</think>Hello"],
+      enforceFinalTag: false,
+      expected: ["Hello"],
+    },
+    {
+      name: "final tags",
+      chunks: ["<fi", "nal>Hello</final>"],
+      enforceFinalTag: true,
+      expected: ["Hello"],
+    },
+    {
+      name: "fence literals",
+      chunks: ["``", "`\n<think>literal</think>\n```\n"],
+      enforceFinalTag: false,
+      expected: ["```\n<think>literal</think>\n```"],
+    },
+  ])(
+    "preserves $name split across native blocks at a checkpoint",
+    async ({ chunks, enforceFinalTag, expected }) => {
+      const onAgentEvent = vi.fn();
+      const h = setup({ onAgentEvent, enforceFinalTag });
+      const visibleUpdates = () =>
+        onAgentEvent.mock.calls
+          .filter(([event]) => event.stream === "assistant")
+          .map(([event]) => event.data.text);
+      h.start();
+      for (const [index, delta] of chunks.entries()) {
+        h.delta(chunks.slice(0, index + 1), index, delta);
+        expect(visibleUpdates()).toEqual(index === chunks.length - 1 ? expected : []);
+      }
+      h.end(chunks, chunks.length - 1);
+      await h.subscription.waitForPendingEvents();
+      expect({
+        events: visibleUpdates(),
+        blocks: h.texts(),
+        assistantTexts: h.subscription.assistantTexts,
+      }).toEqual({ events: expected, blocks: expected, assistantTexts: expected });
+      h.emit({ type: "message_end", message: assistant(chunks) });
+      await h.subscription.waitForPendingEvents();
+      expect(visibleUpdates()).toEqual(expected);
+      expect(h.subscription.assistantTexts).toEqual(expected);
+      expect(h.onBlockReply).toHaveBeenCalledTimes(expected.length);
     },
   );
+});
 
-  it("does not safety-send a cumulative text_end reply when the suffix was sent by a messaging tool", async () => {
-    const onBlockReply = vi.fn();
-    const { emit } = createTextEndBlockReplyHarness({ onBlockReply });
+describe("text_end replay and tool handoff", () => {
+  it.each([
+    { name: "ignores an already-contained snapshot", delta: "Hello world", content: "world" },
+    { name: "appends a snapshot extension", delta: "Hello", content: "Hello world" },
+  ])("$name", async ({ delta, content }) => {
+    const h = setup();
+    emitAssistantTextDelta({ emit: h.emit, delta });
+    emitAssistantTextEnd({ emit: h.emit, content });
+    await h.subscription.waitForPendingEvents();
+    expect(h.onBlockReply).toHaveBeenCalledTimes(1);
+    expect(h.subscription.assistantTexts).toEqual(["Hello world"]);
+  });
 
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextEnd({ emit, content: "Checking:" });
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
-    });
+  it("sends only the new suffix when replies grow across tool calls", async () => {
+    const h = setup();
+    const expected = [
+      "Let me grab actual eBay prices:",
+      "Let me grab actual prices from eBay:",
+      "eBay blocks live pricing:",
+    ];
+    for (let index = 0; index < expected.length; index++) {
+      if (index > 0) {
+        h.toolStart("browser", `tool-${index}`);
+        await Promise.resolve();
+      }
+      h.emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextEnd({ emit: h.emit, content: expected.slice(0, index + 1).join("") });
+      await h.subscription.waitForPendingEvents();
+      expect(h.onBlockReply).toHaveBeenCalledTimes(index + 1);
+    }
+    expect(h.texts()).toEqual(expected);
+    expect(h.subscription.assistantTexts).toEqual(expected);
+  });
 
-    emit({
-      type: "tool_execution_start",
-      toolName: "message",
-      toolCallId: "message-tool-1",
-      args: { action: "send", to: "+1555", message: "Fetched prices" },
+  it("keeps a full post-tool reply with a whitespace-separated shared prefix", async () => {
+    const h = setup();
+    const replies = ["Checking:", "Checking: found X"];
+    h.emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextEnd({ emit: h.emit, content: replies[0] });
+    await h.subscription.waitForPendingEvents();
+    expect(h.onBlockReply).toHaveBeenCalledTimes(1);
+    h.toolStart("browser", "tool-post-check-colon");
+    await Promise.resolve();
+    h.emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextEnd({ emit: h.emit, content: replies[1] });
+    await h.subscription.waitForPendingEvents();
+    expect(h.onBlockReply).toHaveBeenCalledTimes(2);
+    expect(h.texts()).toEqual(replies);
+    expect(h.subscription.assistantTexts).toEqual(replies);
+  });
+
+  it("does not safety-send a cumulative reply whose suffix a messaging tool sent", async () => {
+    const h = setup();
+    h.emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextEnd({ emit: h.emit, content: "Checking:" });
+    await h.subscription.waitForPendingEvents();
+    expect(h.onBlockReply).toHaveBeenCalledTimes(1);
+    h.toolStart("message", "message-tool-1", {
+      action: "send",
+      to: "+1555",
+      message: "Fetched prices",
     });
     await Promise.resolve();
-    emit({
+    h.emit({
       type: "tool_execution_end",
       toolName: "message",
       toolCallId: "message-tool-1",
       isError: false,
-      result: { details: { deliveryStatus: "sent" } },
+      result: { details: { status: "sent" } },
     });
+    await h.subscription.waitForPendingEvents();
+    h.emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextEnd({ emit: h.emit, content: "Checking: Fetched prices" });
     await Promise.resolve();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextEnd({ emit, content: "Checking: Fetched prices" });
-    await Promise.resolve();
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Checking: Fetched prices" }],
-      },
-    });
-    await Promise.resolve();
-
-    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["Checking:"]);
+    h.emit({ type: "message_end", message: textAssistant("Checking: Fetched prices") });
+    await h.subscription.waitForPendingEvents();
+    expect(h.texts()).toEqual(["Checking:"]);
   });
-});
 
-describe("text_end replay de-duplication", () => {
-  it("does not duplicate when text_end repeats full content", async () => {
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+  it.each(["checkpoint text_end", "message_end"] as const)(
+    "preserves split reply directives after a delivered chunk through %s",
+    async (terminal) => {
+      const h = setup({
+        blockReplyChunking: { minChars: 13, maxChars: 13, breakPreference: "newline" },
+      });
+      h.start();
+      for (const delta of ["Visible text.\n[[reply_to:", "target]]Bye"]) {
+        emitAssistantTextDelta({ emit: h.emit, delta });
+        expect(h.texts()).toEqual(["Visible text."]);
+      }
+      const text = "Visible text.\n[[reply_to:target]]Bye";
+      const message = assistant([text]);
+      h.emit(
+        terminal === "message_end"
+          ? { type: "message_end", message }
+          : {
+              type: "message_update",
+              message,
+              assistantMessageEvent: { type: "text_end", content: text, partial: message },
+            },
+      );
+      await h.subscription.waitForPendingEvents();
+      expect(h.texts()).toEqual(["Visible text.", "Bye"]);
+      expect(h.onBlockReply.mock.calls.at(-1)?.[0]).toMatchObject({
+        text: "Bye",
+        replyToId: "target",
+        replyToTag: true,
+      });
+    },
+  );
 
-    emitAssistantTextDelta({ emit, delta: "Good morning!" });
-    emitAssistantTextEnd({ emit, content: "Good morning!" });
-    await Promise.resolve();
-
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
-    });
-    expect(subscription.assistantTexts).toEqual(["Good morning!"]);
-  });
-  it("does not duplicate block chunks when text_end repeats full content", async () => {
-    // Chunked deltas may already flush all visible text before text_end repeats
-    // the same content; the snapshot must be ignored.
-    const onBlockReply = vi.fn();
-    const { emit } = createTextEndBlockReplyHarness({
-      onBlockReply,
-      blockReplyChunking: {
-        minChars: 5,
-        maxChars: 40,
-        breakPreference: "newline",
-      },
-    });
-
-    const fullText = "First line\nSecond line\nThird line\n";
-
-    emitAssistantTextDelta({ emit, delta: fullText });
-    await Promise.resolve();
-
-    const callsAfterDelta = onBlockReply.mock.calls.length;
-    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
-      "First line\nSecond line\nThird line",
-    ]);
-
-    emitAssistantTextEnd({ emit, content: fullText });
-    await Promise.resolve();
-
-    expect(onBlockReply).toHaveBeenCalledTimes(callsAfterDelta);
-  });
-});
-
-describe("assistant snapshot replay", () => {
-  it("does not emit duplicate block replies when text_end repeats", async () => {
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-
-    emitAssistantTextDelta({ emit, delta: "Hello block" });
-    emitAssistantTextEnd({ emit });
-    emitAssistantTextEnd({ emit });
-    await Promise.resolve();
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(subscription.assistantTexts).toEqual(["Hello block"]);
-  });
-  it("does not duplicate assistantTexts when message_end repeats", () => {
-    const { session, emit } = createStubSessionHarness();
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
-    });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello world" }],
-    } as AssistantMessage;
-
-    emit({ type: "message_end", message: assistantMessage });
-    emit({ type: "message_end", message: assistantMessage });
-
-    expect(subscription.assistantTexts).toEqual(["Hello world"]);
-  });
   it("keeps the completed assistant independent from transcript mutation", () => {
-    const { session, emit } = createStubSessionHarness();
-    const subscription = subscribeEmbeddedAgentSession({ session, runId: "run" });
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Current run reply" }],
-    } as AssistantMessage;
-
-    emit({ type: "message_end", message: assistantMessage });
-    assistantMessage.content = [{ type: "text", text: "Rewritten transcript reply" }];
-
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    onTestFinished(() => subscription.unsubscribe());
+    const message = textAssistant("Current run reply");
+    emit({ type: "message_end", message });
+    message.content = [{ type: "text", text: "Rewritten transcript reply" }];
     expect(subscription.getCurrentAttemptAssistant()?.content).toEqual([
       { type: "text", text: "Current run reply" },
     ]);
-  });
-  it("does not duplicate assistantTexts when message_end repeats with trailing whitespace changes", () => {
-    const { session, emit } = createStubSessionHarness();
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
-    });
-
-    const assistantMessageWithNewline = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello world\n" }],
-    } as AssistantMessage;
-
-    const assistantMessageTrimmed = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello world" }],
-    } as AssistantMessage;
-
-    emit({ type: "message_end", message: assistantMessageWithNewline });
-    emit({ type: "message_end", message: assistantMessageTrimmed });
-
-    expect(subscription.assistantTexts).toEqual(["Hello world"]);
-  });
-  it("does not duplicate assistantTexts when message_end repeats with reasoning blocks", () => {
-    const { session, emit } = createStubSessionHarness();
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
-      reasoningMode: "on",
-    });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "Because" },
-        { type: "text", text: "Hello world" },
-      ],
-    } as AssistantMessage;
-
-    emit({ type: "message_end", message: assistantMessage });
-    emit({ type: "message_end", message: assistantMessage });
-
-    expect(subscription.assistantTexts).toEqual(["Hello world"]);
-  });
-  it("populates assistantTexts for non-streaming models with chunking enabled", () => {
-    // Non-streaming providers may only send message_end; assistantTexts still
-    // needs the final visible reply even when block chunking is enabled.
-    // Non-streaming models (e.g. zai/glm-4.7): no text_delta events; message_end
-    // must still populate assistantTexts so providers can deliver a final reply.
-    const { session, emit } = createStubSessionHarness();
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
-      blockReplyChunking: { minChars: 50, maxChars: 200 }, // Chunking enabled
-    });
-
-    // Simulate non-streaming model: only message_start and message_end, no text_delta
-    emit({ type: "message_start", message: { role: "assistant" } });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Response from non-streaming model" }],
-    } as AssistantMessage;
-
-    emit({ type: "message_end", message: assistantMessage });
-
-    expect(subscription.assistantTexts).toEqual(["Response from non-streaming model"]);
-  });
-});
-
-type TextEndBlockReplyHarness = ReturnType<typeof createTextEndBlockReplyHarness>;
-type OnBlockReplyMock = ReturnType<typeof vi.fn>;
-type BlockReplyPayload = { text?: string };
-
-function emitOpenAiResponsesTextEvent(params: {
-  emit: TextEndBlockReplyHarness["emit"];
-  type: "text_delta" | "text_end";
-  text: string;
-  delta?: string;
-  id: string;
-  signaturePhase?: OpenAiResponsesTextEventPhase;
-  partialPhase?: OpenAiResponsesTextEventPhase;
-}) {
-  // Responses events carry item ids and phase signatures; tests preserve those
-  // fields so commentary/final routing matches provider payloads.
-  const { emit, ...eventParams } = params;
-  emit(createOpenAiResponsesTextEvent(eventParams));
-}
-
-function emitOpenAiResponsesTextDeltaAndEnd(params: {
-  emit: TextEndBlockReplyHarness["emit"];
-  text: string;
-  delta?: string;
-  id: string;
-  phase?: OpenAiResponsesTextEventPhase;
-}) {
-  const { phase, ...eventParams } = params;
-  emitOpenAiResponsesTextEvent({
-    ...eventParams,
-    type: "text_delta",
-    signaturePhase: phase,
-    partialPhase: phase,
-  });
-  emitOpenAiResponsesTextEvent({
-    ...eventParams,
-    type: "text_end",
-    delta: undefined,
-    signaturePhase: phase,
-    partialPhase: phase,
-  });
-}
-
-function emitOpenAiResponsesFinalMessageEnd(params: {
-  emit: TextEndBlockReplyHarness["emit"];
-  commentaryText: string;
-  finalText: string;
-}) {
-  params.emit({
-    type: "message_end",
-    message: {
-      role: "assistant",
-      content: [
-        createOpenAiResponsesTextBlock({
-          text: params.commentaryText,
-          id: "item_commentary",
-          phase: "commentary",
-        }),
-        createOpenAiResponsesTextBlock({
-          text: params.finalText,
-          id: "item_final",
-          phase: "final_answer",
-        }),
-      ],
-    } as AssistantMessage,
-  });
-}
-
-async function emitSuppressedCommentary(params: {
-  emit: TextEndBlockReplyHarness["emit"];
-  text: string;
-}) {
-  // Commentary can stream before final_answer; this helper proves suppressed
-  // commentary does not count as a delivered block.
-  params.emit({ type: "message_start", message: { role: "assistant" } });
-  emitOpenAiResponsesTextDeltaAndEnd({
-    emit: params.emit,
-    text: params.text,
-    id: "item_commentary",
-    phase: "commentary",
-  });
-  await Promise.resolve();
-}
-
-function expectSingleBlockReplyText(params: {
-  onBlockReply: OnBlockReplyMock;
-  subscription: TextEndBlockReplyHarness["subscription"];
-  text: string;
-}) {
-  expect(params.onBlockReply).toHaveBeenCalledTimes(1);
-  expect(requireBlockReplyPayload(params.onBlockReply).text).toBe(params.text);
-  expect(params.subscription.assistantTexts).toEqual([params.text]);
-}
-
-function requireBlockReplyPayload(onBlockReply: OnBlockReplyMock): BlockReplyPayload {
-  // Most cases expect exactly one user-visible block reply.
-  const call = onBlockReply.mock.calls[0];
-  if (!call) {
-    throw new Error("expected first block reply call");
-  }
-  const payload = call[0];
-  if (!payload || typeof payload !== "object") {
-    throw new Error("expected first block reply payload");
-  }
-  return payload as BlockReplyPayload;
-}
-
-describe("subscribeEmbeddedAgentSession", () => {
-  it("emits block replies on text_end and does not duplicate on message_end", async () => {
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-
-    emitAssistantTextDelta({ emit, delta: "Hello block" });
-    emitAssistantTextEnd({ emit });
-    await Promise.resolve();
-
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
-    });
-    const payload = requireBlockReplyPayload(onBlockReply);
-    expect(payload?.text).toBe("Hello block");
-    expect(subscription.assistantTexts).toEqual(["Hello block"]);
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello block" }],
-    } as AssistantMessage;
-
-    emit({ type: "message_end", message: assistantMessage });
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(subscription.assistantTexts).toEqual(["Hello block"]);
-  });
-
-  it("message_end block-replies visible text when text_end streamed only silent NO_REPLY chunks", async () => {
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextEnd({ emit, content: "NO_REPLY" });
-    await Promise.resolve();
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final visible reply." }],
-      } as AssistantMessage,
-    });
-    await Promise.resolve();
-
-    await vi.waitFor(() => {
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
-    });
-    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Final visible reply.");
-    expect(subscription.assistantTexts).toEqual(["Final visible reply."]);
-  });
-
-  it("does not duplicate when message_end flushes and a late text_end arrives", async () => {
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-
-    emitAssistantTextDelta({ emit, delta: "Hello block" });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello block" }],
-    } as AssistantMessage;
-
-    // Simulate a provider that ends the message without emitting text_end.
-    emit({ type: "message_end", message: assistantMessage });
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(subscription.assistantTexts).toEqual(["Hello block"]);
-
-    // Some providers can still emit a late text_end; this must not re-emit.
-    emitAssistantTextEnd({ emit, content: "Hello block" });
-    await Promise.resolve();
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(subscription.assistantTexts).toEqual(["Hello block"]);
-  });
-
-  it("emits legacy structured partials on text_end without waiting for message_end", async () => {
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitOpenAiResponsesTextEvent({
-      emit,
-      type: "text_delta",
-      text: "Legacy answer",
-      id: "item_legacy",
-    });
-    emitOpenAiResponsesTextEvent({
-      emit,
-      type: "text_end",
-      text: "Legacy answer",
-      id: "item_legacy",
-    });
-    await Promise.resolve();
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Legacy answer");
-    expect(subscription.assistantTexts).toEqual(["Legacy answer"]);
-
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Legacy answer" }],
-      } as AssistantMessage,
-    });
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(subscription.assistantTexts).toEqual(["Legacy answer"]);
-  });
-
-  it("suppresses commentary block replies until a final answer is available", async () => {
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-
-    await emitSuppressedCommentary({ emit, text: "Working..." });
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(subscription.assistantTexts).toStrictEqual([]);
-
-    emitOpenAiResponsesTextDeltaAndEnd({
-      emit,
-      text: "Done.",
-      id: "item_final",
-      phase: "final_answer",
-    });
-    await Promise.resolve();
-
-    emitOpenAiResponsesFinalMessageEnd({ emit, commentaryText: "Working...", finalText: "Done." });
-
-    expectSingleBlockReplyText({ onBlockReply, subscription, text: "Done." });
-  });
-
-  it("emits the full final answer on text_end when it extends suppressed commentary", async () => {
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitOpenAiResponsesTextDeltaAndEnd({
-      emit,
-      text: "Hello",
-      id: "item_commentary",
-      phase: "commentary",
-    });
-    await Promise.resolve();
-
-    expect(onBlockReply).not.toHaveBeenCalled();
-
-    emitOpenAiResponsesTextDeltaAndEnd({
-      emit,
-      text: "Hello world",
-      delta: " world",
-      id: "item_final",
-      phase: "final_answer",
-    });
-    await Promise.resolve();
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Hello world");
-    expect(subscription.assistantTexts).toEqual(["Hello world"]);
-  });
-
-  it("does not defer final_answer text_end when phase exists only in textSignature", async () => {
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitOpenAiResponsesTextEvent({
-      emit,
-      type: "text_delta",
-      text: "Done.",
-      id: "item_final",
-      signaturePhase: "final_answer",
-    });
-    emitOpenAiResponsesTextEvent({
-      emit,
-      type: "text_end",
-      text: "Done.",
-      id: "item_final",
-      signaturePhase: "final_answer",
-    });
-    await Promise.resolve();
-
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(requireBlockReplyPayload(onBlockReply).text).toBe("Done.");
-    expect(subscription.assistantTexts).toEqual(["Done."]);
-  });
-
-  it("emits the final answer at message_end when commentary was streamed first", async () => {
-    const onBlockReply = vi.fn();
-    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
-
-    await emitSuppressedCommentary({ emit, text: "Working..." });
-
-    emitOpenAiResponsesFinalMessageEnd({ emit, commentaryText: "Working...", finalText: "Done." });
-
-    expectSingleBlockReplyText({ onBlockReply, subscription, text: "Done." });
   });
 });

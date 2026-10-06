@@ -50,7 +50,7 @@ describe("readGatewayDispatchConfig", () => {
         env: { vars: { OPENCLAW_GATEWAY_TOKEN: "inline-token" } },
         agents: {
           defaults: { timeoutSeconds: 42 },
-          list: [{ id: "ops", default: true }],
+          entries: { ops: {} },
         },
         plugins: {
           allow: ["vault"],
@@ -67,7 +67,7 @@ describe("readGatewayDispatchConfig", () => {
     expect(config.gateway?.port).toBe(18888);
     expect(config.gateway?.auth).toMatchObject({ mode: "token", token: "inline-token" });
     expect(config.agents?.defaults?.timeoutSeconds).toBe(42);
-    expect(config.agents?.list?.[0]?.id).toBe("ops");
+    expect(config.agents?.entries).toEqual({ ops: {} });
     expect(config.plugins).toEqual({
       allow: ["vault"],
       entries: { vault: { enabled: true } },
@@ -76,6 +76,19 @@ describe("readGatewayDispatchConfig", () => {
     expect(config.session?.mainKey).toBe("main");
     expect((config as { models?: unknown }).models).toBeUndefined();
     expect(shellEnvMocks.loadShellEnvFallback).not.toHaveBeenCalled();
+  });
+
+  it("still reports broken includes in discarded config branches", () => {
+    const configPath = createTempConfig({
+      "openclaw.json5": `{
+        gateway: { port: 18888 },
+        models: { $include: "./missing-models.json5" },
+      }`,
+    });
+
+    expect(() => readGatewayDispatchConfig({ configPath, env: {} })).toThrow(
+      "Failed to read include file: ./missing-models.json5",
+    );
   });
 
   it("loads only gateway credential shell env keys on explicit fallback", async () => {

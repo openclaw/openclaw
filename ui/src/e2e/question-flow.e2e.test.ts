@@ -1,11 +1,12 @@
 // Control UI E2E tests cover composer-replacing Gateway questions through the mocked WebSocket.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { QuestionResolveResult } from "@openclaw/gateway-protocol";
+import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Page } from "playwright";
-import { afterEach, expect, it } from "vitest";
+import { beforeEach, afterEach, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -13,6 +14,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { defineQuestionFooterTests } from "./question-footer.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Gateway question flow",
@@ -22,22 +24,17 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "question-flow");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("question-flow");
+  }
+});
 const mainSessionKey = "agent:main:main";
 const questionSessionKey = "agent:main:question-proof";
 
 let context: BrowserContext | undefined;
-function questionRecord(
-  id: string,
-  questions: Array<{
-    questionId: string;
-    header: string;
-    question: string;
-    options: Array<{ label: string; description?: string }>;
-    multiSelect?: boolean;
-    isOther?: boolean;
-  }>,
-) {
+function questionRecord(id: string, questions: Question[]) {
   const createdAtMs = Date.now();
   return {
     id,
@@ -50,11 +47,36 @@ function questionRecord(
   };
 }
 
+function secretStoreQuestion(id: string) {
+  return questionRecord(id, [
+    {
+      questionId: "api_key",
+      header: "API key",
+      question: "Provide the deployment API key",
+      options: [],
+      isSecret: true,
+      secretStore: {
+        name: "DEPLOY_API_KEY",
+        kind: "secret",
+        allowedHosts: ["api.example.test"],
+        reason: "Publish the release artifacts.",
+      },
+      secretStoreExisting: {
+        updatedAtMs: Date.now() - 60_000,
+        updatedBy: "release-operator",
+      },
+    },
+  ]);
+}
+
+function storedSecretAnswer(): QuestionResolveResult {
+  return { status: "answered", answers: { answers: { api_key: ["stored"] } } };
+}
+
 async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
@@ -78,11 +100,13 @@ function historyMessages() {
   }));
 }
 
-async function openQuestionPage() {
+async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouch = false) {
   context = await suite.browser.newContext({
+    hasTouch,
     locale: "en-US",
     serviceWorkers: "block",
-    viewport: { height: 900, width: 1440 },
+    viewport,
+    ...(captureUiProof ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
   });
   const page = await context.newPage();
   const gateway = await installMockGateway(page, {
@@ -95,10 +119,12 @@ async function openQuestionPage() {
       "question.resolve",
       "sessions.create",
       "sessions.patch",
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
     ],
     historyMessages: historyMessages(),
     methodResponses: {
       "question.list": { questions: [] },
+      [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
       "sessions.list": {
         ts: Date.now(),
         path: "",
@@ -125,14 +151,17 @@ async function openQuestionPage() {
     sessionKey: mainSessionKey,
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, questionSessionKey));
-  // Chat and sidebar each own a projection; both must bind to the advertised
-  // real client before a lost-broadcast test can prove cross-surface delivery.
-  await expect
-    .poll(async () => (await gateway.getRequests("question.list")).length)
-    .toBeGreaterThanOrEqual(2);
   const startup = await gateway.waitForRequest("chat.startup");
   expect(startup.params).toEqual(expect.objectContaining({ sessionKey: questionSessionKey }));
-  await page.locator(`[data-session-key="${questionSessionKey}"]`).first().waitFor();
+  const compactMobileViewport =
+    viewport.width <= 768 ||
+    (viewport.width <= 932 && viewport.height <= 500 && viewport.width > viewport.height);
+  await page
+    .locator(`[data-session-key="${questionSessionKey}"]`)
+    .first()
+    .waitFor({ state: compactMobileViewport ? "attached" : "visible" });
+  // The mounted chat and sidebar share one authoritative question hydration.
+  await expect.poll(async () => (await gateway.getRequests("question.list")).length).toBe(1);
   return { gateway, page };
 }
 
@@ -140,15 +169,25 @@ function panelFor(page: Page, prompt: string) {
   return page.locator("openclaw-chat-question-panel").filter({ hasText: prompt });
 }
 
-async function expectQuestionAttention(page: Page, present: boolean): Promise<void> {
+async function expectQuestionAttention(page: Page, preview: string | null): Promise<void> {
+  const present = preview !== null;
   const session = page.locator(`[data-session-key="${questionSessionKey}"]`).first();
+  const questionAttention = session.locator('[data-session-attention="question"]');
   const expectedCount = present ? 1 : 0;
-  await expect
-    .poll(() => session.locator('[data-session-attention="question"]').count())
-    .toBe(expectedCount);
-  await expect
-    .poll(() => session.getByText("Waiting for your answer", { exact: true }).count())
-    .toBe(expectedCount);
+  await expect.poll(() => questionAttention.count()).toBe(expectedCount);
+  if (present) {
+    await expect
+      .poll(() =>
+        questionAttention.evaluate(
+          (element) =>
+            element
+              .closest("openclaw-tooltip")
+              ?.querySelector(".sidebar-session-attention-tooltip__preview")?.textContent,
+        ),
+      )
+      .toBe(preview);
+    await expect.poll(() => session.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+  }
 }
 
 async function emitRequested(
@@ -177,6 +216,120 @@ suite.define(() => {
   afterEach(async () => {
     await context?.close().catch(() => {});
     context = undefined;
+  });
+
+  it("reveals sidebar attention on touch without navigating or closing the drawer", async () => {
+    const { gateway, page } = await openQuestionPage({ width: 390, height: 844 }, true);
+    const request = questionRecord("sidebar-touch-question", [
+      {
+        questionId: "environment",
+        header: "Environment",
+        question: "Which environment should I use for the preview?",
+        options: [{ label: "Staging" }, { label: "Production" }],
+        isOther: false,
+      },
+    ]);
+    await emitRequested(gateway, request);
+    await expectQuestionAttention(page, request.questions[0]!.question);
+    await page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first().tap();
+    const row = page.locator(`[data-session-key="${questionSessionKey}"]`).first();
+    const shell = page.locator(".shell");
+    const attention = row.locator('[data-session-attention="question"]');
+    const tooltip = row.locator("openclaw-tooltip wa-tooltip[open]");
+    const route = page.url();
+
+    await attention.tap();
+    try {
+      await expect.poll(() => tooltip.count()).toBe(1);
+    } finally {
+      await screenshot(page, "01-sidebar-attention-tapped.png");
+    }
+    expect(await shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+    expect(page.url()).toBe(route);
+    expect(await row.getByText(request.questions[0]!.question, { exact: true }).isVisible()).toBe(
+      true,
+    );
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+
+    await attention.tap();
+    await expect.poll(() => tooltip.count()).toBe(0);
+    expect(await shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+    await attention.tap();
+    await expect.poll(() => tooltip.count()).toBe(1);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => tooltip.count()).toBe(0);
+    expect(await shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+
+    await row.locator(".sidebar-recent-session__link").tap();
+    await expect.poll(() => shell.getAttribute("class")).not.toContain("shell--nav-drawer-open");
+  });
+
+  it("opens an external question step without answering until completion is submitted", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const url = "https://chatgpt.com/apps/github/connector_question_proof";
+    const prompt = "Sign in to GitHub on ChatGPT to use it in Codex.";
+    await page.context().route(url, (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<h1>Controlled sign-in page</h1><p>Browser navigation proof; no account sign-in.</p>",
+      }),
+    );
+    const request = questionRecord("question-external-step", [
+      {
+        questionId: "continue",
+        header: "Continue",
+        question: prompt,
+        url,
+        options: [{ label: "I've completed this step" }, { label: "Decline" }],
+        isOther: false,
+      },
+    ]);
+    await emitRequested(gateway, request);
+    const panel = panelFor(page, prompt);
+    await panel.waitFor();
+    const link = panel.getByRole("link", { name: "Open link", exact: true });
+    await expect.poll(() => link.count()).toBe(1);
+    expect(await link.getAttribute("href")).toBe(url);
+    await screenshot(page, "01-external-step-pending.png");
+
+    const popupPromise = page.waitForEvent("popup");
+    await link.click();
+    const popup = await popupPromise;
+    await popup.getByRole("heading", { name: "Controlled sign-in page" }).waitFor();
+    expect(popup.url()).toBe(url);
+    expect(await popup.evaluate(() => window.opener)).toBeNull();
+    await screenshot(popup, "02-external-step-opened.png");
+    await popup.close();
+    await panel.waitFor();
+    await expectQuestionAttention(page, request.questions[0]!.question);
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+    expect(await panel.getByRole("button", { name: "Submit", exact: true }).isDisabled()).toBe(
+      true,
+    );
+
+    await panel.getByRole("radio", { name: /I've completed this step/ }).click();
+    // Opening the link with Enter must not trigger the panel's Enter-to-submit shortcut.
+    const keyboardPopupPromise = page.waitForEvent("popup");
+    await link.press("Enter");
+    const keyboardPopup = await keyboardPopupPromise;
+    await keyboardPopup.getByRole("heading", { name: "Controlled sign-in page" }).waitFor();
+    await keyboardPopup.close();
+    await panel.waitFor();
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+    await screenshot(page, "03-external-step-ready-to-confirm.png");
+
+    const answers = { answers: { continue: ["I've completed this step"] } };
+    await gateway.setMethodResponse("question.resolve", {
+      status: "answered",
+      answers,
+    } satisfies QuestionResolveResult);
+    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    const resolved = await gateway.waitForRequest("question.resolve");
+    expect(resolved.params).toEqual({ id: request.id, answers });
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
+    await expect.poll(() => panel.count()).toBe(0);
+    await expectQuestionAttention(page, null);
+    await screenshot(page, "04-external-step-completed.png");
   });
 
   it("settles a live-edge transcript after a question enters footer flow", async () => {
@@ -249,6 +402,13 @@ suite.define(() => {
     await screenshot(page, "06-question-backscroll-arrow.png");
   });
 
+  defineQuestionFooterTests({
+    openQuestionPage,
+    questionRecord,
+    questionSessionKey,
+    screenshot,
+  });
+
   it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
     const { gateway, page } = await openQuestionPage();
     const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -275,7 +435,7 @@ suite.define(() => {
     await emitRequested(gateway, request);
     const panel = panelFor(page, "Where should I deploy?");
     await panel.waitFor();
-    await expectQuestionAttention(page, true);
+    await expectQuestionAttention(page, request.questions[0]!.question);
     await expect
       .poll(() => page.locator(".chat-thread openclaw-chat-question-panel").count())
       .toBe(0);
@@ -304,6 +464,19 @@ suite.define(() => {
         };
       })
       .toEqual({ left: 0, width: 0 });
+    await page
+      .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
+      .hover();
+    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(1);
+    await page.mouse.move(400, 50);
+    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(0);
+    await page
+      .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
+      .focus();
+    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(1);
+    await expect
+      .poll(() => page.locator('.session-progress-hovercard[data-open="true"]').count())
+      .toBe(0);
     await screenshot(page, "01-question-pending.png");
 
     await panel.locator(".chat-question-panel__collapse").click();
@@ -333,7 +506,7 @@ suite.define(() => {
     expect(resolveRequest.params).toEqual({ id: request.id, answers });
 
     await expect.poll(() => panel.count()).toBe(0);
-    await expectQuestionAttention(page, false);
+    await expectQuestionAttention(page, null);
     const summary = page.locator(".chat-question-summary").filter({ hasText: "Deploy:" });
     await summary.waitFor();
     await expect
@@ -344,7 +517,200 @@ suite.define(() => {
     await expect
       .poll(() => composer.evaluate((element) => document.activeElement === element))
       .toBe(true);
+    await summary.scrollIntoViewIfNeeded();
     await screenshot(page, "02-question-answered.png");
+    expect(
+      await summary.getByText(request.questions[0]!.question, { exact: true }).isVisible(),
+    ).toBe(true);
+  });
+
+  it("masks a store-bound secret and resolves it with edited hosts without echoing the value", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const request = secretStoreQuestion("question-store-secret-success");
+    const fakeSecret = "fake-secret-never-use-browser-proof-123";
+    await gateway.setMethodResponse("question.resolve", storedSecretAnswer());
+    await emitRequested(gateway, request);
+
+    const panel = panelFor(page, "Provide the deployment API key");
+    await panel.waitFor();
+    await expect.poll(() => panel.getByText("Requested by main", { exact: false }).count()).toBe(1);
+    await expect.poll(() => panel.getByText("Publish the release artifacts.").count()).toBe(1);
+    await expect
+      .poll(() => panel.getByText("Replaces DEPLOY_API_KEY", { exact: false }).count())
+      .toBe(1);
+    const secretInput = panel.getByLabel("API key", { exact: true });
+    await expect.poll(() => secretInput.count()).toBe(1);
+    expect(await secretInput.getAttribute("type")).toBe("password");
+    expect(await secretInput.getAttribute("autocomplete")).toBe("off");
+    expect(await secretInput.getAttribute("placeholder")).toBe("DEPLOY_API_KEY");
+    await expect.poll(() => panel.locator('[role="radiogroup"]').count()).toBe(0);
+    const hostsInput = panel.locator(".chat-question-panel__hosts");
+    expect(await hostsInput.inputValue()).toBe("api.example.test");
+    await screenshot(page, "07-secret-store-pending.png");
+
+    await secretInput.fill(fakeSecret);
+    await hostsInput.fill("api.example.test, uploads.example.test extra.example.test");
+    expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
+    expect(await page.locator("body").evaluate((element) => element.innerHTML)).not.toContain(
+      fakeSecret,
+    );
+    await screenshot(page, "08-secret-store-masked-input.png");
+
+    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    const resolveRequest = await gateway.waitForRequest("question.resolve");
+    expect(resolveRequest.params).toEqual({
+      id: request.id,
+      answers: { answers: { api_key: [fakeSecret] } },
+      secretStoreAllowedHosts: ["api.example.test", "uploads.example.test", "extra.example.test"],
+    });
+    await expect.poll(() => panel.count()).toBe(0);
+    const summary = page.locator(".chat-question-summary").filter({ hasText: "API key:" });
+    await summary.waitFor();
+    await expect.poll(() => summary.getByText("Answered", { exact: true }).count()).toBe(1);
+    expect(await summary.textContent()).not.toContain("stored");
+    expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
+    await screenshot(page, "09-secret-store-answered.png");
+  });
+
+  it("keeps a store-bound question interactive after Gateway validation rejects its hosts", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const request = secretStoreQuestion("question-store-secret-validation");
+    const fakeSecret = "fake-secret-never-use-validation-proof-456";
+    const validationMessage = "Allowed hosts must be valid hostnames.";
+    await gateway.setMethodResponse("question.resolve", {
+      __mockError: { code: "INVALID_REQUEST", message: validationMessage },
+    });
+    await emitRequested(gateway, request);
+
+    const panel = panelFor(page, "Provide the deployment API key");
+    const secretInput = panel.locator('input[type="password"]');
+    const hostsInput = panel.locator(".chat-question-panel__hosts");
+    await secretInput.fill(fakeSecret);
+    await hostsInput.fill("bad-host.example.test");
+    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    await gateway.waitForRequest("question.resolve");
+    await panel.getByText(validationMessage, { exact: false }).waitFor();
+    await expect.poll(() => secretInput.isEnabled()).toBe(true);
+    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
+    await screenshot(page, "10-secret-store-validation-error.png");
+
+    await gateway.setMethodResponse("question.resolve", storedSecretAnswer());
+    await hostsInput.fill("corrected.example.test");
+    const previousRequestCount = (await gateway.getRequests("question.resolve")).length;
+    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+    const retry = await gateway.waitForRequest("question.resolve", {
+      after: previousRequestCount,
+    });
+    expect(retry.params).toEqual({
+      id: request.id,
+      answers: { answers: { api_key: [fakeSecret] } },
+      secretStoreAllowedHosts: ["corrected.example.test"],
+    });
+    await expect.poll(() => panel.count()).toBe(0);
+    expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
+  });
+
+  it("loads a mounted /ask document and resolves its secret through the shared question card", async () => {
+    context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const request = secretStoreQuestion("question-store-secret-deep-link");
+    const fakeSecret = "fake-secret-never-use-deep-link-proof-789";
+    const gateway = await installMockGateway(page, {
+      basePath: "/operator",
+      featureMethods: ["question.get", "question.resolve"],
+      methodResponses: {
+        "question.get": { question: request },
+        "question.resolve": storedSecretAnswer(),
+      },
+    });
+    const documentUrl = new URL(
+      `operator/ask/${encodeURIComponent(request.id)}`,
+      suite.server.baseUrl,
+    );
+    await page.goto(documentUrl.toString());
+    const getRequest = await gateway.waitForRequest("question.get");
+    expect(getRequest.params).toEqual({ id: request.id });
+
+    const document = page.locator("openclaw-question-page");
+    await document.waitFor();
+    expect(await page.locator("openclaw-app-shell, openclaw-app-sidebar").count()).toBe(0);
+    const panel = document.locator("openclaw-chat-question-panel");
+    await panel.waitFor();
+    expect(await document.getByRole("heading", { level: 1 }).textContent()).toContain(
+      "Waiting for your answer",
+    );
+    expect(await page.title()).toBe("Waiting for your answer — OpenClaw");
+    await screenshot(page, "11-secret-store-ask-pending.png");
+    const secretInput = panel.locator('input[type="password"]');
+    await secretInput.fill(fakeSecret);
+    expect(await page.locator("body").textContent()).not.toContain(fakeSecret);
+    expect(await page.locator("body").evaluate((element) => element.innerHTML)).not.toContain(
+      fakeSecret,
+    );
+    await screenshot(page, "12-secret-store-ask-masked-input.png");
+    await panel.getByRole("button", { name: "Submit", exact: true }).click();
+
+    const resolveRequest = await gateway.waitForRequest("question.resolve");
+    expect(resolveRequest.params).toEqual({
+      id: request.id,
+      answers: { answers: { api_key: [fakeSecret] } },
+      secretStoreAllowedHosts: ["api.example.test"],
+    });
+    const outcomeHeading = document.getByRole("heading", { name: "Answered", exact: true });
+    await outcomeHeading.waitFor();
+    expect(
+      await outcomeHeading.evaluate((element) => element === element.ownerDocument.activeElement),
+    ).toBe(true);
+    expect(await page.title()).toBe("Answered — OpenClaw");
+    expect(await document.textContent()).not.toContain(fakeSecret);
+    expect(await document.textContent()).not.toContain("stored");
+    expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
+    await screenshot(page, "13-secret-store-ask-answered.png");
+  });
+
+  it("retains a typed answer when navigating between pending questions", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const first = questionRecord("question-a-format", [
+      {
+        questionId: "format",
+        header: "Format",
+        question: "Which format should I use?",
+        options: [{ label: "Compact" }, { label: "Detailed" }],
+        isOther: true,
+      },
+    ]);
+    const second = questionRecord("question-b-audience", [
+      {
+        questionId: "audience",
+        header: "Audience",
+        question: "Who should read it?",
+        options: [{ label: "Engineers" }, { label: "Everyone" }],
+        isOther: true,
+      },
+    ]);
+    await emitRequested(gateway, first);
+    await emitRequested(gateway, second);
+    const panel = page.locator("openclaw-chat-question-panel");
+    await panel.getByRole("textbox", { name: "Your own answer for Format" }).fill("Compact");
+    await panel.getByRole("button", { name: "Next", exact: true }).click();
+    await panel.getByText("Who should read it?", { exact: true }).waitFor();
+    await panel.getByRole("button", { name: "Previous", exact: true }).click();
+    await panel.getByText("Which format should I use?", { exact: true }).waitFor();
+    try {
+      expect(
+        await panel.getByRole("textbox", { name: "Your own answer for Format" }).inputValue(),
+      ).toBe("Compact");
+      expect(await panel.getByRole("radio", { name: /Compact/ }).getAttribute("aria-checked")).toBe(
+        "false",
+      );
+    } finally {
+      await screenshot(page, "14-retained-custom-answer.png");
+    }
   });
 
   it("keeps multi-select on one step and submits labels as an array", async () => {
@@ -401,7 +767,7 @@ suite.define(() => {
     await emitRequested(gateway, request);
     const panel = panelFor(page, "Should I continue the deployment?");
     await panel.waitFor();
-    await expectQuestionAttention(page, true);
+    await expectQuestionAttention(page, request.questions[0]!.question);
     await gateway.setMethodResponse("question.resolve", {
       status: "cancelled",
     } satisfies QuestionResolveResult);
@@ -410,7 +776,7 @@ suite.define(() => {
     const resolveRequest = await gateway.waitForRequest("question.resolve");
     expect(resolveRequest.params).toEqual({ id: request.id, cancel: true });
     await expect.poll(() => panel.count()).toBe(0);
-    await expectQuestionAttention(page, false);
+    await expectQuestionAttention(page, null);
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
     await expect
       .poll(() => page.locator(".chat-question-summary").filter({ hasText: "Skipped" }).count())
@@ -438,8 +804,9 @@ suite.define(() => {
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       await expect
-        .poll(async () => (await gateway.getRequests("question.list")).length)
-        .toBeGreaterThanOrEqual(3);
+        .poll(() => panes.locator(".agent-chat__composer-combobox textarea").count())
+        .toBe(2);
+      expect(await gateway.getRequests("question.list")).toHaveLength(1);
 
       const request = questionRecord(`question-split-${status}-${closeSubmittingPane}`, [
         {
@@ -452,7 +819,7 @@ suite.define(() => {
       await emitRequested(gateway, request);
       const panels = panelFor(page, "Where should both panes deploy?");
       await expect.poll(() => panels.count()).toBe(2);
-      await expectQuestionAttention(page, true);
+      await expectQuestionAttention(page, request.questions[0]!.question);
 
       const answers = { answers: { deploy_target: ["Staging"] } };
       const result: QuestionResolveResult =
@@ -480,7 +847,7 @@ suite.define(() => {
       if (closeSubmittingPane) {
         await submittingPane.getByRole("button", { name: "Close pane", exact: true }).click();
         await expect.poll(() => remainingPanes.count()).toBe(1);
-        await expectQuestionAttention(page, true);
+        await expectQuestionAttention(page, request.questions[0]!.question);
         await gateway.resolveDeferred("question.resolve", result);
       }
       const remainingCount = closeSubmittingPane ? 1 : 2;
@@ -497,12 +864,15 @@ suite.define(() => {
             .count(),
         )
         .toBe(remainingCount);
-      await expectQuestionAttention(page, false);
+      await expectQuestionAttention(page, null);
     },
   );
 
   it("restores the composer when reconnect recovery cannot find an old question", async () => {
     const { gateway, page } = await openQuestionPage();
+    const favicon = page.locator('link[rel="icon"][type="image/svg+xml"]');
+    await expect.poll(() => favicon.getAttribute("href")).toMatch(/^\/favicon\.svg(?:\?|$)/);
+    const originalFavicon = await favicon.getAttribute("href");
     const request = questionRecord("question-expired-during-disconnect", [
       {
         questionId: "deploy_target",
@@ -511,29 +881,29 @@ suite.define(() => {
         options: [{ label: "Staging" }, { label: "Production" }],
       },
     ]);
+    await gateway.setMethodResponse("question.list", { questions: [request] });
     await emitRequested(gateway, request);
     const panel = panelFor(page, "Where should I deploy after reconnecting?");
     await panel.waitFor();
-    await expectQuestionAttention(page, true);
+    await expectQuestionAttention(page, request.questions[0]!.question);
+    await expect.poll(() => favicon.getAttribute("href")).toMatch(/^data:image\/svg\+xml,/);
 
-    await gateway.deferNext("question.get");
-    await gateway.deferNext("question.get");
+    await gateway.setMethodResponse("question.list", { questions: [] });
+    await gateway.setMethodResponse("question.get", {
+      __mockError: {
+        code: "INVALID_REQUEST",
+        message: "question was not found",
+        details: { reason: "QUESTION_NOT_FOUND" },
+      },
+    });
     await gateway.closeLatest();
     const recovery = await gateway.waitForRequest("question.get");
     expect(recovery.params).toEqual({ id: request.id });
-    await expect.poll(async () => (await gateway.getRequests("question.get")).length).toBe(2);
-    const notFound = {
-      code: "INVALID_REQUEST",
-      message: "question was not found",
-      details: { reason: "QUESTION_NOT_FOUND" },
-    };
-    await gateway.rejectDeferred("question.get", notFound);
-    await gateway.rejectDeferred("question.get", notFound);
 
     await expect.poll(() => panel.count()).toBe(0);
-    await expectQuestionAttention(page, false);
+    await expectQuestionAttention(page, null);
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-    expect(await gateway.getRequests("question.get")).toHaveLength(2);
+    await expect.poll(() => favicon.getAttribute("href")).toBe(originalFavicon);
   });
 
   it("shows a 1/2 stepper with answered and expired summaries", async () => {

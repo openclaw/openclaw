@@ -4,6 +4,7 @@ import {
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { collectPolicyConfiguredAgents } from "./policy-state-helpers.js";
 import { AGENT_WORKSPACE_POLICY_TOOLS, readStringArray } from "./policy-state-tool-posture.js";
 import type { PolicyAgentWorkspaceEvidence } from "./policy-state-types.js";
 import { toolListCoversTool } from "./tool-policy-conformance.js";
@@ -24,32 +25,26 @@ export function scanPolicyAgentWorkspace(
     tools: defaultTools,
     inheritedTools: {},
     workspaceSourceBase: "oc://openclaw.config/agents/defaults",
-    inheritedWorkspaceSourceBase: "oc://openclaw.config/agents/defaults",
     toolsSourceBase: "oc://openclaw.config/tools",
-    inheritedToolsSourceBase: "oc://openclaw.config/tools",
   });
 
-  const list = Array.isArray(agents.list) ? agents.list : [];
-  list.forEach((agent, index) => {
+  collectPolicyConfiguredAgents(agents).forEach((configured) => {
+    const agent = configured.value;
     if (!isRecord(agent)) {
       return;
     }
-    const agentId =
-      typeof agent.id === "string" && agent.id.trim() !== "" ? agent.id.trim() : undefined;
     const sandbox = asNonArrayRecord(agent.sandbox);
     const tools = asNonArrayRecord(agent.tools);
     pushAgentWorkspaceEvidence(entries, {
-      id: agentId ?? `agent-${index}`,
+      id: configured.agentId,
       scope: "agent",
-      agentId,
+      agentId: configured.agentId,
       sandbox,
       inheritedSandbox: defaultSandbox,
       tools,
       inheritedTools: defaultTools,
-      workspaceSourceBase: `oc://openclaw.config/agents/list/#${index}`,
-      inheritedWorkspaceSourceBase: "oc://openclaw.config/agents/defaults",
-      toolsSourceBase: `oc://openclaw.config/agents/list/#${index}/tools`,
-      inheritedToolsSourceBase: "oc://openclaw.config/tools",
+      workspaceSourceBase: configured.sourceBase,
+      toolsSourceBase: `${configured.sourceBase}/tools`,
     });
   });
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
@@ -66,9 +61,7 @@ function pushAgentWorkspaceEvidence(
     readonly tools: Record<string, unknown>;
     readonly inheritedTools: Record<string, unknown>;
     readonly workspaceSourceBase: string;
-    readonly inheritedWorkspaceSourceBase: string;
     readonly toolsSourceBase: string;
-    readonly inheritedToolsSourceBase: string;
   },
 ): void {
   const explicitSandboxMode = readString(params.sandbox.mode);
@@ -78,9 +71,7 @@ function pushAgentWorkspaceEvidence(
   const sandboxModeSource =
     explicitSandboxMode !== undefined
       ? `${params.workspaceSourceBase}/sandbox/mode`
-      : inheritedSandboxMode !== undefined
-        ? `${params.inheritedWorkspaceSourceBase}/sandbox/mode`
-        : "oc://openclaw.config/agents/defaults/sandbox/mode";
+      : "oc://openclaw.config/agents/defaults/sandbox/mode";
   const explicitWorkspaceAccess = readString(params.sandbox.workspaceAccess);
   const inheritedWorkspaceAccess = readString(params.inheritedSandbox.workspaceAccess);
   entries.push({
@@ -89,9 +80,7 @@ function pushAgentWorkspaceEvidence(
     source:
       explicitWorkspaceAccess !== undefined
         ? `${params.workspaceSourceBase}/sandbox/workspaceAccess`
-        : inheritedWorkspaceAccess !== undefined
-          ? `${params.inheritedWorkspaceSourceBase}/sandbox/workspaceAccess`
-          : "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
+        : "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     value: explicitWorkspaceAccess ?? inheritedWorkspaceAccess ?? "none",
@@ -121,7 +110,6 @@ function agentWorkspaceToolDenyEvidence(
     readonly tools: Record<string, unknown>;
     readonly inheritedTools: Record<string, unknown>;
     readonly toolsSourceBase: string;
-    readonly inheritedToolsSourceBase: string;
   },
   tool: string,
   sandboxModeCoversAgentMain: boolean,
@@ -135,7 +123,7 @@ function agentWorkspaceToolDenyEvidence(
     },
     {
       entries: readStringArray(params.inheritedTools.deny),
-      source: `${params.inheritedToolsSourceBase}/deny`,
+      source: "oc://openclaw.config/tools/deny",
     },
     ...(sandboxModeCoversAgentMain
       ? [
@@ -146,7 +134,7 @@ function agentWorkspaceToolDenyEvidence(
               }
             : {
                 entries: inheritedSandboxToolDeny ?? [],
-                source: `${params.inheritedToolsSourceBase}/sandbox/tools/deny`,
+                source: "oc://openclaw.config/tools/sandbox/tools/deny",
               },
         ]
       : []),

@@ -1,24 +1,16 @@
-/**
- * Session tracking for tabs created through the browser tool.
- */
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserSessionTabAuthority } from "./browser-runtime-state.js";
 import type { BrowserTabOwnership } from "./browser/client.types.js";
+import type * as sessionTabRegistry from "./browser/session-tab-registry.js";
+import type { BrowserSessionTabRoute } from "./browser/session-tab-route.js";
 
-type SessionTabParams = {
-  sessionKey?: string;
-  targetId?: string;
-  baseUrl?: string;
-  profile?: string;
-  profileAliases?: Array<string | undefined>;
-  ownership?: BrowserTabOwnership;
-  aliases?: Array<string | undefined>;
-};
-
-type SessionTabRegistry = {
-  trackSessionBrowserTab: (params: SessionTabParams) => void;
-  touchSessionBrowserTab: (params: SessionTabParams) => void;
-  untrackSessionBrowserTab: (params: SessionTabParams) => void;
-};
+type SessionTabRegistry = Pick<
+  typeof sessionTabRegistry,
+  "trackSessionBrowserTab" | "touchSessionBrowserTab" | "untrackSessionBrowserTab"
+>;
 
 function readOpenedTab(result: unknown): {
   targetId?: string;
@@ -26,10 +18,10 @@ function readOpenedTab(result: unknown): {
   profile?: string;
   ownership?: BrowserTabOwnership;
 } {
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
+  const opened = asNullableRecord(result);
+  if (!opened) {
     return { aliases: [] };
   }
-  const opened = result as Record<string, unknown>;
   const targetId = normalizeOptionalString(opened.targetId);
   const aliases = [
     targetId,
@@ -49,60 +41,12 @@ function readOpenedTab(result: unknown): {
 }
 
 export function stripBrowserOpenInternalMetadata(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = asNullableRecord(value);
+  if (!record) {
     return value;
   }
-  const {
-    ownership: _ownership,
-    resolvedProfile: _resolvedProfile,
-    ...agentVisible
-  } = value as Record<string, unknown>;
+  const { ownership: _ownership, resolvedProfile: _resolvedProfile, ...agentVisible } = record;
   return agentVisible;
-}
-
-async function trackOpenedBrowserTab(params: {
-  result: unknown;
-  sessionKey?: string;
-  fallbackProfile?: string;
-  baseUrl?: string;
-  track: SessionTabRegistry["trackSessionBrowserTab"];
-  closeTab: (targetId: string, profile?: string) => Promise<void>;
-}): Promise<void> {
-  const opened = readOpenedTab(params.result);
-  const profile = opened.profile ?? params.fallbackProfile;
-  try {
-    params.track({
-      sessionKey: params.sessionKey,
-      targetId: opened.targetId,
-      baseUrl: params.baseUrl,
-      profile,
-      ...(params.fallbackProfile && opened.profile && opened.profile !== params.fallbackProfile
-        ? { profileAliases: [params.fallbackProfile] }
-        : {}),
-      // Sandbox/browser-bridge tabs belong to a different browser process.
-      // Keep them process-local even if that server returned durable metadata.
-      ownership: params.baseUrl ? undefined : opened.ownership,
-      aliases: opened.aliases,
-    });
-  } catch (trackingError) {
-    if (!opened.targetId) {
-      throw trackingError;
-    }
-    try {
-      await params.closeTab(opened.targetId, profile);
-    } catch (closeError) {
-      throw Object.assign(
-        new Error("Failed to register browser tab cleanup and close the newly opened tab", {
-          cause: closeError,
-        }),
-        {
-          name: "BrowserTabTrackingCompensationError",
-          errors: [trackingError, closeError],
-        },
-      );
-    }
-    throw trackingError;
-  }
 }
 
 export function createBrowserToolSessionTabs(params: {
@@ -110,46 +54,86 @@ export function createBrowserToolSessionTabs(params: {
   requestedProfile?: string;
   defaultProfile: string;
   baseUrl?: string;
+  nodeRoute?: Extract<BrowserSessionTabRoute, { kind: "node-proxy" }>;
+  routeProfile?: () => string | undefined;
   isHostFallbackActive?: () => boolean;
   registry: SessionTabRegistry;
+  authority?: BrowserSessionTabAuthority;
 }) {
-  const profile = params.requestedProfile ?? params.defaultProfile;
-  const isTrackedRoute = () => !params.isHostFallbackActive || params.isHostFallbackActive();
-  const trackedBaseUrl = () => (params.isHostFallbackActive ? undefined : params.baseUrl);
-  const trackedProfile = () => (trackedBaseUrl() && !params.requestedProfile ? undefined : profile);
-  const identity = (targetId: string) => ({
-    sessionKey: params.sessionKey,
-    targetId,
-    baseUrl: trackedBaseUrl(),
-    profile: trackedProfile(),
-  });
+  const trackedRoute = (): BrowserSessionTabRoute =>
+    params.nodeRoute && !params.isHostFallbackActive?.()
+      ? params.nodeRoute
+      : { kind: "browser-control", ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}) };
+  const trackedProfile = (route: BrowserSessionTabRoute) =>
+    route.kind === "node-proxy"
+      ? (params.routeProfile?.() ?? params.requestedProfile)
+      : route.baseUrl && !params.requestedProfile
+        ? undefined
+        : (params.requestedProfile ?? params.defaultProfile);
+  const identity = (targetId: string) => {
+    const route = trackedRoute();
+    return {
+      sessionKey: params.sessionKey,
+      targetId,
+      route,
+      profile: trackedProfile(route),
+      ...(params.authority ? { authority: params.authority } : {}),
+    };
+  };
   return {
-    touch: (targetId: string | undefined): void => {
-      if (targetId && isTrackedRoute()) {
-        params.registry.touchSessionBrowserTab(identity(targetId));
+    touch: async (targetId: string | undefined): Promise<void> => {
+      if (targetId) {
+        await params.registry.touchSessionBrowserTab(identity(targetId));
       }
     },
-    untrack: (targetId: string | undefined): void => {
-      if (targetId && isTrackedRoute()) {
-        params.registry.untrackSessionBrowserTab(identity(targetId));
+    untrack: async (targetId: string | undefined): Promise<void> => {
+      if (targetId) {
+        await params.registry.untrackSessionBrowserTab(identity(targetId));
       }
     },
     trackOpened: async (
       result: unknown,
       closeTab: (targetId: string, openedProfile?: string) => Promise<void>,
     ): Promise<void> => {
-      if (!isTrackedRoute()) {
-        return;
+      const route = trackedRoute();
+      const fallbackProfile = trackedProfile(route);
+      const opened = readOpenedTab(result);
+      const profile = opened.profile ?? fallbackProfile;
+      try {
+        await params.registry.trackSessionBrowserTab({
+          sessionKey: params.sessionKey,
+          targetId: opened.targetId,
+          route,
+          profile,
+          ...(fallbackProfile && opened.profile && opened.profile !== fallbackProfile
+            ? { profileAliases: [fallbackProfile] }
+            : {}),
+          // Sandbox/browser-bridge tabs belong to a different browser process.
+          // Keep them process-local even if that server returned durable metadata.
+          ownership:
+            route.kind === "browser-control" && route.baseUrl ? undefined : opened.ownership,
+          aliases: opened.aliases,
+          ...(params.authority ? { authority: params.authority } : {}),
+        });
+      } catch (trackingError) {
+        if (!opened.targetId) {
+          throw trackingError;
+        }
+        try {
+          await closeTab(opened.targetId, profile);
+        } catch (closeError) {
+          throw Object.assign(
+            new Error("Failed to register browser tab cleanup and close the newly opened tab", {
+              cause: closeError,
+            }),
+            {
+              name: "BrowserTabTrackingCompensationError",
+              errors: [trackingError, closeError],
+            },
+          );
+        }
+        throw trackingError;
       }
-      const baseUrl = trackedBaseUrl();
-      await trackOpenedBrowserTab({
-        result,
-        sessionKey: params.sessionKey,
-        fallbackProfile: baseUrl && !params.requestedProfile ? undefined : profile,
-        baseUrl,
-        track: params.registry.trackSessionBrowserTab,
-        closeTab,
-      });
     },
   };
 }

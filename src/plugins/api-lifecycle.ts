@@ -1,43 +1,68 @@
-/** Tracks plugin API lifecycle callbacks registered during runtime activation. */
-import type { OpenClawPluginApi } from "./types.js";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { attachPluginApiFacades } from "./api-facades.js";
+import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
 
-type FunctionPropertyNames<T> = Extract<
-  {
-    [K in keyof T]-?: Exclude<T[K], undefined> extends (...args: unknown[]) => unknown ? K : never;
-  }[keyof T],
-  string
->;
+const LATE_CALLABLE_PLUGIN_API_METHODS: ReadonlySet<string> = new Set<keyof OpenClawPluginApi>([
+  "clearRunContext",
+  "emitAgentEvent",
+  "enqueueNextTurnInjection",
+  "getRunContext",
+  "sendSessionAttachment",
+  "scheduleSessionTurn",
+  "setRunContext",
+  "unscheduleSessionTurnsByTag",
+]);
 
-/** Names of plugin API methods exposed on the OpenClaw plugin API. */
-type PluginApiMethodName = FunctionPropertyNames<OpenClawPluginApi>;
-
-/** Lifecycle policy for whether a plugin API method can be called after registration. */
-type PluginApiLifecyclePolicy = {
-  phase: "registration" | "runtime";
-  lateCallable: boolean;
-};
-
-const PLUGIN_API_METHOD_POLICIES: Partial<Record<PluginApiMethodName, PluginApiLifecyclePolicy>> = {
-  clearRunContext: { phase: "runtime", lateCallable: true },
-  emitAgentEvent: { phase: "runtime", lateCallable: true },
-  enqueueNextTurnInjection: { phase: "runtime", lateCallable: true },
-  getRunContext: { phase: "runtime", lateCallable: true },
-  sendSessionAttachment: { phase: "runtime", lateCallable: true },
-  scheduleSessionTurn: { phase: "runtime", lateCallable: true },
-  setRunContext: { phase: "runtime", lateCallable: true },
-  unscheduleSessionTurnsByTag: { phase: "runtime", lateCallable: true },
-};
-
-/** Returns lifecycle policy for one plugin API method name. */
-function getPluginApiMethodLifecyclePolicy(
-  methodName: string,
-): PluginApiLifecyclePolicy | undefined {
-  return PLUGIN_API_METHOD_POLICIES[methodName as PluginApiMethodName];
+function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
+  api: OpenClawPluginApi;
+  close: () => void;
+} {
+  let closed = false;
+  const guardedApi = attachPluginApiFacades(
+    new Proxy(api, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== "function") {
+          return value;
+        }
+        if (typeof prop === "string" && LATE_CALLABLE_PLUGIN_API_METHODS.has(prop)) {
+          return (...args: unknown[]) => Reflect.apply(value, target, args);
+        }
+        return (...args: unknown[]) => {
+          if (closed) {
+            return undefined;
+          }
+          return Reflect.apply(value, target, args);
+        };
+      },
+    }),
+  );
+  return {
+    api: guardedApi,
+    close: () => {
+      closed = true;
+    },
+  };
 }
 
-/** True when a plugin API method remains callable after registration. */
-export function isLateCallablePluginApiMethod(
-  methodName: string,
-): methodName is PluginApiMethodName {
-  return getPluginApiMethodLifecyclePolicy(methodName)?.lateCallable === true;
+export function runPluginRegistration(
+  register: NonNullable<OpenClawPluginDefinition["register"]>,
+  api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
+  asyncResult: "reject" | "ignore" = "reject",
+  trackPending?: (pending: Promise<unknown>) => void,
+): void {
+  const guarded = createGuardedPluginRegistrationApi(api);
+  try {
+    const result = register(guarded.api);
+    if (isPromiseLike(result)) {
+      const pending = Promise.resolve(result);
+      trackPending?.(pending);
+      void pending.catch(() => {});
+      if (asyncResult === "reject") {
+        throw new Error("plugin register must be synchronous");
+      }
+    }
+  } finally {
+    guarded.close();
+  }
 }

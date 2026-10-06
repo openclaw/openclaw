@@ -1,119 +1,72 @@
-// Tests heartbeat runner response prefix template handling.
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
+import { expect, it, vi } from "vitest";
+import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
+  heartbeatTestConfig,
   seedMainSessionStore,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 
 installHeartbeatRunnerTestRuntime();
 
-describe("runHeartbeatOnce responsePrefix templates", () => {
-  const TELEGRAM_GROUP = "-1001234567890";
-
-  function createTelegramHeartbeatConfig(params: {
-    tmpDir: string;
-    storePath: string;
-    responsePrefix: string;
-  }): OpenClawConfig {
-    return {
-      agents: {
-        defaults: {
-          workspace: params.tmpDir,
-          heartbeat: { every: "5m", target: "telegram" },
-        },
-      },
-      channels: {
+it.each([
+  {
+    name: "decorates an alert",
+    prefix: "[{provider}/{model}|think:{thinkingLevel}]",
+    reply: "Heartbeat alert",
+    expected: "[openai/gpt-5.4|think:high] Heartbeat alert",
+  },
+  {
+    name: "suppresses a prefixed acknowledgment",
+    prefix: "[{model}]",
+    reply: "[gpt-5.4] HEARTBEAT_OK all good",
+    expected: undefined,
+  },
+])(
+  "resolves model-selection prefix variables before delivery: $name",
+  async ({ prefix, reply, expected }) => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const target = "-1001234567890";
+      const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
+      cfg.channels = {
         telegram: {
-          token: "test-token",
+          botToken: "test-token",
           allowFrom: ["*"],
           heartbeat: { showOk: false },
-          responsePrefix: params.responsePrefix,
+          responsePrefix: prefix,
         },
-      } as never,
-      session: { store: params.storePath },
-    };
-  }
-
-  function makeTelegramDeps(params: { sendTelegram: ReturnType<typeof vi.fn> }): HeartbeatDeps {
-    return {
-      telegram: params.sendTelegram as unknown,
-      getQueueSize: () => 0,
-      nowMs: () => 0,
-    } satisfies HeartbeatDeps;
-  }
-
-  function createMessageSendSpy() {
-    return vi.fn().mockResolvedValue({
-      messageId: "m1",
-      chatId: TELEGRAM_GROUP,
-    });
-  }
-
-  function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-    const call = mock.mock.calls[0];
-    if (!call) {
-      throw new Error(`expected ${label} call`);
-    }
-    return call;
-  }
-
-  async function runTemplatedHeartbeat(params: { responsePrefix: string; replyText: string }) {
-    return withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createTelegramHeartbeatConfig({
-        tmpDir,
-        storePath,
-        responsePrefix: params.responsePrefix,
-      });
+      };
       await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
         lastProvider: "telegram",
-        lastTo: TELEGRAM_GROUP,
+        lastTo: target,
       });
-
       replySpy.mockImplementation(async (_ctx, opts) => {
         opts?.onModelSelected?.({
           provider: "openai",
           model: "gpt-5.4-20260401",
           thinkLevel: "high",
         });
-        return { text: params.replyText };
+        return { text: reply };
       });
-      const sendTelegram = createMessageSendSpy();
-
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: target });
       await runHeartbeatOnce({
         cfg,
         deps: {
-          ...makeTelegramDeps({ sendTelegram }),
+          telegram: sendTelegram,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
           getReplyFromConfig: replySpy,
         },
       });
-
-      return sendTelegram;
+      if (expected === undefined) {
+        expect(sendTelegram).not.toHaveBeenCalled();
+      } else {
+        expect(sendTelegram).toHaveBeenCalledOnce();
+        expect(sendTelegram.mock.calls[0]?.[0]).toBe(target);
+        expect(sendTelegram.mock.calls[0]?.[1]).toBe(expected);
+        expect(typeof sendTelegram.mock.calls[0]?.[2]).toBe("object");
+      }
     });
-  }
-
-  it("resolves responsePrefix model-selection variables before alert delivery", async () => {
-    const sendTelegram = await runTemplatedHeartbeat({
-      responsePrefix: "[{provider}/{model}|think:{thinkingLevel}]",
-      replyText: "Heartbeat alert",
-    });
-
-    expect(sendTelegram).toHaveBeenCalledTimes(1);
-    const [target, message, options] = requireFirstMockCall(sendTelegram, "telegram send");
-    expect(target).toBe(TELEGRAM_GROUP);
-    expect(message).toBe("[openai/gpt-5.4|think:high] Heartbeat alert");
-    expect(typeof options).toBe("object");
-  });
-
-  it("uses the resolved responsePrefix when suppressing prefixed HEARTBEAT_OK replies", async () => {
-    const sendTelegram = await runTemplatedHeartbeat({
-      responsePrefix: "[{model}]",
-      replyText: "[gpt-5.4] HEARTBEAT_OK all good",
-    });
-
-    expect(sendTelegram).not.toHaveBeenCalled();
-  });
-});
+  },
+);

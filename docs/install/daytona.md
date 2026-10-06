@@ -87,12 +87,15 @@ Running `openclaw onboard` without flags starts a conversational setup
 assistant instead and requires an interactive terminal;
 `openclaw onboard --classic` runs the older step-by-step wizard.
 
-Onboarding configures a gateway auth token. Print it any time from the
-sandbox:
+Onboarding configures a gateway auth token. Print it any time from an
+interactive terminal on the sandbox:
 
 ```bash
-node -p "require(process.env.HOME + '/.openclaw/openclaw.json').gateway.auth.token"
+openclaw gateway auth-token --show
 ```
+
+The command refuses to print the token when stdout is not an interactive
+terminal, so it cannot be captured through a pipe or command substitution.
 
 `openclaw config get gateway.auth.token` returns `__OPENCLAW_REDACTED__`
 rather than the value, because the CLI masks secrets in its output.
@@ -213,7 +216,7 @@ Pairing codes expire after 1 hour. Full reference: [Telegram](/channels/telegram
 WhatsApp ships as a separate plugin, so install and enable it first:
 
 ```bash
-openclaw plugins install clawhub:@openclaw/whatsapp --acknowledge-clawhub-risk
+openclaw plugins install clawhub:@openclaw/whatsapp
 openclaw plugins enable whatsapp
 ```
 
@@ -242,8 +245,11 @@ personal-number mode, and self-chat details: [WhatsApp](/channels/whatsapp).
 The snapshot's global npm tree is owned by root, so plain `openclaw update`
 cannot write to it. Update from the sandbox SSH session with:
 
+The command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`.
+
 ```bash
-sudo env "PATH=$PATH" npm install --global openclaw@latest
+sudo env "PATH=$PATH" npm install --global openclaw@latest --allow-scripts=openclaw
 openclaw doctor
 ```
 

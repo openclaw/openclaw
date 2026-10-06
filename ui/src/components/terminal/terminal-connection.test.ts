@@ -5,6 +5,7 @@ import {
   TerminalConnection,
   type TerminalGatewayClient,
   TerminalOpenTimeoutError,
+  TerminalOpenUnusableSessionError,
 } from "./terminal-connection.ts";
 
 const TERMINAL_LIVENESS_IDLE_MS = 20_000;
@@ -173,6 +174,41 @@ function setLivenessProbeOutcomes(
 }
 
 describe("TerminalConnection", () => {
+  // The gateway creates the session before answering, so a response that cannot
+  // drive a tab must not simply throw: the live server session would keep its
+  // slot against the connection cap with nothing able to close it.
+  it.each(["shell", "agentId", "cwd"] as const)(
+    "closes the opened session when the response omits %s",
+    async (field) => {
+      const { client, conn } = makeHarness();
+      const { [field]: _dropped, ...incomplete } = sessionResult();
+      client.nextResponse = incomplete;
+
+      await expect(openSession(conn)).rejects.toBeInstanceOf(TerminalOpenUnusableSessionError);
+
+      expect(client.requests.map((request) => request.method)).toEqual([
+        "terminal.open",
+        "terminal.close",
+      ]);
+      expect(client.requests[1]?.params).toEqual({ sessionId: "s1" });
+    },
+  );
+
+  it("closes a session-scoped open when its response is unusable", async () => {
+    const { client, conn } = makeHarness();
+    const { shell: _dropped, ...incomplete } = sessionResult();
+    client.nextResponse = incomplete;
+
+    await expect(openSession(conn, {}, { sessionKey: "agent:main:chat" })).rejects.toBeInstanceOf(
+      TerminalOpenUnusableSessionError,
+    );
+
+    expect(client.requests.at(-1)).toMatchObject({
+      method: "terminal.close",
+      params: { sessionId: "s1" },
+    });
+  });
+
   it("opens a session and routes its data to the registered sink", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
@@ -200,49 +236,6 @@ describe("TerminalConnection", () => {
     expect(data).toEqual(["abcdef"]);
     expect(client.requests.filter((request) => request.method === "terminal.attach")).toHaveLength(
       0,
-    );
-  });
-
-  it("keeps shipped protocol-4 counter jumps diagnostic-only during version skew", async () => {
-    const { client, conn } = makeHarness();
-    const data: string[] = [];
-    await openSession(conn, { onData: (dataChunk) => data.push(dataChunk) });
-
-    emitData(client, 0, "hello");
-    emitData(client, 7, "world");
-
-    expect(data).toEqual(["hello", "world"]);
-    expect(client.requests.filter((request) => request.method === "terminal.attach")).toHaveLength(
-      0,
-    );
-  });
-
-  it("does not combine a legacy recovery snapshot with indistinguishable queued frames", async () => {
-    const { client, conn } = makeHarness();
-    const data: string[] = [];
-    const replays: string[] = [];
-    const exits: unknown[] = [];
-    const recovery = createDeferred<TestSessionResult>();
-    await openSession(conn, {
-      onData: (chunk) => data.push(chunk),
-      onReplay: ({ data: snapshot }) => {
-        replays.push(snapshot);
-      },
-      onExit: (info) => exits.push(info),
-    });
-    deferRequest(client, "terminal.attach", recovery);
-
-    // A non-zero first counter is ambiguous until attach reveals an old peer.
-    emitData(client, 7, "first");
-    emitData(client, 8, "second");
-    emitExit(client, { exitCode: null, signal: null, reason: "detached" });
-    recovery.resolve(sessionResult({ buffer: "legacy snapshot containing first" }));
-
-    await vi.waitFor(() => expect(data).toEqual(["first", "second"]));
-    expect(replays).toEqual([]);
-    expect(exits).toEqual([]);
-    expect(client.requests.filter((request) => request.method === "terminal.attach")).toHaveLength(
-      1,
     );
   });
 
@@ -522,6 +515,30 @@ describe("TerminalConnection", () => {
       "terminal.resize",
       "terminal.close",
     ]);
+    expect(client.requests.at(-1)?.params).toEqual({ sessionId: "s1" });
+  });
+
+  it.each([
+    ["terminal.input", (conn: TerminalConnection) => conn.input("s1", "echo lost\n")],
+    ["terminal.resize", (conn: TerminalConnection) => conn.resize("s1", 120, 40)],
+  ] as const)("marks the session unavailable when %s rejects its live owner", async (_, act) => {
+    const { client, conn } = makeHarness();
+    const exits: unknown[] = [];
+    await openSession(conn, { onExit: (info) => exits.push(info) });
+    client.nextResponse = { ok: false };
+
+    await act(conn);
+
+    expect(exits).toEqual([
+      {
+        exitCode: null,
+        signal: null,
+        reason: "disconnected",
+        error: "Terminal session is no longer available. Open a new terminal session.",
+      },
+    ]);
+    expect(conn.size).toBe(0);
+    expect(client.listenerCount()).toBe(0);
   });
 
   it("buffers output that races ahead of sink registration and replays it in order", async () => {
@@ -767,25 +784,6 @@ describe("TerminalConnection", () => {
     expect(conn.size).toBe(1);
   });
 
-  it("preserves output that races an older gateway replay with no offset", async () => {
-    const { client, conn } = makeHarness();
-    const data: string[] = [];
-    const attached = createDeferred<TestSessionResult>();
-    deferRequest(client, "terminal.attach", attached);
-
-    const attachPromise = conn.attach("s1", testSink({ onData: (chunk) => data.push(chunk) }));
-    emitData(client, 41, "raced");
-    attached.resolve(sessionResult({ buffer: "legacy replay" }));
-    await attachPromise;
-    emitData(client, 42, "live");
-    emitData(client, 43, "more");
-
-    expect(data).toEqual(["legacy replay", "raced", "live", "more"]);
-    expect(client.requests.filter((request) => request.method === "terminal.attach")).toHaveLength(
-      1,
-    );
-  });
-
   it("drops the listener when an attach fails so failures do not leak subscriptions", async () => {
     const { client, conn } = makeHarness();
     client.request = ((method: string, params: unknown) => {
@@ -798,6 +796,21 @@ describe("TerminalConnection", () => {
     expect(conn.size).toBe(0);
     expect(client.listenerCount()).toBe(0);
   });
+
+  it.each(["shell", "agentId", "cwd", "buffer", "seq"] as const)(
+    "rejects an unusable replay missing %s without retaining its event listener",
+    async (field) => {
+      const { client, conn } = makeHarness();
+      const { [field]: _dropped, ...incomplete } = sessionResult({ buffer: "snapshot", seq: 8 });
+      client.nextResponse = incomplete;
+
+      await expect(conn.attach("s1", testSink())).rejects.toBeInstanceOf(
+        TerminalOpenUnusableSessionError,
+      );
+      expect(conn.size).toBe(0);
+      expect(client.listenerCount()).toBe(0);
+    },
+  );
 
   it("lists attachable sessions and tolerates a missing sessions field", async () => {
     const { client, conn } = makeHarness();
@@ -910,4 +923,33 @@ describe("TerminalConnection", () => {
     expect(client.listenerCount()).toBe(0);
     expect(conn.size).toBe(0);
   });
+
+  // A reply that lands after panel teardown races a dead owner. Registering its
+  // stream would retain the sink forever and arm the liveness probe loop
+  // against the replaced client, so the owner must refuse post-dispose work.
+  it.each([
+    ["attach", "terminal.attach"],
+    ["open", "terminal.open"],
+  ] as const)(
+    "a late %s reply after dispose() leaves no resurrected stream or liveness probes",
+    (kind, method) =>
+      withFakeTimers(async () => {
+        const { client, conn } = makeHarness();
+        const response = createDeferred<TestSessionResult & { buffer: string }>();
+        deferRequest(client, method, response);
+        const settle =
+          kind === "attach"
+            ? conn.attach("s1", testSink())
+            : conn.open({ cols: 80, rows: 24 }, testSink());
+        // Panel teardown (reconnect or element removal) discards the connection
+        // while the RPC is still in flight.
+        conn.dispose();
+        response.resolve({ ...sessionResult(), buffer: "replayed\n", seq: 9 });
+        await expect(settle).resolves.toMatchObject({ sessionId: "s1" });
+        expect(conn.size).toBe(0);
+        expect(client.listenerCount()).toBe(0);
+        await vi.advanceTimersByTimeAsync(IDLE_PLUS_PROBE_MS);
+        expect(client.requests.filter((request) => request.method === "terminal.list")).toEqual([]);
+      }),
+  );
 });

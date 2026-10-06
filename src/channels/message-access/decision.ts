@@ -1,15 +1,15 @@
-/**
- * Channel ingress decision graph builder.
- *
- * Evaluates route, sender, command, and mention gates into one admission decision.
- */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCommandAuthorizedFromAuthorizers } from "../command-gating.js";
 import {
   allowedImplicitMentionKindsFromConfig,
   resolveInboundMentionDecision,
 } from "../mention-gating.js";
-import { applyMutableIdentifierPolicy, redactedAllowlistDiagnostics } from "./allowlist.js";
+import { applyIdentifierAuthenticationPolicy, redactedAllowlistDiagnostics } from "./allowlist.js";
+import {
+  DEFAULT_IDENTIFIER_AUTHENTICATION,
+  meetsIdentifierAuthentication,
+  minimumIdentifierAuthenticationFrom,
+} from "./identifier-authentication.js";
 import {
   applyEventAuthModeToSenderGate,
   senderGateForDirect,
@@ -19,7 +19,7 @@ import type {
   AccessGraphGate,
   ChannelIngressDecision,
   ChannelIngressPolicyInput,
-  ChannelIngressState,
+  NormalizedIngressState,
   RedactedIngressMatch,
 } from "./types.js";
 
@@ -38,7 +38,7 @@ function decisiveDecision(params: {
   };
 }
 
-function routeGates(state: ChannelIngressState): AccessGraphGate[] {
+function routeGates(state: NormalizedIngressState): AccessGraphGate[] {
   // Route gates run first because a matched route can block dispatch before sender,
   // command, or mention policy needs to evaluate.
   return state.routeFacts.map((route) => ({
@@ -52,7 +52,7 @@ function routeGates(state: ChannelIngressState): AccessGraphGate[] {
   }));
 }
 
-function routeSenderEmptyGate(state: ChannelIngressState): AccessGraphGate | null {
+function routeSenderEmptyGate(state: NormalizedIngressState): AccessGraphGate | null {
   // deny-when-empty route sender policy means the route matched but has no sender list to
   // authorize against, so it becomes an explicit route block.
   const route = state.routeFacts.find(
@@ -80,7 +80,7 @@ function routeSenderEmptyGate(state: ChannelIngressState): AccessGraphGate | nul
 }
 
 function commandGate(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
 }): AccessGraphGate {
   const command = params.policy.command;
@@ -95,10 +95,16 @@ function commandGate(params: {
     };
   }
   const useAccessGroups = command.useAccessGroups ?? true;
-  // Command authorization combines owner and group allowlists after mutable-id policy so
+  // Command authorization combines owner and group allowlists after authentication policy so
   // command control cannot be granted by identifiers the current policy rejects.
-  const owner = applyMutableIdentifierPolicy(params.state.allowlists.commandOwner, params.policy);
-  const group = applyMutableIdentifierPolicy(params.state.allowlists.commandGroup, params.policy);
+  const owner = applyIdentifierAuthenticationPolicy(
+    params.state.allowlists.commandOwner,
+    params.policy,
+  );
+  const group = applyIdentifierAuthenticationPolicy(
+    params.state.allowlists.commandGroup,
+    params.policy,
+  );
   const authorized = resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
     modeWhenAccessGroupsOff: command.modeWhenAccessGroupsOff,
@@ -116,6 +122,12 @@ function commandGate(params: {
     allowed: authorized,
     reasonCode: shouldBlock ? "control_command_unauthorized" : "command_authorized",
     match: mergeCommandMatch(owner.match, group.match),
+    identifierAuthentication: {
+      evaluated: Boolean(owner.authentication?.evaluated || group.authentication?.evaluated),
+      affectedMatch: Boolean(
+        owner.authentication?.affectedMatch || group.authentication?.affectedMatch,
+      ),
+    },
     command: {
       useAccessGroups,
       allowTextCommands: command.allowTextCommands,
@@ -137,7 +149,8 @@ function mergeCommandMatch(
 }
 
 function eventGate(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
+  policy: ChannelIngressPolicyInput;
   senderGate: AccessGraphGate;
   commandGate: AccessGraphGate;
 }): AccessGraphGate {
@@ -171,8 +184,22 @@ function eventGate(params: {
     if (!params.state.event.hasOriginSubject) {
       return eventResult(false, "origin_subject_missing");
     }
-    const matched = params.state.event.originSubjectMatched;
-    return eventResult(matched, matched ? "event_authorized" : "origin_subject_not_matched");
+    const matched =
+      params.state.event.originSubjectMatched &&
+      meetsIdentifierAuthentication(
+        params.state.event.originSubjectAuthentication ?? DEFAULT_IDENTIFIER_AUTHENTICATION,
+        minimumIdentifierAuthenticationFrom(params.policy),
+      );
+    return {
+      ...eventResult(matched, matched ? "event_authorized" : "origin_subject_not_matched"),
+      identifierAuthentication: {
+        evaluated:
+          params.policy.minIdentifierAuthentication !== undefined ||
+          params.policy.mutableIdentifierMatching !== undefined ||
+          params.state.event.originSubjectAuthentication !== undefined,
+        affectedMatch: params.state.event.originSubjectMatched && !matched,
+      },
+    };
   }
   return eventResult(
     params.senderGate.allowed,
@@ -180,60 +207,18 @@ function eventGate(params: {
   );
 }
 
-function activationMetadata(params: {
-  activation?: ChannelIngressPolicyInput["activation"];
-  mentionFacts: ChannelIngressState["mentionFacts"];
-  shouldSkip: boolean;
-  effectiveWasMentioned?: boolean;
-  shouldBypassMention?: boolean;
-}) {
-  const mentionFacts = params.mentionFacts;
-  const allowedImplicitMentionKinds = resolveAllowedImplicitMentionKinds(params.activation);
-  return {
-    hasMentionFacts: mentionFacts != null,
-    requireMention: params.activation?.requireMention ?? false,
-    allowTextCommands: params.activation?.allowTextCommands ?? false,
-    ...(allowedImplicitMentionKinds !== undefined ? { allowedImplicitMentionKinds } : {}),
-    ...(params.activation?.order ? { order: params.activation.order } : {}),
-    shouldSkip: params.shouldSkip,
-    ...(mentionFacts?.canDetectMention !== undefined
-      ? { canDetectMention: mentionFacts.canDetectMention }
-      : {}),
-    ...(mentionFacts?.wasMentioned !== undefined
-      ? { wasMentioned: mentionFacts.wasMentioned }
-      : {}),
-    ...(mentionFacts?.hasAnyMention !== undefined
-      ? { hasAnyMention: mentionFacts.hasAnyMention }
-      : {}),
-    ...(mentionFacts?.implicitMentionKinds !== undefined
-      ? { implicitMentionKinds: mentionFacts.implicitMentionKinds }
-      : {}),
-    ...(params.effectiveWasMentioned !== undefined
-      ? { effectiveWasMentioned: params.effectiveWasMentioned }
-      : {}),
-    ...(params.shouldBypassMention !== undefined
-      ? { shouldBypassMention: params.shouldBypassMention }
-      : {}),
-  };
-}
-
-function resolveAllowedImplicitMentionKinds(activation: ChannelIngressPolicyInput["activation"]) {
-  return (
-    activation?.allowedImplicitMentionKinds ??
-    (activation?.implicitMentions
-      ? allowedImplicitMentionKindsFromConfig(activation.implicitMentions)
-      : undefined)
-  );
-}
-
 function activationGate(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
   commandGate: AccessGraphGate;
 }): AccessGraphGate {
   const activation = params.policy.activation;
   const mentionFacts = params.state.mentionFacts;
-  const allowedImplicitMentionKinds = resolveAllowedImplicitMentionKinds(activation);
+  const allowedImplicitMentionKinds =
+    activation?.allowedImplicitMentionKinds ??
+    (activation?.implicitMentions
+      ? allowedImplicitMentionKindsFromConfig(activation.implicitMentions)
+      : undefined);
   const activationResult = (input: {
     shouldSkip: boolean;
     effectiveWasMentioned?: boolean;
@@ -245,13 +230,32 @@ function activationGate(params: {
     effect: input.shouldSkip ? "skip" : "allow",
     allowed: !input.shouldSkip,
     reasonCode: input.shouldSkip ? "activation_skipped" : "activation_allowed",
-    activation: activationMetadata({
-      activation,
-      mentionFacts,
+    activation: {
+      hasMentionFacts: mentionFacts != null,
+      requireMention: activation?.requireMention ?? false,
+      allowTextCommands: activation?.allowTextCommands ?? false,
+      ...(allowedImplicitMentionKinds !== undefined ? { allowedImplicitMentionKinds } : {}),
+      ...(activation?.order ? { order: activation.order } : {}),
       shouldSkip: input.shouldSkip,
-      effectiveWasMentioned: input.effectiveWasMentioned,
-      shouldBypassMention: input.shouldBypassMention,
-    }),
+      ...(mentionFacts?.canDetectMention !== undefined
+        ? { canDetectMention: mentionFacts.canDetectMention }
+        : {}),
+      ...(mentionFacts?.wasMentioned !== undefined
+        ? { wasMentioned: mentionFacts.wasMentioned }
+        : {}),
+      ...(mentionFacts?.hasAnyMention !== undefined
+        ? { hasAnyMention: mentionFacts.hasAnyMention }
+        : {}),
+      ...(mentionFacts?.implicitMentionKinds !== undefined
+        ? { implicitMentionKinds: mentionFacts.implicitMentionKinds }
+        : {}),
+      ...(input.effectiveWasMentioned !== undefined
+        ? { effectiveWasMentioned: input.effectiveWasMentioned }
+        : {}),
+      ...(input.shouldBypassMention !== undefined
+        ? { shouldBypassMention: input.shouldBypassMention }
+        : {}),
+    },
   });
   if (!activation || !mentionFacts) {
     // Without activation policy or mention facts, sender/event authorization is enough.
@@ -281,7 +285,7 @@ function activationGate(params: {
 }
 
 export function decideChannelIngress(
-  state: ChannelIngressState,
+  state: NormalizedIngressState,
   policy: ChannelIngressPolicyInput,
 ): ChannelIngressDecision {
   const gates: AccessGraphGate[] = routeGates(state);
@@ -337,7 +341,7 @@ export function decideChannelIngress(
     return decisiveDecision({ admission: "drop", decision: "block", gate: command, gates });
   }
 
-  const event = eventGate({ state, senderGate: eventModeSender, commandGate: command });
+  const event = eventGate({ state, policy, senderGate: eventModeSender, commandGate: command });
   gates.push(event);
   if (!event.allowed) {
     return decisiveDecision({ admission: "drop", decision: "block", gate: event, gates });
@@ -350,9 +354,6 @@ export function decideChannelIngress(
   }
   if (activation.effect === "skip") {
     return decisiveDecision({ admission: "skip", decision: "allow", gate: activation, gates });
-  }
-  if (activation.effect === "observe") {
-    return decisiveDecision({ admission: "observe", decision: "allow", gate: activation, gates });
   }
   return decisiveDecision({ admission: "dispatch", decision: "allow", gate: activation, gates });
 }

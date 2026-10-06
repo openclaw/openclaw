@@ -1,7 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import type { Result } from "@openclaw/normalization-core/result";
 import type { Command } from "commander";
+import type { MessageReceipt } from "../channels/message/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ApprovalScope } from "../infra/approval-scope.js";
+import type { InternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
 import type {
   DiagnosticEventPrivateData,
   DiagnosticEventInput,
@@ -10,9 +14,16 @@ import type {
 } from "../infra/diagnostic-events.js";
 import type { DiagnosticTracePropagationBridge as DiagnosticTracePropagationBridgeContract } from "../infra/diagnostic-trace-propagation.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { PluginLogger } from "./logger-types.js";
+import type { PluginManifestCliCommand } from "./manifest-types.js";
+import type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
+import type { OpenClawPluginNodeWorkspace } from "./types.node-host.js";
+
+export type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
+type AnyChannelPlugin = import("../channels/plugins/types.plugin.js").AnyChannelPlugin;
 type DiagnosticTracePropagationBridge = DiagnosticTracePropagationBridgeContract<
   DiagnosticEventPayload,
   DiagnosticEventMetadata
@@ -67,6 +78,61 @@ export type OpenClawPluginHostedMediaResolver = (
   mediaUrl: string,
 ) => string | null | undefined | Promise<string | null | undefined>;
 
+export type WidgetPresenterContext = Readonly<{
+  messageChannel?: string;
+  accountId?: string;
+  deliveryContext?: Readonly<DeliveryContext>;
+  nativeChannelId?: string;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+  sessionKey?: string;
+}>;
+
+export type WidgetPresenterDocument = Readonly<{
+  kind: "html";
+  html: string;
+  hostedUrl?: string;
+}>;
+
+export type WidgetPresentationError =
+  | { code: "no_eligible_node"; message: string }
+  | { code: "node_error"; message: string; nodeId?: string }
+  | { code: "unavailable"; message: string }
+  | { code: "presentation_error"; message: string };
+
+export type WidgetPresentationSuccess =
+  | { kind: "node"; nodeId: string; nodeName?: string }
+  | { kind: "message"; receipt: MessageReceipt };
+
+type WidgetPresenterBase = {
+  description: string;
+  availability: (
+    context: WidgetPresenterContext,
+  ) => Promise<Result<{ available: true }, WidgetPresentationError>>;
+  present: (params: {
+    document: WidgetPresenterDocument;
+    title: string;
+    context: WidgetPresenterContext;
+  }) => Promise<Result<WidgetPresentationSuccess, WidgetPresentationError>>;
+};
+
+export type WidgetPresenter = WidgetPresenterBase &
+  (
+    | {
+        target: "node_panel";
+        match?: never;
+        capabilities?: never;
+      }
+    | {
+        target: "current_channel";
+        match: (context: WidgetPresenterContext) => boolean;
+        capabilities: Readonly<{
+          sourceKinds: readonly string[];
+          maxSourceBytes?: number;
+        }>;
+      }
+  );
+
 export type OpenClawPluginCliContext = {
   /**
    * Command object where this plugin should register its commands.
@@ -91,11 +157,7 @@ export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void
  * advertising it at the root CLI level, provide descriptors that cover every
  * top-level command root registered by that plugin CLI surface.
  */
-type OpenClawPluginCliCommandDescriptor = {
-  name: string;
-  description: string;
-  hasSubcommands: boolean;
-};
+type OpenClawPluginCliCommandDescriptor = PluginManifestCliCommand;
 
 /** Root-command metadata that is available before a plugin registrar is activated. */
 export type OpenClawPluginCliRootCommandDescriptor = OpenClawPluginCliCommandDescriptor & {
@@ -163,11 +225,13 @@ type OpenClawPluginNodeInvokePolicyApprovalRuntime = {
   request: (input: {
     title: string;
     description: string;
+    scope?: ApprovalScope;
     severity?: "info" | "warning" | "critical";
     toolName?: string;
     toolCallId?: string;
     agentId?: string;
     sessionKey?: string;
+    allowedDecisions?: readonly OpenClawPluginNodeInvokeApprovalDecision[];
     timeoutMs?: number;
   }) => Promise<{
     id?: string;
@@ -188,33 +252,39 @@ export type OpenClawPluginNodeInvokePolicyContext = {
     displayName?: string;
     platform?: string;
     deviceFamily?: string;
+    caps?: string[];
     commands?: string[];
   };
   client?: {
     connId?: string;
     scopes?: string[];
   } | null;
+  risk?: {
+    level: "ordinary" | "high";
+    /** Stable, content-free family name; never include user or action arguments. */
+    family: string;
+  };
   approvals?: OpenClawPluginNodeInvokePolicyApprovalRuntime;
+  /** Full covers only the selected harness's declared node commands; undefined requires a human decision. */
+  invokeNodeWithSessionFull?: (input: {
+    workspace: OpenClawPluginNodeWorkspace;
+    /** Called only after the host authorizes this exact admitted Full launch. */
+    createParams: () => unknown;
+  }) => Promise<OpenClawPluginNodeInvokeTransportResult | undefined>;
   invokeNode: (input?: {
     params?: unknown;
+    /** Bind an approved launch to its admitted managed workspace, when present. */
+    workspace?: OpenClawPluginNodeWorkspace;
     timeoutMs?: number;
     idempotencyKey?: string;
   }) => Promise<OpenClawPluginNodeInvokeTransportResult>;
 };
 
 export type OpenClawPluginNodeInvokePolicyResult =
-  | {
-      ok: true;
-      payload?: unknown;
-      payloadJSON?: string | null;
-    }
-  | {
-      ok: false;
-      message: string;
-      code?: string;
-      details?: Record<string, unknown>;
+  | Extract<OpenClawPluginNodeInvokeTransportResult, { ok: true }>
+  | (Extract<OpenClawPluginNodeInvokeTransportResult, { ok: false }> & {
       unavailable?: boolean;
-    };
+    });
 
 export type OpenClawPluginNodeInvokePolicy = {
   commands: string[];
@@ -229,10 +299,25 @@ export type OpenClawPluginNodeInvokePolicy = {
    */
   dangerous?: boolean;
   /**
+   * Explicitly permits one approval to cover later launches on the same managed placement.
+   * The scope is a stable semantic capability key, never user or action arguments.
+   */
+  standingApproval?: {
+    kind: "placement";
+    scope: string;
+  };
+  /**
    * iOS foreground-restricted commands should be queued for foreground delivery
    * when an iOS node reports BACKGROUND_UNAVAILABLE.
    */
   foregroundRestrictedOnIos?: boolean;
+  /**
+   * Classify exact command arguments before the policy handler or node transport runs.
+   * Throwing rejects the invocation before dispatch.
+   */
+  classifyRisk?: (
+    ctx: Pick<OpenClawPluginNodeInvokePolicyContext, "command" | "params">,
+  ) => NonNullable<OpenClawPluginNodeInvokePolicyContext["risk"]>;
   handle: (
     ctx: OpenClawPluginNodeInvokePolicyContext,
   ) => Promise<OpenClawPluginNodeInvokePolicyResult> | OpenClawPluginNodeInvokePolicyResult;
@@ -256,7 +341,6 @@ export type OpenClawGatewayDiscoveryAdvertiseContext = {
   gatewayTlsEnabled: boolean;
   gatewayTlsFingerprintSha256?: string;
   gatewayDirectReachable: boolean;
-  canvasPort?: number;
   tailnetDns?: string;
   sshPort?: number;
   cliPath?: string;
@@ -271,17 +355,51 @@ export type OpenClawGatewayDiscoveryService = {
 };
 
 /** Context passed to long-lived plugin services. */
+export type OpenClawPluginServiceHealth = {
+  reportFailure: (error: unknown) => void;
+  clearFailure: () => void;
+};
+
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
   workspaceDir?: string;
   stateDir: string;
   logger: PluginLogger;
+  serviceHealth?: OpenClawPluginServiceHealth;
+  /** Gateway-owned timed work; required by the version 2 service contract. */
+  scheduler?: PluginServiceSchedulerV1;
+  /** Gateway-owned scheduler access, revoked when this service stops. */
+  getCron?: () =>
+    | (import("./hook-gateway.types.js").PluginHookGatewayCronService & {
+        /** Admit service-owned work through the scheduler's normal run queue. */
+        enqueueRun?: (
+          id: string,
+          mode?: import("../cron/service/state.js").CronRunMode,
+        ) => Promise<import("../cron/service-contract.js").CronServiceRunResult>;
+      })
+    | undefined;
+  /** Service-owned node calls for this plugin's commands; normal node policy still applies. */
+  invokeNode?: (
+    params: Omit<
+      Parameters<import("./runtime/types.js").PluginRuntime["nodes"]["invoke"]>[0],
+      "scopes"
+    >,
+  ) => Promise<unknown>;
+  /** Service-owned binary transport for this plugin's duplex node commands. */
+  openNodeDuplex?: (
+    params: Omit<
+      Parameters<import("./runtime/types.js").PluginRuntime["nodes"]["openDuplex"]>[0],
+      "scopes"
+    > & { assertCurrent?: () => void },
+  ) => ReturnType<import("./runtime/types.js").PluginRuntime["nodes"]["openDuplex"]>;
   gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
   };
   internalDiagnostics?: {
+    /** Identity of the hosting process, available only while this service is active. */
+    getRuntimeIdentity?: () => { processInstanceId: string; buildId?: string };
     emit: (event: DiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;
     onEvent: (
       listener: (
@@ -289,6 +407,9 @@ export type OpenClawPluginServiceContext = {
         metadata: DiagnosticEventMetadata,
         privateData: DiagnosticEventPrivateData,
       ) => void,
+      filter?: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]>,
+      /** Defaults to true; false skips private payload copies and passes a frozen empty object. */
+      options?: { includePrivateData?: boolean },
     ) => () => void;
     registerTracePropagationBridge?: (bridge: DiagnosticTracePropagationBridge) => () => void;
   };
@@ -296,13 +417,30 @@ export type OpenClawPluginServiceContext = {
 
 /** Background service registered by a plugin during `register(api)`. */
 export type OpenClawPluginService = {
+  apiVersion?: 1;
   id: string;
+  /** Restart this service with committed config when one of these paths changes. */
+  reload?: { configPrefixes: readonly string[] };
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };
 
-export type OpenClawPluginChannelRegistration = {
-  plugin: ChannelPlugin;
+export type OpenClawPluginServiceContextV2 = OpenClawPluginServiceContext & {
+  scheduler: PluginServiceSchedulerV1;
+};
+
+/** A service whose host must provide scheduling bound to its lifetime. */
+export type OpenClawPluginServiceV2 = Omit<
+  OpenClawPluginService,
+  "apiVersion" | "start" | "stop"
+> & {
+  apiVersion: 2;
+  start: (ctx: OpenClawPluginServiceContextV2) => void | Promise<void>;
+  stop?: (ctx: OpenClawPluginServiceContextV2) => void | Promise<void>;
+};
+
+export type OpenClawPluginChannelRegistration<Plugin extends AnyChannelPlugin = ChannelPlugin> = {
+  plugin: Plugin;
 };
 
 /**

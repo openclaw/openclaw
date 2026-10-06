@@ -18,6 +18,12 @@ vi.mock("./outbound-media.js", () => ({
   resolveSynologyHostedMediaRoute: vi.fn(),
 }));
 
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  // client.test.ts covers send-slot timing; keep retry and deadline timers real.
+  sleep: async () => undefined,
+}));
+
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
 describe("Synology Chat client loopback", () => {
@@ -297,7 +303,7 @@ describe("Synology Chat client loopback", () => {
       expect(result).toMatchObject({
         channel: "synology-chat",
         messageId: "",
-        chatId: "42",
+        target: { kind: "chat", id: "42" },
         receipt: {
           platformMessageIds: [],
           parts: [],
@@ -341,7 +347,7 @@ describe("Synology Chat client loopback", () => {
 
     await synologyChatPlugin.outbound.sendText({ cfg, text, to: "42" });
     await synologyChatPlugin.message.send?.text?.({ cfg, text, to: "42" });
-    await sendMessage(incomingUrl, text, "42");
+    await sendMessage(incomingUrl, text, 42);
 
     expect(receivedPayloads).toHaveLength(6);
     expect(receivedPayloads.map(({ text: chunk }) => chunk).join("")).toBe(text + text + text);
@@ -460,7 +466,7 @@ describe("Synology Chat client loopback", () => {
     });
     const incomingUrl =
       `http://127.0.0.1:${port}/webapi/entry.cgi?` +
-      "api=SYNO.Chat.External&method=chatbot&version=2";
+      `api=SYNO.Chat.External&method=chatbot&version=2&token=${randomUUID()}`;
     const now = vi.spyOn(Date, "now");
     now.mockReturnValue(1_700_000_100_000);
 

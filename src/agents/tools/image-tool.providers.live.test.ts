@@ -24,6 +24,8 @@ import { isLiveAuthDrift } from "../live-test-provider-drift.test-support.js";
 import { createImageTool } from "./image-tool.js";
 import { testing } from "./image-tool.test-support.js";
 
+const describeLiveImageWithModel = describeImageWithModel;
+
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim() ?? "";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
 const LIVE_IMAGE_TOOL_ENABLED = isLiveTestEnabled(["OPENCLAW_LIVE_IMAGE_TOOL_TEST"]);
@@ -217,7 +219,7 @@ async function runLiveDownscaleCase(testCase: LiveProviderCase) {
       expect(Math.max(observedDimensions.width, observedDimensions.height)).toBeLessThanOrEqual(
         MODEL_SIDE_LIMIT,
       );
-      return await describeImageWithModel(params);
+      return await describeLiveImageWithModel(params);
     },
   });
 
@@ -236,7 +238,7 @@ async function runLiveDownscaleCase(testCase: LiveProviderCase) {
       result = await tool.execute(`live-${testCase.provider}-large-image`, {
         prompt:
           "Look at the center of the image. Reply with one lowercase word naming that center color.",
-        image: imagePath,
+        path: imagePath,
       });
     } catch (err) {
       if (isSkippableLiveError(err)) {

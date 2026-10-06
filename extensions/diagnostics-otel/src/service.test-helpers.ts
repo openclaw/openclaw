@@ -1,3 +1,5 @@
+import { createServer, type IncomingHttpHeaders } from "node:http";
+import type { AddressInfo } from "node:net";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -6,12 +8,12 @@ import {
   type DiagnosticTraceContext,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   onTrustedInternalDiagnosticEvent,
   registerDiagnosticTracePropagationBridge,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
-import type { OpenClawPluginServiceContext } from "../api.js";
 import type { ExporterHealthUpdate } from "./service-exporter-health.js";
 import { createDiagnosticsOtelService } from "./service.js";
 
@@ -213,6 +215,43 @@ export async function stopStartedOtelServices() {
   const services = [...startedServices];
   startedServices.clear();
   await Promise.all(services.map(({ service, ctx }) => Promise.resolve(service.stop?.(ctx))));
+}
+
+export async function startOtlpReceiver() {
+  const requests: Array<{
+    contentType: string | undefined;
+    headers: IncomingHttpHeaders;
+    method: string | undefined;
+    url: string;
+  }> = [];
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      requests.push({
+        contentType: request.headers["content-type"],
+        headers: request.headers,
+        method: request.method,
+        url: request.url ?? "",
+      });
+      response.writeHead(200, { "content-type": "application/x-protobuf" });
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = server.address() as AddressInfo;
+  return {
+    endpoint: `http://127.0.0.1:${port}`,
+    requests,
+    async close() {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeIdleConnections();
+      });
+    },
+  };
 }
 
 export function createTestTrace(spanId: string, parentSpanId?: string): DiagnosticTraceContext {

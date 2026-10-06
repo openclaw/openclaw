@@ -75,8 +75,7 @@ export function buildUsageHeatmap(
       return entry.totalTokens > 0 && entryMs >= startMs && entryMs <= endMs;
     })
     .map((entry) => entry.totalTokens);
-  const thresholds =
-    nonZero.length > 0 ? levelThresholds(nonZero) : ([0, 0, 0] as [number, number, number]);
+  const thresholds = levelThresholds(nonZero);
 
   const startWeekday = new Date(startMs).getUTCDay();
   const gridStartMs = startMs - startWeekday * DAY_MS;

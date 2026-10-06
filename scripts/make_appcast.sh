@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -61,15 +61,16 @@ if [[ -z "$VERSION" ]]; then
   fi
 fi
 
-CHANNEL_ARGS=()
+# Bash 3.2 treats an empty array as unset under nounset, so keep a required option.
+APPCAST_ARGS=(--embed-release-notes)
 if [[ "$VERSION" == *-alpha.* || "$VERSION" == *.alpha.* ]]; then
   echo "Alpha releases do not ship via Sparkle: $VERSION" >&2
   exit 1
 fi
 if [[ "$VERSION" == *-beta.* || "$VERSION" == *.beta.* ]]; then
-  CHANNEL_ARGS=(--channel beta)
+  APPCAST_ARGS+=(--channel beta)
 elif [[ "$VERSION" =~ ^[0-9]{4}\.[1-9][0-9]*\.([0-9]+)$ && "${BASH_REMATCH[1]}" -ge 33 ]]; then
-  CHANNEL_ARGS=(--channel extended-stable)
+  APPCAST_ARGS+=(--channel extended-stable)
 fi
 
 TMP_DIR="$(mktemp -d)"
@@ -103,12 +104,13 @@ if [[ -z "$GENERATE_APPCAST" ]]; then
   exit 1
 fi
 
+# Sparkle 2.10 otherwise names the feed after the app's SUFeedURL basename (appcast-arm64.xml).
 "$GENERATE_APPCAST" \
   --ed-key-file "$PRIVATE_KEY_FILE" \
+  -o "$TMP_DIR/appcast.xml" \
   --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
-  --embed-release-notes \
   --link "$FEED_URL" \
-  "${CHANNEL_ARGS[@]}" \
+  "${APPCAST_ARGS[@]}" \
   "$TMP_DIR"
 
 APPCAST_PATH="$TMP_DIR/appcast.xml" APPCAST_VERSION="$VERSION" node <<'NODE'

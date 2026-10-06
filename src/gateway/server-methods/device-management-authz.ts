@@ -5,8 +5,6 @@ export type DeviceSessionAuthz = {
   callerDeviceId: string | null;
   callerScopes: string[];
   isAdminCaller: boolean;
-  isDeviceAuthMigrationCaller: boolean;
-  isDeviceAuthMigrationSession: boolean;
 };
 
 export type DeviceManagementAuthz = DeviceSessionAuthz & {
@@ -14,27 +12,14 @@ export type DeviceManagementAuthz = DeviceSessionAuthz & {
 };
 
 export function resolveDeviceSessionAuthz(client: GatewayClient | null): DeviceSessionAuthz {
-  const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  const rawCallerDeviceId = client?.connect?.device?.id;
-  const isDeviceAuthMigrationCaller = client?.isControlUiDeviceAuthMigration === true;
-  const isDeviceAuthMigrationSession = client?.isControlUiDeviceAuthMigrationSession === true;
-  const callerDeviceId =
-    // Migration admission verifies this exact signed device before marking the
-    // session. It gets self-service ownership, never cross-device admin power.
-    (client?.isDeviceTokenAuth || isDeviceAuthMigrationCaller) &&
-    typeof rawCallerDeviceId === "string" &&
-    rawCallerDeviceId.trim()
-      ? rawCallerDeviceId.trim()
-      : null;
+  const callerScopes = client?.connect.scopes ?? [];
+  const callerDeviceId = client?.isDeviceTokenAuth
+    ? client.connect.device?.id.trim() || null
+    : null;
   return {
     callerDeviceId,
     callerScopes,
-    isAdminCaller:
-      !isDeviceAuthMigrationSession &&
-      !isDeviceAuthMigrationCaller &&
-      callerScopes.includes("operator.admin"),
-    isDeviceAuthMigrationCaller,
-    isDeviceAuthMigrationSession,
+    isAdminCaller: callerScopes.includes("operator.admin"),
   };
 }
 
@@ -49,9 +34,6 @@ export function resolveDeviceManagementAuthz(
 }
 
 export function deniesCrossDeviceManagement(authz: DeviceManagementAuthz): boolean {
-  if (authz.isDeviceAuthMigrationSession && !authz.callerDeviceId) {
-    return true;
-  }
   return Boolean(
     authz.callerDeviceId &&
     authz.callerDeviceId !== authz.normalizedTargetDeviceId &&
@@ -63,26 +45,14 @@ export function deniesDeviceTokenRoleManagement(
   authz: DeviceManagementAuthz,
   targetRole: string,
 ): boolean {
-  const normalizedTargetRole = targetRole.trim();
-  if (!normalizedTargetRole || authz.isAdminCaller) {
-    return false;
-  }
-  return normalizedTargetRole !== "operator";
+  return !authz.isAdminCaller && requestsNonOperatorDeviceRole({ role: targetRole });
 }
 
-function hasNonOperatorDeviceRole(input: { role?: string; roles?: string[] }): boolean {
-  const roles = new Set<string>();
-  const role = input.role?.trim();
-  if (role) {
-    roles.add(role);
-  }
-  for (const entry of input.roles ?? []) {
-    const normalized = entry.trim();
-    if (normalized) {
-      roles.add(normalized);
-    }
-  }
-  return [...roles].some((entry) => entry !== "operator");
+export function requestsNonOperatorDeviceRole(input: { role?: string; roles?: string[] }): boolean {
+  return [input.role, ...(input.roles ?? [])].some((role) => {
+    const normalized = role?.trim();
+    return Boolean(normalized && normalized !== "operator");
+  });
 }
 
 function hasNonOperatorDeviceTokenRole(
@@ -97,17 +67,10 @@ function hasNonOperatorDeviceTokenRole(
   return false;
 }
 
-export function requestsNonOperatorDeviceRole(pending: {
-  role?: string;
-  roles?: string[];
-}): boolean {
-  return hasNonOperatorDeviceRole(pending);
-}
-
 export function pairedDeviceHasNonOperatorRole(device: {
   role?: string;
   roles?: string[];
   tokens?: Record<string, DeviceAuthToken>;
 }): boolean {
-  return hasNonOperatorDeviceRole(device) || hasNonOperatorDeviceTokenRole(device.tokens);
+  return requestsNonOperatorDeviceRole(device) || hasNonOperatorDeviceTokenRole(device.tokens);
 }

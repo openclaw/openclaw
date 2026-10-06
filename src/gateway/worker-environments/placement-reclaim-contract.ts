@@ -1,0 +1,74 @@
+import type {
+  WorkerSessionPlacementIdentity,
+  WorkerSessionPlacementRecord,
+} from "./placement-record.js";
+import type { WorkerPlacementCancellationTarget } from "./placement-target.js";
+import type {
+  WorkerPlacementAuthorization,
+  WorkerPlacementReclaimRequest,
+} from "./service-contract.js";
+import type { WorkerSessionWorkspace } from "./session-workspace.js";
+import type {
+  WorkerWorkspaceConflictReport,
+  WorkspaceResultConflictLookup,
+} from "./workspace-conflicts.js";
+
+export type PreparedWorkerWorkspaceRecovery = {
+  readonly workspace: WorkerSessionWorkspace;
+  assertCurrent: () => void;
+  resolveConflict: () => Promise<WorkspaceResultConflictLookup>;
+  reportConflict: (report: WorkerWorkspaceConflictReport) => Promise<void>;
+  reportFailure: (error: string) => Promise<void>;
+};
+
+export type WithPreparedWorkerWorkspaceRecovery = <T>(
+  identity: WorkerSessionPlacementIdentity,
+  assertCurrent: () => void,
+  run: (recovery: PreparedWorkerWorkspaceRecovery) => Promise<T>,
+) => Promise<T>;
+
+type WorkerReclaimStartPlacement = Extract<
+  WorkerSessionPlacementRecord,
+  { state: "draining" | "reclaimed" }
+>;
+export type WorkerReclaimPlacement = Extract<
+  WorkerSessionPlacementRecord,
+  { state: "local" | "reclaimed" }
+>;
+
+export type WorkerPlacementPendingOperations = {
+  isCurrent: () => boolean;
+  hasPendingDispatch: () => boolean;
+  currentPlacement: () => WorkerPlacementCancellationTarget | undefined;
+  completedPlacement: () => WorkerPlacementCancellationTarget | undefined;
+  settled: Promise<unknown>;
+};
+
+export type WorkerPlacementReclaimBarriers = {
+  runReclaimPreparation: (
+    params: WorkerPlacementReclaimRequest & {
+      authorize?: WorkerPlacementAuthorization;
+      beforeDrain?: WorkerPlacementAuthorization;
+      pendingOperations?: WorkerPlacementPendingOperations;
+      run: (authorize?: WorkerPlacementAuthorization) => Promise<WorkerReclaimPlacement>;
+    },
+  ) => Promise<WorkerReclaimPlacement>;
+  runReclaimBarrier: (
+    params: WorkerPlacementReclaimRequest & {
+      authorize?: WorkerPlacementAuthorization;
+      beforeDrain?: WorkerPlacementAuthorization;
+      begin: (assertCurrent?: () => void) => Promise<WorkerReclaimStartPlacement>;
+      reclaim: (
+        workspace: WorkerSessionWorkspace,
+        placement: WorkerReclaimStartPlacement,
+        authorize?: WorkerPlacementAuthorization,
+      ) => Promise<WorkerReclaimPlacement>;
+    },
+  ) => Promise<WorkerReclaimPlacement>;
+  runFailedReclaimBarrier: (
+    params: WorkerPlacementReclaimRequest & {
+      authorize?: WorkerPlacementAuthorization;
+      reclaim: (authorize?: WorkerPlacementAuthorization) => Promise<WorkerReclaimPlacement>;
+    },
+  ) => Promise<WorkerReclaimPlacement>;
+};

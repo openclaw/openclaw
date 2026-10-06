@@ -1,16 +1,16 @@
-/**
- * Rendering helpers for session tool output in the TUI.
- *
- * Normalizes paths/text/image fallbacks before tool results are styled or truncated.
- */
 import * as os from "node:os";
-import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  getCapabilities,
+  getImageDimensions,
+  imageFallback,
+  Text,
+} from "@earendil-works/pi-tui";
 import { shortenPathWithHome } from "../../../infra/home-display.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
 import type { ToolRenderResultOptions } from "../extensions/types.js";
-import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "./truncate.js";
 
 /** Shortens paths under the current home directory for display. */
 export function shortenPath(path: unknown): string {
@@ -41,6 +41,15 @@ export function normalizeDisplayText(text: string): string {
   return text.replace(/\r/g, "");
 }
 
+export function trimTrailingEmptyLines(lines: readonly string[]): string[] {
+  return lines.slice(0, lines.findLastIndex((line) => line !== "") + 1);
+}
+
+export function reuseTextComponent(lastComponent: Component | undefined, content: string): Text {
+  const text = (lastComponent as Text | undefined) ?? new Text("", 0, 0); // SAFETY: Render slots only reuse the component returned by this renderer.
+  text.setText(content);
+  return text;
+}
 /** Extracts text output and image placeholders from a tool result. */
 export function getTextOutput(
   result:
@@ -100,29 +109,6 @@ export function formatSessionToolOutput(
     text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
   }
   return text;
-}
-
-export function appendSessionToolTruncationWarning(
-  text: string,
-  theme: Pick<Theme, "fg">,
-  options: {
-    limit?: { count: number; noun: string };
-    truncation?: Pick<TruncationResult, "truncated" | "maxBytes">;
-    additionalWarnings?: readonly string[];
-  },
-): string {
-  const warnings: string[] = [];
-  if (options.limit) {
-    warnings.push(`${options.limit.count} ${options.limit.noun} limit`);
-  }
-  if (options.truncation?.truncated) {
-    warnings.push(`${formatSize(options.truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit`);
-  }
-  warnings.push(...(options.additionalWarnings ?? []));
-  if (warnings.length === 0) {
-    return text;
-  }
-  return `${text}\n${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
 }
 
 /** Formats the invalid-argument marker with the active theme. */

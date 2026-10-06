@@ -2,15 +2,13 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { normalizeSessionRowChatType, normalizeText } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeStatus } from "./session-accessor.sqlite-status.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
-  const raw = entry as unknown as Record<string, unknown>;
   const hasLegacyDeliveryFields = [
     "route",
     "deliveryContext",
@@ -20,19 +18,16 @@ export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntr
     "lastTo",
     "lastAccountId",
     "lastThreadId",
-  ].some((key) => key in raw);
+  ].some((key) => key in entry);
   const delivery =
     entry.delivery ?? (hasLegacyDeliveryFields ? undefined : { kind: "none" as const });
-  if (typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)) {
+  if (asFiniteNumber(entry.updatedAt) !== undefined) {
     if (entry.delivery === delivery) {
       return entry;
     }
     return delivery ? { ...entry, delivery } : entry;
   }
-  const updatedAt =
-    typeof entry.sessionStartedAt === "number" && Number.isFinite(entry.sessionStartedAt)
-      ? entry.sessionStartedAt
-      : Date.now();
+  const updatedAt = asFiniteNumber(entry.sessionStartedAt) ?? Date.now();
   return delivery ? { ...entry, delivery, updatedAt } : { ...entry, updatedAt };
 }
 
@@ -67,8 +62,8 @@ export function bindSessionWindowEntryProjection(params: {
     ended_at: finiteSqliteNumber(params.entry.endedAt),
     status: normalizeStatus(params.entry.status),
     chat_type: normalizeSessionRowChatType(params.entry.chatType),
-    channel: resolveSqliteSessionChannel(params.entry),
-    account_id: resolveSqliteSessionAccountId(params.entry),
+    channel: normalizeText(sessionDeliveryChannel(params.entry)),
+    account_id: normalizeText(deliveryContextFromSession(params.entry)?.accountId),
     model_provider: normalizeText(params.entry.modelProvider),
     model: normalizeText(params.entry.model),
     agent_harness_id: normalizeText(params.entry.agentHarnessId),
@@ -78,31 +73,25 @@ export function bindSessionWindowEntryProjection(params: {
   };
 }
 
-/** Project the canonical entry blob into the logical-node query columns. */
+/** Project canonical hot facts into the logical-node query columns. */
 export function bindSessionNode(params: {
   entry: SessionEntry;
+  entryJson: string;
   sessionKey: string;
   updatedAt: number;
 }) {
-  const canonicalEntry = projectCanonicalSessionEntryShape(
-    params.entry as unknown as Record<string, unknown>,
-  );
   const actor = params.entry.createdActor;
-  const legacyActorId = normalizeText(
-    (params.entry as SessionEntry & { createdBy?: { id?: unknown } }).createdBy?.id,
-  );
   return {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
-    entry_json: JSON.stringify(canonicalEntry),
+    entry_json: params.entryJson,
     entry_valid: 1,
     updated_at: params.updatedAt,
     status: normalizeStatus(params.entry.status),
     created_at: finiteSqliteNumber(params.entry.createdAt),
     created_via: normalizeSqliteCreatedVia(params.entry.createdVia),
-    created_actor_type:
-      normalizeSqliteCreatedActorType(actor?.type) ?? (legacyActorId ? "human" : null),
-    created_actor_id: normalizeText(actor?.id) ?? legacyActorId,
+    created_actor_type: normalizeSqliteCreatedActorType(actor?.type),
+    created_actor_id: normalizeText(actor?.id),
     project_id: normalizeText(params.entry.projectId),
     parent_session_key:
       normalizeText(params.entry.parentSessionKey) ?? normalizeText(params.entry.spawnedBy),
@@ -113,7 +102,7 @@ export function bindSessionNode(params: {
     label: normalizeText(params.entry.label),
     display_name: normalizeText(params.entry.displayName),
     category: normalizeText(params.entry.category),
-    icon: normalizeText(canonicalEntry.icon),
+    icon: normalizeText(params.entry.icon),
     pinned_at: finiteSqliteNumber(params.entry.pinnedAt),
     archived_at: finiteSqliteNumber(params.entry.archivedAt),
     last_read_at: finiteSqliteNumber(params.entry.lastReadAt),
@@ -165,14 +154,6 @@ function resolveSqliteSessionCreatedAt(entry: SessionEntry, updatedAt: number): 
 
 function finiteSqliteNumber(value: unknown): number | null {
   return asFiniteNumber(value) ?? null;
-}
-
-function resolveSqliteSessionChannel(entry: SessionEntry): string | null {
-  return normalizeText(sessionDeliveryChannel(entry));
-}
-
-function resolveSqliteSessionAccountId(entry: SessionEntry): string | null {
-  return normalizeText(deliveryContextFromSession(entry)?.accountId);
 }
 
 function resolveSqliteSessionDisplayName(entry: SessionEntry): string | null {

@@ -1,10 +1,17 @@
 {
   "id": "arcee",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["arcee"],
+  "providerAuthAliases": {
+    "arcee": {
+      "provider": "openrouter",
+      "baseUrls": ["https://openrouter.ai/api/v1", "https://openrouter.ai/v1"]
+    }
+  },
   "modelCatalog": {
     "discovery": {
       "arcee": "runtime"
@@ -44,10 +51,7 @@
       "groupId": "arcee",
       "groupLabel": "Arcee AI",
       "groupHint": "Direct API or OpenRouter",
-      "optionKey": "openrouterApiKey",
-      "cliFlag": "--openrouter-api-key",
-      "cliOption": "--openrouter-api-key <key>",
-      "cliDescription": "OpenRouter API key for Arcee AI models"
+      "optionKey": "openrouterApiKey"
     }
   ],
   "configSchema": {

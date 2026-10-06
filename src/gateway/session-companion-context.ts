@@ -1,17 +1,15 @@
+import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  extractStoredAssistantText,
-  stripToolMessages,
-} from "../agents/tools/chat-history-text.js";
-import {
-  isSessionTranscriptProjectionUnavailableError,
-  readSessionTranscriptBoundedMessageTailPage,
-} from "../config/sessions/session-accessor.sqlite-active-events.js";
+import { collectTextContentBlocks } from "../agents/content-blocks.js";
+import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import type {
-  SessionCompanionContextMessage,
-  SessionCompanionPreparedContext,
+import {
+  selectSessionCompanionReferenceItems,
+  type SessionCompanionContextMessage,
+  type SessionCompanionPreparedContext,
 } from "./session-companion-state.js";
+import { readSessionTranscriptBoundedMessageTailPageAsync } from "./session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const CONTEXT_MAX_MESSAGES = 40;
@@ -28,11 +26,7 @@ type SessionCompanionContextReadResult =
 
 export type SessionCompanionContextReader = {
   currentSessionId: (params: { agentId: string; sessionKey: string }) => string | undefined;
-  read: (params: {
-    agentId: string;
-    sessionKey: string;
-    signal?: AbortSignal;
-  }) => Promise<SessionCompanionContextReadResult>;
+  read: typeof readSessionCompanionContext;
 };
 
 function normalizeContextText(value: string): string {
@@ -43,79 +37,33 @@ function normalizeContextText(value: string): string {
 }
 
 function extractUserText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return normalizeContextText(content) || undefined;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .flatMap((block) => {
-      if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "text") {
-        return [];
-      }
-      const blockText = (block as { text?: unknown }).text;
-      return typeof blockText === "string" ? [blockText] : [];
-    })
-    .join("\n");
+  const content = asOptionalObjectRecord(message)?.content;
+  const text = typeof content === "string" ? content : collectTextContentBlocks(content).join("\n");
   return normalizeContextText(text) || undefined;
 }
 
-function readMessageTimestamp(message: unknown): number {
-  if (!message || typeof message !== "object") {
-    return 0;
-  }
-  const value = (message as { timestamp?: unknown }).timestamp;
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
-}
-
-function sanitizeContextMessages(messages: unknown[]): SessionCompanionContextMessage[] {
-  return stripToolMessages(messages).flatMap((message): SessionCompanionContextMessage[] => {
-    if (!message || typeof message !== "object") {
-      return [];
-    }
-    const role = (message as { role?: unknown }).role;
+function appendContextMessages(
+  events: Array<{ event: unknown }>,
+  messages: SessionCompanionContextMessage[],
+): void {
+  // Keep newest-first context across pages; older discarded rows need no text work.
+  for (
+    let index = events.length - 1;
+    index >= 0 && messages.length < CONTEXT_MAX_MESSAGES;
+    index--
+  ) {
+    const message = asOptionalObjectRecord(asOptionalObjectRecord(events[index]?.event)?.message);
+    const role = message?.role;
     const text =
       role === "assistant"
         ? normalizeContextText(extractStoredAssistantText(message) ?? "")
         : role === "user"
           ? extractUserText(message)
           : undefined;
-    return text && (role === "assistant" || role === "user")
-      ? [{ role, text, ts: readMessageTimestamp(message) }]
-      : [];
-  });
-}
-
-function selectContextMessages(messages: SessionCompanionContextMessage[]) {
-  const selected: SessionCompanionContextMessage[] = [];
-  let bytes = 2;
-  for (const message of messages.toReversed()) {
-    if (selected.length >= CONTEXT_MAX_MESSAGES) {
-      break;
+    if (text && (role === "assistant" || role === "user")) {
+      messages.push({ role, text, ts: resolveNonNegativeIntegerOption(message?.timestamp, 0) });
     }
-    const messageBytes = Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
-    if (bytes + messageBytes > CONTEXT_MAX_BYTES) {
-      break;
-    }
-    selected.unshift(message);
-    bytes += messageBytes;
   }
-  return selected;
-}
-
-function readPageMessages(events: Array<{ event: unknown }>): unknown[] {
-  return events.flatMap(({ event }) => {
-    if (!event || typeof event !== "object") {
-      return [];
-    }
-    const message = (event as { message?: unknown }).message;
-    return message && typeof message === "object" ? [message] : [];
-  });
 }
 
 async function readSessionCompanionContext(params: {
@@ -142,6 +90,7 @@ async function readSessionCompanionContext(params: {
     let rawBytes = 0;
     let scannedMessages = 0;
     let totalMessages = 0;
+    let stoppedAtOlderByteBoundary = false;
     let snapshot:
       | {
           activeLeafEntryId?: string | null;
@@ -150,12 +99,12 @@ async function readSessionCompanionContext(params: {
           totalMessages: number;
         }
       | undefined;
-    let contextMessages: SessionCompanionContextMessage[] = [];
+    const contextMessages: SessionCompanionContextMessage[] = [];
     while (
       contextMessages.length < CONTEXT_MAX_MESSAGES &&
       scannedMessages < CONTEXT_READ_MAX_SCANNED_MESSAGES
     ) {
-      const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+      const page = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
         maxBytes: CONTEXT_READ_MAX_BYTES - rawBytes,
         maxMessages: Math.min(
           CONTEXT_READ_PAGE_MESSAGES,
@@ -163,7 +112,7 @@ async function readSessionCompanionContext(params: {
         ),
         offset,
       });
-      if (params.signal?.aborted || page.events.length !== page.scannedMessages) {
+      if (params.signal?.aborted) {
         return { kind: "unavailable" };
       }
       const pageSnapshot = {
@@ -182,21 +131,36 @@ async function readSessionCompanionContext(params: {
         return { kind: "unavailable" };
       }
       totalMessages = page.totalMessages;
+      const pageIsPartial = page.newestContiguousEventCount !== page.scannedMessages;
+      // Sparse bounded pages may include older rows beyond an oversized gap.
+      // Only the contiguous newest suffix is authoritative companion context.
+      const pageEvents =
+        page.newestContiguousEventCount === page.events.length
+          ? page.events
+          : page.events.slice(page.events.length - page.newestContiguousEventCount);
       rawBytes += page.serializedBytes;
       scannedMessages += page.scannedMessages;
       offset += page.scannedMessages;
-      contextMessages = [
-        ...sanitizeContextMessages(readPageMessages(page.events)),
-        ...contextMessages,
-      ].slice(-CONTEXT_MAX_MESSAGES);
+      appendContextMessages(pageEvents, contextMessages);
+      if (pageIsPartial) {
+        if (contextMessages.length === 0) {
+          return { kind: "unavailable" };
+        }
+        stoppedAtOlderByteBoundary = true;
+        break;
+      }
       if (page.scannedMessages === 0 || offset >= totalMessages) {
         break;
       }
     }
-    if (contextMessages.length < CONTEXT_MAX_MESSAGES && offset < totalMessages) {
+    if (
+      contextMessages.length < CONTEXT_MAX_MESSAGES &&
+      offset < totalMessages &&
+      !stoppedAtOlderByteBoundary
+    ) {
       return { kind: "unavailable" };
     }
-    const fence = readSessionTranscriptBoundedMessageTailPage(scope, {
+    const fence = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
       maxBytes: 0,
       maxMessages: 0,
       offset: 0,
@@ -215,14 +179,11 @@ async function readSessionCompanionContext(params: {
       kind: "ready",
       context: {
         empty: totalMessages === 0,
-        messages: selectContextMessages(contextMessages),
+        messages: selectSessionCompanionReferenceItems(contextMessages, CONTEXT_MAX_BYTES),
         sessionId,
       },
     };
-  } catch (error) {
-    if (isSessionTranscriptProjectionUnavailableError(error)) {
-      return { kind: "unavailable" };
-    }
+  } catch {
     return { kind: "unavailable" };
   }
 }

@@ -1,7 +1,14 @@
-// Openshell plugin module implements backend behavior.
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  movePathWithCopyFallback,
+  type MovePathPublicationReceipt,
+} from "@openclaw/fs-safe/atomic";
+import { GUEST_FILESYSTEM_PYTHON } from "@openclaw/fs-safe/guest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
   CreateSandboxBackendParams,
   OpenClawConfig,
@@ -9,44 +16,59 @@ import type {
   SandboxBackendCommandResult,
   SandboxBackendFactory,
   SandboxBackendManager,
-  SshSandboxSession,
+  SandboxFsBridge,
 } from "openclaw/plugin-sdk/sandbox";
 import {
+  buildRemoteCommand,
+  buildRemoteWorkdirValidationCommand,
+  buildValidatedExecRemoteCommand,
   createRemoteShellSandboxFsBridge,
   disposeSshSandboxSession,
+  prepareSshSandboxExec,
   resolvePreferredOpenClawTmpDir,
   runSshSandboxCommand,
   sanitizeEnvVars,
   shellEscape,
   withTempWorkspace,
 } from "openclaw/plugin-sdk/sandbox";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenShellSandboxBackend } from "./backend.types.js";
+import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
 import {
-  buildValidatedExecRemoteCommand,
-  buildRemoteWorkdirValidationCommand,
-  buildRemoteCommand,
-  createOpenShellSshSession,
-  runOpenShellCli,
-  type OpenShellExecContext,
-} from "./cli.js";
+  asOptionalRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
+import { createOpenShellSshSession, runOpenShellCli, type OpenShellExecContext } from "./cli.js";
 import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
 import { createOpenShellFsBridge } from "./fs-bridge.js";
 import {
   DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
-  movePathWithCopyFallback,
   replaceDirectoryContents,
   stageDirectoryContents,
 } from "./mirror.js";
+import {
+  isOpenShellRemotePathInside,
+  orderOpenShellWorkspaceRoots,
+  resolveOpenShellWorkspaceRoot,
+  type OpenShellWorkspaceRoot,
+} from "./workspace-roots.js";
 
 type CreateOpenShellSandboxBackendFactoryParams = {
   pluginConfig: ResolvedOpenShellPluginConfig;
 };
 
 type PendingExec = {
-  sshSession: SshSandboxSession;
+  cleanup: () => Promise<void>;
+  workspaceLease?: OpenShellWorkspaceLease;
 };
 
+type OpenShellWorkspaceLease = {
+  release: () => void;
+};
+
+// Mirror commands own their snapshot until publication; remote runtimes only serialize initialization.
+const openShellWorkspaceOperations = new KeyedAsyncQueue();
+let openShellDetachedCreateSupport: { key: string; promise: Promise<boolean> } | undefined;
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
 function buildOpenShellDirectoryUploadArgs(params: {
   sandboxName: string;
@@ -59,115 +81,43 @@ function buildOpenShellDirectoryUploadArgs(params: {
     "--no-git-ignore",
     params.sandboxName,
     params.localPath,
-    normalizeRemotePath(params.remotePath),
+    `${normalizeRemotePath(params.remotePath)}/`,
   ];
 }
 
-const PINNED_REMOTE_PATH_MUTATION_SCRIPT = [
-  "set -eu",
-  'die() { echo "$1" >&2; exit 1; }',
-  "validate_basename() {",
-  '  case "$1" in ""|"."|".."|*/*) die "unsafe remote basename: $1" ;; esac',
-  "}",
-  "pin_dir() {",
-  '  root="$1"',
-  '  relative="$2"',
-  '  create="$3"',
-  '  case "$root" in /*) ;; *) die "remote root must be absolute: $root" ;; esac',
-  '  root="${root%/}"',
-  '  [ -n "$root" ] || root="/"',
-  '  if [ -L "$root" ]; then die "unsafe remote root symlink: $root"; fi',
-  '  mkdir -p -- "$root"',
-  '  canonical_root="$(cd "$root" && pwd -P)"',
-  '  current="$canonical_root"',
-  '  relative="${relative#/}"',
-  '  while [ -n "$relative" ]; do',
-  '    part="${relative%%/*}"',
-  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
-  '    [ -n "$part" ] || continue',
-  '    case "$part" in "."|"..") die "unsafe remote directory component: $part" ;; esac',
-  '    if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
-  '    if [ -L "$next" ]; then die "unsafe remote directory symlink: $next"; fi',
-  '    if [ -e "$next" ]; then',
-  '      if [ ! -d "$next" ]; then die "unsafe remote directory component: $next"; fi',
-  "    else",
-  '      if [ "$create" != "1" ]; then die "remote directory not found: $next"; fi',
-  '      mkdir -- "$next"',
-  "    fi",
-  '    current="$next"',
-  "  done",
-  '  printf "%s\\n" "$current"',
-  "}",
-  "pin_dir_or_missing() {",
-  '  root="$1"',
-  '  relative="$2"',
-  '  missing_ok="$3"',
-  '  case "$root" in /*) ;; *) die "remote root must be absolute: $root" ;; esac',
-  '  root="${root%/}"',
-  '  [ -n "$root" ] || root="/"',
-  '  if [ -L "$root" ]; then die "unsafe remote root symlink: $root"; fi',
-  '  if [ ! -d "$root" ]; then',
-  '    if [ -e "$root" ]; then die "unsafe remote root component: $root"; fi',
-  '    if [ "$missing_ok" = "1" ]; then printf "\\n"; return 0; fi',
-  '    die "remote directory not found: $root"',
-  "  fi",
-  '  canonical_root="$(cd "$root" && pwd -P)"',
-  '  current="$canonical_root"',
-  '  relative="${relative#/}"',
-  '  while [ -n "$relative" ]; do',
-  '    part="${relative%%/*}"',
-  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
-  '    [ -n "$part" ] || continue',
-  '    case "$part" in "."|"..") die "unsafe remote directory component: $part" ;; esac',
-  '    if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
-  '    if [ -L "$next" ]; then die "unsafe remote directory symlink: $next"; fi',
-  '    if [ -e "$next" ]; then',
-  '      if [ ! -d "$next" ]; then die "unsafe remote directory component: $next"; fi',
-  "    else",
-  '      if [ "$missing_ok" = "1" ]; then printf "\\n"; return 0; fi',
-  '      die "remote directory not found: $next"',
-  "    fi",
-  '    current="$next"',
-  "  done",
-  '  printf "%s\\n" "$current"',
-  "}",
-  'operation="$1"',
-  'case "$operation" in',
-  "  mkdirp)",
-  '    pin_dir "$2" "$3" 1 >/dev/null',
-  "    ;;",
-  "  remove)",
-  '    validate_basename "$4"',
-  '    parent="$(pin_dir_or_missing "$2" "$3" "${5:-0}")"',
-  '    [ -n "$parent" ] || exit 0',
-  '    target="$parent/$4"',
-  '    if [ -d "$target" ] && [ ! -L "$target" ]; then rm -rf -- "$target"; elif [ -e "$target" ] || [ -L "$target" ]; then rm -f -- "$target"; fi',
-  "    ;;",
-  "  removefile)",
-  '    validate_basename "$4"',
-  '    parent="$(pin_dir_or_missing "$2" "$3" "${5:-0}")"',
-  '    [ -n "$parent" ] || exit 0',
-  '    target="$parent/$4"',
-  '    if [ -d "$target" ] && [ ! -L "$target" ]; then rmdir -- "$target"; elif [ -e "$target" ] || [ -L "$target" ]; then rm -f -- "$target"; fi',
-  "    ;;",
-  "  rename)",
-  '    src_parent="$(pin_dir "$2" "$3" 0)"',
-  '    validate_basename "$4"',
-  '    dst_parent="$(pin_dir "$5" "$6" 1)"',
-  '    validate_basename "$7"',
-  '    if [ -L "$dst_parent/$7" ]; then die "unsafe remote rename target symlink: $dst_parent/$7"; fi',
-  '    if [ -d "$dst_parent/$7" ]; then die "unsafe remote rename target directory: $dst_parent/$7"; fi',
-  '    mv -- "$src_parent/$4" "$dst_parent/$7"',
-  "    ;;",
-  "  *)",
-  '    die "unknown remote path mutation: $operation"',
-  "    ;;",
-  "esac",
-].join("\n");
+// Prints "0" when every managed root is missing or empty, "1" otherwise. Any
+// content in a managed root means the remote workspace was already seeded (or
+// holds operator data) and re-seeding would destroy remote-canonical state.
+const REMOTE_MANAGED_ROOTS_EMPTY_SCRIPT =
+  'for root in "$@"; do if [ -d "$root" ] && [ -n "$(ls -A "$root")" ]; then printf "1\\n"; exit 0; fi; done; printf "0\\n"';
+// Keep mirror admission and missing-parent policy outside the shared guest engine.
+const OPEN_SHELL_GUEST_MUTATION_PYTHON = `
+import os, sys
+guest = sys.argv.pop(1)
+ignore_missing_parent = sys.argv.pop(1) == '1'
+operation = sys.argv[1]
+for index in ((2, 5) if operation == 'rename' else (2,)):
+    root = sys.argv[index].rstrip('/') or '/'
+    sys.argv[index] = root
+    if not os.path.isabs(root) or os.path.islink(root):
+        raise OSError('unsafe remote root: ' + root)
+    if operation != 'remove':
+        os.makedirs(root, exist_ok=True)
+if operation == 'rename':
+    target = os.path.join(sys.argv[5], sys.argv[6], sys.argv[7])
+    if os.path.islink(target) or os.path.isdir(target):
+        raise OSError('unsafe remote rename target: ' + target)
+try:
+    exec(guest)
+except FileNotFoundError:
+    if operation != 'remove' or not ignore_missing_parent:
+        raise
+`;
 const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
   "set -e",
   'target="$1"',
   'root="${2:-$1}"',
+  'replace_blocking="${3:-0}"',
   'case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac',
   'case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac',
   'target="${target%/}"',
@@ -195,9 +145,15 @@ const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
   '  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
   '  [ -n "$part" ] || continue',
   '  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
-  '  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
+  '  if [ -L "$next" ]; then',
+  '    if [ "$replace_blocking" != "1" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
+  '    rm -rf -- "$next"',
+  '  elif [ -e "$next" ] && [ ! -d "$next" ]; then',
+  '    if [ "$replace_blocking" != "1" ]; then echo "unsafe remote directory component: $next" >&2; exit 1; fi',
+  '    rm -rf -- "$next"',
+  "  fi",
   '  if [ -e "$next" ]; then',
-  '    if [ ! -d "$next" ]; then echo "unsafe remote directory component: $next" >&2; exit 1; fi',
+  '    [ -d "$next" ] || { echo "unsafe remote directory component: $next" >&2; exit 1; }',
   "  else",
   '    mkdir -- "$next"',
   "  fi",
@@ -205,18 +161,26 @@ const ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT = [
   "done",
 ].join("\n");
 
-function buildOpenShellSshExecEnv(): NodeJS.ProcessEnv {
-  return sanitizeEnvVars(process.env).allowed;
-}
-
 export function createOpenShellSandboxBackendFactory(
   params: CreateOpenShellSandboxBackendFactoryParams,
 ): SandboxBackendFactory {
-  return async (createParams) =>
-    await createOpenShellSandboxBackend({
-      ...params,
-      createParams,
+  return async (createParams) => {
+    if ((createParams.cfg.docker.binds?.length ?? 0) > 0) {
+      throw new Error("OpenShell sandbox backend does not support sandbox.docker.binds.");
+    }
+    const { sandboxName, legacyRuntimeAdopted } = resolveOpenShellSandboxName({
+      scopeKey: createParams.scopeKey,
+      registeredRuntimeIds: createParams.registeredRuntimeIds,
     });
+    const impl = new OpenShellSandboxBackendImpl({
+      createParams,
+      execContext: { config: params.pluginConfig, sandboxName },
+      legacyRuntimeAdopted,
+      remoteWorkspaceDir: params.pluginConfig.remoteWorkspaceDir,
+      remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
+    });
+    return impl.asHandle();
+  };
 }
 
 export function createOpenShellSandboxBackendManager(params: {
@@ -230,111 +194,35 @@ export function createOpenShellSandboxBackendManager(params: {
       };
       const result = await runOpenShellCli({
         context: execContext,
-        args: ["sandbox", "get", entry.containerName],
+        args: ["sandbox", "get", entry.containerName, "--output", "json"],
       });
       const configuredSource = execContext.config.from;
       return {
-        running: result.code === 0,
+        running: result.code === 0 && parseOpenShellSandboxPhase(result.stdout) === "Ready",
         actualConfigLabel: entry.image,
         configLabelMatch: entry.image === configuredSource,
       };
     },
-    async removeRuntime({ entry }) {
+    async removeRuntime({ entry, config }) {
       const execContext: OpenShellExecContext = {
-        config: params.pluginConfig,
+        config: resolveOpenShellPluginConfigFromConfig(config, params.pluginConfig),
         sandboxName: entry.containerName,
       };
-      await runOpenShellCli({
+      const result = await runOpenShellCli({
         context: execContext,
         args: ["sandbox", "delete", entry.containerName],
       });
+      if (result.code !== 0) {
+        throw new Error(result.stderr.trim() || "openshell sandbox delete failed");
+      }
     },
-  };
-}
-
-async function createOpenShellSandboxBackend(params: {
-  pluginConfig: ResolvedOpenShellPluginConfig;
-  createParams: CreateSandboxBackendParams;
-}): Promise<OpenShellSandboxBackend> {
-  if ((params.createParams.cfg.docker.binds?.length ?? 0) > 0) {
-    throw new Error("OpenShell sandbox backend does not support sandbox.docker.binds.");
-  }
-
-  const resolvedSandboxName = resolveOpenShellSandboxName({
-    scopeKey: params.createParams.scopeKey,
-    registeredRuntimeIds: params.createParams.registeredRuntimeIds,
-  });
-  const sandboxName = resolvedSandboxName.sandboxName;
-  const execContext: OpenShellExecContext = {
-    config: params.pluginConfig,
-    sandboxName,
-  };
-  const impl = new OpenShellSandboxBackendImpl({
-    createParams: params.createParams,
-    execContext,
-    legacyRuntimeAdopted: resolvedSandboxName.legacyRuntimeAdopted,
-    remoteWorkspaceDir: params.pluginConfig.remoteWorkspaceDir,
-    remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
-  });
-
-  return {
-    id: "openshell",
-    runtimeId: sandboxName,
-    runtimeLabel: sandboxName,
-    workdir: params.pluginConfig.remoteWorkspaceDir,
-    env: params.createParams.cfg.docker.env,
-    mode: params.pluginConfig.mode,
-    configLabel: params.pluginConfig.from,
-    configLabelKind: "Source",
-    workdirValidation: "backend",
-    validateWorkdir: async (workdir) => await impl.validateWorkdir(workdir),
-    discardPreparedWorkdir: (workdir) => impl.discardPreparedWorkdir(workdir),
-    workdirRoots: [
-      params.pluginConfig.remoteWorkspaceDir,
-      params.pluginConfig.remoteAgentWorkspaceDir,
-    ],
-    buildExecSpec: async ({ command, workdir, env, usePty }) => {
-      const pending = await impl.prepareExec({ command, workdir, env, usePty });
-      return {
-        argv: pending.argv,
-        env: buildOpenShellSshExecEnv(),
-        stdinMode: "pipe-open",
-        finalizeToken: pending.token,
-      };
-    },
-    finalizeExec: async ({ token }) => {
-      await impl.finalizeExec(token as PendingExec | undefined);
-    },
-    runShellCommand: async (command) => await impl.runRemoteShellScript(command),
-    createFsBridge: ({ sandbox }) =>
-      params.pluginConfig.mode === "remote"
-        ? createRemoteShellSandboxFsBridge({
-            sandbox,
-            runtime: impl.asHandle(),
-          })
-        : createOpenShellFsBridge({
-            sandbox,
-            backend: impl.asHandle(),
-          }),
-    remoteWorkspaceDir: params.pluginConfig.remoteWorkspaceDir,
-    remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
-    runRemoteShellScript: async (command) => await impl.runRemoteShellScript(command),
-    mkdirpRemotePath: async (remotePath, signal) => await impl.mkdirpRemotePath(remotePath, signal),
-    removeRemotePath: async (remotePath, removeParams) =>
-      await impl.removeRemotePath(remotePath, removeParams),
-    renameRemotePath: async (fromRemotePath, toRemotePath, signal) =>
-      await impl.renameRemotePath(fromRemotePath, toRemotePath, signal),
-    syncLocalPathToRemote: async (localPath, remotePath) =>
-      await impl.syncLocalPathToRemote(localPath, remotePath),
   };
 }
 
 class OpenShellSandboxBackendImpl {
+  // Filesystem bridges must retain the same lifecycle owner returned by the factory.
+  private handle: OpenShellSandboxBackend | null = null;
   private ensurePromise: Promise<void> | null = null;
-  private preparedRemoteWorkspaceForNextExec: {
-    workdir: string;
-    promise: Promise<void>;
-  } | null = null;
   private remoteSeedPending = false;
 
   constructor(
@@ -348,7 +236,14 @@ class OpenShellSandboxBackendImpl {
   ) {}
 
   asHandle(): OpenShellSandboxBackend {
-    return {
+    if (this.handle) {
+      return this.handle;
+    }
+    const runRemoteShellScript = (command: SandboxBackendCommandParams) =>
+      this.params.execContext.config.mode === "mirror"
+        ? this.runWorkspaceOperation(() => this.runRemoteShellScript(command), command.signal)
+        : this.runRemoteShellScript(command);
+    const handle: OpenShellSandboxBackend = {
       id: "openshell",
       runtimeId: this.params.execContext.sandboxName,
       runtimeLabel: this.params.execContext.sandboxName,
@@ -359,7 +254,6 @@ class OpenShellSandboxBackendImpl {
       configLabelKind: "Source",
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
-      discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),
       workdirRoots: [this.params.remoteWorkspaceDir, this.params.remoteAgentWorkspaceDir],
       remoteWorkspaceDir: this.params.remoteWorkspaceDir,
       remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
@@ -367,7 +261,7 @@ class OpenShellSandboxBackendImpl {
         const pending = await this.prepareExec({ command, workdir, env, usePty });
         return {
           argv: pending.argv,
-          env: buildOpenShellSshExecEnv(),
+          env: sanitizeEnvVars(process.env).allowed,
           stdinMode: "pipe-open",
           finalizeToken: pending.token,
         };
@@ -375,26 +269,93 @@ class OpenShellSandboxBackendImpl {
       finalizeExec: async ({ token }) => {
         await this.finalizeExec(token as PendingExec | undefined);
       },
-      runShellCommand: async (command) => await this.runRemoteShellScript(command),
+      runShellCommand: runRemoteShellScript,
       createFsBridge: ({ sandbox }) =>
         this.params.execContext.config.mode === "remote"
           ? createRemoteShellSandboxFsBridge({
               sandbox,
-              runtime: this.asHandle(),
+              runtime: handle,
             })
-          : createOpenShellFsBridge({
-              sandbox,
-              backend: this.asHandle(),
-            }),
-      runRemoteShellScript: async (command) => await this.runRemoteShellScript(command),
-      mkdirpRemotePath: async (remotePath, signal) =>
-        await this.mkdirpRemotePath(remotePath, signal),
-      removeRemotePath: async (remotePath, removeParams) =>
-        await this.removeRemotePath(remotePath, removeParams),
-      renameRemotePath: async (fromRemotePath, toRemotePath, signal) =>
-        await this.renameRemotePath(fromRemotePath, toRemotePath, signal),
-      syncLocalPathToRemote: async (localPath, remotePath) =>
-        await this.syncLocalPathToRemote(localPath, remotePath),
+          : this.createMirrorFsBridge(sandbox),
+      runRemoteShellScript,
+    };
+    this.handle = handle;
+    return handle;
+  }
+
+  private createMirrorFsBridge(sandbox: OpenShellFsBridgeContext): SandboxFsBridge {
+    const bridge = createOpenShellFsBridge({
+      sandbox,
+      backend: {
+        remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
+        mkdirpRemotePath: (remotePath, signal) => this.mkdirpRemotePath(remotePath, signal),
+        removeRemotePath: (remotePath, params) => this.removeRemotePath(remotePath, params),
+        renameRemotePath: (from, to, signal) => this.renameRemotePath(from, to, signal),
+        syncLocalPathToRemote: (localPath, remotePath) =>
+          this.syncLocalPathToRemote(localPath, remotePath),
+      },
+    });
+    // Hold one lease across validation and both commits, not just the remote step.
+    // Otherwise exec publication can erase a successful file-tool write or expose partial reads.
+    return {
+      get pathMappings() {
+        return bridge.pathMappings;
+      },
+      resolvePath: (params) => bridge.resolvePath(params),
+      readFile: (params) =>
+        this.runWorkspaceOperation(() => bridge.readFile(params), params.signal),
+      readDirectory: (params) =>
+        this.runWorkspaceOperation(() => bridge.readDirectory(params), params.signal),
+      writeFile: (params) =>
+        this.runWorkspaceOperation(() => bridge.writeFile(params), params.signal),
+      createFileExclusive: (params) =>
+        this.runWorkspaceOperation(() => bridge.createFileExclusive(params), params.signal),
+      mkdirp: (params) => this.runWorkspaceOperation(() => bridge.mkdirp(params), params.signal),
+      remove: (params) => this.runWorkspaceOperation(() => bridge.remove(params), params.signal),
+      rename: (params) => this.runWorkspaceOperation(() => bridge.rename(params), params.signal),
+      stat: (params) => this.runWorkspaceOperation(() => bridge.stat(params), params.signal),
+    };
+  }
+
+  private async runWorkspaceOperation<T>(
+    operation: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    signal?.throwIfAborted();
+    const lease = await this.acquireWorkspaceLease();
+    try {
+      signal?.throwIfAborted();
+      return await operation();
+    } finally {
+      lease.release();
+    }
+  }
+
+  private async acquireWorkspaceLease(): Promise<OpenShellWorkspaceLease> {
+    const { config, sandboxName } = this.params.execContext;
+    const keys = [
+      // Mirror publication owns the physical directory, so aliases must share its host lease.
+      `host:${await canonicalPathFromExistingAncestor(this.params.createParams.workspaceDir)}`,
+      `runtime:${JSON.stringify([
+        config.gatewayEndpoint ?? "",
+        config.gateway ?? "",
+        config.workspace ?? process.env.OPENSHELL_WORKSPACE ?? "",
+        sandboxName,
+      ])}`,
+    ].toSorted();
+    const releases: Array<() => void> = [];
+    for (const key of keys) {
+      const acquired = createDeferred<() => void>();
+      void openShellWorkspaceOperations.enqueue(key, () => new Promise<void>(acquired.resolve));
+      releases.push(await acquired.promise);
+    }
+    return {
+      release: () => {
+        for (const release of releases.toReversed()) {
+          // Deferred resolution is idempotent, including repeated finalization cleanup.
+          release();
+        }
+      },
     };
   }
 
@@ -405,118 +366,150 @@ class OpenShellSandboxBackendImpl {
     usePty: boolean;
   }): Promise<{ argv: string[]; token: PendingExec }> {
     const remoteWorkdir = params.workdir ?? this.params.remoteWorkspaceDir;
-    const preparedWorkspace = this.consumePreparedRemoteWorkspaceForNextExec(remoteWorkdir);
     const remoteCommand = buildValidatedExecRemoteCommand({
       command: params.command,
       workdir: remoteWorkdir,
-      env: params.env,
+      env: {},
     });
-    await (preparedWorkspace ?? this.prepareRemoteWorkspaceForExec());
-    const sshSession = await createOpenShellSshSession({
-      context: this.params.execContext,
-    });
-    return {
-      argv: [
-        "ssh",
-        "-F",
-        sshSession.configPath,
-        ...(params.usePty
-          ? ["-tt", "-o", "RequestTTY=force", "-o", "SetEnv=TERM=xterm-256color"]
-          : ["-T", "-o", "RequestTTY=no"]),
-        sshSession.host,
-        remoteCommand,
-      ],
-      token: { sshSession },
-    };
-  }
-
-  async validateWorkdir(workdir: string): Promise<string | null> {
-    const preparedWorkspace = this.prepareRemoteWorkspaceForExec();
-    const reusablePreparation = { workdir, promise: preparedWorkspace };
-    this.preparedRemoteWorkspaceForNextExec = reusablePreparation;
+    const workspaceLease =
+      this.params.execContext.config.mode === "mirror"
+        ? await this.acquireWorkspaceLease()
+        : undefined;
     try {
-      await preparedWorkspace;
+      await this.ensureSandboxExists();
+      if (workspaceLease) {
+        await this.syncWorkspaceToRemote();
+        this.remoteSeedPending = false;
+      }
       const sshSession = await createOpenShellSshSession({
         context: this.params.execContext,
       });
       try {
-        const result = await runSshSandboxCommand({
+        const prepared = await prepareSshSandboxExec({
           session: sshSession,
-          remoteCommand: buildRemoteWorkdirValidationCommand({
-            workdir,
-            root: this.resolveWorkdirValidationRoot(workdir),
-          }),
-          allowFailure: true,
+          remoteCommand,
+          env: params.env,
+          tty: params.usePty,
         });
-        const resolvedWorkdir = result.code === 0 ? result.stdout.toString("utf8").trim() : "";
-        if (this.preparedRemoteWorkspaceForNextExec === reusablePreparation) {
-          this.preparedRemoteWorkspaceForNextExec = resolvedWorkdir
-            ? { workdir: resolvedWorkdir, promise: preparedWorkspace }
-            : null;
-        }
-        return resolvedWorkdir || null;
-      } finally {
+        return {
+          argv: prepared.argv,
+          token: {
+            workspaceLease,
+            cleanup: async () => {
+              try {
+                await prepared.cleanup();
+              } finally {
+                await disposeSshSandboxSession(sshSession);
+              }
+            },
+          },
+        };
+      } catch (error) {
         await disposeSshSandboxSession(sshSession);
+        throw error;
       }
     } catch (error) {
-      if (this.preparedRemoteWorkspaceForNextExec === reusablePreparation) {
-        this.preparedRemoteWorkspaceForNextExec = null;
-      }
+      workspaceLease?.release();
       throw error;
+    }
+  }
+
+  async validateWorkdir(workdir: string): Promise<string | null> {
+    if (this.params.execContext.config.mode === "mirror") {
+      // Validate the canonical upload source after any outstanding publication.
+      // Never retain a lease across the caller's env hooks, approvals, or abandonment.
+      return await this.runWorkspaceOperation(() => this.validateMirrorWorkdir(workdir));
+    }
+    await this.ensureSandboxExists();
+    const sshSession = await createOpenShellSshSession({ context: this.params.execContext });
+    try {
+      const result = await runSshSandboxCommand({
+        session: sshSession,
+        remoteCommand: buildRemoteWorkdirValidationCommand({
+          workdir,
+          root: this.resolveWorkdirValidationRoot(workdir),
+        }),
+        allowFailure: true,
+      });
+      return result.code === 0 ? result.stdout.toString("utf8").trim() || null : null;
+    } finally {
+      await disposeSshSandboxSession(sshSession);
     }
   }
 
   private resolveWorkdirValidationRoot(workdir: string): string {
     try {
-      const normalized = normalizeRemotePath(workdir);
-      const roots = [
-        normalizeRemotePath(this.params.remoteAgentWorkspaceDir),
-        normalizeRemotePath(this.params.remoteWorkspaceDir),
-      ].toSorted((a, b) => b.length - a.length);
-      return (
-        roots.find((root) => isRemotePathInside(root, normalized)) ?? this.params.remoteWorkspaceDir
-      );
+      return this.resolveRemoteTarget(workdir).root;
     } catch {
       return this.params.remoteWorkspaceDir;
     }
   }
 
-  private consumePreparedRemoteWorkspaceForNextExec(workdir: string): Promise<void> | null {
-    const preparedWorkspace = this.preparedRemoteWorkspaceForNextExec;
-    if (!preparedWorkspace || preparedWorkspace.workdir !== workdir) {
-      this.preparedRemoteWorkspaceForNextExec = null;
+  private async validateMirrorWorkdir(workdir: string): Promise<string | null> {
+    const normalized = normalizeRemotePath(workdir);
+    const roots = this.workspaceUploadRoots();
+    if (!roots.some((root) => isOpenShellRemotePathInside(root.remote, normalized))) {
       return null;
     }
-    this.preparedRemoteWorkspaceForNextExec = null;
-    return preparedWorkspace.promise;
-  }
-
-  discardPreparedWorkdir(workdir: string): void {
-    if (this.preparedRemoteWorkspaceForNextExec?.workdir === workdir) {
-      this.preparedRemoteWorkspaceForNextExec = null;
+    const { cfg, skillsWorkspaceDir } = this.params.createParams;
+    if (cfg.workspaceAccess === "rw" && skillsWorkspaceDir) {
+      roots.push({
+        remote: resolveRemoteMaterializedSkillsWorkspaceDir(this.params.remoteWorkspaceDir),
+        local: skillsWorkspaceDir,
+        owner: "workspace",
+      });
     }
-  }
-
-  private async prepareRemoteWorkspaceForExec(): Promise<void> {
-    await this.ensureSandboxExists();
-    if (this.params.execContext.config.mode === "mirror") {
-      await this.syncWorkspaceToRemote();
-      return;
+    // Each configured root replaces its subtree. More-specific roots publish
+    // later; equal roots retain the historical agent-root precedence.
+    let createdAncestor = false;
+    for (const root of roots.toReversed()) {
+      if (!isOpenShellRemotePathInside(root.remote, normalized)) {
+        createdAncestor ||= isOpenShellRemotePathInside(normalized, root.remote);
+        continue;
+      }
+      if (createdAncestor) {
+        return normalized;
+      }
+      const relative = path.posix.relative(root.remote, normalized);
+      if (!relative) {
+        return normalized;
+      }
+      const parts = relative.split("/");
+      if (
+        DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS.some(
+          (excluded) => excluded === normalizeLowercaseStringOrEmpty(parts[0]),
+        )
+      ) {
+        return null;
+      }
+      let local = root.local;
+      for (const part of root.local === skillsWorkspaceDir ? ["", ...parts] : parts) {
+        local = path.join(local, part);
+        const stats = await fs.lstat(local).catch(() => null);
+        if (!stats?.isDirectory()) {
+          return null;
+        }
+      }
+      return normalized;
     }
-    const seeded = await this.maybeSeedRemoteWorkspace();
-    if (!seeded) {
-      await this.syncSkillsWorkspaceToRemote();
-    }
+    return createdAncestor ? normalized : null;
   }
 
   async finalizeExec(token?: PendingExec): Promise<void> {
+    const workspaceLease =
+      token?.workspaceLease ??
+      (this.params.execContext.config.mode === "mirror"
+        ? await this.acquireWorkspaceLease()
+        : undefined);
     try {
       if (this.params.execContext.config.mode === "mirror") {
         await this.syncWorkspaceFromRemote();
       }
     } finally {
-      if (token?.sshSession) {
-        await disposeSshSandboxSession(token.sshSession);
+      try {
+        await token?.cleanup();
+      } finally {
+        workspaceLease?.release();
       }
     }
   }
@@ -525,9 +518,8 @@ class OpenShellSandboxBackendImpl {
     params: SandboxBackendCommandParams,
   ): Promise<SandboxBackendCommandResult> {
     await this.ensureSandboxExists();
-    const seeded = await this.maybeSeedRemoteWorkspace();
-    if (!seeded) {
-      await this.syncSkillsWorkspaceToRemote();
+    if (this.params.execContext.config.mode === "mirror") {
+      await this.maybeSeedRemoteWorkspace();
     }
     return await this.runRemoteShellScriptInternal(params);
   }
@@ -551,14 +543,16 @@ class OpenShellSandboxBackendImpl {
     const target = this.resolveRemoteTarget(remotePath);
     await this.runPinnedRemotePathMutation({
       args: [
-        params?.recursive ? "remove" : "removefile",
+        "remove",
         target.root,
         path.posix.dirname(target.relativePath) === "."
           ? ""
           : path.posix.dirname(target.relativePath),
         path.posix.basename(target.relativePath),
-        params?.ignoreMissing ? "1" : "0",
+        params?.recursive ? "1" : "0",
+        "1",
       ],
+      ignoreMissingParent: params?.ignoreMissing,
       signal: params?.signal,
     });
   }
@@ -579,6 +573,7 @@ class OpenShellSandboxBackendImpl {
         to.root,
         path.posix.dirname(to.relativePath) === "." ? "" : path.posix.dirname(to.relativePath),
         path.posix.basename(to.relativePath),
+        "1",
       ],
       signal,
     });
@@ -614,32 +609,8 @@ class OpenShellSandboxBackendImpl {
     await this.maybeSeedRemoteWorkspace();
     const target = this.resolveRemoteTarget(remotePath);
     const stats = await fs.lstat(localPath).catch(() => null);
-    if (!stats) {
-      await this.runPinnedRemotePathMutation({
-        args: [
-          "remove",
-          target.root,
-          path.posix.dirname(target.relativePath) === "."
-            ? ""
-            : path.posix.dirname(target.relativePath),
-          path.posix.basename(target.relativePath),
-          "1",
-        ],
-      });
-      return;
-    }
-    if (stats.isSymbolicLink()) {
-      await this.runPinnedRemotePathMutation({
-        args: [
-          "remove",
-          target.root,
-          path.posix.dirname(target.relativePath) === "."
-            ? ""
-            : path.posix.dirname(target.relativePath),
-          path.posix.basename(target.relativePath),
-          "1",
-        ],
-      });
+    if (!stats || stats.isSymbolicLink()) {
+      await this.removeRemotePath(remotePath, { recursive: true, ignoreMissing: true });
       return;
     }
     if (stats.isDirectory()) {
@@ -663,7 +634,7 @@ class OpenShellSandboxBackendImpl {
         "--no-git-ignore",
         this.params.execContext.sandboxName,
         localPath,
-        path.posix.dirname(remotePath),
+        remotePath,
       ],
       cwd: this.params.createParams.workspaceDir,
     });
@@ -674,11 +645,17 @@ class OpenShellSandboxBackendImpl {
 
   private async runPinnedRemotePathMutation(params: {
     args: string[];
+    ignoreMissingParent?: boolean;
     signal?: AbortSignal;
   }): Promise<SandboxBackendCommandResult> {
     return await this.runRemoteShellScript({
-      script: PINNED_REMOTE_PATH_MUTATION_SCRIPT,
-      args: params.args,
+      script: 'python_script="$1"; shift; python3 -c "$python_script" "$@"',
+      args: [
+        OPEN_SHELL_GUEST_MUTATION_PYTHON,
+        GUEST_FILESYSTEM_PYTHON,
+        params.ignoreMissingParent ? "1" : "0",
+        ...params.args,
+      ],
       signal: params.signal,
     });
   }
@@ -686,14 +663,21 @@ class OpenShellSandboxBackendImpl {
   private resolveRemoteTarget(remotePath: string): { root: string; relativePath: string } {
     const normalized = normalizeRemotePath(remotePath);
     const roots = [
-      normalizeRemotePath(this.params.remoteWorkspaceDir),
-      normalizeRemotePath(this.params.remoteAgentWorkspaceDir),
-    ].toSorted((a, b) => b.length - a.length);
-    for (const root of roots) {
-      if (isRemotePathInside(root, normalized)) {
-        const relativePath = path.posix.relative(root, normalized);
-        return { root, relativePath: relativePath === "." ? "" : relativePath };
-      }
+      {
+        remote: normalizeRemotePath(this.params.remoteWorkspaceDir),
+        owner: "workspace" as const,
+        value: undefined,
+      },
+      {
+        remote: normalizeRemotePath(this.params.remoteAgentWorkspaceDir),
+        owner: "agent" as const,
+        value: undefined,
+      },
+    ];
+    const root = resolveOpenShellWorkspaceRoot(roots, normalized)?.remote;
+    if (root) {
+      const relativePath = path.posix.relative(root, normalized);
+      return { root, relativePath: relativePath === "." ? "" : relativePath };
     }
     throw new Error(`Remote path escapes OpenShell managed roots: ${remotePath}`);
   }
@@ -702,7 +686,21 @@ class OpenShellSandboxBackendImpl {
     if (this.ensurePromise) {
       return await this.ensurePromise;
     }
-    this.ensurePromise = this.ensureSandboxExistsInner();
+    const initialize = async () => {
+      await this.ensureSandboxExistsInner();
+      if (
+        this.params.execContext.config.mode === "remote" &&
+        !(await this.maybeSeedRemoteWorkspace())
+      ) {
+        await this.syncSkillsWorkspaceToRemote();
+      }
+    };
+    // Remote commands must not block later turns that supply their input. Only
+    // discovery, seeding and this turn's skill refresh share the runtime lock.
+    this.ensurePromise =
+      this.params.execContext.config.mode === "remote"
+        ? this.runWorkspaceOperation(initialize)
+        : initialize();
     try {
       await this.ensurePromise;
     } catch (error) {
@@ -729,11 +727,26 @@ class OpenShellSandboxBackendImpl {
           throw this.buildLegacyRuntimeUnavailableError(`OpenShell reports phase "${phase}".`);
         }
       }
+      // The seed obligation must survive a gateway restart between `sandbox
+      // create` and the first exec: process memory is gone, so adopted remote
+      // sandboxes probe the managed roots instead. Only completely empty roots
+      // arm the seed — the wipe step is then a no-op, so recovery can never
+      // destroy operator content in a remote-canonical workspace.
+      if (
+        this.params.execContext.config.mode === "remote" &&
+        (await this.remoteManagedRootsEmpty())
+      ) {
+        this.remoteSeedPending = true;
+      }
       return;
     }
     if (this.params.legacyRuntimeAdopted) {
       throw this.buildLegacyRuntimeUnavailableError(getResult.stderr.trim());
     }
+    if (!/\bsandbox not found\b/iu.test(getResult.stderr)) {
+      throw new Error(getResult.stderr.trim() || "openshell sandbox get failed");
+    }
+    const detachedCreateSupported = await this.supportsDetachedSandboxCreation();
     const createArgs = [
       "sandbox",
       "create",
@@ -749,8 +762,7 @@ class OpenShellSandboxBackendImpl {
         ? ["--auto-providers"]
         : ["--no-auto-providers"]),
       ...this.params.execContext.config.providers.flatMap((provider) => ["--provider", provider]),
-      "--",
-      "true",
+      ...(detachedCreateSupported ? ["--detach", "--", "sleep", "infinity"] : ["--", "true"]),
     ];
     const createResult = await runOpenShellCli({
       context: this.params.execContext,
@@ -762,6 +774,45 @@ class OpenShellSandboxBackendImpl {
       throw new Error(createResult.stderr.trim() || "openshell sandbox create failed");
     }
     this.remoteSeedPending = true;
+  }
+
+  private async supportsDetachedSandboxCreation(): Promise<boolean> {
+    const { config } = this.params.execContext;
+    const cliIdentity = JSON.stringify([
+      config.command,
+      config.gatewayEndpoint ?? "",
+      config.gateway ?? "",
+      config.workspace ?? process.env.OPENSHELL_WORKSPACE ?? "",
+    ]);
+    let support =
+      openShellDetachedCreateSupport?.key === cliIdentity
+        ? openShellDetachedCreateSupport.promise
+        : undefined;
+    if (!support) {
+      support = (async () => {
+        const result = await runOpenShellCli({
+          context: this.params.execContext,
+          args: ["sandbox", "create", "--help"],
+          cwd: this.params.createParams.workspaceDir,
+        });
+        if (result.code !== 0) {
+          throw new Error(
+            result.stderr.trim() || "openshell sandbox create capability check failed",
+          );
+        }
+        // Older supported CLIs run and await trailing commands; newer ones require a live main.
+        return /^\s*--detach(?:\s|$)/mu.test(result.stdout);
+      })();
+      openShellDetachedCreateSupport = { key: cliIdentity, promise: support };
+    }
+    try {
+      return await support;
+    } catch (error) {
+      if (openShellDetachedCreateSupport?.promise === support) {
+        openShellDetachedCreateSupport = undefined;
+      }
+      throw error;
+    }
   }
 
   private async resolveLegacyRuntimePhase(): Promise<string | undefined> {
@@ -815,29 +866,44 @@ class OpenShellSandboxBackendImpl {
     );
   }
 
-  private async syncWorkspaceToRemote(): Promise<void> {
-    await this.runRemoteShellScriptInternal({
-      script: 'mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
-      args: [this.params.remoteWorkspaceDir],
-    });
-    await this.uploadPathToRemote(
-      this.params.createParams.workspaceDir,
-      this.params.remoteWorkspaceDir,
-    );
-
+  private workspaceUploadRoots(): Array<{
+    remote: string;
+    local: string;
+    owner: "workspace" | "agent";
+  }> {
+    const { createParams, remoteWorkspaceDir, remoteAgentWorkspaceDir } = this.params;
+    const roots: OpenShellWorkspaceRoot<string>[] = [
+      { remote: remoteWorkspaceDir, owner: "workspace", value: createParams.workspaceDir },
+    ];
     if (
-      this.params.createParams.cfg.workspaceAccess !== "none" &&
-      path.resolve(this.params.createParams.agentWorkspaceDir) !==
-        path.resolve(this.params.createParams.workspaceDir)
+      createParams.cfg.workspaceAccess !== "none" &&
+      path.resolve(createParams.agentWorkspaceDir) !== path.resolve(createParams.workspaceDir)
     ) {
-      await this.runRemoteShellScriptInternal({
-        script: 'mkdir -p -- "$1" && find "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +',
-        args: [this.params.remoteAgentWorkspaceDir],
+      roots.push({
+        remote: remoteAgentWorkspaceDir,
+        owner: "agent",
+        value: createParams.agentWorkspaceDir,
       });
-      await this.uploadPathToRemote(
-        this.params.createParams.agentWorkspaceDir,
-        this.params.remoteAgentWorkspaceDir,
-      );
+    }
+    return orderOpenShellWorkspaceRoots(roots).map(({ remote, owner, value: local }) => ({
+      remote,
+      local,
+      owner,
+    }));
+  }
+
+  private async syncWorkspaceToRemote(): Promise<void> {
+    const roots = this.workspaceUploadRoots();
+    for (const [index, root] of roots.entries()) {
+      const containingRoot = roots
+        .slice(0, index)
+        .toReversed()
+        .find((candidate) => isOpenShellRemotePathInside(candidate.remote, root.remote));
+      await this.runRemoteShellScriptInternal({
+        script: `${ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT}\nfind "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`,
+        args: [root.remote, containingRoot?.remote ?? root.remote, containingRoot ? "1" : "0"],
+      });
+      await this.uploadPathToRemote(root.local, root.remote);
     }
     await this.syncSkillsWorkspaceToRemote();
   }
@@ -867,44 +933,108 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async syncWorkspaceFromRemote(): Promise<void> {
-    await withTempWorkspace(
-      { rootDir: resolveOpenShellTmpRoot(), prefix: "openclaw-openshell-sync-" },
-      async ({ dir: tmpDir }) => {
-        const result = await runOpenShellCli({
-          context: this.params.execContext,
-          args: [
-            "sandbox",
-            "download",
-            this.params.execContext.sandboxName,
-            this.params.remoteWorkspaceDir,
-            tmpDir,
-          ],
-          cwd: this.params.createParams.workspaceDir,
-        });
-        if (result.code !== 0) {
-          throw new Error(result.stderr.trim() || "openshell sandbox download failed");
-        }
-        await removeMaterializedSkillsFromDownloadedWorkspace(tmpDir);
-        const preservedSandboxSkills = await moveMaterializedSkillsShadowAside({
-          workspaceDir: this.params.createParams.workspaceDir,
-          tmpDir,
-        });
-        try {
-          await replaceDirectoryContents({
-            sourceDir: tmpDir,
-            targetDir: this.params.createParams.workspaceDir,
-            // Never sync trusted host hook directories or repository metadata from
-            // the remote sandbox.
-            excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
-          });
-        } finally {
-          await restoreMaterializedSkillsShadow({
-            workspaceDir: this.params.createParams.workspaceDir,
-            preserved: preservedSandboxSkills,
-          });
-        }
-      },
+    const remoteSkillsWorkspaceDir = resolveRemoteMaterializedSkillsWorkspaceDir(
+      this.params.remoteWorkspaceDir,
     );
+    const roots = this.workspaceUploadRoots();
+    for (const [index, root] of roots.entries()) {
+      // The primary workspace is the mirror's canonical download target. Agent roots are
+      // host-owned inputs, including in rw mode, and historically never reconcile back.
+      if (root.owner === "agent") {
+        continue;
+      }
+      await withTempWorkspace(
+        { rootDir: resolveOpenShellTmpRoot(), prefix: "openclaw-openshell-sync-" },
+        async ({ dir: tmpDir }) => {
+          const result = await runOpenShellCli({
+            context: this.params.execContext,
+            args: ["sandbox", "download", this.params.execContext.sandboxName, root.remote, tmpDir],
+            cwd: this.params.createParams.workspaceDir,
+          });
+          if (result.code !== 0) {
+            throw new Error(result.stderr.trim() || "openshell sandbox download failed");
+          }
+          const preservedShadows: PreservedLocalShadow[] = [];
+          const failures: unknown[] = [];
+          try {
+            for (const shadowedRoot of roots.slice(index + 1)) {
+              if (
+                root.remote === shadowedRoot.remote ||
+                !isOpenShellRemotePathInside(root.remote, shadowedRoot.remote)
+              ) {
+                continue;
+              }
+              const relativeParts = path.posix
+                .relative(root.remote, shadowedRoot.remote)
+                .split("/")
+                .filter(Boolean);
+              await removeDownloadedWorkspacePath(tmpDir, relativeParts);
+              await moveLocalShadowAside({
+                workspaceDir: root.local,
+                tmpDir,
+                relativeParts,
+                preservedShadows,
+              });
+            }
+            const relativeSkillsPath = path.posix.relative(root.remote, remoteSkillsWorkspaceDir);
+            if (
+              relativeSkillsPath === "" ||
+              (!relativeSkillsPath.startsWith("../") && !path.posix.isAbsolute(relativeSkillsPath))
+            ) {
+              await removeDownloadedWorkspacePath(
+                tmpDir,
+                relativeSkillsPath.split("/").filter(Boolean),
+              );
+            }
+            await moveLocalShadowAside({
+              workspaceDir: root.local,
+              tmpDir,
+              relativeParts: MATERIALIZED_SKILLS_REMOTE_PARTS,
+              preservedShadows,
+            });
+            await replaceDirectoryContents({
+              sourceDir: tmpDir,
+              targetDir: root.local,
+              // Never sync trusted host hook directories or repository metadata from
+              // the remote sandbox.
+              excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+            });
+          } catch (error) {
+            failures.push(error);
+          }
+          const retained: string[] = [];
+          for (const preserved of preservedShadows.toReversed()) {
+            if (preserved.sourceRetired) {
+              try {
+                const cleanupFailure = await restoreLocalShadow(preserved);
+                if (cleanupFailure) {
+                  failures.push(cleanupFailure);
+                }
+                continue;
+              } catch (error) {
+                failures.push(error);
+              }
+            }
+            retained.push(`${preserved.receipt.path} (workspace path: ${preserved.shadowPath})`);
+          }
+          if (retained.length > 0 || failures.length > 1) {
+            const recovery =
+              retained.length > 0
+                ? ` Inspect the recovery paths ${retained.join("; ")}. ` +
+                  "Remaining workspace entries were preserved; compare both paths before recovering or deleting either copy."
+                : "";
+            throw new AggregateError(
+              failures,
+              `OpenShell mirror synchronization failed: ${failures.map(String).join("; ")}.${recovery}`,
+              { cause: failures[0] },
+            );
+          }
+          if (failures.length > 0) {
+            throw failures[0];
+          }
+        },
+      );
+    }
   }
 
   private async uploadPathToRemote(localPath: string, remotePath: string): Promise<void> {
@@ -918,9 +1048,9 @@ class OpenShellSandboxBackendImpl {
         await stageDirectoryContents({
           sourceDir: localPath,
           targetDir: stagedRoot,
+          excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
         });
-        const stagedEntries = (await fs.readdir(stagedRoot)).toSorted();
-        for (const entry of stagedEntries) {
+        for (const entry of (await fs.readdir(stagedRoot)).toSorted()) {
           const result = await runOpenShellCli({
             context: this.params.execContext,
             args: buildOpenShellDirectoryUploadArgs({
@@ -936,6 +1066,16 @@ class OpenShellSandboxBackendImpl {
         }
       },
     );
+  }
+
+  private async remoteManagedRootsEmpty(): Promise<boolean> {
+    const result = await this.runRemoteShellScriptInternal({
+      script: REMOTE_MANAGED_ROOTS_EMPTY_SCRIPT,
+      args: [this.params.remoteWorkspaceDir, this.params.remoteAgentWorkspaceDir],
+    });
+    // Anything other than an exact "0" reads as non-empty so the seed never
+    // fires on ambiguous probe output.
+    return result.stdout.toString("utf8").trim() === "0";
   }
 
   private async maybeSeedRemoteWorkspace(): Promise<boolean> {
@@ -1013,24 +1153,22 @@ function parseOpenShellSandboxPhasePage(
   stdout: string,
   sandboxName: string,
 ): { count: number; phase?: string } | undefined {
-  try {
-    const parsed: unknown = JSON.parse(stdout);
-    if (!Array.isArray(parsed)) {
-      return undefined;
-    }
-    for (const entry of parsed) {
-      if (!entry || typeof entry !== "object") {
-        continue;
-      }
-      const record = entry as Record<string, unknown>;
-      if (record.name === sandboxName && typeof record.phase === "string") {
-        return { count: parsed.length, phase: record.phase };
-      }
-    }
-    return { count: parsed.length };
-  } catch {
+  const parsed = safeParseJson<unknown>(stdout);
+  if (!Array.isArray(parsed)) {
     return undefined;
   }
+  for (const entry of parsed) {
+    const record = asOptionalRecord(entry);
+    if (record?.name === sandboxName && typeof record.phase === "string") {
+      return { count: parsed.length, phase: record.phase };
+    }
+  }
+  return { count: parsed.length };
+}
+
+function parseOpenShellSandboxPhase(stdout: string): string | undefined {
+  const parsed = asOptionalRecord(safeParseJson<unknown>(stdout));
+  return typeof parsed?.phase === "string" ? parsed.phase : undefined;
 }
 
 function resolveRemoteMaterializedSkillsWorkspaceDir(remoteWorkspaceDir: string): string {
@@ -1038,19 +1176,24 @@ function resolveRemoteMaterializedSkillsWorkspaceDir(remoteWorkspaceDir: string)
   return path.posix.join(root, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
 }
 
-async function removeMaterializedSkillsFromDownloadedWorkspace(tmpDir: string): Promise<void> {
+async function removeDownloadedWorkspacePath(
+  tmpDir: string,
+  parts: readonly string[],
+): Promise<void> {
+  if (parts.length === 0) {
+    for (const entry of await fs.readdir(tmpDir)) {
+      await fs.rm(path.join(tmpDir, entry), { recursive: true, force: true });
+    }
+    return;
+  }
   let cursor = tmpDir;
-  for (const [index, part] of MATERIALIZED_SKILLS_REMOTE_PARTS.entries()) {
+  for (const [index, part] of parts.entries()) {
     const next = path.join(cursor, part);
     const stats = await fs.lstat(next).catch(() => null);
     if (!stats) {
       return;
     }
-    if (index === MATERIALIZED_SKILLS_REMOTE_PARTS.length - 1) {
-      await fs.rm(next, { recursive: true, force: true });
-      return;
-    }
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    if (index === parts.length - 1 || stats.isSymbolicLink() || !stats.isDirectory()) {
       await fs.rm(next, { recursive: true, force: true });
       return;
     }
@@ -1058,57 +1201,86 @@ async function removeMaterializedSkillsFromDownloadedWorkspace(tmpDir: string): 
   }
 }
 
-async function moveMaterializedSkillsShadowAside(params: {
+type PreservedLocalShadow = {
+  receipt: MovePathPublicationReceipt;
+  shadowPath: string;
+  sourceRetired: boolean;
+};
+
+async function moveLocalShadowAside(params: {
   workspaceDir: string;
   tmpDir: string;
-}): Promise<{ preservedPath: string; preserveRoot: string } | undefined> {
-  const shadowPath = path.join(params.workspaceDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
+  relativeParts: readonly string[];
+  preservedShadows: PreservedLocalShadow[];
+}): Promise<void> {
+  const shadowPath = path.join(params.workspaceDir, ...params.relativeParts);
   const parentStats = await fs.lstat(path.dirname(shadowPath)).catch(() => null);
   if (!parentStats?.isDirectory() || parentStats.isSymbolicLink()) {
-    return undefined;
+    return;
   }
   const shadowStats = await fs.lstat(shadowPath).catch(() => null);
   if (!shadowStats || shadowStats.isSymbolicLink()) {
-    return undefined;
+    return;
   }
   const preserveRoot = await fs.mkdtemp(
     path.join(path.dirname(params.tmpDir), "openclaw-openshell-preserve-"),
   );
-  const preservedPath = path.join(preserveRoot, "sandbox-skills");
-  await movePathWithCopyFallback({ from: shadowPath, to: preservedPath });
-  return { preservedPath, preserveRoot };
+  let preserved: PreservedLocalShadow | undefined;
+  await movePathWithCopyFallback({
+    from: shadowPath,
+    to: path.join(preserveRoot, "shadow"),
+    onDestinationPublished: (receipt) => {
+      preserved = { receipt, shadowPath, sourceRetired: false };
+      params.preservedShadows.push(preserved);
+    },
+  });
+  if (preserved) {
+    preserved.sourceRetired = true;
+  }
 }
 
-async function restoreMaterializedSkillsShadow(params: {
-  workspaceDir: string;
-  preserved?: { preservedPath: string; preserveRoot: string };
-}): Promise<void> {
-  if (!params.preserved) {
-    return;
+function assertPreservedShadowIdentity(receipt: MovePathPublicationReceipt): void {
+  const stat = fsSync.lstatSync(receipt.path, { bigint: true });
+  if (
+    stat.isSymbolicLink() ||
+    stat.dev !== receipt.dev ||
+    stat.ino !== receipt.ino ||
+    (process.platform === "win32" && (stat.dev === 0n || stat.ino === 0n))
+  ) {
+    throw new Error(`Refusing to restore an unverified workspace shadow: ${receipt.path}`);
   }
-  let restored = false;
+}
+
+async function restoreLocalShadow(preserved: PreservedLocalShadow): Promise<Error | undefined> {
+  const { shadowPath, receipt } = preserved;
+  const assertBackup = () => assertPreservedShadowIdentity(receipt);
+  const parentPath = path.dirname(shadowPath);
+  const parentStats = await fs.lstat(parentPath).catch(() => null);
+  if (parentStats?.isSymbolicLink()) {
+    throw new Error(`Refusing to restore workspace shadow through symlink parent: ${parentPath}`);
+  }
+  if (parentStats && !parentStats.isDirectory()) {
+    assertBackup();
+    await fs.rm(parentPath, { recursive: true, force: true });
+  }
+  assertBackup();
+  await fs.mkdir(parentPath, { recursive: true });
+  assertBackup();
+  await fs.rm(shadowPath, { recursive: true, force: true });
+  await movePathWithCopyFallback({
+    from: receipt.path,
+    to: shadowPath,
+    assertBeforeMutation: assertBackup,
+  });
   try {
-    const shadowPath = path.join(params.workspaceDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
-    const parentPath = path.dirname(shadowPath);
-    const parentStats = await fs.lstat(parentPath).catch(() => null);
-    if (parentStats?.isSymbolicLink()) {
-      throw new Error(`Refusing to restore sandbox skills through symlink parent: ${parentPath}`);
-    }
-    if (parentStats && !parentStats.isDirectory()) {
-      await fs.rm(parentPath, { recursive: true, force: true });
-    }
-    await fs.mkdir(parentPath, { recursive: true });
-    await fs.rm(shadowPath, { recursive: true, force: true });
-    await movePathWithCopyFallback({
-      from: params.preserved.preservedPath,
-      to: shadowPath,
-    });
-    restored = true;
-  } finally {
-    if (restored) {
-      await fs.rm(params.preserved.preserveRoot, { recursive: true, force: true });
-    }
+    await fs.rmdir(path.dirname(receipt.path));
+  } catch (error) {
+    return new Error(
+      `Workspace shadow was restored at ${shadowPath}, but preservation directory cleanup failed at ${path.dirname(receipt.path)}`,
+      { cause: error },
+    );
   }
+  return undefined;
 }
 
 function resolveOpenShellTmpRoot(): string {
@@ -1123,11 +1295,4 @@ function normalizeRemotePath(remotePath: string): string {
   return normalized;
 }
 
-function isRemotePathInside(root: string, candidate: string): boolean {
-  const relative = path.posix.relative(root, candidate);
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith("../") && !path.posix.isAbsolute(relative))
-  );
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements quoted message behavior.
 import {
   isHostedLidUser,
   isHostedPnUser,
@@ -10,13 +9,10 @@ import {
   formatMediaPlaceholderText,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { jidToE164 } from "./text-runtime.js";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { jidToE164 } from "./targets-runtime.js";
 
-// ── Inbound message metadata cache ──────────────────────────────────────
-// Maps messageId → { participant, participantE164, body, fromMe } so the
-// outbound adapter can
-// populate the quote key with the sender JID and preview text even though
-// the outbound path only receives a bare messageId string.
+// Outbound callers only have a message ID; retain the sender and preview needed for quotes.
 
 type QuotedMeta = {
   participant?: string;
@@ -56,12 +52,7 @@ export function cacheInboundMessageMeta(
   if (!accountId || !messageId || !remoteJid) {
     return;
   }
-  if (cache.size >= MAX_ENTRIES) {
-    const oldest = cache.keys().next().value;
-    if (oldest) {
-      cache.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(cache, MAX_ENTRIES - 1);
   cache.set(makeCacheKey(accountId, remoteJid, messageId), { ...meta, ts: Date.now() });
 }
 
@@ -145,11 +136,7 @@ export function lookupInboundMessageMetaForTarget(
   if (exact) {
     return {
       remoteJid: targetJid,
-      participant: exact.participant,
-      participantE164: exact.participantE164,
-      body: exact.body,
-      media: exact.media,
-      fromMe: exact.fromMe,
+      ...exact,
     };
   }
   const prefix = `${accountId}:`;
@@ -228,7 +215,14 @@ export function buildQuotedMessageOptions(params: {
 }): MiscMessageGenerationOptions | undefined {
   const id = params.messageId?.trim();
   const quotedRemoteJid = params.remoteJid?.trim();
-  if (!id || !quotedRemoteJid) {
+  const previewText = [
+    params.messageText,
+    formatMediaPlaceholderText(params.media ? [params.media] : []),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  // Baileys needs quote content; a cache miss uses the ordinary unquoted send.
+  if (!id || !quotedRemoteJid || !previewText) {
     return undefined;
   }
   const remoteJid = resolveQuotedRemoteJid({
@@ -237,12 +231,6 @@ export function buildQuotedMessageOptions(params: {
     quotedRemoteJid,
     requestedJid: params.requestedJid,
   });
-  const previewText = [
-    params.messageText,
-    formatMediaPlaceholderText(params.media ? [params.media] : []),
-  ]
-    .filter(Boolean)
-    .join("\n");
   return {
     quoted: {
       key: {

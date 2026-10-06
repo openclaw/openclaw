@@ -1,15 +1,18 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AVATAR_MAX_BYTES } from "../../shared/avatar-policy.js";
+import * as participantRecording from "../../sessions/session-participant-recording.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { registerAgentResetAuthorityTests } from "./agent.reset-authority.test-support.js";
 import {
   REAL_PNG,
   REAL_PNG_DATA_URL,
   getAgentTestMocks,
+  operatorWriteCliClient,
+  operatorWriteGatewayClient,
   makeContext,
   type AgentHandlerArgs,
   waitForAssertion,
@@ -37,6 +40,78 @@ const mocks = getAgentTestMocks();
 
 describe("gateway agent handler", () => {
   afterEach(describe0AfterEach0);
+
+  it.each(["profile", "synthetic", "profileless", "system"] as const)(
+    "records direct accepted agent input once across retries: %s",
+    async (kind) => {
+      primeMainAgentRun();
+      const profile = ensureProfileForEmail("agent-participant@example.test");
+      const record = vi
+        .spyOn(participantRecording, "recordSessionParticipantBestEffort")
+        .mockImplementation(() => {});
+      const context = makeContext();
+      const params = {
+        message: "accepted input",
+        sessionKey: "agent:main:main",
+        idempotencyKey: `participant-${kind}`,
+        ...(kind === "system"
+          ? { inputProvenance: { kind: "internal_system" as const, sourceTool: "fixture" } }
+          : {}),
+      };
+      const client: AgentHandlerArgs["client"] = {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "cli", mode: "cli", platform: "test", version: "test" },
+          scopes: ["operator.admin"],
+        },
+        ...(kind !== "profileless"
+          ? {
+              authenticatedUserProfile: {
+                profileId: profile.id,
+                displayName: profile.displayName,
+                hasAvatar: false,
+                updatedAt: profile.updatedAt,
+              },
+            }
+          : {}),
+        ...(kind === "synthetic" ? { internal: { syntheticClient: true } } : {}),
+      };
+      try {
+        const respond = vi.fn();
+        const before = Date.now();
+        await invokeAgent(params, { context, client, respond });
+        await invokeAgent(params, { context, client, respond });
+        expect(respond.mock.calls.some(([ok, value]) => ok && value?.status === "accepted")).toBe(
+          true,
+        );
+        if (kind === "profile" || kind === "profileless") {
+          expect(record).toHaveBeenCalledOnce();
+          expect(record).toHaveBeenCalledWith(
+            expect.objectContaining({
+              identity:
+                kind === "profile"
+                  ? { type: "profile", id: profile.id }
+                  : {
+                      type: "observation",
+                      pluginId: null,
+                      accountId: null,
+                      senderKind: "unknown",
+                      id: "cli",
+                    },
+              agentId: "main",
+              sessionKey: "agent:main:main",
+            }),
+          );
+          expect(record.mock.calls[0]?.[0].promptedAt).toBeGreaterThanOrEqual(before);
+        } else {
+          expect(record).not.toHaveBeenCalled();
+        }
+      } finally {
+        record.mockRestore();
+      }
+    },
+  );
 
   it("routes voice wake trigger to configured session target", async () => {
     mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
@@ -267,7 +342,7 @@ describe("gateway agent handler", () => {
   });
 
   it("does not auto-route voice wake requests with another agent's explicit main session", async () => {
-    const opsAgentCfg = { agents: { list: [{ id: "main" }, { id: "ops" }] } };
+    const opsAgentCfg = { agents: { entries: { main: {}, ops: {} } } };
     mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
       version: 1,
@@ -377,7 +452,7 @@ describe("gateway agent handler", () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {
         session: { mainKey: "work" },
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
       },
       storePath: "/tmp/sessions.json",
       entry: {
@@ -431,7 +506,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "4",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -468,7 +543,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "4-new-followup-recorder",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -480,31 +555,7 @@ describe("gateway agent handler", () => {
     expect(call.userTurnTranscriptRecorder?.message?.content).toBe("continue with this prompt");
   });
 
-  it("handles bare /reset by resetting the same session without running the model", async () => {
-    mockSessionResetSuccess({ reason: "reset" });
-    mocks.performGatewaySessionReset.mockClear();
-    mocks.agentCommand.mockClear();
-
-    const respond = await invokeAgent(
-      {
-        message: "/reset",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "test-idem-reset",
-      },
-      {
-        reqId: "4-reset",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
-      },
-    );
-
-    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(mockCallArg(respond)).toBe(true);
-    const result = expectRecordFields(mockCallArg(respond, 0, 1), {}).result as {
-      payloads?: Array<{ text?: string }>;
-    };
-    expect(result.payloads?.[0]?.text).toBe("✅ Session reset.");
-  });
+  registerAgentResetAuthorityTests(mocks);
 
   it("dedupes bare /reset retries after returning the terminal ack", async () => {
     mockSessionResetSuccess({ reason: "reset" });
@@ -516,9 +567,7 @@ describe("gateway agent handler", () => {
       sessionKey: "agent:main:main",
       idempotencyKey: "test-idem-reset-retry",
     };
-    const client = {
-      connect: { scopes: ["operator.admin"] },
-    } as AgentHandlerArgs["client"];
+    const client = operatorWriteCliClient(["operator.admin"]);
 
     const firstRespond = await invokeAgent(request, {
       reqId: "4-reset-retry-first",
@@ -555,7 +604,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "4-reset-deliver-missing-target",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -584,7 +633,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "4-reset-deliver-best-effort",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -650,7 +699,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "4-reset-deliver-session-key-to",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
         context: { ...makeContext(), deps: {} } as GatewayRequestContext,
       },
     );
@@ -679,7 +728,7 @@ describe("gateway agent handler", () => {
   it("resets the selected global agent session for bare /new without startup context", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
       session: { scope: "global" },
     };
     mocks.performGatewaySessionReset.mockClear();
@@ -708,7 +757,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "4c-startup",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -740,7 +789,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "4b",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -754,7 +803,7 @@ describe("gateway agent handler", () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
       session: { scope: "global" },
     };
     mocks.performGatewaySessionReset.mockClear();
@@ -797,7 +846,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "4c",
-        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -840,7 +889,7 @@ describe("gateway agent handler", () => {
         },
         {
           reqId: "4c",
-          client: { connect: { scopes: ["operator.write"] } } as AgentHandlerArgs["client"],
+          client: operatorWriteCliClient(["operator.write"]),
         },
       );
 
@@ -866,7 +915,7 @@ describe("gateway agent handler", () => {
     mocks.loadConfigReturn = {
       agents: {
         defaults: { workspace: "/tmp/workspace" },
-        list: [{ id: "main", identity: { avatar: "/Users/test/private/avatar.png" } }],
+        entries: { main: { identity: { avatar: "/Users/test/private/avatar.png" } } },
       },
     };
 
@@ -895,7 +944,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", identity: { avatar: "avatars/main.png" } }],
+          entries: { main: { identity: { avatar: "avatars/main.png" } } },
         },
       };
 
@@ -918,7 +967,9 @@ describe("gateway agent handler", () => {
     ["data", "data:image/png;base64,aaaa"],
     ["text", "PS"],
   ] as const)("preserves %s avatar values in agent.identity.get", async (_kind, avatar) => {
-    mocks.loadConfigReturn = { ui: { assistant: { avatar } } };
+    mocks.loadConfigReturn = {
+      agents: { entries: { main: { identity: { avatar } } } },
+    };
 
     const respond = await invokeAgentIdentityGet(
       { sessionKey: "agent:main:main" },
@@ -931,7 +982,7 @@ describe("gateway agent handler", () => {
   it("prefixes same-origin avatar routes in agent.identity.get when Control UI has a base path", async () => {
     mocks.loadConfigReturn = {
       gateway: { controlUi: { basePath: "/openclaw" } },
-      ui: { assistant: { avatar: "/avatar/main" } },
+      agents: { entries: { main: { identity: { avatar: "/avatar/main" } } } },
     };
 
     const respond = await invokeAgentIdentityGet(
@@ -949,7 +1000,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", identity: { avatar: "avatars/missing.png" } }],
+          entries: { main: { identity: { avatar: "avatars/missing.png" } } },
         },
       };
 
@@ -967,31 +1018,44 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("inlines a workspace-local avatar in agent.identity.get (#97602)", async () => {
-    await withTestDir({ prefix: "openclaw-agent-identity-avatar-" }, async (workspace) => {
-      await fs.writeFile(`${workspace}/avatar.png`, REAL_PNG);
-      mocks.loadConfigReturn = {
-        agents: {
-          defaults: { workspace },
-          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
-        },
-      };
+  it.each(["browser", "cli", "copilot"])(
+    "projects a workspace-local avatar for %s agent.identity.get",
+    async (kind) => {
+      await withTestDir({ prefix: "openclaw-agent-identity-avatar-" }, async (workspace) => {
+        await fs.writeFile(`${workspace}/avatar.png`, REAL_PNG);
+        mocks.loadConfigReturn = {
+          agents: {
+            defaults: { workspace },
+            entries: { main: { workspace, identity: { avatar: "avatar.png" } } },
+          },
+        };
 
-      const respond = await invokeAgentIdentityGet(
-        { sessionKey: "agent:main:main" },
-        { reqId: "5-local-avatar" },
-      );
+        const client = kind === "cli" ? operatorWriteCliClient() : operatorWriteGatewayClient();
+        if (kind === "copilot" && client) {
+          client.connect.client.id = "openclaw-browser-copilot";
+        }
+        const respond = await invokeAgentIdentityGet(
+          { sessionKey: "agent:main:main" },
+          {
+            reqId: "5-local-avatar",
+            client,
+          },
+        );
 
-      expect(mockCallArg(respond)).toBe(true);
-      expectRecordFields(mockCallArg(respond, 0, 1), {
-        agentId: "main",
-        avatar: REAL_PNG_DATA_URL,
-        avatarSource: "avatar.png",
-        avatarStatus: "local",
+        expect(mockCallArg(respond)).toBe(true);
+        expectRecordFields(mockCallArg(respond, 0, 1), {
+          agentId: "main",
+          avatar:
+            kind === "browser"
+              ? expect.stringMatching(/^\/avatar\/main\?v=[a-f0-9]+$/)
+              : REAL_PNG_DATA_URL,
+          avatarSource: "avatar.png",
+          avatarStatus: "local",
+        });
+        expect(mockCallArg(respond, 0, 2)).toBeUndefined();
       });
-      expect(mockCallArg(respond, 0, 2)).toBeUndefined();
-    });
-  });
+    },
+  );
 
   it("reports a hardlinked avatar as unreadable in agent.identity.get", async () => {
     await withTestDir({ prefix: "openclaw-agent-identity-hardlink-" }, async (workspace) => {
@@ -1000,7 +1064,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+          entries: { main: { workspace, identity: { avatar: "avatar.png" } } },
         },
       };
 
@@ -1020,41 +1084,14 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("bounds an agent.identity.get avatar that grows after its descriptor is pinned", async () => {
-    await withTestDir({ prefix: "openclaw-agent-identity-growth-" }, async (workspace) => {
-      const avatarPath = `${workspace}/avatar.png`;
-      await fs.writeFile(avatarPath, REAL_PNG);
-      mocks.loadConfigReturn = {
-        agents: {
-          defaults: { workspace },
-          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
-        },
-      };
-      const originalFstatSync = fsSync.fstatSync;
-      const fstatSync = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
-        const stat = originalFstatSync(fd);
-        fsSync.appendFileSync(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES));
-        return stat;
-      });
+  it("does not deliver prepared identity after the client loses authority", async () => {
+    const client = requireValue(operatorWriteGatewayClient(), "missing operator fixture");
+    const respond = vi.fn();
+    const pending = invokeAgentIdentityGet({ agentId: "main" }, { client, respond });
+    client.invalidated = true;
 
-      try {
-        const respond = await invokeAgentIdentityGet(
-          { sessionKey: "agent:main:main" },
-          { reqId: "5-growing-avatar" },
-        );
-
-        expect(mockCallArg(respond)).toBe(true);
-        expectRecordFields(mockCallArg(respond, 0, 1), {
-          agentId: "main",
-          avatar: "A",
-          avatarSource: "avatar.png",
-          avatarStatus: "none",
-          avatarReason: "unreadable",
-        });
-      } finally {
-        fstatSync.mockRestore();
-      }
-    });
+    await expect(pending).rejects.toThrow("Gateway requester authority changed");
+    expect(respond).not.toHaveBeenCalled();
   });
 
   it("keeps configured emoji precedence free of file metadata in agent.identity.get", async () => {
@@ -1064,7 +1101,7 @@ describe("gateway agent handler", () => {
       mocks.loadConfigReturn = {
         agents: {
           defaults: { workspace },
-          list: [{ id: "main", workspace, identity: { emoji: "🦞" } }],
+          entries: { main: { workspace, identity: { emoji: "🦞" } } },
         },
       };
 

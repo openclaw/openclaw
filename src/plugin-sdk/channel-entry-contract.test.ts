@@ -2,7 +2,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -349,6 +349,8 @@ function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
     },
   });
   fs.writeFileSync(path.join(tempRoot, "openclaw.mjs"), "#!/usr/bin/env node\n", "utf8");
+  fs.mkdirSync(path.join(tempRoot, "src"));
+  fs.mkdirSync(path.join(tempRoot, "extensions"));
   fs.mkdirSync(path.join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
   fs.writeFileSync(
     path.join(tempRoot, "dist", "plugin-sdk", "channel-outbound.js"),
@@ -383,7 +385,11 @@ function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, ["--import", "tsx", probePath], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, OPENCLAW_DIAGNOSTICS: "plugin.load-profile" },
+    env: {
+      ...process.env,
+      OPENCLAW_DIAGNOSTICS: "plugin.load-profile",
+      OPENCLAW_DEV_SOURCE_ROOT: tempRoot,
+    },
   });
 }
 
@@ -454,15 +460,32 @@ describe("loadBundledEntryExportSync", () => {
     const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
     const openedFdPath = path.join(tempRoot, "opened");
     fs.writeFileSync(openedFdPath, "opened\n", "utf8");
+    const importerUrl = "file:///C:/Users/alice/openclaw/dist/extensions/feishu/index.js";
+    const sidecarPath = path.resolve(path.dirname(fileURLToPath(importerUrl)), "helper.ts");
     const jitiLoad = vi.fn(() => ({ load: 42 }));
     const createJiti = vi.fn(() => jitiLoad);
-    vi.doMock("../infra/boundary-file-read.js", () => ({
-      openRootFileSync: () => ({
-        ok: true,
-        path: "C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\helper.ts",
-        fd: fs.openSync(openedFdPath, "r"),
-      }),
-    }));
+    vi.doMock("../infra/boundary-file-read.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../infra/boundary-file-read.js")>();
+      return {
+        ...actual,
+        openRootFileSync: (params: Parameters<typeof actual.openRootFileSync>[0]) => {
+          if (params.absolutePath !== sidecarPath) {
+            return actual.openRootFileSync(params);
+          }
+          const opened = actual.openRootFileSync({
+            ...params,
+            absolutePath: openedFdPath,
+            rootPath: tempRoot,
+          });
+          return opened.ok
+            ? {
+                ...opened,
+                path: "C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\helper.ts",
+              }
+            : opened;
+        },
+      };
+    });
 
     await withMockedWindowsPlatform(async () => {
       try {
@@ -472,7 +495,7 @@ describe("loadBundledEntryExportSync", () => {
 
         expect(
           channelEntryContract.loadBundledEntryExportSync<number>(
-            "file:///C:/Users/alice/openclaw/dist/extensions/feishu/index.js",
+            importerUrl,
             {
               specifier: "./helper.ts",
               exportName: "load",
@@ -490,16 +513,9 @@ describe("loadBundledEntryExportSync", () => {
     });
   });
 
-  it("transforms OpenClaw SDK dependencies after a native built sidecar load declines", async () => {
+  it("keeps the host SDK native when a built sidecar needs plugin transformation", async () => {
     const sourceLoad = vi.fn(() => ({ sentinel: 42 }));
     const createJiti = vi.fn((_filename: string, _options?: Record<string, unknown>) => sourceLoad);
-    vi.doMock("../plugins/native-module-require.js", () => ({
-      tryNativeRequireJavaScriptModule: vi.fn(() => ({ ok: false })),
-    }));
-
-    const channelEntryContract = await importFreshModule<
-      typeof import("./channel-entry-contract.js")
-    >(import.meta.url, "./channel-entry-contract.js?scope=native-esm-race-fallback");
     const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
     const pluginRoot = path.join(tempRoot, "dist", "extensions", "whatsapp");
     fs.mkdirSync(pluginRoot, { recursive: true });
@@ -507,6 +523,21 @@ describe("loadBundledEntryExportSync", () => {
     const sidecarPath = path.join(pluginRoot, "setup-plugin-api.js");
     fs.writeFileSync(importerPath, "export default {};\n", "utf8");
     fs.writeFileSync(sidecarPath, "export const sentinel = 42;\n", "utf8");
+    vi.doMock("../plugins/native-module-require.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../plugins/native-module-require.js")>();
+      return {
+        ...actual,
+        tryNativeRequireJavaScriptModule: (
+          ...args: Parameters<typeof actual.tryNativeRequireJavaScriptModule>
+        ) =>
+          args[0] === sidecarPath
+            ? { ok: false }
+            : actual.tryNativeRequireJavaScriptModule(...args),
+      };
+    });
+    const channelEntryContract = await importFreshModule<
+      typeof import("./channel-entry-contract.js")
+    >(import.meta.url, "./channel-entry-contract.js?scope=native-esm-race-fallback");
 
     expect(
       channelEntryContract.loadBundledEntryExportSync<number>(
@@ -522,12 +553,34 @@ describe("loadBundledEntryExportSync", () => {
       | { nativeModules?: string[]; tryNative?: boolean }
       | undefined;
     expect(jitiOptions?.tryNative).toBe(false);
-    expect(jitiOptions?.nativeModules).toEqual([]);
+    expect(jitiOptions?.nativeModules).toEqual(["openclaw"]);
     expect(sourceLoad).toHaveBeenCalledWith(sidecarPath);
+  });
+
+  it("does not replay a failed native sidecar through the plugin transformer", () => {
+    const root = tempDirs.make("openclaw-channel-entry-failure-");
+    const pluginRoot = path.join(root, "dist", "extensions", "fixture");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    const importerPath = path.join(pluginRoot, "setup-entry.cjs");
+    const evaluations = path.join(root, "evaluations.txt");
+    fs.writeFileSync(importerPath, "module.exports = {};\n");
+    fs.writeFileSync(
+      path.join(pluginRoot, "sidecar.cjs"),
+      `require("node:fs").appendFileSync(${JSON.stringify(evaluations)}, "evaluation\\n");
+       throw new Error("sidecar initialization failed");`,
+    );
+
+    expect(() =>
+      loadBundledEntryExportSync(pathToFileURL(importerPath).href, {
+        specifier: "./sidecar.cjs",
+      }),
+    ).toThrow("sidecar initialization failed");
+    expect(fs.readFileSync(evaluations, "utf8")).toBe("evaluation\n");
   });
 
   it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
     const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
+    fs.writeFileSync(path.join(tempRoot, "package.json"), '{"type":"module"}\n');
 
     const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
     fs.mkdirSync(pluginRoot, { recursive: true });
@@ -583,14 +636,13 @@ describe("loadBundledEntryExportSync", () => {
     fs.writeFileSync(importerPath, "export default {};\n", "utf8");
     fs.writeFileSync(helperPath, "module.exports = { sentinel: 42 };\n", "utf8");
 
-    const openRootFileSync = vi.fn(() => ({
-      ok: true,
-      path: helperPath,
-      fd: fs.openSync(helperPath, "r"),
-    }));
-    vi.doMock("../infra/boundary-file-read.js", () => ({
-      openRootFileSync,
-    }));
+    const openRootFileSync =
+      vi.fn<typeof import("../infra/boundary-file-read.js").openRootFileSync>();
+    vi.doMock("../infra/boundary-file-read.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../infra/boundary-file-read.js")>();
+      openRootFileSync.mockImplementation(actual.openRootFileSync);
+      return { ...actual, openRootFileSync };
+    });
 
     try {
       const channelEntryContract = await importFreshModule<
@@ -608,12 +660,16 @@ describe("loadBundledEntryExportSync", () => {
         ),
       ).toBe(42);
       expect(
+        openRootFileSync.mock.calls.filter(([params]) => params.absolutePath === helperPath),
+      ).toHaveLength(1);
+      openRootFileSync.mockClear();
+      expect(
         channelEntryContract.loadBundledEntryExportSync<number>(
           pathToFileURL(importerPath).href,
           ref,
         ),
       ).toBe(42);
-      expect(openRootFileSync).toHaveBeenCalledTimes(1);
+      expect(openRootFileSync).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock("../infra/boundary-file-read.js");
     }
@@ -633,7 +689,7 @@ describe("loadBundledEntryExportSync", () => {
   it("keeps compiled ESM sidecars with SDK imports on the nodeRequire fast-path", async () => {
     const result = compiledEsmSidecarFastPathResult;
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("adapter");
     expect(result.stderr).toMatch(/sourceLoaderCreateMs=0(?:\.0+)?(?:\s|$)/u);
     expect(result.stderr).toMatch(/sourceLoaderCallMs=0(?:\.0+)?(?:\s|$)/u);

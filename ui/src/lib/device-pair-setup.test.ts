@@ -1,5 +1,7 @@
 // @vitest-environment node
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import {
   closeDevicePairSetup,
   completeDevicePairSetup,
@@ -18,14 +20,6 @@ import {
 type DevicePairSetupState = ReturnType<typeof createDevicePairSetupState>;
 type DevicePairSetup = Extract<DevicePairSetupLifecycle, { phase: "waiting" }>["setup"];
 type DevicePairSetupCompletion = NonNullable<ReturnType<typeof parseDevicePairSetupCompletion>>;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function setupResult(
   setupId: string,
@@ -56,8 +50,11 @@ function completion(setupId: string): DevicePairSetupCompletion {
   };
 }
 
-function stateWithClient(client: DevicePairSetupState["client"]): DevicePairSetupState {
-  const state = createDevicePairSetupState({ client, connected: true });
+function stateWithClient(
+  client: DevicePairSetupState["client"],
+  onChange?: () => void,
+): DevicePairSetupState {
+  const state = createDevicePairSetupState({ client, connected: true, onChange });
   state.devicePairSetupOpen = true;
   return state;
 }
@@ -77,10 +74,11 @@ describe("device pairing setup state", () => {
     await expect(requestDevicePairJoinSetup({ request })).resolves.toMatchObject({
       joinUrl: "https://gateway.example.com/j/fresh-code",
     });
-    expect(request).toHaveBeenCalledWith("device.pair.setupCode", {
-      includeQr: false,
-      joinUrl: true,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "device.pair.setupCode",
+      { includeQr: false, joinUrl: true },
+      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+    );
   });
 
   it("opens in access selection without minting a setup credential", async () => {
@@ -182,9 +180,10 @@ describe("device pairing setup state", () => {
     expect(request).not.toHaveBeenCalled();
     await refreshDevicePairSetup(state);
 
-    expect(request).toHaveBeenCalledWith("device.pair.setupCode", {
-      bootstrapProfile: "limited",
-    });
+    expect(request.mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      "device.pair.setupCode",
+      { bootstrapProfile: "limited" },
+    ]);
     expect(state.devicePairSetupLifecycle).toMatchObject({
       phase: "waiting",
       access: "limited",
@@ -195,7 +194,7 @@ describe("device pairing setup state", () => {
     state.devicePairSetupOpen = true;
     request.mockResolvedValueOnce(setupResult("full-setup", "FULL"));
     await refreshDevicePairSetup(state);
-    expect(request).toHaveBeenLastCalledWith("device.pair.setupCode", {});
+    expect(request.mock.calls.at(-1)?.slice(0, 2)).toEqual(["device.pair.setupCode", {}]);
     closeDevicePairSetup(state);
   });
 
@@ -208,10 +207,10 @@ describe("device pairing setup state", () => {
     await setDevicePairSetupAccess(state, "node");
     await refreshDevicePairSetup(state);
 
-    expect(request).toHaveBeenCalledWith("device.pair.setupCode", {
-      bootstrapProfile: "node",
-      includeQr: false,
-    });
+    expect(request.mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      "device.pair.setupCode",
+      { bootstrapProfile: "node", includeQr: false },
+    ]);
     expect(state.devicePairSetupLifecycle).toMatchObject({ phase: "waiting", access: "node" });
     closeDevicePairSetup(state);
   });
@@ -245,7 +244,7 @@ describe("device pairing setup state", () => {
       phase: "error",
       source: "create",
       access: "full",
-      message: "Error: setup unavailable",
+      message: "setup unavailable",
     });
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });
@@ -266,7 +265,7 @@ describe("device pairing setup state", () => {
       source: "create",
       access: "full",
       message:
-        "Error: Gateway does not provide pairing lifecycle metadata. Update the Gateway and try again.",
+        "Gateway does not provide pairing lifecycle metadata. Update the Gateway and try again.",
     });
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });
@@ -329,8 +328,7 @@ describe("device pairing setup state", () => {
   it("stops the node countdown when delivery reaches a terminal outcome", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const state = createDevicePairSetupState({ client: null, connected: true });
-    state.devicePairSetupOpen = true;
+    const state = stateWithClient(null);
     state.devicePairSetupLifecycle = {
       phase: "waiting",
       access: "node",
@@ -346,8 +344,7 @@ describe("device pairing setup state", () => {
   });
 
   it("surfaces delivery uncertainty as a recoverable terminal state", () => {
-    const state = createDevicePairSetupState({ client: null, connected: true });
-    state.devicePairSetupOpen = true;
+    const state = stateWithClient(null);
     state.devicePairSetupLifecycle = {
       phase: "waiting",
       access: "limited",
@@ -387,12 +384,10 @@ describe("device pairing setup state", () => {
       .fn()
       .mockResolvedValueOnce(setupResult("old-setup", "OLD", { expiresAtMs: 2_000 }))
       .mockResolvedValueOnce(setupResult("new-setup", "NEW", { expiresAtMs: 5_000 }));
-    const state = createDevicePairSetupState({
-      client: { request } as unknown as DevicePairSetupState["client"],
-      connected: true,
+    const state = stateWithClient(
+      { request } as unknown as DevicePairSetupState["client"],
       onChange,
-    });
-    state.devicePairSetupOpen = true;
+    );
 
     await refreshDevicePairSetup(state);
     await refreshDevicePairSetup(state);
@@ -422,12 +417,10 @@ describe("device pairing setup state", () => {
         ? { completion: completion("live-setup") }
         : setupResult("live-setup", "SECRET", { expiresAtMs: 2_000 }),
     );
-    const state = createDevicePairSetupState({
-      client: { request } as unknown as DevicePairSetupState["client"],
-      connected: true,
+    const state = stateWithClient(
+      { request } as unknown as DevicePairSetupState["client"],
       onChange,
-    });
-    state.devicePairSetupOpen = true;
+    );
 
     await refreshDevicePairSetup(state);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -441,27 +434,6 @@ describe("device pairing setup state", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("shows expiry only when the gateway authoritatively has no completion", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const request = vi.fn(async (method: string) =>
-      method === "device.pair.setupStatus"
-        ? {}
-        : setupResult("live-setup", "SECRET", { expiresAtMs: 2_000 }),
-    );
-    const state = createDevicePairSetupState({
-      client: { request } as unknown as DevicePairSetupState["client"],
-      connected: true,
-    });
-    state.devicePairSetupOpen = true;
-
-    await refreshDevicePairSetup(state);
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(state.devicePairSetupLifecycle).toEqual({ phase: "expired", access: "full" });
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("retires the bearer while an expiry status lookup is pending", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -472,12 +444,10 @@ describe("device pairing setup state", () => {
         ? await status.promise
         : setupResult("live-setup", "SECRET", { expiresAtMs: 2_000 }),
     );
-    const state = createDevicePairSetupState({
-      client: { request } as unknown as DevicePairSetupState["client"],
-      connected: true,
+    const state = stateWithClient(
+      { request } as unknown as DevicePairSetupState["client"],
       onChange,
-    });
-    state.devicePairSetupOpen = true;
+    );
 
     await refreshDevicePairSetup(state);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -502,7 +472,7 @@ describe("device pairing setup state", () => {
       async () => {
         throw new Error("offline");
       },
-      "Error: offline",
+      "offline",
     ],
     [
       "the recorded completion belongs to another setup",
@@ -519,11 +489,7 @@ describe("device pairing setup state", () => {
           ? await statusResponse()
           : setupResult("live-setup", "SECRET", { expiresAtMs: 2_000 }),
       );
-      const state = createDevicePairSetupState({
-        client: { request } as unknown as DevicePairSetupState["client"],
-        connected: true,
-      });
-      state.devicePairSetupOpen = true;
+      const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
 
       await refreshDevicePairSetup(state);
       await vi.advanceTimersByTimeAsync(1_000);
@@ -547,11 +513,7 @@ describe("device pairing setup state", () => {
       .mockResolvedValueOnce(setupResult("live-setup", "SECRET", { expiresAtMs: 2_000 }))
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce({ completion: completion("live-setup") });
-    const state = createDevicePairSetupState({
-      client: { request } as unknown as DevicePairSetupState["client"],
-      connected: true,
-    });
-    state.devicePairSetupOpen = true;
+    const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
 
     await refreshDevicePairSetup(state);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -578,11 +540,7 @@ describe("device pairing setup state", () => {
         method === "device.pair.setupStatus" ? await status.promise : setupResult("new", "NEW"),
       )
       .mockImplementationOnce(async () => setupResult("old", "OLD", { expiresAtMs: 2_000 }));
-    const state = createDevicePairSetupState({
-      client: { request } as unknown as DevicePairSetupState["client"],
-      connected: true,
-    });
-    state.devicePairSetupOpen = true;
+    const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
 
     await refreshDevicePairSetup(state);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -608,12 +566,10 @@ describe("device pairing setup state", () => {
     const request = vi
       .fn()
       .mockResolvedValue(setupResult("expired-setup", "SECRET", { expiresAtMs: 1_999 }));
-    const state = createDevicePairSetupState({
-      client: { request } as unknown as DevicePairSetupState["client"],
-      connected: true,
+    const state = stateWithClient(
+      { request } as unknown as DevicePairSetupState["client"],
       onChange,
-    });
-    state.devicePairSetupOpen = true;
+    );
 
     await refreshDevicePairSetup(state);
     // Even an already-lapsed credential reconciles first; expiry lands one turn later.

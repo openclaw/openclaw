@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient } from "./client.js";
 import {
   GatewayProtocolClient,
@@ -16,6 +16,7 @@ type SocketFactoryHarness = {
 
 function createSocketFactoryHarness(options?: {
   initialFailures?: number;
+  onClose?: () => void;
   onConnectError?: (error: Error) => void;
   retryFactoryError?: (error: Error) => boolean;
   rethrowFactoryError?: (error: Error) => boolean;
@@ -41,6 +42,7 @@ function createSocketFactoryHarness(options?: {
     buildConnectPlan: () => ({}),
     buildConnectParams: (plan) => plan,
     resolveClose: () => ({ retry: true, notify: true }),
+    onClose: options?.onClose,
     onConnectError,
     handshake: { mode: "require-challenge", timeoutMs: 100 },
     reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
@@ -54,66 +56,63 @@ function createSocketFactoryHarness(options?: {
   return { client, createSocket, onConnectError };
 }
 
+beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
+});
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe("GatewayProtocolClient socket factory recovery", () => {
-  it("automatically retries a socket factory failure when the transport opts in", async () => {
-    vi.useFakeTimers();
-    const { client, createSocket, onConnectError } = createSocketFactoryHarness({
-      initialFailures: 1,
-      retryFactoryError: () => true,
-    });
+  it.each([
+    { draw: 0, delays: [10, 20, 40, 80, 84, 84], resetDelay: 25 },
+    { draw: 0.5, delays: [11, 22, 44, 88, 92, 92], resetDelay: 28 },
+    { draw: 0.999, delays: [12, 24, 48, 96, 100, 100], resetDelay: 30 },
+  ])(
+    "spreads exponential retries through the cap and reset ($draw)",
+    async ({ draw, delays, resetDelay }) => {
+      vi.useFakeTimers();
+      vi.mocked(Math.random).mockReturnValue(draw);
+      const { client, createSocket, onConnectError } = createSocketFactoryHarness({
+        initialFailures: delays.length,
+        retryFactoryError: () => true,
+      });
 
-    client.start();
+      try {
+        client.start();
 
-    expect(createSocket).toHaveBeenCalledOnce();
-    expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: "temporary socket construction failure" }),
-    );
-    expect(vi.getTimerCount()).toBe(1);
+        expect(createSocket).toHaveBeenCalledOnce();
+        expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ message: "temporary socket construction failure" }),
+        );
+        expect(vi.getTimerCount()).toBe(1);
 
-    client.start();
-    expect(createSocket).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(1);
+        client.start();
+        expect(createSocket).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(1);
 
-    await vi.advanceTimersByTimeAsync(9);
-    expect(createSocket).toHaveBeenCalledOnce();
+        for (const [index, delay] of delays.entries()) {
+          await vi.advanceTimersByTimeAsync(delay - 1);
+          expect(createSocket).toHaveBeenCalledTimes(index + 1);
+          await vi.advanceTimersByTimeAsync(1);
+          expect(createSocket).toHaveBeenCalledTimes(index + 2);
+        }
+        expect(onConnectError).toHaveBeenCalledTimes(delays.length);
+        expect(client.connected).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(1);
-    expect(createSocket).toHaveBeenCalledTimes(2);
-    expect(client.connected).toBe(true);
-
-    client.stop();
-  });
-
-  it("uses the canonical exponential reconnect schedule for consecutive failures", async () => {
-    vi.useFakeTimers();
-    const { client, createSocket, onConnectError } = createSocketFactoryHarness({
-      initialFailures: 3,
-      retryFactoryError: () => true,
-    });
-
-    client.start();
-    await vi.advanceTimersByTimeAsync(10);
-    expect(createSocket).toHaveBeenCalledTimes(2);
-
-    await vi.advanceTimersByTimeAsync(19);
-    expect(createSocket).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(createSocket).toHaveBeenCalledTimes(3);
-
-    await vi.advanceTimersByTimeAsync(39);
-    expect(createSocket).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(createSocket).toHaveBeenCalledTimes(4);
-    expect(onConnectError).toHaveBeenCalledTimes(3);
-    expect(client.connected).toBe(true);
-
-    client.stop();
-  });
+        client.resetReconnectBackoff(25);
+        createSocket.mock.calls.at(-1)?.[0].close(1012, "service restart");
+        await vi.advanceTimersByTimeAsync(resetDelay - 1);
+        expect(createSocket).toHaveBeenCalledTimes(delays.length + 1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(createSocket).toHaveBeenCalledTimes(delays.length + 2);
+      } finally {
+        client.stop();
+      }
+    },
+  );
 
   it("cancels a pending factory retry when the client is stopped", async () => {
     vi.useFakeTimers();
@@ -166,6 +165,43 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     client.stop();
   });
 
+  it("does not schedule a retry over a socket restarted by a close callback", async () => {
+    vi.useFakeTimers();
+    let recoveredRequest: Promise<{ healthy: boolean }> | undefined;
+    const { client, createSocket } = createSocketFactoryHarness({
+      onClose: () => {
+        client.start();
+        recoveredRequest = client.request("sessions.list", {}, { timeoutMs: null });
+      },
+    });
+
+    client.start();
+    createSocket.mock.calls[0]?.[0].close(1012, "service restart");
+
+    expect(createSocket).toHaveBeenCalledTimes(2);
+    expect(client.connected).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(createSocket).toHaveBeenCalledTimes(2);
+
+    const replacementSocket = createSocket.mock.results[1]?.value as GatewayProtocolSocket;
+    const requestFrame = vi.mocked(replacementSocket.send).mock.calls[0]?.[0];
+    expect(requestFrame).toBeDefined();
+    createSocket.mock.calls[1]?.[0].message(
+      JSON.stringify({
+        type: "res",
+        id: JSON.parse(requestFrame ?? "{}").id,
+        ok: true,
+        payload: { healthy: true },
+      }),
+    );
+    await expect(recoveredRequest).resolves.toEqual({ healthy: true });
+    expect(client.hasPendingRequests).toBe(false);
+
+    client.stop();
+  });
+
   it("keeps socket factory failures terminal unless a transport explicitly opts in", async () => {
     vi.useFakeTimers();
     const { client, createSocket, onConnectError } = createSocketFactoryHarness({
@@ -209,6 +245,69 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     expect(vi.getTimerCount()).toBe(0);
     client.stop();
   });
+
+  it.each([true, false])(
+    "contains a terminal asynchronous reconnect failure (rethrow: %s)",
+    async (rethrow) => {
+      vi.useFakeTimers();
+      let socketAttempts = 0;
+      let disconnect: ((code: number, reason: string) => void) | undefined;
+      const onConnectError = vi.fn<(error: Error) => void>();
+      const onCallbackError = vi.fn<(label: string, error: unknown) => void>();
+      const onReconnectStopped = vi.fn<(error: Error) => void>();
+      const client = new GatewayProtocolClient<Record<string, never>>({
+        createSocket: (handlers) => {
+          socketAttempts += 1;
+          if (socketAttempts > 1) {
+            throw new Error("loopback proxy policy rejected");
+          }
+          let open = true;
+          disconnect = (code, reason) => {
+            open = false;
+            handlers.close(code, reason);
+          };
+          return {
+            isOpen: () => open,
+            send: vi.fn(),
+            close: (code, reason) => disconnect?.(code ?? 1000, reason ?? ""),
+          };
+        },
+        createRequestId: () => "request-1",
+        buildConnectPlan: () => ({}),
+        buildConnectParams: (plan) => plan,
+        resolveClose: () => ({ retry: true, notify: true }),
+        onConnectError,
+        onCallbackError,
+        onReconnectStopped,
+        shouldRetrySocketFactoryError: () => rethrow,
+        rethrowSocketFactoryError: () => rethrow,
+        handshake: { mode: "require-challenge", timeoutMs: 100 },
+        reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
+      });
+      client.start();
+      disconnect?.(1012, "service restart");
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(socketAttempts).toBe(2);
+      expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "loopback proxy policy rejected" }),
+      );
+      if (rethrow) {
+        expect(onCallbackError).toHaveBeenCalledExactlyOnceWith(
+          "reconnect",
+          expect.objectContaining({ message: "loopback proxy policy rejected" }),
+        );
+      } else {
+        expect(onCallbackError).not.toHaveBeenCalled();
+      }
+      expect(onReconnectStopped).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "loopback proxy policy rejected" }),
+      );
+      expect(vi.getTimerCount()).toBe(0);
+      client.stop();
+    },
+  );
 });
 
 describe("GatewayClient socket factory recovery", () => {
@@ -219,7 +318,7 @@ describe("GatewayClient socket factory recovery", () => {
     });
     const client = new GatewayClient({
       url: "WSS://gateway.example:18789",
-      tlsFingerprint: "deadbeef",
+      tlsFingerprint: "ab".repeat(32),
       onConnectError,
       hostDeps: { beforeConnect },
     });
@@ -278,6 +377,12 @@ describe("GatewayClient socket factory recovery", () => {
       tlsFingerprint: "deadbeef",
       expectedMessage: "gateway tls fingerprint requires wss:// gateway url",
     },
+    {
+      label: "invalid TLS fingerprint",
+      url: "wss://gateway.example:18789",
+      tlsFingerprint: "deadbeef",
+      expectedMessage: "gateway tls fingerprint must be a SHA-256 fingerprint",
+    },
   ])("does not retry $label", async ({ url, tlsFingerprint, expectedMessage }) => {
     vi.useFakeTimers();
     const onConnectError = vi.fn<(error: Error) => void>();
@@ -289,7 +394,7 @@ describe("GatewayClient socket factory recovery", () => {
       hostDeps: { beforeConnect },
     });
 
-    expect(() => client.start()).not.toThrow();
+    client.start();
     expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ message: expect.stringContaining(expectedMessage) }),
     );

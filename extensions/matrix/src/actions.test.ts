@@ -11,27 +11,8 @@ const runtimeStub = {
   config: {
     current: () => ({}),
   },
-  media: {
-    loadWebMedia: async () => {
-      throw new Error("not used");
-    },
-    mediaKindFromMime: () => "image",
-    isVoiceCompatibleAudio: () => false,
-    getImageMetadata: async () => null,
-    resizeToJpeg: async () => Buffer.from(""),
-  },
   state: {
     resolveStateDir: () => "/tmp/openclaw-matrix-test",
-  },
-  channel: {
-    text: {
-      resolveTextChunkLimit: () => 4000,
-      resolveChunkMode: () => "length",
-      chunkMarkdownText: (text: string) => (text ? [text] : []),
-      chunkMarkdownTextWithMode: (text: string) => (text ? [text] : []),
-      resolveMarkdownTableMode: () => "code",
-      convertMarkdownTables: (text: string) => text,
-    },
   },
 } as unknown as PluginRuntime;
 
@@ -90,7 +71,10 @@ describe("matrixMessageActions", () => {
     if (!schema) {
       throw new Error("matrix schema missing");
     }
-    const properties = (schema as { properties?: Record<string, unknown> }).properties ?? {};
+    const profileSchema = Array.isArray(schema)
+      ? schema.find((contribution) => contribution.actions?.includes("set-profile"))
+      : schema;
+    const properties = profileSchema?.properties ?? {};
 
     expect(actions).toContain(profileAction);
     expect(supportsAction({ action: profileAction } as never)).toBe(true);
@@ -108,6 +92,32 @@ describe("matrixMessageActions", () => {
     expect(properties.displayName).toHaveProperty("type", "string");
     expect(properties.avatarUrl).toHaveProperty("type", "string");
     expect(properties.avatarPath).toHaveProperty("type", "string");
+  });
+
+  it("advertises custom-emote discovery and its reaction hint only when reactions are enabled", () => {
+    const cfg = createConfiguredMatrixConfig();
+    const enabled = matrixMessageActions.describeMessageTool({ cfg } as never);
+    const disabled = matrixMessageActions.describeMessageTool({
+      cfg: {
+        channels: {
+          matrix: { ...cfg.channels?.matrix, actions: { reactions: false } },
+        },
+      },
+    } as never);
+
+    expect(enabled?.actions).toContain("emoji-list");
+    expect(matrixMessageActions.supportsAction?.({ action: "emoji-list" } as never)).toBe(true);
+    expect(enabled?.schema).toMatchObject({
+      actions: ["react", "reactions"],
+      properties: {
+        emoji: {
+          description: expect.stringContaining('action:"emoji-list"'),
+        },
+      },
+    });
+    expect(disabled?.actions).not.toContain("emoji-list");
+    expect(disabled?.actions).not.toContain("react");
+    expect(disabled?.schema).toBeNull();
   });
 
   it("hides self-profile updates without owner identity context", () => {
@@ -270,7 +280,9 @@ describe("matrixMessageActions", () => {
 
     expect(assistantActions).not.toContain("react");
     expect(assistantActions).not.toContain("reactions");
+    expect(assistantActions).not.toContain("emoji-list");
     expect(opsActions).toContain("react");
     expect(opsActions).toContain("reactions");
+    expect(opsActions).toContain("emoji-list");
   });
 });

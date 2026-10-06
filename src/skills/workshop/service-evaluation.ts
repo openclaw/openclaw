@@ -19,13 +19,11 @@ import {
   readSkillProposalTargetTreeSha256,
 } from "./proposal-bundle.js";
 import { readRequiredProposal } from "./service-query.js";
+import { captureSkillWorkshopStoreOptions } from "./store-client.js";
 import { readSkillProposalEvents, recordSkillProposalEvaluation } from "./store-evaluation.js";
 import { assertSkillProposalEvaluationWithinLimit } from "./store-record.js";
-import {
-  hashSkillProposalContent,
-  readProposalSupportFiles,
-  withSkillProposalTargetLock,
-} from "./store.js";
+import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
+import { hashSkillProposalContent, withSkillProposalTargetLock } from "./store.js";
 import type {
   SkillProposalEvaluateInput,
   SkillProposalEvaluateResult,
@@ -39,25 +37,38 @@ const MAX_EVALUATION_METRICS = 64;
 
 export class SkillProposalCreateTargetConflictError extends Error {}
 
+export class SkillProposalRevisionChangedError extends Error {
+  constructor(
+    readonly expectedRevisionHash: string,
+    readonly currentRevisionHash: string,
+  ) {
+    super(
+      `Skill proposal revision changed (expected ${expectedRevisionHash}, current ${currentRevisionHash}); reload and retry.`,
+    );
+    this.name = "SkillProposalRevisionChangedError";
+  }
+}
+
 export async function evaluateSkillProposal(
   input: SkillProposalEvaluateInput,
+  options: SkillWorkshopStoreOptions = {},
 ): Promise<SkillProposalEvaluateResult> {
-  const correlationId = normalizeSkillProposalCorrelationId(input.correlationId);
+  const store = captureSkillWorkshopStoreOptions({
+    ...options,
+    env: options.env ?? input.env,
+    agentId: input.agentId,
+    config: input.config,
+  });
+  const request = { ...input, env: store.env, eventActor: structuredClone(input.eventActor) };
+  const correlationId = normalizeSkillProposalCorrelationId(request.correlationId);
   const shouldRunEvaluators = hasSkillProposalEvaluators();
-  const initial = await readRequiredProposal(
-    input.proposalId,
-    input.workspaceDir,
-    input.env,
-    input.agentId,
-  );
+  const initial = await readRequiredProposal(request.proposalId, store);
   const snapshot = await withSkillProposalTargetLock(
     initial.record,
-    async () => {
+    async (lockedStore) => {
       const read = await readRequiredProposal(
-        input.proposalId,
-        input.workspaceDir,
-        input.env,
-        input.agentId,
+        request.proposalId,
+        { ...lockedStore, config: request.config },
         { reconcile: false },
       );
       if (read.record.status !== "pending") {
@@ -65,11 +76,10 @@ export async function evaluateSkillProposal(
           `Only pending proposals can be evaluated. Current status: ${read.record.status}.`,
         );
       }
-      assertExpectedRevisionHash(read.revisionHash, input.expectedRevisionHash);
+      assertExpectedRevisionHash(read.revisionHash, request.expectedRevisionHash);
       if (hashSkillProposalContent(read.content) !== read.record.draftHash) {
         throw new Error("Proposal draft changed without updating proposal metadata.");
       }
-      const supportFiles = await readProposalSupportFiles(read.record, storeOptions(input.env));
       if (
         shouldRunEvaluators &&
         read.record.kind === "create" &&
@@ -84,12 +94,12 @@ export async function evaluateSkillProposal(
         bundles: shouldRunEvaluators
           ? await buildSkillProposalEvaluationBundles({
               proposal: read,
-              supportFiles,
+              supportFiles: read.supportFiles ?? [],
             })
           : undefined,
       };
     },
-    storeOptions(input.env),
+    store,
   );
   const { read, bundles } = snapshot;
   const startedAt = new Date().toISOString();
@@ -114,11 +124,11 @@ export async function evaluateSkillProposal(
           },
           candidate: bundles.candidate,
           ...(bundles.baseline ? { baseline: bundles.baseline } : {}),
-          reason: input.trigger === "apply" ? "apply" : "manual",
+          reason: request.trigger === "apply" ? "apply" : "manual",
         },
         {
-          workspaceDir: input.workspaceDir,
-          ...(input.agentId ? { agentId: input.agentId } : {}),
+          workspaceDir: request.workspaceDir,
+          ...(request.agentId ? { agentId: request.agentId } : {}),
         },
       )
     : [];
@@ -127,7 +137,7 @@ export async function evaluateSkillProposal(
     id: randomUUID(),
     proposedVersion: read.record.proposedVersion,
     revisionHash: read.revisionHash,
-    trigger: input.trigger ?? ("manual" as const),
+    trigger: request.trigger ?? ("manual" as const),
     startedAt,
     completedAt,
     ...(correlationId ? { correlationId } : {}),
@@ -139,7 +149,7 @@ export async function evaluateSkillProposal(
   const eventInput = createSkillProposalEvent({
     record: pendingRecord,
     type: "evaluation_completed",
-    actor: input.eventActor,
+    actor: request.eventActor,
     ...(correlationId ? { correlationId } : {}),
     occurredAt: completedAt,
     payload: {
@@ -151,12 +161,10 @@ export async function evaluateSkillProposal(
   });
   const stored = await withSkillProposalTargetLock(
     read.record,
-    async () => {
+    async (lockedStore) => {
       const current = await readRequiredProposal(
-        input.proposalId,
-        input.workspaceDir,
-        input.env,
-        input.agentId,
+        request.proposalId,
+        { ...lockedStore, config: request.config },
         { reconcile: false },
       );
       if (
@@ -165,11 +173,6 @@ export async function evaluateSkillProposal(
         current.revisionHash !== read.revisionHash ||
         hashSkillProposalContent(current.content) !== current.record.draftHash
       ) {
-        throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
-      }
-      try {
-        await readProposalSupportFiles(current.record, storeOptions(input.env));
-      } catch {
         throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
       }
       if (bundles) {
@@ -191,33 +194,35 @@ export async function evaluateSkillProposal(
         expectedRevisionHash: read.revisionHash,
         evaluation,
         event: eventInput,
-        store: storeOptions(input.env),
+        store: lockedStore,
       });
     },
-    storeOptions(input.env),
+    store,
   );
   await dispatchSkillProposalChanged({
     event: stored.event,
     record: stored.record,
-    workspaceDir: input.workspaceDir,
-    ...(input.agentId ? { agentId: input.agentId } : {}),
+    workspaceDir: request.workspaceDir,
+    ...(request.agentId ? { agentId: request.agentId } : {}),
     evaluations: evaluation.outcomes,
   });
   return { record: stored.record, evaluation };
 }
 
-export function listSkillProposalEvents(
+export async function listSkillProposalEvents(
   input: SkillProposalEventsListInput,
-): SkillProposalEventsListResult {
-  return readSkillProposalEvents(input, storeOptions(input.env));
+): Promise<SkillProposalEventsListResult> {
+  return await readSkillProposalEvents(input, {
+    env: input.env,
+    agentId: input.agentId,
+    config: input.config,
+  });
 }
 
 export function assertExpectedRevisionHash(actual: string, expected?: string): void {
   const normalized = normalizeOptionalString(expected);
   if (normalized && normalized !== actual) {
-    throw new Error(
-      `Skill proposal revision changed (expected ${normalized}, current ${actual}); reload and retry.`,
-    );
+    throw new SkillProposalRevisionChangedError(normalized, actual);
   }
 }
 
@@ -361,8 +366,4 @@ function boundedRequired(value: string, maxLength: number, fallback: string): st
 function boundedOptional(value: string | undefined, maxLength: number): string | undefined {
   const normalized = normalizeOptionalString(value);
   return normalized === undefined ? undefined : truncateUtf16Safe(normalized, maxLength);
-}
-
-function storeOptions(env?: NodeJS.ProcessEnv) {
-  return env ? { env } : {};
 }

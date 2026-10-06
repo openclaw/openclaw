@@ -42,6 +42,42 @@ describe("imessage config schema", () => {
     }
   });
 
+  it("accepts optional bot-thread mention overrides in root and account group maps", () => {
+    const result = IMessageConfigSchema.parse({
+      groups: { "*": { requireMention: true, requireMentionInBotThreads: false } },
+      accounts: {
+        work: { groups: { "123": { requireMentionInBotThreads: true } } },
+      },
+    });
+    expect(result.groups?.["*"]?.requireMentionInBotThreads).toBe(false);
+    expect(result.accounts?.work?.groups?.["123"]?.requireMentionInBotThreads).toBe(true);
+    expect(IMessageConfigSchema.parse({ groups: { "*": {} } }).groups?.["*"]).not.toHaveProperty(
+      "requireMentionInBotThreads",
+    );
+  });
+
+  it.each([
+    { scope: "channel", config: { joinIntro: false }, path: [] },
+    {
+      scope: "account",
+      config: { accounts: { personal: { joinIntro: false } } },
+      path: ["accounts", "personal"],
+    },
+  ])("rejects unsupported $scope join introductions", ({ config, path }) => {
+    const res = IMessageConfigSchema.safeParse(config);
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues).toContainEqual(
+        expect.objectContaining({
+          code: "unrecognized_keys",
+          keys: ["joinIntro"],
+          path,
+        }),
+      );
+    }
+  });
+
   it("accepts historyLimit", () => {
     const res = IMessageConfigSchema.safeParse({ historyLimit: 5 });
 

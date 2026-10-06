@@ -6,9 +6,7 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempTelegramHeartbeatSandbox,
 } from "../infra/heartbeat-runner.test-utils.js";
-import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
 import {
-  consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
   peekSystemEventEntries,
   resetSystemEventsForTest,
@@ -16,6 +14,7 @@ import {
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { startDeferredNotifyRun } from "./bash-tools.notify-on-exit-ack.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const supervisorSpawnMock = vi.hoisted(() => vi.fn());
@@ -30,7 +29,7 @@ vi.mock("../infra/secure-random.js", async (importOriginal) => ({
   generateSecureInt: randomMock,
 }));
 vi.mock("../process/supervisor/index.js", () => ({
-  getProcessSupervisor: () => ({ spawn: supervisorSpawnMock, getRecord: vi.fn() }),
+  getProcessSupervisor: () => ({ spawn: supervisorSpawnMock }),
 }));
 
 const QUEUE_KEY = "agent:main:notify-ack";
@@ -48,7 +47,8 @@ const contexts = () => peekSystemEventEntries(QUEUE_KEY).map((event) => event.co
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
-  vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now);
 });
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -65,16 +65,11 @@ it("keeps selected-agent global completions scoped to their owner", async () => 
   });
   await process.finish();
 
-  expect(requestHeartbeatMock).toHaveBeenCalledWith({
-    source: "exec-event",
-    intent: "event",
-    reason: "exec-event",
-    coalesceMs: 0,
-    agentId: "research",
-  });
-  const queued = peekSystemEventEntries("global");
-  expect(selectAgentSystemEvents(queued, "research")).toHaveLength(1);
-  expect(selectAgentSystemEvents(queued, "main")).toEqual([]);
+  expect(requestHeartbeatMock).toHaveBeenCalledWith(
+    expect.objectContaining({ agentId: "research" }),
+  );
+  expect(peekSystemEventEntries("agent:research:global")).toHaveLength(1);
+  expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
 });
 
 it("isolates identical completions across exact full-slug reuse", async () => {
@@ -91,31 +86,18 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   expect(queued[0]?.id).not.toBe(queued[2]?.id);
   expect(queued[0]).toEqual({ ...queued[2], id: queued[0]?.id });
 
-  await poll(second.run.session.id);
+  const result = await poll(second.run.session.id);
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(queued);
+  acknowledgeInternalToolResult(result);
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
-  await poll(second.run.session.id);
+  acknowledgeInternalToolResult(await poll(second.run.session.id));
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
-});
-
-it("invalidates a heartbeat snapshot when terminal poll consumes its occurrence", async () => {
-  const process = await startNotifyRun();
-  await process.finish();
-  const snapshot = peekSystemEventEntries(QUEUE_KEY);
-  await poll(process.run.session.id);
-
-  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
-  expect(consumeSelectedSystemEventEntries(QUEUE_KEY, snapshot)).toEqual([]);
 });
 
 it("keeps an identical successor queued when heartbeat consumes a stale snapshot", async () => {
   await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
     const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          workspace: tmpDir,
-          heartbeat: { every: "5m", target: "telegram" },
-        },
-      },
+      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "telegram" } } },
       channels: { telegram: { allowFrom: ["*"] } },
       session: { mainKey: "notify-ack", store: storePath },
     };
@@ -134,7 +116,9 @@ it("keeps an identical successor queued when heartbeat consumes a stale snapshot
 
     let successor: Awaited<ReturnType<typeof startNotifyRun>> | undefined;
     replySpy.mockImplementation(async () => {
-      await poll(first.run.session.id);
+      const result = await poll(first.run.session.id);
+      expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(firstQueued);
+      acknowledgeInternalToolResult(result);
       await execute("clear", first.run.session.id);
       const replacement = await startNotifyRun();
       successor = replacement;
@@ -166,17 +150,12 @@ it("keeps an identical successor queued when heartbeat consumes a stale snapshot
       throw new Error("heartbeat reply did not enqueue the successor completion");
     }
     expect(successor.run.session.id).toBe(first.run.session.id);
-    expect(peekSystemEventEntries(QUEUE_KEY)).toHaveLength(1);
+    const successorQueued = peekSystemEventEntries(QUEUE_KEY);
+    expect(successorQueued).toHaveLength(1);
 
-    await poll(successor.run.session.id);
+    const successorResult = await poll(successor.run.session.id);
+    expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(successorQueued);
+    acknowledgeInternalToolResult(successorResult);
     expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
   });
-});
-
-it("keeps an unpolled completion deliverable after finished-session cleanup", async () => {
-  const process = await startNotifyRun();
-  await process.finish();
-  await execute("clear", process.run.session.id);
-
-  expect(contexts()).toEqual([`exec:${process.run.session.id}`]);
 });

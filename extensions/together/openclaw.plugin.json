@@ -1,5 +1,6 @@
 {
   "id": "together",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -40,6 +41,9 @@
     "videoGenerationProviders": ["together"]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "together": "togetherai"
+    },
     "providers": {
       "together": {
         "baseUrl": "https://api.together.xyz/v1",

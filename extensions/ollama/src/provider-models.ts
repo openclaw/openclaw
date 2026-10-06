@@ -1,20 +1,23 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   isCloudModelRef,
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  isHostedOllamaCloud,
   OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
   OLLAMA_DEFAULT_MAX_TOKENS,
   OLLAMA_LOCAL_CONTEXT_TOKENS,
+  normalizeOllamaCloudModelId,
 } from "./defaults.js";
 import { supportsOllamaCloudFullThinkingEffort } from "./model-reasoning.js";
 
@@ -24,7 +27,10 @@ export type OllamaTagModel = {
   size?: number;
   digest?: string;
   remote_host?: string;
+  remote_model?: string;
+  capabilities?: string[];
   details?: {
+    context_length?: number;
     family?: string;
     parameter_size?: string;
     quantization_level?: string;
@@ -42,11 +48,8 @@ type OllamaRunningModel = {
 
 type OllamaModelRow = OllamaTagModel | OllamaRunningModel;
 
-export type OllamaModelWithContext = OllamaTagModel & {
-  contextWindow?: number;
-  capabilities?: string[];
-  showInspectionFailed?: boolean;
-};
+export type OllamaModelWithContext = OllamaTagModel &
+  OllamaModelShowInfo & { capabilitiesFromList?: boolean };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
@@ -62,21 +65,18 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   if (!trimmed) {
     return undefined;
   }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    if (OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)) {
-      return undefined;
-    }
-    return {
-      hostnameAllowlist: [parsed.hostname],
-      allowPrivateNetwork: true,
-    };
-  } catch {
+  const parsed = URL.parse(trimmed);
+  if (
+    !parsed ||
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)
+  ) {
     return undefined;
   }
+  return {
+    hostnameAllowlist: [parsed.hostname],
+    allowPrivateNetwork: true,
+  };
 }
 
 export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
@@ -94,6 +94,32 @@ export type OllamaModelShowInfo = {
   showInspectionFailed?: boolean;
 };
 
+export const mergeOllamaModelShowInfo = (
+  model: OllamaModelWithContext,
+  info: OllamaModelShowInfo,
+): OllamaModelWithContext => {
+  const incomplete =
+    info.capabilities === undefined &&
+    model.capabilities !== undefined &&
+    isOllamaRemoteModel(model) &&
+    !isOllamaEmbeddingOnlyModel(model);
+  return {
+    ...model,
+    ...info,
+    contextWindow: info.contextWindow ?? model.contextWindow ?? model.details?.context_length,
+    capabilities: incomplete
+      ? [
+          ...new Set([
+            ...(model.capabilities ?? []),
+            ...(info.showInspectionFailed ? [] : ["tools"]),
+            ...(isReasoningModelHeuristic(model.name) ? ["thinking"] : []),
+          ]),
+        ]
+      : (info.capabilities ?? model.capabilities),
+    ...(incomplete ? { capabilitiesFromList: true } : {}),
+  };
+};
+
 const OLLAMA_FAILED_SHOW_INFO: OllamaModelShowInfo = Object.freeze({
   showInspectionFailed: true,
 });
@@ -102,6 +128,7 @@ type OllamaModelRequestOptions = {
   apiKey?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  discoveryMode?: "strict";
 };
 
 type OllamaModelShowRequestOptions = OllamaModelRequestOptions & {
@@ -286,20 +313,23 @@ export async function queryOllamaContextWindow(
 export async function enrichOllamaModelsWithContext(
   apiBase: string,
   models: OllamaTagModel[],
-  opts?: OllamaModelRequestOptions & { concurrency?: number },
+  opts?: OllamaModelRequestOptions,
 ): Promise<OllamaModelWithContext[]> {
-  const concurrency = Math.max(1, Math.floor(opts?.concurrency ?? OLLAMA_SHOW_CONCURRENCY));
   const enriched: OllamaModelWithContext[] = [];
-  for (let index = 0; index < models.length; index += concurrency) {
+  for (let index = 0; index < models.length; index += OLLAMA_SHOW_CONCURRENCY) {
     throwIfOllamaRequestAborted(opts?.signal);
-    const batch = models.slice(index, index + concurrency);
-    const batchResults = await Promise.all(
-      batch.map(async (model) => {
-        const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, opts);
-        return Object.assign({}, model, showInfo);
-      }),
-    );
-    enriched.push(...batchResults);
+    const batch = models.slice(index, index + OLLAMA_SHOW_CONCURRENCY);
+    const probes = batch.map(async (model) => {
+      const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, opts);
+      return mergeOllamaModelShowInfo(model, showInfo);
+    });
+    try {
+      enriched.push(...(await Promise.all(probes)));
+    } catch (error) {
+      // A canceled probe must join sibling HTTP cleanup before the node becomes idle.
+      await Promise.allSettled(probes);
+      throw error;
+    }
   }
   return enriched;
 }
@@ -324,7 +354,12 @@ export async function enrichOllamaCompletionModels(
     );
     for (const model of batch) {
       const canComplete = model.capabilities?.includes("completion");
-      if (!canComplete && (opts?.requireCompletionCapability || model.capabilities)) {
+      if (
+        isOllamaEmbeddingOnlyModel(model) ||
+        (!canComplete &&
+          (opts?.requireCompletionCapability ||
+            (model.capabilities && !model.capabilitiesFromList)))
+      ) {
         continue;
       }
       completionModels.push(model);
@@ -340,6 +375,33 @@ export function isOllamaCloudModel(modelName: string | undefined): boolean {
   return isCloudModelRef(modelName);
 }
 
+export function isOllamaEmbeddingOnlyModel(model: OllamaTagModel): boolean {
+  // Advertised tools do not turn an embedding-only row into a chat model.
+  return (
+    model.capabilities?.includes("embedding") === true && !model.capabilities.includes("completion")
+  );
+}
+
+export function isOllamaRemoteModel(model: OllamaTagModel): boolean {
+  // Remote stubs can identify only the upstream model, without a host or cloud suffix.
+  return (
+    Boolean(model.remote_host?.trim() || model.remote_model?.trim()) ||
+    isOllamaCloudModel(model.name)
+  );
+}
+
+/**
+ * Cloud models are referenced both bare (`kimi-k3`) and suffixed (`kimi-k3:cloud`).
+ * Both spellings must reach the same known context window, or a suffixed ref silently
+ * falls back to the generic default whenever live inspection is unavailable.
+ */
+function resolveOllamaCloudDefaultModel(
+  modelId: string,
+): (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number] | undefined {
+  const normalized = normalizeOllamaCloudModelId(modelId);
+  return OLLAMA_CLOUD_DEFAULT_MODELS.find((model) => model.id === normalized);
+}
+
 export function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
@@ -350,35 +412,26 @@ export function buildOllamaModelDefinition(
   capabilities?: string[],
   opts?: { showInspectionFailed?: boolean },
 ): ModelDefinitionConfig {
-  const hasVision = capabilities?.includes("vision") ?? false;
-  const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
-  const reasoning =
-    supportsOllamaCloudFullThinkingEffort(modelId) ||
-    (capabilities === undefined
-      ? isReasoningModelHeuristic(modelId)
-      : capabilities.includes("thinking"));
-  const compat = {
-    supportsTools:
-      opts?.showInspectionFailed === true ? false : (capabilities?.includes("tools") ?? true),
-    supportsUsageInStreaming: true,
-    supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
-  };
   return {
     id: modelId,
     name: modelId,
-    reasoning,
-    input,
+    reasoning:
+      supportsOllamaCloudFullThinkingEffort(modelId) ||
+      (capabilities === undefined
+        ? isReasoningModelHeuristic(modelId)
+        : capabilities.includes("thinking")),
+    input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
     cost: OLLAMA_DEFAULT_COST,
     contextWindow:
       contextWindow ??
-      (modelId
-        .trim()
-        .toLowerCase()
-        .replace(/:cloud$/, "") === "glm-5.2"
-        ? 1_000_000
-        : OLLAMA_DEFAULT_CONTEXT_WINDOW),
+      resolveOllamaCloudDefaultModel(modelId)?.contextWindow ??
+      OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-    compat,
+    compat: {
+      supportsTools: capabilities?.includes("tools") ?? opts?.showInspectionFailed !== true,
+      supportsUsageInStreaming: true,
+      supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
+    },
   };
 }
 
@@ -394,8 +447,16 @@ export function buildDefaultOllamaCloudModelDefinition(
   };
 }
 
-export function capLocalOllamaModelContext(model: ModelDefinitionConfig): ModelDefinitionConfig {
-  if (isOllamaCloudModel(model.id) || typeof model.contextWindow !== "number") {
+export function capLocalOllamaModelContext(
+  model: ModelDefinitionConfig,
+  baseUrl: string,
+): ModelDefinitionConfig {
+  // Direct hosted routes use bare model IDs; their context is not a local KV allocation.
+  if (
+    isHostedOllamaCloud(baseUrl) ||
+    isOllamaCloudModel(model.id) ||
+    typeof model.contextWindow !== "number"
+  ) {
     return model;
   }
   return {
@@ -409,21 +470,14 @@ export function capLocalOllamaModelContext(model: ModelDefinitionConfig): ModelD
 export function capLocalOllamaProviderContext(provider: ModelProviderConfig): ModelProviderConfig {
   return {
     ...provider,
-    models: provider.models?.map(capLocalOllamaModelContext),
+    models: provider.models?.map((model) => capLocalOllamaModelContext(model, provider.baseUrl)),
   };
 }
-
-/** Optional test hooks so discovery can exercise the real guarded-fetch owner. */
-type OllamaModelsFetchDeps = {
-  fetchImpl?: typeof fetch;
-  lookupFn?: LookupFn;
-};
 
 async function fetchOllamaModelRows(params: {
   baseUrl: string;
   endpoint: "ps" | "tags";
   opts?: OllamaModelRequestOptions;
-  deps?: OllamaModelsFetchDeps;
 }): Promise<{ reachable: boolean; models: OllamaModelRow[] }> {
   try {
     const apiBase = resolveOllamaApiBase(params.baseUrl);
@@ -440,27 +494,34 @@ async function fetchOllamaModelRows(params: {
       ...(params.opts?.signal ? { signal: params.opts.signal } : {}),
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
       auditContext,
-      ...(params.deps?.fetchImpl ? { fetchImpl: params.deps.fetchImpl } : {}),
-      ...(params.deps?.lookupFn ? { lookupFn: params.deps.lookupFn } : {}),
     });
     try {
       if (!response.ok) {
         // Capture can retain a cloned tee branch, so cancellation must not delay
         // the guard's bounded dispatcher release.
         void response.body?.cancel().catch(() => undefined);
+        if (params.opts?.discoveryMode === "strict") {
+          throw new LiveModelCatalogHttpError("ollama", response.status);
+        }
         return { reachable: true, models: [] };
       }
       const data = await readProviderJsonResponse<{ models?: OllamaModelRow[] }>(
         response,
         auditContext,
       );
+      if (params.opts?.discoveryMode === "strict" && !Array.isArray(data.models)) {
+        throw new Error("Ollama model discovery response must contain models[]");
+      }
       const models = Array.isArray(data.models) ? data.models : [];
       return { reachable: true, models };
     } finally {
       await release();
     }
-  } catch {
+  } catch (error) {
     throwIfOllamaRequestAborted(params.opts?.signal);
+    if (params.opts?.discoveryMode === "strict") {
+      throw error;
+    }
     return { reachable: false, models: [] };
   }
 }
@@ -468,14 +529,8 @@ async function fetchOllamaModelRows(params: {
 export async function fetchOllamaModels(
   baseUrl: string,
   opts?: OllamaModelRequestOptions,
-  deps?: OllamaModelsFetchDeps,
 ): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
-  const result = await fetchOllamaModelRows({
-    baseUrl,
-    endpoint: "tags",
-    opts,
-    deps,
-  });
+  const result = await fetchOllamaModelRows({ baseUrl, endpoint: "tags", opts });
   return {
     reachable: result.reachable,
     models: result.models.filter(
@@ -487,14 +542,8 @@ export async function fetchOllamaModels(
 export async function fetchLoadedOllamaModelNames(
   baseUrl: string,
   opts?: OllamaModelRequestOptions,
-  deps?: OllamaModelsFetchDeps,
 ): Promise<{ reachable: boolean; models: string[] }> {
-  const result = await fetchOllamaModelRows({
-    baseUrl,
-    endpoint: "ps",
-    opts,
-    deps,
-  });
+  const result = await fetchOllamaModelRows({ baseUrl, endpoint: "ps", opts });
   return {
     reachable: result.reachable,
     models: result.models
@@ -511,11 +560,11 @@ export async function fetchLoadedOllamaModelNames(
 
 export async function buildOllamaProvider(
   configuredBaseUrl?: string,
-  opts?: { apiKey?: string; quiet?: boolean },
+  opts?: { apiKey?: string; quiet?: boolean; discoveryMode?: "strict" },
 ): Promise<ModelProviderConfig> {
   const apiBase = resolveOllamaApiBase(configuredBaseUrl);
   const auth = opts?.apiKey ? { apiKey: opts.apiKey } : undefined;
-  const { reachable, models } = await fetchOllamaModels(apiBase, auth);
+  const { reachable, models } = await fetchOllamaModels(apiBase, opts);
   if (!reachable && !opts?.quiet) {
     console.warn(`Ollama could not be reached at ${apiBase}.`);
   }

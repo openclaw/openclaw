@@ -19,6 +19,10 @@ export type FenceScanState = {
   };
 };
 
+// LF alone defines scanner lines; consume CRLF's CR for raw offsets, not opener text.
+const FENCE_LINE_RE = /(?:^|\n)( {0,3})(`{3,}|~{3,})([^\r\n\u2028\u2029]*)\r?(?=\n|$)/g;
+const SINGLE_LINE_FENCE_RE = new RegExp(FENCE_LINE_RE, "gy");
+
 /** Scans fenced-code spans incrementally so chunking can carry an open fence forward. */
 export function scanFenceSpans(
   buffer: string,
@@ -26,67 +30,49 @@ export function scanFenceSpans(
 ): { spans: FenceSpan[]; state: FenceScanState } {
   const spans: FenceSpan[] = [];
   const startsAtLineStart = state?.atLineStart ?? true;
-  let open:
-    | {
-        start: number;
-        markerChar: string;
-        markerLen: number;
-        openLine: string;
-        marker: string;
-        indent: string;
-      }
-    | undefined = state?.open ? { ...state.open, start: 0 } : undefined;
+  let open: (NonNullable<FenceScanState["open"]> & { start: number }) | undefined = state?.open
+    ? { ...state.open, start: 0 }
+    : undefined;
 
-  let offset = 0;
-  while (offset <= buffer.length) {
-    const nextNewline = buffer.indexOf("\n", offset);
-    const lineEnd = nextNewline === -1 ? buffer.length : nextNewline;
-    const line = buffer.slice(offset, lineEnd).replace(/\r$/, "");
-
-    const match = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
-    if (match && (offset > 0 || startsAtLineStart)) {
-      const [, indent, marker, trailing] = match;
-      if (indent === undefined || marker === undefined || trailing === undefined) {
-        if (nextNewline === -1) {
-          break;
-        }
-        offset = nextNewline + 1;
-        continue;
-      }
-      const markerChar = marker.charAt(0);
-      const markerLen = marker.length;
-      if (!open) {
-        open = {
-          start: offset,
-          markerChar,
-          markerLen,
-          openLine: line,
-          marker,
-          indent,
-        };
-      } else if (
-        open.markerChar === markerChar &&
-        markerLen >= open.markerLen &&
-        /^[ \t]*$/.test(trailing)
-      ) {
-        // CommonMark permits only spaces or tabs after a closing fence. A marker line carrying
-        // other trailing text is code content, not a close, so it must not end the block.
-        const end = lineEnd;
-        spans.push({
-          start: open.start,
-          end,
-          openLine: open.openLine,
-          marker: open.marker,
-          indent: open.indent,
-        });
-        open = undefined;
-      }
+  // Without LF, only offset zero can be a fence. Sticky matching skips long prose,
+  // including inline marker literals; matchAll leaves both shared patterns untouched.
+  const pattern = buffer.includes("\n") ? FENCE_LINE_RE : SINGLE_LINE_FENCE_RE;
+  for (const match of buffer.matchAll(pattern)) {
+    const [, indent, marker, trailing] = match;
+    if (indent === undefined || marker === undefined || trailing === undefined) {
+      continue;
     }
-
-    if (nextNewline === -1) {
-      break;
+    const start = match.index + (match[0].startsWith("\n") ? 1 : 0);
+    if (start === 0 && !startsAtLineStart) {
+      continue;
     }
-    offset = nextNewline + 1;
+    const markerChar = marker.charAt(0);
+    const markerLen = marker.length;
+    if (!open) {
+      open = {
+        start,
+        markerChar,
+        markerLen,
+        openLine: `${indent}${marker}${trailing}`,
+        marker,
+        indent,
+      };
+    } else if (
+      open.markerChar === markerChar &&
+      markerLen >= open.markerLen &&
+      /^[ \t]*$/.test(trailing)
+    ) {
+      // CommonMark permits only spaces or tabs after a closing fence. A marker line carrying
+      // other trailing text is code content, not a close, so it must not end the block.
+      spans.push({
+        start: open.start,
+        end: match.index + match[0].length,
+        openLine: open.openLine,
+        marker: open.marker,
+        indent: open.indent,
+      });
+      open = undefined;
+    }
   }
 
   if (open) {
@@ -122,8 +108,11 @@ export function parseFenceSpans(buffer: string): FenceSpan[] {
   return scanFenceSpans(buffer).spans;
 }
 
-/** Looks up the fence containing an offset; spans must be sorted by start offset. */
-export function findFenceSpanAt(spans: FenceSpan[], index: number): FenceSpan | undefined {
+/** Looks up the span containing an offset; spans must be sorted by start offset. */
+export function findFenceSpanAt<T extends Pick<FenceSpan, "start" | "end">>(
+  spans: readonly T[],
+  index: number,
+): T | undefined {
   let low = 0;
   let high = spans.length - 1;
 
@@ -147,7 +136,10 @@ export function findFenceSpanAt(spans: FenceSpan[], index: number): FenceSpan | 
   return undefined;
 }
 
-/** True when a chunk boundary would not split a fenced-code block. */
-export function isSafeFenceBreak(spans: FenceSpan[], index: number): boolean {
+/** True when a chunk boundary would not split any of the given spans. */
+export function isSafeFenceBreak(
+  spans: readonly Pick<FenceSpan, "start" | "end">[],
+  index: number,
+): boolean {
   return !findFenceSpanAt(spans, index);
 }

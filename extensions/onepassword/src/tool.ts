@@ -1,12 +1,16 @@
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  asNonArrayRecord,
+  asRecord,
+  isRecord,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import type {
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
 } from "openclaw/plugin-sdk/types";
 import { parseToolInput, type OnePasswordBroker } from "./broker.js";
-import { OnePasswordError } from "./errors.js";
 import { AUTHORIZATION_NONCE_PARAM } from "./pending-authorization.js";
 
 const OnePasswordToolSchema = {
@@ -35,15 +39,10 @@ const OnePasswordToolSchema = {
       description: "Internal. Injected by the gateway policy layer; never set this manually.",
     },
   },
-} as unknown as AnyAgentTool["parameters"];
+} satisfies AnyAgentTool["parameters"];
 
 function errorResult(error: unknown) {
-  const code =
-    error instanceof OnePasswordError
-      ? error.code
-      : error && typeof error === "object" && "code" in error && typeof error.code === "string"
-        ? error.code
-        : "OP_ERROR";
+  const code = readStringField(asRecord(error), "code") ?? "OP_ERROR";
   const message = error instanceof Error ? error.message : "1Password request failed";
   return jsonResult({ ok: false, error: { code, message } });
 }
@@ -59,10 +58,7 @@ export function redactPersistedOnePasswordResult(
   }
   const details = event.message.details;
   const contentText = event.message.content
-    .filter(
-      (part): part is Extract<(typeof event.message.content)[number], { type: "text" }> =>
-        part.type === "text",
-    )
+    .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("\n");
   const hasSecretValue =
@@ -81,8 +77,7 @@ export function redactPersistedOnePasswordResult(
   return {
     message: {
       ...event.message,
-      content: [{ type: "text", text: JSON.stringify(persisted, null, 2) }],
-      details: persisted,
+      ...jsonResult(persisted),
     },
   };
 }
@@ -98,10 +93,7 @@ export function createOnePasswordTool(
       "List curated 1Password secret slugs or retrieve one secret under its configured access policy.",
     parameters: OnePasswordToolSchema,
     execute: async (toolCallId, rawParams) => {
-      const params =
-        rawParams && typeof rawParams === "object" && !Array.isArray(rawParams)
-          ? (rawParams as Record<string, unknown>)
-          : {};
+      const params = asNonArrayRecord(rawParams);
       try {
         const input = parseToolInput(params);
         if (input.action === "list") {
@@ -117,4 +109,3 @@ export function createOnePasswordTool(
     },
   };
 }
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

@@ -10,7 +10,6 @@ import {
   makeCompletionsModel,
   streamChunks,
 } from "./openai-completions.test-support.js";
-import { getCompat } from "./openai-transport-params.js";
 
 describe("openai completions DSML", () => {
   it("fails before a later DSML call after overflow can be authorized", async () => {
@@ -243,36 +242,6 @@ describe("openai completions DSML", () => {
     ]);
   });
 
-  it.each([
-    { finishReason: "length", stopReason: "length" },
-    { finishReason: "content_filter", stopReason: "error" },
-  ])(
-    "does not authorize recovered DeepSeek DSML calls after $finishReason",
-    async ({ finishReason, stopReason }) => {
-      const model = createDeepSeekCompletionsModel();
-      const output = createAssistantOutput(model);
-      expect(getCompat(model).thinkingFormat).toBe("deepseek");
-
-      await processCompletionsStream(
-        streamChunks([
-          makeCompletionsChunk(
-            {
-              content:
-                '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
-            },
-            finishReason,
-          ),
-        ]),
-        output,
-        model,
-        { push() {} },
-      );
-
-      expect(output.stopReason).toBe(stopReason);
-      expect(output.content).toEqual([]);
-    },
-  );
-
   it("does not authorize recovered DeepSeek DSML calls when the stream omits a terminal", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
@@ -293,7 +262,14 @@ describe("openai completions DSML", () => {
     expect(output.content).toEqual([]);
   });
 
-  it("emits recovered DeepSeek content-filter terminals as errors", async () => {
+  it.each([
+    { finishReason: "stop", allowed: true, code: 'return "ready";' },
+    { finishReason: "length", allowed: false, code: 'return "ready";' },
+    { finishReason: "content_filter", allowed: false, code: 'return "ready";' },
+    { finishReason: "stop", allowed: true, code: "" },
+    { finishReason: "length", allowed: false, code: "" },
+    { finishReason: "content_filter", allowed: false, code: "" },
+  ])("gates HTTP DSML $finishReason '$code'", async ({ finishReason, allowed, code }) => {
     const server = createServer((req, res) => {
       req.resume();
       req.on("end", () => {
@@ -302,17 +278,11 @@ describe("openai completions DSML", () => {
           "cache-control": "no-cache",
           connection: "keep-alive",
         });
-        res.write(
-          `data: ${JSON.stringify(
-            makeCompletionsChunk(
-              {
-                content:
-                  '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
-              },
-              "content_filter",
-            ),
-          )}\n\n`,
-        );
+        const content = `<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="exec"><｜｜DSML｜｜parameter name="code" string="true">${code}</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>`;
+        for (const char of content) {
+          res.write(`data: ${JSON.stringify(makeCompletionsChunk({ content: char }))}\n\n`);
+        }
+        res.write(`data: ${JSON.stringify(makeCompletionsChunk({}, finishReason))}\n\n`);
         res.end("data: [DONE]\n\n");
       });
     });
@@ -329,42 +299,43 @@ describe("openai completions DSML", () => {
         ...createDeepSeekCompletionsModel(),
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
       });
-      const stream = createOpenAICompletionsTransportStreamFn()(
+      const stream = await createOpenAICompletionsTransportStreamFn()(
         model,
         {
           systemPrompt: "system",
           messages: [{ role: "user", content: "Read the file", timestamp: Date.now() }],
           tools: [],
-        } as never,
-        { apiKey: "test-key" } as never,
+        },
+        { apiKey: "test-key" },
       );
 
-      const terminalEvents: Array<{
-        type: string;
-        reason?: string;
-        error?: Record<string, unknown>;
-      }> = [];
-      for await (const event of stream as AsyncIterable<{
-        type: string;
-        reason?: string;
-        error?: Record<string, unknown>;
-      }>) {
-        if (event.type === "done" || event.type === "error") {
-          terminalEvents.push(event);
-        }
+      const events = [];
+      for await (const event of stream) {
+        events.push(event);
       }
-
-      expect(terminalEvents).toEqual([
-        expect.objectContaining({
+      const terminal = events.at(-1);
+      if (finishReason === "content_filter") {
+        expect(terminal).toMatchObject({
           type: "error",
           reason: "error",
-          error: expect.objectContaining({
+          error: {
             stopReason: "error",
             errorMessage: "Provider finish_reason: content_filter",
             content: [],
-          }),
-        }),
-      ]);
+          },
+        });
+      } else {
+        expect(terminal).toMatchObject({
+          type: "done",
+          reason: allowed ? "toolUse" : "length",
+          message: {
+            stopReason: allowed ? "toolUse" : "length",
+            content: allowed ? [{ type: "toolCall", name: "exec", arguments: { code } }] : [],
+          },
+        });
+      }
+      expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(allowed ? 1 : 0);
+      expect(events.filter((event) => event.type === "text_delta")).toEqual([]);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -431,26 +402,63 @@ describe("openai completions DSML", () => {
     ]);
   });
 
-  it("does not recover malformed DeepSeek DSML tool calls", async () => {
+  it.each([
+    {
+      name: "empty arguments",
+      body: '<|DSML|invoke name="read"></|DSML|invoke>',
+    },
+    {
+      name: "empty non-string parameter",
+      body: '<|DSML|invoke name="read"><|DSML|parameter name="path" string="false"></|DSML|parameter></|DSML|invoke>',
+    },
+    {
+      name: "empty parameter without a string attribute",
+      body: '<|DSML|invoke name="read"><|DSML|parameter name="path"></|DSML|parameter></|DSML|invoke>',
+    },
+    {
+      name: "empty non-string parameter with a string attribute inside its name",
+      body: `<|DSML|invoke name="read"><|DSML|parameter name="path string='true' suffix" string="false"></|DSML|parameter></|DSML|invoke>`,
+    },
+    {
+      name: "asymmetric invoke marker",
+      body: '<|DSML｜invoke name="read">{"path":"/tmp/unexecuted"}</|DSML|invoke>',
+    },
+    {
+      name: "foreign invoke close",
+      body: '<|DSML|invoke name="read">{"path":"/tmp/unexecuted"}</｜DSML｜invoke>',
+    },
+    {
+      name: "asymmetric parameter marker",
+      body: '<|DSML|invoke name="read"><|DSML｜parameter name="path">/tmp/unexecuted</|DSML|parameter></|DSML|invoke>',
+    },
+    {
+      name: "foreign parameter close",
+      body: '<|DSML|invoke name="read"><|DSML|parameter name="path">/tmp/unexecuted</｜DSML｜parameter></|DSML|invoke>',
+    },
+    {
+      name: "doubled invoke with single close",
+      body: '<｜｜DSML｜｜invoke name="read">{"path":"/tmp/unexecuted"}</｜DSML｜invoke>',
+    },
+    {
+      name: "mixed doubled marker",
+      body: '<|｜DSML|｜invoke name="read">{"path":"/tmp/unexecuted"}</|｜DSML|｜invoke>',
+    },
+  ])("does not authorize DSML with $name", async ({ body }) => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
-
+    const events: CapturedStreamEvent[] = [];
+    const content = `<|DSML|tool_calls>${body}</|DSML|tool_calls>`;
     await processCompletionsStream(
       streamChunks([
-        makeCompletionsChunk(
-          {
-            content:
-              '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
-          },
-          "stop",
-        ),
+        ...Array.from(content, (char) => makeCompletionsChunk({ content: char })),
+        makeCompletionsChunk({}, "stop"),
       ]),
       output,
       model,
-      { push() {} },
+      { push: (event) => events.push(event as CapturedStreamEvent) },
     );
-
     expect(output.stopReason).toBe("stop");
     expect(output.content).toEqual([]);
+    expect(events.filter((event) => event.type?.startsWith("toolcall_"))).toEqual([]);
   });
 });

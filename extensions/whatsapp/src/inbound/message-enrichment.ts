@@ -1,9 +1,7 @@
-// Whatsapp plugin module prepares inbound text, context, and downloaded media.
 import type { proto, WAMessage, WASocket } from "baileys";
 import {
   formatInboundMediaUnavailableText,
   formatLocationText,
-  type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -14,7 +12,9 @@ import {
   extractExternalAdReplyContext,
   extractLocationData,
   extractMediaKind,
+  extractMentionedJids,
   extractText,
+  projectWhatsAppInboundMessage,
 } from "./extract.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
@@ -66,33 +66,24 @@ function logMediaMaterializationFailure(params: {
   });
 }
 
-export type WhatsAppEnrichedInboundMessage = {
-  body: string;
-  commandBody: string;
-  location?: ReturnType<typeof extractLocationData>;
-  contactContext?: ReturnType<typeof extractContactContext>;
-  externalAdReplyContext?: ReturnType<typeof extractExternalAdReplyContext>;
-  replyContext?: ReturnType<typeof describeReplyContext>;
-  mediaPath?: string;
-  mediaType?: string;
-  mediaFileName?: string;
-  mediaKind?: NonNullable<ReturnType<typeof extractMediaKind>>;
-  nativeMedia?: MediaPlaceholderTextFact;
-};
+export type WhatsAppEnrichedInboundMessage = NonNullable<
+  Awaited<ReturnType<typeof enrichWhatsAppInboundMessage>>
+>;
 
 export async function enrichWhatsAppInboundMessage(params: {
   msg: WAMessage;
   sock: WASocket;
   mediaMaxMb?: number;
   logVerbose: (message: string) => void;
-}): Promise<WhatsAppEnrichedInboundMessage | null> {
+}) {
   const { msg, sock } = params;
-  const location = extractLocationData(msg.message ?? undefined);
+  const messageProjection = projectWhatsAppInboundMessage(msg.message ?? undefined);
+  const location = extractLocationData(messageProjection);
   const locationText = location ? formatLocationText(location) : undefined;
-  const contactContext = extractContactContext(msg.message ?? undefined);
-  const externalAdReplyContext = extractExternalAdReplyContext(msg.message ?? undefined);
-  let mediaKind = extractMediaKind(msg.message ?? undefined);
-  let body = extractText(msg.message ?? undefined);
+  const contactContext = extractContactContext(messageProjection);
+  const externalAdReplyContext = extractExternalAdReplyContext(messageProjection);
+  let mediaKind = extractMediaKind(messageProjection);
+  let body = extractText(messageProjection);
   if (locationText) {
     body = [body, locationText].filter(Boolean).join("\n").trim();
   }
@@ -101,7 +92,7 @@ export async function enrichWhatsAppInboundMessage(params: {
   }
   body = body ?? "";
   const commandBody = body;
-  const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
+  const replyContext = describeReplyContext(messageProjection);
 
   let mediaPath: string | undefined;
   let mediaType = mediaKind
@@ -123,8 +114,15 @@ export async function enrichWhatsAppInboundMessage(params: {
     mediaFileName = inboundMedia.fileName;
   };
   try {
+    // Entry zero is exactly the Baileys normalization that downloadInboundMedia performed here
+    // previously; later projection entries are extraction-only future-proof payloads.
     await saveInboundMedia(
-      await downloadInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes),
+      await downloadInboundMedia(
+        msg as proto.IWebMessageInfo,
+        sock,
+        maxBytes,
+        messageProjection[0],
+      ),
     );
   } catch (error) {
     logMediaMaterializationFailure({
@@ -175,5 +173,6 @@ export async function enrichWhatsAppInboundMessage(params: {
     mediaFileName,
     mediaKind,
     nativeMedia,
+    mentionedJids: extractMentionedJids(messageProjection),
   };
 }

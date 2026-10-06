@@ -31,6 +31,10 @@ function gatewayCall(callIndex = 0): ReadonlyArray<unknown> {
   return call;
 }
 
+function jsonFailure(message: string) {
+  return { ok: false, error: { type: "cli_error", message } };
+}
+
 describe("system-cli", () => {
   async function runCli(args: string[]) {
     const program = new Command();
@@ -114,9 +118,9 @@ describe("system-cli", () => {
 
       await runCli(args);
 
-      expect(runtimeLogs).toEqual([JSON.stringify({ error: expectedError }, null, 2)]);
+      expect(runtimeLogs).toEqual([JSON.stringify(jsonFailure(expectedError), null, 2)]);
       expect(runtimeErrors).toEqual([]);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ error: expectedError });
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(jsonFailure(expectedError));
       expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
       expect(callGatewayFromCli).toHaveBeenCalledTimes(gatewayCalls);
     },
@@ -125,24 +129,19 @@ describe("system-cli", () => {
   it.each([
     { mode: "human", args: ["system", "event", "--text", "hello"] },
     { mode: "JSON", args: ["system", "event", "--text", "hello", "--json"] },
-  ])("renders named errors without class names in $mode mode", async ({ mode, args }) => {
+  ])("hands agent selection refusals to the CLI failure owner in $mode mode", async ({ args }) => {
     const error = new Error("Multiple agents are configured, but this operation has no owner.");
     error.name = "AgentSelectionRequiredError";
     callGatewayFromCli.mockRejectedValueOnce(error);
 
-    await runCli(args);
+    // The root failure owner renders expected conditions without crash framing;
+    // the command must rethrow instead of printing its own copy.
+    await expect(runCli(args)).rejects.toBe(error);
 
-    if (mode === "JSON") {
-      const payload = JSON.parse(runtimeLogs.at(-1) ?? "");
-      expect(payload).toEqual({ error: error.message });
-      expect(Object.keys(payload)).toEqual(["error"]);
-      expect(runtimeErrors).toEqual([]);
-    } else {
-      expect(runtimeErrors).toEqual([error.message]);
-      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    }
-    expect([...runtimeLogs, ...runtimeErrors].join("\n")).not.toContain(error.name);
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(runtimeLogs).toEqual([]);
+    expect(runtimeErrors).toEqual([]);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("forwards --session-key on system event", async () => {
@@ -167,14 +166,6 @@ describe("system-cli", () => {
     expect(requestOptions).toEqual({ expectFinal: false });
   });
 
-  it("omits sessionKey from payload when --session-key not provided", async () => {
-    await runCli(["system", "event", "--text", "ping"]);
-
-    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-    const params = gatewayCall()[2];
-    expect(params).not.toHaveProperty("sessionKey");
-  });
-
   it("treats empty --session-key as omitted", async () => {
     await runCli(["system", "event", "--text", "ping", "--session-key", "  "]);
 
@@ -195,9 +186,9 @@ describe("system-cli", () => {
     expect(params).toBeUndefined();
     expect(requestOptions).toEqual({ expectFinal: false });
     const expectedError = "Gateway unavailable";
-    expect(runtimeLogs).toEqual([JSON.stringify({ error: expectedError }, null, 2)]);
+    expect(runtimeLogs).toEqual([JSON.stringify(jsonFailure(expectedError), null, 2)]);
     expect(runtimeErrors).toEqual([]);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ error: expectedError });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(jsonFailure(expectedError));
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 

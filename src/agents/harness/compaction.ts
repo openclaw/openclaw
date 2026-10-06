@@ -1,10 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type { Model } from "openclaw/plugin-sdk/llm";
-/**
- * Routes compaction through selected native agent harnesses when supported.
- */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { resolveUserPath } from "../../utils.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
@@ -17,6 +18,7 @@ import {
 } from "../model-auth.js";
 import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
 import { isOpenAIProvider } from "../openai-routing.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -33,44 +35,31 @@ import {
   resolvePreparedRuntimeModelAuth,
 } from "../runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
+import { resolveAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
+import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import {
+  assertCompactionSource,
+  type AgentHarnessCompactionSourceAuthority,
+} from "./host-source-authority.js";
 import { resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy } from "./policy.js";
 import {
-  resolveAgentHarnessNativeToolPolicyRestricted,
-  selectAgentHarness,
-  selectAgentHarnessForPreparedModelProviders,
-  type AgentHarnessPreparedModelProvider,
-} from "./selection.js";
-import {
-  resolveAgentHarnessPreparedAuthSupport,
-  resolveAgentHarnessPreparedRouteSupport,
-} from "./support.js";
+  resolveAgentHarnessOwnerPluginId,
+  resolveCodexAgentHarnessNativeCompaction,
+} from "./registry.js";
+import { selectAgentHarness, selectAgentHarnessForPreparedModelProviders } from "./selection.js";
+import { projectPreparedModelProvider } from "./support.js";
 import type {
   AgentHarness,
-  AgentHarnessCompactParams,
-  AgentHarnessCompactResult,
+  AgentHarnessCompactParamsV2,
+  AgentHarnessNativeCompactionRequest,
 } from "./types.js";
 
-/**
- * Delegates session compaction to the selected agent harness when that runtime owns compaction.
- *
- * CLI runtimes and OpenClaw-native compaction stay on the embedded runner path; plugin harnesses
- * can opt in through their `compact` hook.
- */
-type NativeCompactionRequest = "after_context_engine";
-
 type InternalAgentHarnessCompactionOptions = {
-  nativeCompactionRequest?: NativeCompactionRequest;
+  preparedModelRuntime: PreparedModelRuntimeSnapshot;
+  sourceAuthority: AgentHarnessCompactionSourceAuthority;
+  nativeCompactionRequest?: AgentHarnessNativeCompactionRequest;
+  onNativeCompactionCapabilityUsed?: () => void;
 };
-
-type InternalAgentHarnessCompactionCapability = {
-  // Context-engine follow-up compaction is core/Codex sequencing, not a plugin SDK
-  // contract. Keep it behind this private capability so public compact params stay generic.
-  compactAfterContextEngine?(
-    params: AgentHarnessCompactParams,
-  ): Promise<AgentHarnessCompactResult | undefined>;
-};
-
-type InternalAgentHarness = AgentHarness & InternalAgentHarnessCompactionCapability;
 type HarnessCompactionResolvedAuth = { apiKey?: string };
 
 const log = createSubsystemLogger("agents/harness-compaction");
@@ -103,27 +92,6 @@ function stripHarnessOwnedAuthInputs(
   return result;
 }
 
-function buildHarnessCompactionModelProvider(params: {
-  model?: Model;
-  plan?: AgentRuntimeAuthPlan;
-  attempt?: PreparedAgentRuntimeAuthAttempt;
-}): AgentHarnessPreparedModelProvider {
-  const route = params.plan?.modelRoute;
-  return {
-    api: route?.api ?? params.model?.api,
-    baseUrl: route?.baseUrl ?? params.model?.baseUrl,
-    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
-    ...(params.plan
-      ? {
-          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
-            plan: params.plan,
-            source: params.attempt?.kind === "implicit" ? undefined : params.attempt?.kind,
-          }),
-        }
-      : {}),
-  };
-}
-
 async function resolveHarnessCompactApiKey(params: {
   agentDir: string;
   compactParams: CompactEmbeddedAgentSessionParams;
@@ -131,6 +99,7 @@ async function resolveHarnessCompactApiKey(params: {
   agentId: string;
   sessionKey?: string;
   pinnedHarnessId?: string;
+  preparedModelRuntime: PreparedModelRuntimeSnapshot;
 }): Promise<{
   harness: AgentHarness;
   apiKey?: string;
@@ -151,6 +120,7 @@ async function resolveHarnessCompactApiKey(params: {
       ? providedRuntimeAuthPlan
       : undefined;
   const workspaceDir = resolveUserPath(compactParams.workspaceDir);
+  const preparedStores = params.preparedModelRuntime.createStores();
   const callerRuntimeModel = compactParams.runtimeModel;
   const fallbackResolution = (
     harness: AgentHarness,
@@ -180,10 +150,10 @@ async function resolveHarnessCompactApiKey(params: {
       provider,
       modelId,
       modelProviders: attempts.map((attempt) =>
-        buildHarnessCompactionModelProvider({
+        projectPreparedModelProvider({
           model: preparedModel,
           plan: attempt.plan,
-          attempt,
+          attemptKind: attempt.kind,
         }),
       ),
       config: compactParams.config,
@@ -208,11 +178,13 @@ async function resolveHarnessCompactApiKey(params: {
     authProfileMode,
   }: Parameters<Parameters<typeof materializePreparedRuntimeModel<Model>>[0]["resolveModel"]>[0]) =>
     resolveModelAsync(provider, modelId, agentDir, config, {
+      abortSignal: compactParams.abortSignal,
+      ...preparedStores,
+      preparedModelRuntime: params.preparedModelRuntime,
       authProfileId: profileId,
       authProfileMode,
       skipAgentDiscovery: true,
       allowBundledStaticCatalogFallback: true,
-      preferBundledStaticCatalogTransport: true,
       workspaceDir,
     });
   let model = callerRuntimeModel;
@@ -220,6 +192,9 @@ async function resolveHarnessCompactApiKey(params: {
     try {
       model = (
         await resolveModelAsync(provider, modelId, agentDir, compactParams.config, {
+          abortSignal: compactParams.abortSignal,
+          ...preparedStores,
+          preparedModelRuntime: params.preparedModelRuntime,
           authProfileId:
             reusableRuntimeAuthPlan?.forwardedAuthProfileId ??
             compactParams.authProfileId?.trim() ??
@@ -228,6 +203,7 @@ async function resolveHarnessCompactApiKey(params: {
         })
       ).model;
     } catch (error) {
+      compactParams.abortSignal?.throwIfAborted();
       log.warn(
         `native compaction model resolution failed for ${provider}/${modelId}: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -239,10 +215,12 @@ async function resolveHarnessCompactApiKey(params: {
   }
   const runtimeAuthProfileStore = isOpenAIProvider(provider)
     ? ensureAuthProfileStore(agentDir, {
+        profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       })
     : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+        profileId: compactParams.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         allowKeychainPrompt: false,
       });
   const prepareRuntimeAuth = (harness: AgentHarness) =>
@@ -252,6 +230,7 @@ async function resolveHarnessCompactApiKey(params: {
       modelApi: model.api,
       modelBaseUrl: model.baseUrl,
       config: compactParams.config,
+      agentId: params.agentId,
       env: process.env,
       agentDir,
       workspaceDir,
@@ -308,6 +287,8 @@ async function resolveHarnessCompactApiKey(params: {
       provider,
       modelId,
       config: compactParams.config,
+      workspaceDir,
+      metadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
       model: input.model,
       forceResolve: input.forceResolve,
       rejectMismatchedModel: true,
@@ -362,6 +343,7 @@ async function resolveHarnessCompactApiKey(params: {
       errorMessage: `Prepared native compaction auth attempts could not be resolved for ${provider}/${modelId}.`,
     });
   } catch (error) {
+    compactParams.abortSignal?.throwIfAborted();
     log.warn(
       `native compaction prepared auth resolution failed for ${provider}/${modelId}: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -378,7 +360,16 @@ async function resolveHarnessCompactApiKey(params: {
 /** Runs harness-provided compaction when the selected runtime supports it. */
 export async function maybeCompactAgentHarnessSession(
   params: CompactEmbeddedAgentSessionParams,
-  options: InternalAgentHarnessCompactionOptions = {},
+  options: InternalAgentHarnessCompactionOptions,
+): Promise<EmbeddedAgentCompactResult | undefined> {
+  return await withPluginRuntimeGenerationScope(options.preparedModelRuntime, () =>
+    maybeCompactAgentHarnessSessionInGeneration(params, options),
+  );
+}
+
+async function maybeCompactAgentHarnessSessionInGeneration(
+  params: CompactEmbeddedAgentSessionParams,
+  options: InternalAgentHarnessCompactionOptions,
 ): Promise<EmbeddedAgentCompactResult | undefined> {
   const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const pinnedHarnessId =
@@ -392,9 +383,10 @@ export async function maybeCompactAgentHarnessSession(
   }
   const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const runtimePolicyAgentId =
-    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
+    params.sandboxAgentId ??
+    (params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
       ? undefined
-      : params.agentId;
+      : params.agentId);
   const runtimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
   const modelRoute = runtimeAuthPlan?.modelRoute;
   if (
@@ -439,18 +431,15 @@ export async function maybeCompactAgentHarnessSession(
     ? selectAgentHarnessForPreparedModelProviders({
         ...harnessSelectionParams,
         modelProviders: [
-          buildHarnessCompactionModelProvider({
+          projectPreparedModelProvider({
             model: params.runtimeModel,
             plan: runtimeAuthPlan,
           }),
         ],
       })
     : selectAgentHarness(harnessSelectionParams);
-  const initialInternalHarness = harness as InternalAgentHarness;
-  if (
-    options.nativeCompactionRequest === "after_context_engine" &&
-    !initialInternalHarness.compactAfterContextEngine
-  ) {
+  const initialNativeCompaction = resolveCodexAgentHarnessNativeCompaction(harness);
+  if (options.nativeCompactionRequest === "after_context_engine" && !initialNativeCompaction) {
     return undefined;
   }
   if (!options.nativeCompactionRequest && !harness.compact) {
@@ -465,118 +454,191 @@ export async function maybeCompactAgentHarnessSession(
     return undefined;
   }
   const compactIdentity = resolveHarnessCompactIdentity(params);
-  let resolvedRuntimeAuthPlan = runtimeAuthPlan;
-  const resolveNativeToolPolicyRestricted = (targetHarness: AgentHarness) =>
-    resolveAgentHarnessNativeToolPolicyRestricted(
+  const sourceAuthority = options.sourceAuthority;
+  assertCompactionSource(sourceAuthority);
+  const signals = [params.abortSignal, sourceAuthority.operatorAuthority?.signal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  const abortSignal = signals.length > 0 ? AbortSignal.any(signals) : undefined;
+  const assertSourceCurrent = () => {
+    abortSignal?.throwIfAborted();
+    assertCompactionSource(sourceAuthority);
+  };
+  return await runWithAsyncWorkResources(async (onAcquired) => {
+    const runId = `${params.runId ?? params.sessionId}:harness-compact:${randomUUID()}`;
+    const admission = prepareSystemAgentRunAdmission(
+      params.config ?? {},
+      runId,
+      compactIdentity.agentId,
+      "agents.harness-compaction",
+      assertSourceCurrent,
+      sourceAuthority.operatorAuthority,
+    );
+    const resources: {
+      host?: ReturnType<typeof createAgentHarnessHostCapabilities>;
+      releaseUnqualifiedModelSource?: () => void;
+    } = {};
+    onAcquired({
+      release: () => {
+        try {
+          resources.releaseUnqualifiedModelSource?.();
+          resources.host?.close();
+        } finally {
+          admission.close();
+        }
+      },
+      releaseBeforeResultWhenIdle: true,
+    });
+    const compactParams: CompactEmbeddedAgentSessionParams = {
+      ...params,
+      abortSignal,
+      agentDir: compactIdentity.agentDir,
+      agentId: compactIdentity.agentId,
+    };
+    const resolved = await resolveHarnessCompactApiKey({
+      agentDir: compactIdentity.agentDir,
+      compactParams,
+      initialHarness: harness,
+      agentId: compactIdentity.agentId,
+      sessionKey: runtimePolicySessionKey,
+      pinnedHarnessId,
+      preparedModelRuntime: options.preparedModelRuntime,
+    });
+    assertSourceCurrent();
+    harness = resolved.harness;
+    const nativeToolPolicyRestricted = resolveAgentHarnessNativeToolPolicyRestricted(
       {
         ...params,
         agentId: compactIdentity.agentId,
+        sandboxAgentId: runtimePolicyAgentId,
         provider: params.provider ?? "",
         modelId: params.model ?? "",
       },
-      targetHarness,
+      harness,
     );
-  const compactParams: CompactEmbeddedAgentSessionParams = {
-    ...params,
-    agentDir: compactIdentity.agentDir,
-    agentId: compactIdentity.agentId,
-    ...(resolvedRuntimeAuthPlan
-      ? {
-          runtimeAuthPlan: resolvedRuntimeAuthPlan,
-          ...(params.runtimePlan
-            ? { runtimePlan: { ...params.runtimePlan, auth: resolvedRuntimeAuthPlan } }
-            : {}),
-        }
-      : {}),
-  };
-  const resolved = await resolveHarnessCompactApiKey({
-    agentDir: compactIdentity.agentDir,
-    compactParams,
-    initialHarness: harness,
-    agentId: compactIdentity.agentId,
-    sessionKey: runtimePolicySessionKey,
-    pinnedHarnessId,
-  });
-  harness = resolved.harness;
-  const nativeToolPolicyRestricted = resolveNativeToolPolicyRestricted(harness);
-  compactParams.nativeToolSurface = nativeToolPolicyRestricted ? "host-isolated" : "unrestricted";
-  resolvedRuntimeAuthPlan = resolved.runtimeAuthPlan ?? resolvedRuntimeAuthPlan;
-  const internalHarness = harness as InternalAgentHarness;
-  const shouldCompactAfterContextEngine =
-    options.nativeCompactionRequest === "after_context_engine";
-  if (shouldCompactAfterContextEngine && !internalHarness.compactAfterContextEngine) {
-    return undefined;
-  }
-  if (!options.nativeCompactionRequest && !harness.compact) {
-    if (harness.id !== "openclaw") {
-      return {
-        ok: false,
-        compacted: false,
-        reason: `Agent harness "${harness.id}" does not support compaction.`,
-        failure: { reason: "unsupported_harness_compaction" },
-      };
+    compactParams.nativeToolSurface = nativeToolPolicyRestricted ? "host-isolated" : "unrestricted";
+    const resolvedRuntimeAuthPlan = resolved.runtimeAuthPlan ?? runtimeAuthPlan;
+    const nativeCompaction = resolveCodexAgentHarnessNativeCompaction(harness);
+    if (options.nativeCompactionRequest === "after_context_engine" && !nativeCompaction) {
+      return undefined;
     }
-    return undefined;
-  }
-  if (
-    nativeToolPolicyRestricted &&
-    harness.id !== "openclaw" &&
-    harness.conversationToolPolicySupport !== "exact"
-  ) {
-    throw new Error(
-      `Agent harness ${harness.id} cannot enforce the host-isolated tool policy required for compaction`,
-    );
-  }
-  // Native runtimes own subscription login, but a provider-locked Platform
-  // route must receive the exact host-prepared key selected for this attempt.
-  const harnessOwnsAuth =
-    harness.authBootstrap === "harness" && !runtimePlanRequiresHostApiKey(resolvedRuntimeAuthPlan);
-  const resolvedApiKey = harnessOwnsAuth ? undefined : resolved.apiKey;
-  const runtimeModel =
-    harnessOwnsAuth && !resolvedRuntimeAuthPlan ? undefined : resolved.runtimeModel;
-  const compactParamsWithResolvedAuth = resolvedRuntimeAuthPlan
-    ? {
-        ...compactParams,
-        authProfileId: resolvedRuntimeAuthPlan.forwardedAuthProfileId,
-        authProfileIdSource: resolvedRuntimeAuthPlan.forwardedAuthProfileSource,
-        runtimeAuthPlan: resolvedRuntimeAuthPlan,
-        ...(compactParams.runtimePlan
-          ? {
-              runtimePlan: {
-                ...compactParams.runtimePlan,
-                auth: resolvedRuntimeAuthPlan,
-              },
-            }
-          : {}),
+    if (!options.nativeCompactionRequest && !harness.compact) {
+      if (harness.id !== "openclaw") {
+        return {
+          ok: false,
+          compacted: false,
+          reason: `Agent harness "${harness.id}" does not support compaction.`,
+          failure: { reason: "unsupported_harness_compaction" },
+        };
       }
-    : compactParams;
-  const handoffCompactParams = harnessOwnsAuth
-    ? stripHarnessOwnedAuthInputs(compactParamsWithResolvedAuth)
-    : compactParamsWithResolvedAuth;
-  const resolvedCompactParams =
-    resolvedApiKey || runtimeModel
+      return undefined;
+    }
+    if (
+      nativeToolPolicyRestricted &&
+      harness.id !== "openclaw" &&
+      harness.conversationToolPolicySupport !== "exact"
+    ) {
+      throw new Error(
+        `Agent harness ${harness.id} cannot enforce the host-isolated tool policy required for compaction`,
+      );
+    }
+    // Native runtimes own subscription login, but a provider-locked Platform
+    // route must receive the exact host-prepared key selected for this attempt.
+    const harnessOwnsAuth =
+      harness.authBootstrap === "harness" &&
+      !runtimePlanRequiresHostApiKey(resolvedRuntimeAuthPlan);
+    const resolvedApiKey = harnessOwnsAuth ? undefined : resolved.apiKey;
+    const runtimeModel =
+      harnessOwnsAuth && !resolvedRuntimeAuthPlan ? undefined : resolved.runtimeModel;
+    const compactParamsWithResolvedAuth = resolvedRuntimeAuthPlan
       ? {
-          ...handoffCompactParams,
-          ...(resolvedApiKey
+          ...compactParams,
+          authProfileId: resolvedRuntimeAuthPlan.forwardedAuthProfileId,
+          authProfileIdSource: resolvedRuntimeAuthPlan.forwardedAuthProfileSource,
+          runtimeAuthPlan: resolvedRuntimeAuthPlan,
+          ...(compactParams.runtimePlan
             ? {
-                resolvedApiKey: unwrapSecretSentinelsForProviderEgress(
-                  resolvedApiKey,
-                  "plugin harness compaction handoff",
-                ),
-              }
-            : {}),
-          ...(runtimeModel
-            ? {
-                runtimeModel: unwrapModelHeaderSentinelsForProviderEgress(
-                  runtimeModel,
-                  "plugin harness compaction handoff",
-                ),
+                runtimePlan: {
+                  ...compactParams.runtimePlan,
+                  auth: resolvedRuntimeAuthPlan,
+                },
               }
             : {}),
         }
-      : handoffCompactParams;
-  if (shouldCompactAfterContextEngine) {
-    return internalHarness.compactAfterContextEngine?.(resolvedCompactParams);
-  }
-  return harness.compact?.(resolvedCompactParams);
+      : compactParams;
+    const handoffCompactParams = harnessOwnsAuth
+      ? stripHarnessOwnedAuthInputs(compactParamsWithResolvedAuth)
+      : compactParamsWithResolvedAuth;
+    const resolvedCompactParams =
+      resolvedApiKey || runtimeModel
+        ? {
+            ...handoffCompactParams,
+            ...(resolvedApiKey
+              ? {
+                  resolvedApiKey: unwrapSecretSentinelsForProviderEgress(
+                    resolvedApiKey,
+                    "plugin harness compaction handoff",
+                  ),
+                }
+              : {}),
+            ...(runtimeModel
+              ? {
+                  runtimeModel: unwrapModelHeaderSentinelsForProviderEgress(
+                    runtimeModel,
+                    "plugin harness compaction handoff",
+                  ),
+                }
+              : {}),
+          }
+        : handoffCompactParams;
+    const admittedRunContext = await admission.admit("plugin-harness", harness.id);
+    assertSourceCurrent();
+    // Compaction reasons are not agent-run triggers.
+    const { model: modelId, trigger: _compactionTrigger, ...hostAttempt } = resolvedCompactParams;
+    const host = createAgentHarnessHostCapabilities({
+      attempt: { ...hostAttempt, modelId, runId, admittedRunContext },
+      pluginId: resolveAgentHarnessOwnerPluginId(harness),
+      nativeModelPolicySupport: harness.nativeModelPolicySupport,
+    });
+    resources.host = host;
+    const retainSourceAuthority = host.capabilities.retainSourceAuthority;
+    if (!retainSourceAuthority) {
+      throw new Error("Compaction host cannot retain its original source authority");
+    }
+    const unqualifiedModelSource =
+      harness.nativeModelPolicySupport === "exact" ? undefined : retainSourceAuthority();
+    resources.releaseUnqualifiedModelSource = unqualifiedModelSource?.release;
+    const dispatchParams: AgentHarnessCompactParamsV2 = {
+      ...resolvedCompactParams,
+      ...(unqualifiedModelSource?.signal
+        ? {
+            abortSignal: AbortSignal.any([
+              unqualifiedModelSource.signal,
+              ...(abortSignal ? [abortSignal] : []),
+            ]),
+          }
+        : {}),
+      hostCapabilities: Object.freeze({
+        kind: host.capabilities.kind,
+        version: host.capabilities.version,
+        assertActive: host.capabilities.assertActive,
+        retainSourceAuthority,
+      }),
+    };
+    if (options.nativeCompactionRequest) {
+      if (nativeCompaction) {
+        // Registry ownership, not a public harness property or result, grants
+        // the Codex-only fallback authority recorded at this dispatch boundary.
+        options.onNativeCompactionCapabilityUsed?.();
+        return await nativeCompaction({
+          ...dispatchParams,
+          nativeCompactionRequest: options.nativeCompactionRequest,
+        });
+      }
+      if (!harness.compact) {
+        return undefined;
+      }
+    }
+    return await harness.compact?.(dispatchParams);
+  });
 }

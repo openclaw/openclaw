@@ -5,12 +5,10 @@ import { renderSlackBlockFallbackText } from "./blocks-fallback.js";
 import {
   hasSlackDataTableBlock,
   renderSlackDataTableCompactPlainTextFallback,
-  renderSlackDataTableMrkdwnFallbackText,
 } from "./data-table.js";
 import {
   hasSlackDataVisualizationBlock,
   renderSlackDataVisualizationFallbackText,
-  renderSlackDataVisualizationMrkdwnFallbackText,
 } from "./data-visualization.js";
 
 export const SLACK_MALFORMED_NATIVE_DATA_FALLBACK =
@@ -87,18 +85,6 @@ export function isSlackNativeResponseUrlRejection(error: unknown): boolean {
   }
   const record = asOptionalRecord(error);
   return record?.code === "slack_bolt_respond_error" && record.statusCode === 400;
-}
-
-/** Extract a complete accessible summary from a supported native data block. */
-function renderSlackNativeDataFallbackText(value: unknown): string | undefined {
-  const type = asOptionalRecord(value)?.type;
-  if (type === "data_visualization") {
-    return renderSlackDataVisualizationMrkdwnFallbackText(value);
-  }
-  if (type === "data_table") {
-    return renderSlackDataTableMrkdwnFallbackText(value);
-  }
-  return undefined;
 }
 
 function comparableText(value: string): string {
@@ -183,7 +169,10 @@ export function buildSlackNativeDataAccessibilityText(
     const isNativeData = hasSlackNativeDataBlock([block]);
     const rendered =
       renderSlackNativeDataPlainTextBlock(block) ??
-      renderSlackBlockFallbackText(block, { nativeDataFormat: "plain" }) ??
+      renderSlackBlockFallbackText(block, {
+        nativeDataFormat: "plain",
+        includeSelectOptions: true,
+      }) ??
       (isNativeData ? SLACK_MALFORMED_NATIVE_DATA_FALLBACK : undefined);
     if (!rendered || (isNativeData && consumeFromBase(rendered))) {
       continue;
@@ -198,7 +187,9 @@ export function appendSlackNativeDataFallbackText(
   text: string,
   blocks?: readonly unknown[],
 ): string {
-  return appendSlackNativeDataFallback(text, blocks, renderSlackNativeDataFallbackText);
+  return appendSlackNativeDataFallback(text, blocks, (block) =>
+    hasSlackNativeDataBlock([block]) ? renderSlackBlockFallbackText(block) : undefined,
+  );
 }
 
 /** Build a bounded plain-text retry without activating control tokens. */

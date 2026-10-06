@@ -48,20 +48,27 @@ final class DeepLinkHandler {
     static let shared = DeepLinkHandler()
 
     private var lastPromptAt: Date = .distantPast
+    private let gatewaySetup: @MainActor (GatewayConnectDeepLink) async -> Void
 
     /// Ephemeral, in-memory key used for unattended deep links originating from the in-app Canvas.
     /// This avoids blocking Canvas init on UserDefaults and doesn't weaken the external deep-link prompt:
     /// outside callers can't know this randomly generated key.
     private nonisolated static let canvasUnattendedKey: String = DeepLinkHandler.generateRandomKey()
 
+    init(gatewaySetup: @escaping @MainActor (GatewayConnectDeepLink) async -> Void = { link in
+        await DashboardManager.shared.handleGatewaySetup(link)
+    }) {
+        self.gatewaySetup = gatewaySetup
+    }
+
     func handle(url: URL) async {
         guard let route = DeepLinkParser.parse(url) else {
-            deepLinkLogger.debug("ignored url \(url.absoluteString, privacy: .public)")
+            deepLinkLogger.debug("ignored deep link \(Self.invalidRouteMetadata(url), privacy: .public)")
             return
         }
         switch route {
         case .dashboard:
-            await self.openDashboard()
+            AppNavigationActions.openDashboard()
             return
         case let .agent(link):
             guard !AppStateStore.shared.isPaused else {
@@ -69,12 +76,17 @@ final class DeepLinkHandler {
                 return
             }
             await self.handleAgent(link: link, originalURL: url)
-        case .gateway:
-            guard !AppStateStore.shared.isPaused else {
-                self.presentAlert(title: "OpenClaw is paused", message: "Unpause OpenClaw to run agent actions.")
-                return
-            }
+        case let .gateway(link):
+            await self.gatewaySetup(link)
+        case let .gatewayAdd(link):
+            GatewayBrowserOnboardingController.shared.present(link)
         }
+    }
+
+    static func invalidRouteMetadata(_ url: URL) -> String {
+        let scheme = url.scheme?.lowercased() ?? "missing"
+        let route = url.host?.lowercased() ?? "missing"
+        return "scheme=\(scheme) route=\(route)"
     }
 
     private func handleAgent(link: AgentDeepLink, originalURL: URL) async {
@@ -84,7 +96,7 @@ final class DeepLinkHandler {
             return
         }
 
-        let allowUnattended = link.key == Self.canvasUnattendedKey || link.key == Self.expectedKey()
+        let allowUnattended = link.key == Self.canvasUnattendedKey || link.key == Self.currentKey()
         if !allowUnattended {
             if Date().timeIntervalSince(self.lastPromptAt) < 1.0 {
                 deepLinkLogger.debug("throttling deep link prompt")
@@ -104,7 +116,7 @@ final class DeepLinkHandler {
             let urlPreview = urlText.count > 500 ? "\(urlText.prefix(500))…" : urlText
             let body =
                 "Run the agent with this message?\n\n\(messagePreview)\n\nURL:\n\(urlPreview)"
-            guard self.confirm(title: "Run OpenClaw agent?", message: body) else { return }
+            guard await self.confirm(title: "Run OpenClaw agent?", message: body) else { return }
         }
 
         if AppStateStore.shared.connectionMode == .local {
@@ -143,25 +155,12 @@ final class DeepLinkHandler {
         }
     }
 
-    // MARK: - Auth
-
     static func currentKey() -> String {
-        self.expectedKey()
-    }
-
-    private static func expectedKey() -> String {
         let defaults = AppDefaults.standard
         if let key = defaults.string(forKey: deepLinkKeyKey), !key.isEmpty {
             return key
         }
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        let data = Data(bytes)
-        let key = data
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        let key = self.generateRandomKey()
         defaults.set(key, forKey: deepLinkKeyKey)
         return key
     }
@@ -177,20 +176,14 @@ final class DeepLinkHandler {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    // MARK: - UI
-
-    private func openDashboard() async {
-        AppNavigationActions.openDashboard()
-    }
-
-    private func confirm(title: String, message: String) -> Bool {
+    private func confirm(title: String, message: String) async -> Bool {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
         alert.addButton(withTitle: "Run")
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
-        return alert.runModal() == .alertFirstButtonReturn
+        return await AppActivation.shared.response(to: alert) == .alertFirstButtonReturn
     }
 
     private func presentAlert(title: String, message: String) {
@@ -199,6 +192,6 @@ final class DeepLinkHandler {
         alert.informativeText = message
         alert.addButton(withTitle: "OK")
         alert.alertStyle = .informational
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 }

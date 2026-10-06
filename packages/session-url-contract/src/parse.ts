@@ -1,10 +1,11 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import {
   isReservedSessionRest,
   normalizeControlUiBasePath,
   parseShortSessionRef,
 } from "./grammar.js";
+
+export { matchControlUiCatalogSharePath, type ControlUiCatalogSharePathMatch } from "./share.js";
 
 export type ControlUiSessionPathTarget =
   | { namespace: "chat" | "dashboard"; kind: "main"; agentId: string }
@@ -13,6 +14,8 @@ export type ControlUiSessionPathTarget =
       kind: "short";
       agentId: string;
       shortId: string;
+      /** Exact decoded key candidate for route resolution after a short lookup misses. */
+      literalSessionKey: string;
       /**
        * Display-name slug that preceded the id, when the reference carried one. The id
        * stays authoritative; this only breaks a tie between sessions whose ids share the
@@ -51,14 +54,6 @@ function decodePathSegment(segment: string): string | null {
   }
 }
 
-function literalSessionKey(agentId: string, restSegments: readonly string[]): string | null {
-  const normalizedAgentId = normalizeNullableString(agentId);
-  if (!normalizedAgentId || restSegments.length === 0 || restSegments.some((segment) => !segment)) {
-    return null;
-  }
-  return `agent:${normalizeAgentId(normalizedAgentId)}:${restSegments.join(":")}`;
-}
-
 export function parseControlUiSessionPath(
   pathname: string,
   basePath = "",
@@ -81,21 +76,14 @@ export function parseControlUiSessionPath(
     }
     const forceLiteral = rawSegments[1] === "~key";
     const restSegments = rawSegments.slice(forceLiteral ? 2 : 1).map(decodePathSegment);
-    if (restSegments.some((segment) => segment === null)) {
+    if (restSegments.length === 0 || !restSegments.every((segment) => segment !== null)) {
       return null;
     }
-    const literalRestSegments = restSegments as string[];
-    const sessionKey = literalSessionKey(agentId, literalRestSegments);
-    if (!sessionKey) {
-      return null;
-    }
-    if (forceLiteral) {
+    const sessionKey = `agent:${agentId}:${restSegments.join(":")}`;
+    if (forceLiteral || restSegments.length !== 1) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }
-    if (literalRestSegments.length !== 1) {
-      return { namespace, kind: "literal", agentId, sessionKey };
-    }
-    const segment = literalRestSegments[0] ?? "";
+    const segment = restSegments[0] ?? "";
     if (isReservedSessionRest(segment, mainKey)) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }
@@ -103,7 +91,7 @@ export function parseControlUiSessionPath(
     if (!shortRef) {
       return { namespace, kind: "literal", agentId, sessionKey, slugCandidate: segment };
     }
-    return { namespace, kind: "short", agentId, ...shortRef };
+    return { namespace, kind: "short", agentId, literalSessionKey: sessionKey, ...shortRef };
   }
   return null;
 }

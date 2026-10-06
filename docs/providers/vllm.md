@@ -20,7 +20,13 @@ vLLM serves open-source (and some custom) models through an **OpenAI-compatible*
 
 <Steps>
   <Step title="Start vLLM with an OpenAI-compatible server">
-    Your base URL must expose `/v1` endpoints (`/v1/models`, `/v1/chat/completions`). vLLM commonly runs on:
+    Your base URL must expose `/v1` endpoints (`/v1/models`, `/v1/chat/completions`). Start the server with the model you want to serve:
+
+    ```bash
+    vllm serve <model-id>
+    ```
+
+    See the [vLLM online serving docs](https://docs.vllm.ai/en/latest/serving/online_serving/) for flags. vLLM commonly runs on:
 
     ```text
     http://127.0.0.1:8000/v1
@@ -310,7 +316,7 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
     curl http://127.0.0.1:8000/v1/models
     ```
 
-    If you see a connection error, verify the host, port, and that vLLM started in OpenAI-compatible server mode. OpenClaw trusts the exact configured `models.providers.vllm.baseUrl` origin for guarded model requests on loopback, LAN, and Tailscale endpoints. Metadata/link-local origins remain blocked without explicit opt-in. Set `models.providers.vllm.request.allowPrivateNetwork: true` only when vLLM requests must reach another private origin, or `false` to opt out of exact-origin trust.
+    If you see a connection error, verify the host, port, and that vLLM started in OpenAI-compatible server mode. OpenClaw trusts the exact configured `models.providers.vllm.baseUrl` origin for guarded model requests on loopback, LAN, and Tailscale endpoints. Metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins remain blocked without explicit opt-in. Set `models.providers.vllm.request.allowPrivateNetwork: true` only when vLLM requests must reach another private origin, or `false` to opt out of exact-origin trust.
 
   </Accordion>
 

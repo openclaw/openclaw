@@ -77,13 +77,17 @@ export const pluginRegistrationContractCases = {
     pluginId: "groq",
     mediaUnderstandingProviderIds: ["groq"],
   },
+  kie: {
+    pluginId: "kie",
+    videoGenerationProviderIds: ["kie"],
+  },
   lmstudio: {
     pluginId: "lmstudio",
     providerIds: ["lmstudio"],
   },
   microsoft: {
     pluginId: "microsoft",
-    speechProviderIds: ["microsoft"],
+    speechProviderIds: ["microsoft", "edge"],
   },
   minimax: {
     pluginId: "minimax",
@@ -113,6 +117,10 @@ export const pluginRegistrationContractCases = {
       groupHint: "Kimi Code membership · https://www.kimi.com/membership/pricing",
     },
   },
+  novita: {
+    pluginId: "novita",
+    videoGenerationProviderIds: ["novita"],
+  },
   nvidia: {
     pluginId: "nvidia",
     providerIds: ["nvidia"],
@@ -138,7 +146,6 @@ export const pluginRegistrationContractCases = {
     realtimeVoiceProviderIds: ["openai"],
     mediaUnderstandingProviderIds: ["openai"],
     imageGenerationProviderIds: ["openai"],
-    videoGenerationProviderIds: ["openai"],
   },
   "opencode-go": {
     pluginId: "opencode-go",
@@ -232,5 +239,6 @@ export const pluginRegistrationContractCases = {
   zai: {
     pluginId: "zai",
     mediaUnderstandingProviderIds: ["zai"],
+    videoGenerationProviderIds: ["zai"],
   },
 } satisfies Record<string, PluginRegistrationContractParams>;

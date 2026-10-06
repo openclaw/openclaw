@@ -1,16 +1,29 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
+  createOverflowRunParams,
+  mockedBuildAgentRuntimePlan,
   mockedBuildEmbeddedRunPayloads,
   mockedCompactDirect,
   mockedGetApiKeyForModel,
   mockedResolveAuthProfileOrder,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createSharedRunIntegrationSession,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
+import {
+  clearActiveEmbeddedRun,
+  resolveEmbeddedRunAbandonment,
+  markActiveEmbeddedRunAbandoned,
+  setActiveEmbeddedRun,
+} from "./runs.js";
+import { createEmbeddedRunHandle, testing as runsTesting } from "./runs.test-support.js";
 
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
@@ -30,33 +43,46 @@ type CompactParams = {
 };
 
 describe("runEmbeddedAgent timeout recovery composition", () => {
+  let fixture: Pick<OpenClawTestState, "cleanup"> | undefined;
+
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
   beforeEach(() => {
     resetSharedRunIntegrationHarnessMocks();
+    runsTesting.resetActiveEmbeddedRuns();
+  });
+
+  afterEach(async () => {
+    try {
+      await fixture?.cleanup();
+    } finally {
+      fixture = undefined;
+    }
   });
 
   it("adopts a compacted transcript and retries with a continuation prompt", async () => {
+    const session = await createSharedRunIntegrationSession();
+    fixture = session;
+    const successor = {
+      ...session.runParams.sessionTarget,
+      sessionId: `${session.runParams.sessionId}-timeout-rotated`,
+    };
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "timeout recovery complete" }]);
     mockedRunEmbeddedAttempt
       .mockImplementationOnce(async (params) => {
-        params.onUserMessagePersisted?.({
-          role: "user",
-          content: "hello",
-          timestamp: 1,
-        });
-        return makeAttemptResult({
+        params.onUserMessagePersisted?.(makeUserMessage("hello", 1));
+        return session.makeAttemptResult({
           timedOut: true,
           lastAssistant: { usage: { input: 160_000 } } as never,
         });
       })
       .mockResolvedValueOnce(
-        makeAttemptResult({
+        session.makeAttemptResult({
           promptError: null,
-          sessionIdUsed: "timeout-rotated-session",
-          sessionFileUsed: "/tmp/timeout-rotated-session.json",
+          sessionIdUsed: successor.sessionId,
+          sessionFileUsed: successor.sessionKey,
         }),
       );
     mockedCompactDirect.mockResolvedValueOnce(
@@ -64,31 +90,29 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
         summary: "compacted for timeout",
         tokensBefore: 160_000,
         tokensAfter: 60_000,
-        sessionId: "timeout-rotated-session",
-        sessionFile: "/tmp/timeout-rotated-session.json",
+        sessionTarget: successor,
       }),
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...session.runParams,
       messageChannel: "slack",
       currentThreadTs: "thread-1",
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]).toMatchObject({
-      sessionId: "timeout-rotated-session",
-      sessionFile: "/tmp/timeout-rotated-session.json",
+      sessionId: successor.sessionId,
+      sessionFile: successor.sessionKey,
+      sessionTarget: successor,
     });
     expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt).toContain(
-      "Continue from the current transcript",
+      "Continue the current task from the existing transcript",
     );
-    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt).not.toBe(
-      overflowBaseRunParams.prompt,
-    );
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt).not.toBe(session.runParams.prompt);
     const compactParams = mockedCompactDirect.mock.calls[0]?.[0] as CompactParams | undefined;
     expect(compactParams).toMatchObject({
-      sessionId: "test-session",
+      sessionId: session.runParams.sessionId,
       tokenBudget: 200_000,
       force: true,
       compactionTarget: "budget",
@@ -104,7 +128,62 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     expect(result.payloads).toEqual([{ text: "timeout recovery complete" }]);
   });
 
+  it("restores terminal abandonment when retry preparation fails before registration", async () => {
+    const session = await createSharedRunIntegrationSession();
+    fixture = session;
+    const preparationError = new Error("next attempt preparation failed");
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      const handle = createEmbeddedRunHandle({ runId: params.runId });
+      setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+      expect(
+        markActiveEmbeddedRunAbandoned({
+          sessionId: params.sessionId,
+          handle,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+          reason: "timeout",
+        }),
+      ).toBe(true);
+      clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+      return session.makeAttemptResult({
+        timedOut: true,
+        lastAssistant: { usage: { input: 160_000 } } as never,
+      });
+    });
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "compacted before failed retry preparation",
+        tokensBefore: 160_000,
+        tokensAfter: 60_000,
+      }),
+    );
+    const defaultBuildRuntimePlan = mockedBuildAgentRuntimePlan.getMockImplementation();
+    expect(defaultBuildRuntimePlan).toBeDefined();
+    let buildCalls = 0;
+    mockedBuildAgentRuntimePlan.mockImplementation(() => {
+      buildCalls += 1;
+      if (buildCalls === 2) {
+        throw preparationError;
+      }
+      return defaultBuildRuntimePlan!();
+    });
+
+    await expect(runEmbeddedAgent(session.runParams)).rejects.toBe(preparationError);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(2);
+    expect(
+      resolveEmbeddedRunAbandonment({
+        sessionId: session.runParams.sessionId,
+        sessionKey: session.runParams.sessionKey,
+      }),
+    ).toBe("timeout");
+  });
+
   it("leaves timeout recovery to a forced unlocked Codex compaction owner", async () => {
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    const state = await createOpenClawTestState({ label: "run.timeout-triggered-compaction" });
+    fixture = state;
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
       makeAttemptResult({
@@ -128,10 +207,12 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     });
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "openai",
       model: "gpt-5.5",
-      config: { agents: { defaults: { agentRuntime: { id: "codex" } } } },
+      config: {
+        agents: { defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } } },
+      },
       runId: "forced-unlocked-codex-timeout-owner",
     }).finally(clearAgentHarnesses);
 
@@ -142,6 +223,8 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
   });
 
   it("keeps the timeout compaction cap across auth-profile rotation", async () => {
+    const session = await createSharedRunIntegrationSession();
+    fixture = session;
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     mockedResolveAuthProfileOrder.mockReturnValue(["profile-a", "profile-b"]);
     mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
@@ -151,7 +234,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       mode: "api-key",
     }));
     mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({
+      session.makeAttemptResult({
         timedOut: true,
         aborted: true,
         lastAssistant: { usage: { input: 150_000 } } as never,
@@ -163,7 +246,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       reason: "nothing to compact",
     });
 
-    const result = await runEmbeddedAgent(overflowBaseRunParams);
+    const result = await runEmbeddedAgent(session.runParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(2);
     expect(
@@ -176,6 +259,9 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
   });
 
   it("lets one silent idle timeout retry before the normal timeout surface", async () => {
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    const state = await createOpenClawTestState({ label: "run.timeout-triggered-compaction" });
+    fixture = state;
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
         makeAttemptResult({
@@ -187,7 +273,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
       )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    const result = await runEmbeddedAgent(overflowBaseRunParams);
+    const result = await runEmbeddedAgent(createOverflowRunParams(state));
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedCompactDirect).not.toHaveBeenCalled();

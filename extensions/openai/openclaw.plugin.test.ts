@@ -7,59 +7,66 @@ import {
 } from "./model-route-contract.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { createOpenAIProvider } from "./provider-contract-api.js";
 import { buildOpenAISetupProvider } from "./setup-api.js";
 
-function manifestComparableWizardFields(choice: {
+const WIZARD_METADATA_KEYS = [
+  "choiceId",
+  "choiceLabel",
+  "choiceHint",
+  "assistantPriority",
+  "assistantVisibility",
+  "onboardingFeatured",
+  "groupId",
+  "groupLabel",
+  "groupHint",
+] as const;
+
+function comparableWizardFields(choice: {
   choiceId?: string;
   choiceLabel?: string;
   choiceHint?: string;
+  assistantPriority?: number;
   assistantVisibility?: string;
+  onboardingFeatured?: boolean;
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
 }) {
   return Object.fromEntries(
-    Object.entries({
-      choiceId: choice.choiceId,
-      choiceLabel: choice.choiceLabel,
-      choiceHint: choice.choiceHint,
-      assistantVisibility: choice.assistantVisibility,
-      groupId: choice.groupId,
-      groupLabel: choice.groupLabel,
-      groupHint: choice.groupHint,
-    }).filter(([, value]) => value !== undefined),
+    WIZARD_METADATA_KEYS.flatMap((key) => (choice[key] === undefined ? [] : [[key, choice[key]]])),
   );
 }
 
-function providerWizardByKey() {
-  const providers = [buildOpenAIProvider(), buildOpenAISetupProvider()];
-  const wizards = new Map<string, Record<string, unknown>>();
-
-  for (const provider of providers) {
-    for (const authMethod of provider.auth ?? []) {
-      if (authMethod.wizard) {
-        wizards.set(`${provider.id}:${authMethod.id}`, authMethod.wizard);
-      }
-    }
-  }
-
-  return wizards;
-}
-
-function expectWizardFields(
-  wizard: Record<string, unknown> | undefined,
-  choice: ReturnType<typeof manifestComparableWizardFields>,
-  key: string,
-) {
-  if (!wizard) {
-    throw new Error(`Missing wizard for ${key}`);
-  }
-  for (const [field, value] of Object.entries(choice)) {
-    expect(wizard[field], `${key}.${field}`).toBe(value);
-  }
+function comparableProviderMetadata(provider: ReturnType<typeof createOpenAIProvider>) {
+  return {
+    id: provider.id,
+    label: provider.label,
+    hookAliases: provider.hookAliases,
+    docsPath: provider.docsPath,
+    envVars: provider.envVars,
+    auth: provider.auth.map((method) => ({
+      id: method.id,
+      kind: method.kind,
+      label: method.label,
+      hint: method.hint,
+      wizard: comparableWizardFields(method.wizard ?? {}),
+    })),
+  };
 }
 
 describe("OpenAI plugin manifest", () => {
+  it("owns canonical OpenAI session route state for Doctor cleanup", () => {
+    expect(manifest.sessionRouteStateOwners).toEqual([
+      {
+        id: "openai",
+        label: "OpenAI",
+        providerIds: ["openai"],
+        authProfilePrefixes: ["openai:"],
+      },
+    ]);
+  });
+
   it("exposes only current OpenAI login choices", () => {
     const openAiLogin = manifest.providerAuthChoices?.find(
       (choice) => choice.choiceId === "openai",
@@ -92,7 +99,7 @@ describe("OpenAI plugin manifest", () => {
   it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {
     const metadata = manifest.mediaUnderstandingProviderMetadata?.openai;
     expect(metadata?.capabilities).toEqual(["image", "audio"]);
-    expect(metadata?.defaultModels?.image).toBe("gpt-5.6-sol");
+    expect(metadata?.defaultModels?.image).toBe("gpt-6-astra");
     expect(metadata?.defaultModels?.audio).toBe("gpt-4o-transcribe");
     expect(metadata?.autoPriority?.image).toBe(20);
     expect(metadata?.autoPriority?.audio).toBe(20);
@@ -122,33 +129,47 @@ describe("OpenAI plugin manifest", () => {
     }
   });
 
-  it("labels OpenAI API key and Codex auth choices without stale mixed OAuth wording", () => {
+  it("labels and orders OpenAI authentication choices", () => {
     const choices = manifest.providerAuthChoices ?? [];
     const openAiLogin = choices.find((choice) => choice.choiceId === "openai");
     const openAiDeviceCode = choices.find((choice) => choice.choiceId === "openai-device-code");
+    const signInWithChatGpt = choices.find((choice) => choice.choiceId === "openai-token-sharing");
     const apiKey = choices.find(
       (choice) => choice.provider === "openai" && choice.method === "api-key",
     );
 
-    expect(openAiLogin?.choiceLabel).toBe("ChatGPT Login");
-    expect(openAiLogin?.choiceHint).toBe("Sign in with your ChatGPT or Codex subscription");
-    expect(openAiLogin?.assistantVisibility).toBeUndefined();
+    expect(openAiLogin?.choiceLabel).toBe("Codex login (browser)");
+    expect(openAiLogin?.choiceHint).toBe("Sign in to Codex locally with your ChatGPT account");
+    expect(openAiLogin && "assistantVisibility" in openAiLogin).toBe(false);
     expect(openAiLogin?.groupId).toBe("openai");
     expect(openAiLogin?.groupLabel).toBe("OpenAI");
-    expect(openAiLogin?.groupHint).toBe("ChatGPT/Codex sign-in or API key");
-    expect(openAiDeviceCode?.choiceLabel).toBe("ChatGPT Device Pairing");
+    expect(openAiLogin?.groupHint).toBe("Codex login, Sign in with ChatGPT (Beta), or API key");
+    expect(openAiDeviceCode?.choiceLabel).toBe("Codex login (device code)");
     expect(openAiDeviceCode?.choiceHint).toBe(
-      "Pair your ChatGPT account in browser with a device code",
+      "Use a browser code when OpenClaw runs on a remote VM",
     );
-    expect(openAiDeviceCode?.assistantVisibility).toBe("manual-only");
+    expect(openAiDeviceCode && "assistantVisibility" in openAiDeviceCode).toBe(false);
+    expect(openAiDeviceCode?.onboardingFeatured).toBe(true);
+    expect(openAiLogin?.onboardingFeatured).not.toBe(true);
     expect(openAiDeviceCode?.groupId).toBe("openai");
     expect(openAiDeviceCode?.groupLabel).toBe("OpenAI");
-    expect(openAiDeviceCode?.groupHint).toBe("ChatGPT/Codex sign-in or API key");
+    expect(openAiDeviceCode?.groupHint).toBe(
+      "Codex login, Sign in with ChatGPT (Beta), or API key",
+    );
+    expect(signInWithChatGpt?.choiceLabel).toBe("Sign in with ChatGPT (Beta)");
+    expect(signInWithChatGpt?.choiceHint).toBe(
+      "Authorize OpenClaw for eligible Responses models using your Codex allowance",
+    );
+    expect(
+      choices
+        .toSorted((a, b) => (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0))
+        .map((choice) => choice.choiceId),
+    ).toEqual(["openai-device-code", "openai", "openai-token-sharing", "openai-api-key"]);
     expect(apiKey?.choiceLabel).toBe("OpenAI API Key");
     expect(apiKey?.choiceHint).toBe("Use your OpenAI API key directly");
     expect(apiKey?.groupId).toBe("openai");
     expect(apiKey?.groupLabel).toBe("OpenAI");
-    expect(apiKey?.groupHint).toBe("ChatGPT/Codex sign-in or API key");
+    expect(apiKey?.groupHint).toBe("Codex login, Sign in with ChatGPT (Beta), or API key");
     expect(choices.map((choice) => choice.choiceLabel)).not.toContain(
       "OpenAI Codex (ChatGPT OAuth)",
     );
@@ -185,13 +206,25 @@ describe("OpenAI plugin manifest", () => {
     expect(azureSparkSuppression).not.toHaveProperty("when");
   });
 
-  it("keeps auth choice copy aligned with provider wizard metadata", () => {
-    const wizards = providerWizardByKey();
-
+  it("keeps manifest auth choices aligned with the lightweight provider descriptor", () => {
+    const provider = createOpenAIProvider();
     for (const choice of manifest.providerAuthChoices ?? []) {
       const key = `${choice.provider}:${choice.method}`;
+      const method = provider.auth.find((entry) => entry.id === choice.method);
 
-      expectWizardFields(wizards.get(key), manifestComparableWizardFields(choice), key);
+      expect(method, key).toBeDefined();
+      expect(comparableWizardFields(method?.wizard ?? {}), key).toEqual(
+        comparableWizardFields(choice),
+      );
     }
+  });
+
+  it.each([
+    ["setup", buildOpenAISetupProvider],
+    ["full runtime", buildOpenAIProvider],
+  ])("keeps %s provider metadata on the lightweight descriptor", (_surface, buildProvider) => {
+    expect(comparableProviderMetadata(buildProvider())).toEqual(
+      comparableProviderMetadata(createOpenAIProvider()),
+    );
   });
 });

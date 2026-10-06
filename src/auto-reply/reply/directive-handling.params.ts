@@ -1,16 +1,18 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-/** Parameter contracts for the canonical directive transaction handler. */
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { AgentModelPrimaryWriteTarget } from "../../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import type { ModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 
-/** Core directive handler inputs that do not depend on the inbound message shape. */
-type HandleDirectiveOnlyCoreParams = {
+export type HandleDirectiveOnlyParams = {
   cfg: OpenClawConfig;
+  agentId: string;
   directives: InlineDirectives;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
@@ -19,14 +21,14 @@ type HandleDirectiveOnlyCoreParams = {
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   elevatedFailures?: Array<{ gate: string; key: string }>;
-  messageProviderKey?: string;
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
-  policyAliasIndex?: ModelAliasIndex;
   allowedModelKeys: Set<string>;
+  modelPolicy?: ModelVisibilityPolicy;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog>
+    ReturnType<typeof import("../../agents/prepared-model-catalog.js").readPreparedModelCatalog>
   >;
   thinkingCatalog?: ModelCatalogEntry[];
   resetModelOverride: boolean;
@@ -35,10 +37,8 @@ type HandleDirectiveOnlyCoreParams = {
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   canPersistStickyModelSelection?: boolean;
-};
-
-/** Full directive-only command handler inputs. */
-export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
+  stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
+  onRejection?: () => void;
   ctx?: MsgContext;
   messageProvider?: string;
   currentThinkLevel?: ThinkLevel;
@@ -54,7 +54,12 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   /** Mixed messages consume the transaction outcome without repeating persistence. */
   persistenceState?: {
     outcome:
-      | { kind: "pending" | "applied"; provider: string; model: string }
+      | {
+          kind: "pending" | "applied";
+          provider: string;
+          model: string;
+          modelCatalog?: ModelCatalogEntry[];
+        }
       | { kind: "rejected"; errorText: string };
   };
 };

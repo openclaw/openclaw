@@ -1,11 +1,13 @@
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { MODEL_APIS, type ModelApi } from "../../../config/types.models.js";
+import { MODEL_APIS } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../../plugins/provider-model-routes.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../../secrets/sentinel.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
+import { isStringOption } from "../../../utils/string-readers.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { markAuthProfileSuccess } from "../../auth-profiles.js";
 import { recordRuntimeAuthMaterialization } from "../../auth-profiles/runtime-materializations.js";
@@ -38,13 +40,10 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
   }
   const successProfileId = input.profileId;
   const safeSuccessProfileId = redactIdentifier(successProfileId, { len: 12 });
-  const successProvider = resolveAuthProfileStateProvider(
-    input.profileStore,
-    successProfileId,
-    input.provider,
-  );
+  const successProvider =
+    input.profileStore.profiles[successProfileId]?.provider.trim() || input.provider;
   const successStarted = Date.now();
-  void markAuthProfileSuccess({
+  const bookkeeping = markAuthProfileSuccess({
     store: input.profileStore,
     provider: successProvider,
     profileId: successProfileId,
@@ -73,6 +72,9 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
           `error=${formatErrorMessage(error)}`,
       );
     });
+  // Capture the entire operation before it waits in the auth writer queue.
+  // Ordinary turns remain nonblocking; a repair owner must join it before Doctor.
+  void getOpenClawDatabaseMaintenanceScope()?.track(bookkeeping);
 }
 
 export function reportEmbeddedRunSuccessfulAuthBinding(input: {
@@ -93,10 +95,7 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
 }): void {
   const credential = input.profileId ? input.profileStore.profiles[input.profileId] : undefined;
-  const pluginHarnessApiKeyInfo = resolvePluginHarnessApiKeyInfo({
-    apiKeyInfo: input.apiKeyInfo,
-    pluginHarnessOwnsTransport: input.pluginHarnessOwnsTransport,
-  });
+  const pluginHarnessApiKeyInfo = resolvePluginHarnessApiKeyInfo(input);
   const authFingerprint =
     credential?.type === "oauth" && input.profileId
       ? fingerprintResolvedAuthProfileCredential({
@@ -141,16 +140,13 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
             ...(authProfileOwnerFingerprint ? { authProfileOwnerFingerprint } : {}),
           })
         : undefined;
-  const runtimeOwnerKind = runtimeOwnerFingerprint
-    ? input.apiKeyInfo?.mode === "aws-sdk"
+  const runtimeOwnerKind =
+    runtimeOwnerFingerprint && input.apiKeyInfo?.mode === "aws-sdk"
       ? ("aws-sdk" as const)
       : input.pluginHarnessOwnsTransport
         ? ("plugin-harness" as const)
-        : undefined
-    : input.pluginHarnessOwnsTransport
-      ? ("plugin-harness" as const)
-      : undefined;
-  const materializedRoute = resolveOpaqueHarnessMaterialization(input, credential);
+        : undefined;
+  const materializedRoute = resolveHarnessAuthMaterialization(input, credential);
   if (materializedRoute) {
     recordRuntimeAuthMaterialization({
       agentDir: input.agentDir,
@@ -182,15 +178,25 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
   });
 }
 
-function resolveOpaqueHarnessMaterialization(
+function resolveHarnessAuthMaterialization(
   input: Parameters<typeof reportEmbeddedRunSuccessfulAuthBinding>[0],
   credential: AuthProfileStore["profiles"][string] | undefined,
 ) {
+  const preparedApiKeyProfileId = input.apiKeyInfo?.profileId;
+  // Prepared API-key routes are host-resolved before a harness turn. Only the
+  // exact SecretRef profile may turn that completed request into a catalog fact.
+  const resolvedReferencedApiKey =
+    credential?.type === "api_key" &&
+    credential.keyRef !== undefined &&
+    input.apiKeyInfo?.mode === "api-key" &&
+    preparedApiKeyProfileId !== undefined &&
+    preparedApiKeyProfileId === input.profileId &&
+    input.apiKeyInfo.source === `profile:${preparedApiKeyProfileId}`;
   if (
     !input.pluginHarnessOwnsAuthBootstrap ||
-    input.apiKeyInfo ||
+    (input.apiKeyInfo && !resolvedReferencedApiKey) ||
     hasInlineCredentialMaterial(credential) ||
-    !isModelApi(input.modelApi)
+    !isStringOption(input.modelApi, MODEL_APIS)
   ) {
     return undefined;
   }
@@ -218,10 +224,6 @@ function resolveOpaqueHarnessMaterialization(
         })),
   );
   return routes.length === 1 ? routes[0] : undefined;
-}
-
-function isModelApi(value: string): value is ModelApi {
-  return (MODEL_APIS as readonly string[]).includes(value);
 }
 
 function hasInlineCredentialMaterial(
@@ -255,16 +257,4 @@ function resolvePluginHarnessApiKeyInfo(input: {
   }
   const resolvedApiKey = resolveSecretSentinel(apiKey);
   return resolvedApiKey ? { ...apiKeyInfo, apiKey: resolvedApiKey } : null;
-}
-
-function resolveAuthProfileStateProvider(
-  store: AuthProfileStore,
-  profileId: string,
-  fallbackProvider: string,
-): string {
-  const profileProvider = store.profiles?.[profileId]?.provider?.trim();
-  if (profileProvider) {
-    return profileProvider;
-  }
-  return profileId.split(":", 1)[0]?.trim() || fallbackProvider;
 }

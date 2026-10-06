@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -30,16 +30,21 @@ import {
   logAttachmentFailure,
   parseMessageWithAttachments,
   type ChatAttachment,
+  type ChatImageContent,
+  type OffloadedRef,
 } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import {
   loadSessionEntry,
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+import { AgentRequestReservationEndedError } from "./agent-dedupe.js";
 import type { AgentTurnContext } from "./types.js";
 
 type ExplicitRecipientSession = Awaited<
@@ -47,21 +52,6 @@ type ExplicitRecipientSession = Awaited<
     typeof import("../../infra/outbound/agent-delivery.js").resolveAgentExplicitRecipientSession
   >
 >;
-
-type AgentContentPhaseResult = {
-  agentId?: string;
-  requestedSessionKey?: string;
-  effectiveTranscriptInputText: string;
-  message: string;
-  images: Array<{ type: "image"; data: string; mimeType: string }>;
-  imageOrder: PromptImageOrderEntry[];
-  media: MediaFact[];
-  replyTo: string;
-  recipientChannel?: string;
-  recipientAccountId?: string;
-  recipientThreadId?: string | number;
-  to: string;
-};
 
 export async function prepareAgentContentPhase(params: {
   request: AgentRunRequest;
@@ -81,79 +71,26 @@ export async function prepareAgentContentPhase(params: {
   modelOverride?: string;
   explicitRecipientSession?: ExplicitRecipientSession;
   knownAgents: string[];
-}): Promise<AgentContentPhaseResult | undefined> {
-  const transcriptInputText = (params.request.message ?? "").trim();
+  assertAdmissionCurrent?: () => void;
+}) {
+  const transcriptInputText = params.request.message.trim();
   let message = params.isRawModelRun
     ? transcriptInputText
     : annotateInterSessionPromptText(transcriptInputText, params.inputProvenance);
-  let images: AgentContentPhaseResult["images"] = [];
+  let images: ChatImageContent[] = [];
   let imageOrder: PromptImageOrderEntry[] = [];
   let media: MediaFact[] = [];
+  let offloadedRefs: OffloadedRef[] = [];
+  let supportsInlineImages: boolean | undefined;
   let agentId = params.agentId;
   let requestedSessionKey = params.requestedSessionKey;
 
-  if (params.normalizedAttachments.length > 0) {
-    let baseProvider: string | undefined;
-    let baseModel: string | undefined;
-    let catalogAgentId = agentId;
-    let requestedAcpMeta: ReturnType<typeof readAcpSessionMeta>;
-    if (params.requestedSessionKeyRaw) {
-      const { cfg, entry, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw, {
-        ...(agentId ? { agentId } : {}),
-        clone: false,
-      });
-      const sessionAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
-      catalogAgentId = sessionAgentId;
-      const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
-      baseProvider = modelRef.provider;
-      baseModel = modelRef.model;
-      requestedAcpMeta = readAcpSessionMeta({ sessionKey: canonicalKey });
-    }
-    const isConfirmedAcpSession =
-      params.request.acpTurnSource === "manual_spawn" &&
-      isAcpSessionKey(params.requestedSessionKeyRaw) &&
-      requestedAcpMeta != null;
-    const supportsInlineImages = isConfirmedAcpSession
-      ? true
-      : await resolveGatewayModelSupportsImages({
-          loadGatewayModelCatalog: params.context.loadGatewayModelCatalog,
-          loadGatewayModelCatalogSnapshot: params.context.loadGatewayModelCatalogSnapshot,
-          agentId: catalogAgentId,
-          provider: params.providerOverride || baseProvider,
-          model: params.modelOverride || baseModel,
-        });
-    try {
-      const parsed = await parseMessageWithAttachments(message, params.normalizedAttachments, {
-        maxBytes: resolveChatAttachmentMaxBytes(params.cfg),
-        log: params.context.logGateway,
-        supportsInlineImages,
-        acceptNonImage: false,
-      });
-      message = parsed.message.trim();
-      images = parsed.images;
-      imageOrder = parsed.imageOrder;
-      media = parsed.media;
-    } catch (err) {
-      logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", err);
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-          String(err),
-        ),
-      );
-      return undefined;
-    }
-  }
-
   const isKnownGatewayChannel = (value: string): boolean =>
     isGatewayMessageChannel(value) || isInternalNonDeliveryChannel(value);
-  const channelHints = normalizeStringEntries(
-    [params.request.channel, params.request.replyChannel].filter(
-      (value): value is string => typeof value === "string",
-    ),
-  );
+  const channelHints = normalizeTrimmedStringList([
+    params.request.channel,
+    params.request.replyChannel,
+  ]);
   for (const rawChannel of channelHints) {
     const normalized = normalizeMessageChannel(rawChannel);
     if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {
@@ -169,6 +106,48 @@ export async function prepareAgentContentPhase(params: {
     }
   }
 
+  if (params.normalizedAttachments.length > 0) {
+    let baseProvider: string | undefined;
+    let baseModel: string | undefined;
+    let catalogAgentId = agentId;
+    let isConfirmedAcpSession = false;
+    if (params.requestedSessionKeyRaw) {
+      const target = resolveSessionStoreIdentity({
+        cfg: params.cfg,
+        sessionKey: params.requestedSessionKeyRaw,
+        agentId,
+      });
+      const session = await readAcpSessionEntryAsync({
+        cfg: params.cfg,
+        agentId: target.agentId,
+        sessionKey: target.canonicalKey,
+        assertCurrent: params.assertAdmissionCurrent,
+      });
+      params.assertAdmissionCurrent?.();
+      catalogAgentId = target.agentId;
+      const modelRef = resolveSessionModelRef(
+        session?.cfg ?? params.cfg,
+        session?.entry,
+        target.agentId,
+      );
+      baseProvider = modelRef.provider;
+      baseModel = modelRef.model;
+      isConfirmedAcpSession =
+        params.request.acpTurnSource === "manual_spawn" &&
+        isAcpSessionKey(params.requestedSessionKeyRaw) &&
+        session?.acp != null;
+    }
+    supportsInlineImages = isConfirmedAcpSession
+      ? true
+      : await resolveGatewayModelSupportsImages({
+          loadGatewayModelCatalog: params.context.loadGatewayModelCatalog,
+          loadGatewayModelCatalogSnapshot: params.context.loadGatewayModelCatalogSnapshot,
+          agentId: catalogAgentId,
+          provider: params.providerOverride || baseProvider,
+          model: params.modelOverride || baseModel,
+        });
+  }
+
   const voiceWakeTrigger = normalizeOptionalString(params.request.voiceWakeTrigger) ?? "";
   const replyTo = normalizeOptionalString(params.request.replyTo) ?? "";
   const recipientChannel = params.explicitRecipientSession?.channel ?? params.request.channel;
@@ -177,27 +156,29 @@ export async function prepareAgentContentPhase(params: {
   const to = params.sessionKeyFromTo
     ? ""
     : (params.explicitRecipientSession?.to ?? params.requestedToRaw ?? "");
-  const explicitVoiceWakeSessionTarget = params.requestedSessionKeyRaw
-    ? (() => {
-        const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
-          ...(agentId ? { agentId } : {}),
-          clone: false,
-        });
-        const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
-        const compatibilityOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, canonicalKey);
-        if (!compatibilityOwner || routedAgentId !== compatibilityOwner) {
-          return true;
-        }
-        return canonicalKey !== resolveAgentMainSessionKey({ cfg, agentId: routedAgentId });
-      })()
-    : false;
   const canAutoRouteVoiceWake =
+    Object.hasOwn(params.request, "voiceWakeTrigger") &&
     !normalizeOptionalString(params.request.agentId) &&
-    !explicitVoiceWakeSessionTarget &&
     !params.requestedSessionId &&
     !replyTo &&
     !to;
-  if (Object.hasOwn(params.request, "voiceWakeTrigger") && canAutoRouteVoiceWake) {
+  const explicitVoiceWakeSessionTarget =
+    canAutoRouteVoiceWake && params.requestedSessionKeyRaw
+      ? (() => {
+          const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
+            ...(agentId ? { agentId } : {}),
+            clone: false,
+            projection: "list",
+          });
+          const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
+          const compatibilityOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, canonicalKey);
+          if (!compatibilityOwner || routedAgentId !== compatibilityOwner) {
+            return true;
+          }
+          return canonicalKey !== resolveAgentMainSessionKey({ cfg, agentId: routedAgentId });
+        })()
+      : false;
+  if (canAutoRouteVoiceWake && !explicitVoiceWakeSessionTarget) {
     try {
       const route = resolveVoiceWakeRouteByTrigger({
         trigger: voiceWakeTrigger || undefined,
@@ -214,7 +195,10 @@ export async function prepareAgentContentPhase(params: {
         }
       } else if ("sessionKey" in route) {
         if (classifySessionKeyShape(route.sessionKey) !== "malformed_agent") {
-          const canonicalKey = loadSessionEntry(route.sessionKey, { clone: false }).canonicalKey;
+          const canonicalKey = loadSessionEntry(route.sessionKey, {
+            clone: false,
+            projection: "list",
+          }).canonicalKey;
           const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
           if (params.knownAgents.includes(routedAgentId)) {
             requestedSessionKey = canonicalKey;
@@ -235,6 +219,42 @@ export async function prepareAgentContentPhase(params: {
     }
   }
 
+  if (params.normalizedAttachments.length > 0) {
+    params.assertAdmissionCurrent?.();
+    try {
+      const parsed = await parseMessageWithAttachments(message, params.normalizedAttachments, {
+        maxBytes: resolveChatAttachmentMaxBytes(params.cfg),
+        log: params.context.logGateway,
+        supportsInlineImages,
+        acceptNonImage: false,
+        assertCurrent: params.assertAdmissionCurrent,
+      });
+      message = parsed.message.trim();
+      images = parsed.images;
+      imageOrder = parsed.imageOrder;
+      media = parsed.media;
+      offloadedRefs = parsed.offloadedRefs;
+    } catch (err) {
+      if (err instanceof AgentRequestReservationEndedError) {
+        throw err;
+      }
+      logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", err);
+      params.respond(
+        false,
+        undefined,
+        err instanceof SessionMutationAuthorizationChangedError
+          ? err.error
+          : errorShape(
+              err instanceof MediaOffloadError
+                ? ErrorCodes.UNAVAILABLE
+                : ErrorCodes.INVALID_REQUEST,
+              String(err),
+            ),
+      );
+      return undefined;
+    }
+  }
+
   return {
     agentId,
     requestedSessionKey,
@@ -243,6 +263,7 @@ export async function prepareAgentContentPhase(params: {
     images,
     imageOrder,
     media,
+    offloadedRefs,
     replyTo,
     recipientChannel,
     recipientAccountId,

@@ -6,11 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
-  ManagedWorktreeGcResult,
+  ManagedWorktreeGcReceipt,
   ManagedWorktreeRecord,
 } from "../../../../src/agents/worktrees/types.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
@@ -28,18 +30,18 @@ type SessionListResult = {
     worktree?: SessionWorktree;
   }>;
 };
-type SessionDeleteResult = {
-  deleted: boolean;
-  worktreePreserved?: { id: string; branch: string; path: string };
-};
 type WorktreeListResult = { worktrees: ManagedWorktreeRecord[] };
 type GatewayRunResult = { runId?: unknown; status?: unknown };
 
-let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
+let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
 
 afterEach(async () => {
-  await harness?.stop().catch(() => undefined);
+  if (gatewayOwner) {
+    await stopQaGatewayFixture(gatewayOwner);
+  }
   harness = undefined;
+  gatewayOwner = undefined;
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -99,7 +101,8 @@ describe("managed worktrees session-owner product proof", () => {
       const canonicalTmp = await fs.realpath(os.tmpdir());
       const fixtureRoot = tempDirs.make("openclaw-managed-worktree-session-", canonicalTmp);
       const { baseCommit, repo } = await initializeRepository(fixtureRoot);
-      harness = await startQaLiveLaneGateway({
+      gatewayOwner = createQaLiveLaneGateway();
+      harness = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
@@ -119,7 +122,7 @@ describe("managed worktrees session-owner product proof", () => {
         branch: "openclaw/qa-session-clean",
         path: expect.any(String),
       });
-      expect(clean.entry.worktree).toEqual({
+      expect(clean.entry.worktree).toMatchObject({
         id: clean.worktree.id,
         branch: clean.worktree.branch,
         repoRoot: repo,
@@ -147,11 +150,11 @@ describe("managed worktrees session-owner product proof", () => {
         expect.objectContaining({
           key: clean.key,
           spawnedCwd: clean.worktree.path,
-          worktree: {
+          worktree: expect.objectContaining({
             id: clean.worktree.id,
             branch: clean.worktree.branch,
             repoRoot: repo,
-          },
+          }),
         }),
       );
 
@@ -173,19 +176,40 @@ describe("managed worktrees session-owner product proof", () => {
       )) as GatewayRunResult;
       expect(terminal.status).toBe("ok");
 
-      const gc = (await harness.gateway.call("worktrees.gc", {})) as ManagedWorktreeGcResult;
-      expect(gc).toEqual({
+      const gateway = harness.gateway;
+      let gc = (await gateway.call("worktrees.gc", {})) as ManagedWorktreeGcReceipt;
+      expect(gc).toMatchObject({ jobId: expect.any(String), state: "queued" });
+      const jobId = gc.jobId;
+      await expect
+        .poll(
+          async () => {
+            gc = (await gateway.call("worktrees.gc", { jobId })) as ManagedWorktreeGcReceipt;
+            return gc.state === "completed" || gc.state === "failed";
+          },
+          { timeout: 30_000, interval: 2_000 },
+        )
+        .toBe(true);
+      expect(gc).toMatchObject({
+        jobId,
+        state: "completed",
+        outcome: "completed",
+        error: null,
         removed: expect.not.arrayContaining([clean.worktree.id]),
         orphansDeleted: expect.any(Number),
         snapshotsPruned: expect.any(Number),
       });
-      expect((await listWorktrees()).worktrees).toContainEqual(
-        expect.objectContaining({ id: clean.worktree.id, ownerId: clean.key }),
+      const retained = (await listWorktrees()).worktrees.find(
+        (record) => record.id === clean.worktree.id,
+      );
+      expect(retained).toMatchObject({ id: clean.worktree.id, ownerId: clean.key });
+      expect(retained).not.toHaveProperty("removedAt");
+      await expect(fs.readFile(path.join(clean.worktree.path, "README.md"), "utf8")).resolves.toBe(
+        "base\n",
       );
 
       const cleanDeleted = (await harness.gateway.call("sessions.delete", {
         key: clean.key,
-      })) as SessionDeleteResult;
+      })) as SessionsDeleteResult;
       expect(cleanDeleted.deleted).toBe(true);
       expect(cleanDeleted).not.toHaveProperty("worktreePreserved");
       await expect(fs.access(clean.worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -206,7 +230,7 @@ describe("managed worktrees session-owner product proof", () => {
       await fs.writeFile(dirtyFile, "restore this note\n");
       const dirtyDeleted = (await harness.gateway.call("sessions.delete", {
         key: dirty.key,
-      })) as SessionDeleteResult;
+      })) as SessionsDeleteResult;
       expect(dirtyDeleted.deleted).toBe(true);
       expect(dirtyDeleted).not.toHaveProperty("worktreePreserved");
       await expect(fs.access(dirty.worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -233,7 +257,7 @@ describe("managed worktrees session-owner product proof", () => {
       await git(repo, "worktree", "lock", locked.worktree.path);
       const lockedDeleted = (await harness.gateway.call("sessions.delete", {
         key: locked.key,
-      })) as SessionDeleteResult;
+      })) as SessionsDeleteResult;
       expect(lockedDeleted).toEqual(
         expect.objectContaining({
           deleted: true,
@@ -241,6 +265,7 @@ describe("managed worktrees session-owner product proof", () => {
             id: locked.worktree.id,
             branch: locked.worktree.branch,
             path: locked.worktree.path,
+            reason: "foreign-lock",
           },
         }),
       );

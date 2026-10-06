@@ -2,683 +2,319 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  deleteCloudDraftSession,
-  deleteRecoveredCloudDraftSession,
-  startCloudInitialTurn,
-} from "../../lib/sessions/cloud-startup.ts";
-import { renderCloudProfileMenuItems } from "./cloud-target.ts";
-import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
-
-const params = {
-  key: "agent:cloud:test",
-  agentId: "cloud",
-  profileId: "aws",
-  message: "run remotely",
-};
-
-function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClient, "request"> {
-  return { request: request as GatewayBrowserClient["request"] };
-}
-
-describe("cloud session startup", () => {
-  it("stops before the first turn when dispatch fails", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("allocation failed"))
-      .mockResolvedValueOnce({ session: { placement: { state: "failed" } } });
-
-    await expect(startCloudInitialTurn(clientWith(request), params, () => true)).resolves.toEqual({
-      status: "dispatch-rejected",
-      error: "allocation failed",
-    });
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenCalledWith("sessions.dispatch", {
-      key: params.key,
-      agentId: params.agentId,
-      profileId: params.profileId,
-    });
-  });
-
-  it("does not reconcile a definitive dispatch rejection", async () => {
-    const request = vi.fn().mockRejectedValue(
-      new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "unknown cloud profile",
-        retryable: false,
-      }),
-    );
-
-    await expect(startCloudInitialTurn(clientWith(request), params, () => true)).resolves.toEqual({
-      status: "dispatch-rejected",
-      error: "unknown cloud profile",
-    });
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).not.toHaveBeenCalledWith("sessions.describe", expect.anything());
-  });
-
-  it("destroys an allocated worker when provisioning becomes failed", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        placement: { state: "provisioning", environmentId: "environment-failed" },
-      })
-      .mockResolvedValueOnce({
-        session: { placement: { state: "failed", environmentId: "environment-failed" } },
-      })
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
-
-    await expect(startCloudInitialTurn(clientWith(request), params, () => true)).resolves.toEqual({
-      status: "dispatch-rejected",
-      error: "cloud worker placement became failed",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "environments.destroy", {
-      environmentId: "environment-failed",
-    });
-    expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
-  });
-
-  it("keeps recovery state when failed-placement cleanup is rejected", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        placement: { state: "failed", environmentId: "environment-failed" },
-      })
-      .mockRejectedValueOnce(new Error("cleanup unavailable"));
-
-    await expect(startCloudInitialTurn(clientWith(request), params, () => true)).resolves.toEqual({
-      status: "cleanup-rejected",
-      error: "cleanup unavailable",
-    });
-  });
-
-  it("sends after an ambiguous dispatch error when durable placement is active", async () => {
-    const attachments = [{ type: "file", mimeType: "text/plain", content: "aGVsbG8=" }];
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockResolvedValueOnce({ session: { placement: { state: "active" } } })
-      .mockResolvedValueOnce({ runId: "run-1", messageSeq: 3 });
-
-    await expect(
-      startCloudInitialTurn(clientWith(request), { ...params, attachments }, () => true),
-    ).resolves.toMatchObject({
-      status: "started",
-      messageSeq: 3,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: params.key });
-    expect(request).toHaveBeenNthCalledWith(
-      3,
-      "sessions.send",
-      expect.objectContaining({ message: params.message, attachments }),
-    );
-  });
-
-  it("waits for an absent placement after an ambiguous dispatch error", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockResolvedValueOnce({ session: {} })
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-1" });
-
-    await expect(
-      startCloudInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toMatchObject({ status: "started" });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.describe", { key: params.key });
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ message: params.message }),
-    );
-  });
-
-  it("waits for a successful dispatch placement to become active", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        placement: { state: "provisioning", environmentId: "environment-1" },
-      })
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-1" });
-
-    await expect(
-      startCloudInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toMatchObject({ status: "started" });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.describe", { key: params.key });
-    expect(request).toHaveBeenNthCalledWith(
-      3,
-      "sessions.send",
-      expect.objectContaining({ message: params.message }),
-    );
-  });
-
-  it("waits through an in-progress placement after an ambiguous dispatch error", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockResolvedValueOnce({ session: { placement: { state: "provisioning" } } })
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-1" });
-
-    await expect(
-      startCloudInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toMatchObject({ status: "started" });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.describe", { key: params.key });
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ message: params.message }),
-    );
-  });
-
-  it("waits for a draining placement to become active during recovery", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockResolvedValueOnce({
-        session: { placement: { state: "draining", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-1" });
-
-    await expect(
-      startCloudInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toMatchObject({ status: "started" });
-    expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ message: params.message }),
-    );
-  });
-
-  it("keeps reconciling after a transient placement lookup failure", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockRejectedValueOnce(new Error("still reconnecting"))
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-1" });
-
-    await expect(
-      startCloudInitialTurn(clientWith(request), params, () => true),
-    ).resolves.toMatchObject({ status: "started" });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.describe", { key: params.key });
-    expect(request).toHaveBeenNthCalledWith(
-      4,
-      "sessions.send",
-      expect.objectContaining({ message: params.message }),
-    );
-  });
-
-  it("stops quickly when placement lookups remain unavailable", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockRejectedValue(new Error("authentication expired"));
-
-    await expect(startCloudInitialTurn(clientWith(request), params, () => true)).resolves.toEqual({
-      status: "cleanup-rejected",
-      error: "cloud worker placement could not be verified",
-    });
-    expect(request).toHaveBeenCalledTimes(5);
-  });
-
-  it.each([
-    {
-      name: "destroys the last known worker",
-      cleanupError: undefined,
-      expectedError: "cloud worker placement could not be verified",
-    },
-    {
-      name: "reports a rejected worker cleanup",
-      cleanupError: "cleanup unavailable",
-      expectedError:
-        "cloud worker placement could not be verified; cleanup failed: cleanup unavailable",
-    },
-  ])("$name when placement lookups remain unavailable", async ({ cleanupError, expectedError }) => {
-    vi.useFakeTimers();
-    try {
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce({
-          placement: { state: "provisioning", environmentId: "environment-unavailable" },
-        })
-        .mockRejectedValueOnce(new Error("lookup unavailable 1"))
-        .mockRejectedValueOnce(new Error("lookup unavailable 2"))
-        .mockRejectedValueOnce(new Error("lookup unavailable 3"))
-        .mockRejectedValueOnce(new Error("lookup unavailable 4"));
-      if (cleanupError) {
-        request.mockRejectedValueOnce(new Error(cleanupError));
-      } else {
-        request.mockResolvedValueOnce({ worker: { state: "destroyed" } });
-      }
-
-      const outcome = startCloudInitialTurn(clientWith(request), params, () => true);
-      await vi.runAllTimersAsync();
-
-      await expect(outcome).resolves.toEqual({ status: "cleanup-rejected", error: expectedError });
-      expect(request).toHaveBeenCalledTimes(6);
-      expect(request).toHaveBeenNthCalledWith(6, "environments.destroy", {
-        environmentId: "environment-unavailable",
-      });
-      expect(request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps a still-provisioning placement recoverable after reconciliation times out", async () => {
-    vi.useFakeTimers();
-    try {
-      const request = vi.fn().mockResolvedValue({
-        placement: { state: "provisioning", environmentId: "environment-slow" },
-        session: { placement: { state: "provisioning", environmentId: "environment-slow" } },
-      });
-
-      const outcome = startCloudInitialTurn(clientWith(request), params, () => true);
-      await vi.runAllTimersAsync();
-      await expect(outcome).resolves.toEqual({
-        status: "cleanup-rejected",
-        error: "cloud worker placement reconciliation timed out",
-      });
-      expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps a cancelled placement recoverable when destruction fails", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ placement: { state: "active", environmentId: "environment-1" } })
-      .mockRejectedValueOnce(new Error("cleanup unavailable"));
-
-    await expect(startCloudInitialTurn(clientWith(request), params, () => false)).resolves.toEqual({
-      status: "cleanup-rejected",
-      error: "cleanup unavailable",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "environments.destroy", {
-      environmentId: "environment-1",
-    });
-    expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
-  });
-
-  it("cancels provisioning promptly while reconciling an ambiguous dispatch", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transport closed"))
-      .mockResolvedValueOnce({
-        session: { placement: { state: "provisioning", environmentId: "environment-1" } },
-      })
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
-
-    await expect(startCloudInitialTurn(clientWith(request), params, () => false)).resolves.toEqual({
-      status: "cancelled",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "environments.destroy", {
-      environmentId: "environment-1",
-    });
-    expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
-  });
-
-  it("destroys the last known worker when cancellation coincides with a lookup failure", async () => {
-    let current = true;
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        placement: { state: "provisioning", environmentId: "environment-1" },
-      })
-      .mockImplementationOnce(async () => {
-        current = false;
-        throw new Error("reconnecting");
-      })
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
-
-    await expect(
-      startCloudInitialTurn(clientWith(request), params, () => current),
-    ).resolves.toEqual({ status: "cancelled" });
-    expect(request).toHaveBeenNthCalledWith(3, "environments.destroy", {
-      environmentId: "environment-1",
-    });
-  });
-
-  it("preserves the last known worker identity when a later placement omits it", async () => {
-    let current = true;
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        placement: { state: "provisioning", environmentId: "environment-1" },
-      })
-      .mockImplementationOnce(async () => {
-        current = false;
-        return { session: { placement: { state: "provisioning" } } };
-      })
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
-
-    await expect(
-      startCloudInitialTurn(clientWith(request), params, () => current),
-    ).resolves.toEqual({ status: "cancelled" });
-    expect(request).toHaveBeenNthCalledWith(3, "environments.destroy", {
-      environmentId: "environment-1",
-    });
-  });
-
-  it("aborts and destroys when cancellation lands while the first turn is in flight", async () => {
-    let current = true;
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        placement: { state: "active", environmentId: "environment-1" },
-      })
-      .mockImplementationOnce(async () => {
-        current = false;
-        return { runId: "run-1" };
-      })
-      .mockResolvedValueOnce({ ok: true, status: "aborted" })
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
-
-    await expect(
-      startCloudInitialTurn(clientWith(request), params, () => current),
-    ).resolves.toEqual({
-      status: "cancelled",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.abort", {
-      key: params.key,
-      agentId: params.agentId,
-    });
-    expect(request).toHaveBeenNthCalledWith(4, "environments.destroy", {
-      environmentId: "environment-1",
-    });
-  });
-
-  it("keeps the accepted message identity when post-send cleanup fails", async () => {
-    let current = true;
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        placement: { state: "active", environmentId: "environment-1" },
-      })
-      .mockImplementationOnce(async (_method, requestParams) => {
-        current = false;
-        return { runId: "run-1", requestParams };
-      })
-      .mockResolvedValueOnce({ ok: true, status: "aborted" })
-      .mockRejectedValueOnce(new Error("cleanup unavailable"));
-
-    const outcome = await startCloudInitialTurn(clientWith(request), params, () => current);
-    const sent = request.mock.calls[1]?.[1] as { idempotencyKey: string };
-    expect(outcome).toEqual({
-      status: "cleanup-rejected",
-      error: "cleanup unavailable",
-      messageId: sent.idempotencyKey,
-    });
-  });
-
-  it("destroys the worker after a definitive first-turn rejection", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        placement: { state: "active", environmentId: "environment-1" },
-      })
-      .mockRejectedValueOnce(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "message rejected",
-          retryable: false,
-        }),
-      )
-      .mockResolvedValueOnce({ worker: { state: "destroyed" } });
-
-    await expect(startCloudInitialTurn(clientWith(request), params, () => true)).resolves.toEqual({
-      status: "send-definitive-rejected",
-      error: "message rejected",
-      messageId: expect.any(String),
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "environments.destroy", {
-      environmentId: "environment-1",
-    });
-  });
-
-  it("redispatches terminal sending recovery with the same message identity", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ session: { placement: { state: "failed" } } })
-      .mockResolvedValueOnce({
-        placement: { state: "active", environmentId: "environment-2" },
-      })
-      .mockResolvedValueOnce({ runId: "run-2" });
-
-    await expect(
-      startCloudInitialTurn(
-        clientWith(request),
-        {
-          ...params,
-          messageId: "message-recovered",
-          recovering: true,
-          retryTerminalPlacement: true,
-        },
-        () => true,
-      ),
-    ).resolves.toEqual({ status: "started", messageId: "message-recovered" });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.dispatch", {
-      key: params.key,
-      agentId: params.agentId,
-      profileId: params.profileId,
-    });
-    expect(request).toHaveBeenNthCalledWith(
-      3,
-      "sessions.send",
-      expect.objectContaining({ idempotencyKey: "message-recovered" }),
-    );
-  });
-
-  it("destroys the worker without sending when recovery cannot enter the sending phase", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        placement: { state: "active", environmentId: "environment-1" },
-      })
-      .mockResolvedValueOnce({ ok: true });
-
-    await expect(
-      startCloudInitialTurn(
-        clientWith(request),
-        params,
-        () => true,
-        () => false,
-      ),
-    ).resolves.toEqual({
-      status: "send-not-started",
-      error: "cloud recovery storage is unavailable",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "environments.destroy", {
-      environmentId: "environment-1",
-    });
-    expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
-  });
-
-  it("reports lost worker identity instead of claiming cancellation succeeded", async () => {
-    const request = vi.fn().mockResolvedValueOnce({ placement: { state: "active" } });
-
-    await expect(startCloudInitialTurn(clientWith(request), params, () => false)).resolves.toEqual({
-      status: "cleanup-rejected",
-      error: "cloud worker cleanup lost its environment identity",
-    });
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it("deletes a cancelled local draft session", async () => {
-    const request = vi.fn().mockResolvedValue({ ok: true, deleted: true });
-
-    await expect(
-      deleteCloudDraftSession(clientWith(request), params.key, params.agentId),
-    ).resolves.toBeUndefined();
-
-    expect(request).toHaveBeenCalledWith("sessions.delete", {
-      key: params.key,
-      agentId: params.agentId,
-      deleteTranscript: true,
-    });
-  });
-
-  it("reports a rejected local draft cleanup", async () => {
-    const request = vi.fn().mockRejectedValue(new Error("delete unavailable"));
-
-    await expect(
-      deleteCloudDraftSession(clientWith(request), params.key, params.agentId),
-    ).resolves.toBe("delete unavailable");
-  });
-
-  it("destroys a recovered worker before deleting its draft session", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-recovered" } },
-      })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true, deleted: true });
-
-    await expect(
-      deleteRecoveredCloudDraftSession(clientWith(request), params.key, params.agentId),
-    ).resolves.toBeUndefined();
-    expect(request.mock.calls).toEqual([
-      ["sessions.describe", { key: params.key }],
-      ["environments.destroy", { environmentId: "environment-recovered" }],
-      ["sessions.delete", { key: params.key, agentId: params.agentId, deleteTranscript: true }],
-    ]);
-  });
-
-  it("retains a recovered draft when worker placement cannot be verified", async () => {
-    const request = vi.fn().mockRejectedValueOnce(new Error("gateway unavailable"));
-
-    await expect(
-      deleteRecoveredCloudDraftSession(clientWith(request), params.key, params.agentId),
-    ).resolves.toBe("cloud worker placement could not be verified");
-    expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("sessions.describe", { key: params.key });
-  });
-
-  it("treats a missing recovered session as already cleaned up", async () => {
-    const request = vi.fn().mockResolvedValueOnce({ session: null });
-
-    await expect(
-      deleteRecoveredCloudDraftSession(clientWith(request), params.key, params.agentId),
-    ).resolves.toBeUndefined();
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns the same idempotency key when first-turn sending fails", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        placement: { state: "active", environmentId: "environment-1" },
-      })
-      .mockRejectedValueOnce(new Error("transport closed"));
-
-    const outcome = await startCloudInitialTurn(clientWith(request), params, () => true);
-    expect(outcome).toMatchObject({ status: "send-rejected", error: "transport closed" });
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.send",
-      expect.objectContaining({
-        key: params.key,
-        message: params.message,
-        idempotencyKey: (outcome as { messageId: string }).messageId,
-      }),
-    );
-  });
-
-  it("reuses a supplied recovery idempotency key", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        placement: { state: "active", environmentId: "environment-1" },
-      })
-      .mockRejectedValueOnce(new Error("transport closed again"));
-
-    const outcome = await startCloudInitialTurn(
-      clientWith(request),
-      { ...params, messageId: "recovery-message-1" },
-      () => true,
-    );
-
-    expect(outcome).toMatchObject({ status: "send-rejected", messageId: "recovery-message-1" });
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.send",
-      expect.objectContaining({ idempotencyKey: "recovery-message-1" }),
-    );
-  });
-
-  it("reuses an active recovered worker without dispatching another one", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        session: { placement: { state: "active", environmentId: "environment-existing" } },
-      })
-      .mockResolvedValueOnce({ runId: "run-recovered" });
-
-    await expect(
-      startCloudInitialTurn(
-        clientWith(request),
-        { ...params, recovering: true, messageId: "recovery-message-1" },
-        () => true,
-      ),
-    ).resolves.toEqual({ status: "started", messageId: "recovery-message-1" });
-    expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.describe", { key: params.key });
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.send",
-      expect.objectContaining({ idempotencyKey: "recovery-message-1" }),
-    );
-  });
-});
+import { renderSessionMenuItem, renderCloudProfileMenuItems } from "./cloud-target.ts";
 
 describe("cloud target menu", () => {
+  it("renders explicit remediation commands on separate lines", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionMenuItem(
+        {
+          value: "device:disabled",
+          label: "Device",
+          compact: true,
+          disabled: true,
+          checked: false,
+          title: "Hosting disabled",
+          remediation: "enable-session-hosting",
+          onSelect: vi.fn(),
+        },
+        false,
+      ),
+      container,
+    );
+    expect(container.querySelector("code.new-session-page__command")?.textContent).toBe(
+      "openclaw connect --service --session-host",
+    );
+  });
+
+  it("anchors selected cloud configuration beside its profile row", () => {
+    const container = document.createElement("div");
+    render(
+      renderCloudProfileMenuItems({
+        profiles: [
+          {
+            id: "aws",
+            providerId: "aws",
+            operatingSystems: [
+              { id: "linux", label: "Linux", default: true },
+              { id: "windows", label: "Windows" },
+            ],
+            machines: [
+              { id: "small", label: "Small", cpu: 2, memoryGb: 4, default: true },
+              { id: "large", label: "Large", cpu: 8, memoryGb: 16 },
+            ],
+          },
+        ],
+        selectedId: "aws",
+        selectedOs: "windows",
+        selectedMachine: "large",
+        compact: true,
+        submitting: false,
+        onSelect: vi.fn(),
+      }),
+      container,
+    );
+    expect(container.querySelector('[data-value="cloud:aws"]')?.getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    const wrapper = container.querySelector("openclaw-tooltip.new-session-page__cloud-config-card");
+    expect(wrapper?.getAttribute("placement")).toBe("right");
+    expect(wrapper?.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
+    expect(
+      wrapper
+        ?.querySelector('[slot="content"] [data-value="os:windows"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      wrapper
+        ?.querySelector('[slot="content"] [data-value="machine:large"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("shows unselected provider defaults as suggestions and selects the provider before an explicit choice", () => {
+    const container = document.createElement("div");
+    const onSelect = vi.fn();
+    const onSelectOs = vi.fn();
+    const params = {
+      profiles: [
+        {
+          id: "aws",
+          providerId: "aws",
+          operatingSystems: [
+            { id: "linux", label: "Linux", default: true },
+            { id: "windows", label: "Windows" },
+          ],
+          machines: [
+            { id: "small", label: "Small", default: true },
+            { id: "standard", label: "Standard" },
+          ],
+        },
+      ],
+      selectedId: "",
+      compact: true,
+      submitting: false,
+      onSelect,
+      onSelectOs,
+    };
+    render(renderCloudProfileMenuItems(params), container);
+    const suggested = container.querySelector<HTMLButtonElement>('[data-value="os:linux"]')!;
+    expect(suggested.dataset.suggested).toBe("true");
+    expect(suggested.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      container.querySelector('[data-value="machine:small"]')?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    suggested.click();
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("aws", true);
+    expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("linux");
+    render(renderCloudProfileMenuItems({ ...params, selectedId: "aws" }), container);
+    expect(
+      container.querySelector('[data-value="os:linux"]')?.getAttribute("data-suggested"),
+    ).toBeNull();
+    expect(container.querySelector('[data-value="os:linux"]')?.getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+  });
+
+  it("shows only the blocking reason for unavailable compact choices", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionMenuItem(
+        {
+          value: "device:offline",
+          label: "Offline device",
+          compact: true,
+          disabled: true,
+          checked: false,
+          title: "Device unavailable",
+          platform: "macOS",
+          facts: ["Camera"],
+          capacityLabel: "Slot utilization unavailable",
+          onSelect: vi.fn(),
+        },
+        false,
+      ),
+      container,
+    );
+    const card = container.querySelector('[slot="content"]');
+    expect(card?.textContent?.trim()).toBe("Device unavailable");
+    expect(card?.querySelector("strong, svg, .new-session-page__capacity-caption")).toBeNull();
+  });
+
   it.each([
     {
-      name: "keeps an advertised supported runtime enabled",
-      runtime: { id: "codex", cloudPlacementSupported: true, source: "model" as const },
-      expected: undefined,
+      machine: { id: "standard", label: "Standard", cpu: 32, memoryGb: 64 },
+      expected: "32 vCPU · 64 GB",
     },
-    {
-      name: "leaves an unadvertised runtime to the Gateway dispatch gate",
-      runtime: { id: "codex", source: "model" as const },
-      expected: undefined,
-    },
-    {
-      name: "explains an advertised unsupported runtime",
-      runtime: { id: "acpx", cloudPlacementSupported: false, source: "model" as const },
-      expected: "The acpx runtime does not support cloud workers.",
-    },
-  ])("$name", ({ runtime, expected }) => {
-    const flow = new DraftSubmissionFlow(
-      {} as never,
-      {
-        modelControl: { resolveAgentRuntime: () => runtime },
-        repository: { kind: "git", repoRoot: "/repo", branches: [] },
-        selectedAgent: () => undefined,
-        worktreeAvailable: () => true,
-      } as never,
-      () => ({ context: undefined, data: undefined, isConnected: true }),
-      { requestUpdate: vi.fn(), closeTransientUi: vi.fn() },
+    { machine: { id: "compute", label: "Compute", cpu: 48 }, expected: "48 vCPU" },
+    { machine: { id: "memory", label: "Memory", memoryGb: 256 }, expected: "256 GB" },
+    { machine: { id: "custom", label: "Custom" }, expected: "Custom" },
+  ])("renders a single machine as fixed provider configuration", ({ machine, expected }) => {
+    const container = document.createElement("div");
+    render(
+      renderCloudProfileMenuItems({
+        profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
+        selectedId: "aws",
+        compact: true,
+        selectedMachine: machine.id,
+        submitting: false,
+        onSelect: vi.fn(),
+      }),
+      container,
     );
+    const machineLabel = container.querySelector(`[data-value="machine:${machine.id}"]`);
+    expect(machineLabel?.classList.contains("new-session-page__fixed-machine")).toBe(true);
+    expect(machineLabel?.textContent).toContain(expected);
+    expect(machineLabel?.tagName).toBe("SPAN");
+  });
 
-    expect(flow.cloudDisabledReason()).toBe(expected);
+  it("keeps the profile selected when configuration uses defaults", () => {
+    const container = document.createElement("div");
+    render(
+      renderCloudProfileMenuItems({
+        profiles: [
+          {
+            id: "aws",
+            providerId: "aws",
+            operatingSystems: [
+              { id: "windows", label: "Windows" },
+              { id: "linux", label: "Linux", default: true },
+            ],
+            machines: [
+              { id: "small", label: "Small" },
+              { id: "standard", label: "Standard", default: true },
+            ],
+          },
+        ],
+        selectedId: "aws",
+        compact: true,
+        submitting: false,
+        onSelect: vi.fn(),
+      }),
+      container,
+    );
+    expect(container.querySelector('[data-value="cloud:aws"]')?.getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+  });
+
+  it("uses the first machine as the displayed default when a provider omits one", () => {
+    const container = document.createElement("div");
+    render(
+      renderCloudProfileMenuItems({
+        profiles: [
+          {
+            id: "daytona",
+            providerId: "crabbox",
+            machines: [
+              { id: "small", label: "Small", cpu: 4, memoryGb: 8 },
+              { id: "large", label: "Large", cpu: 8, memoryGb: 16 },
+            ],
+          },
+        ],
+        selectedId: "daytona",
+        compact: true,
+        submitting: false,
+        onSelect: vi.fn(),
+      }),
+      container,
+    );
+    expect(
+      container.querySelector('[data-value="machine:small"]')?.getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("omits the operating-system heading when a provider exposes only machines", () => {
+    const container = document.createElement("div");
+    render(
+      renderCloudProfileMenuItems({
+        profiles: [
+          {
+            id: "daytona",
+            providerId: "crabbox",
+            machines: [{ id: "small", label: "Small", cpu: 4, memoryGb: 8 }],
+          },
+        ],
+        selectedId: "daytona",
+        compact: true,
+        submitting: false,
+        onSelect: vi.fn(),
+      }),
+      container,
+    );
+    const configuration = container.querySelector(".new-session-page__cloud-configuration");
+    expect(configuration?.textContent).not.toContain("Operating system");
+    expect(configuration?.textContent).toContain("Machine");
+  });
+
+  it("forwards configuration choices and disables them while submitting", () => {
+    const container = document.createElement("div");
+    const onSelectMachine = vi.fn();
+    const onSelectOs = vi.fn();
+    const params = {
+      profiles: [
+        {
+          id: "aws",
+          providerId: "aws",
+          operatingSystems: [
+            { id: "linux", label: "Linux" },
+            { id: "macos", label: "macOS" },
+          ],
+          machines: [
+            { id: "small", label: "Small" },
+            { id: "large", label: "Large" },
+          ],
+        },
+      ],
+      selectedId: "aws",
+      compact: true,
+      selectedOs: "linux",
+      selectedMachine: "small",
+      submitting: false,
+      onSelectMachine,
+      onSelectOs,
+      onSelect: vi.fn(),
+    };
+    render(renderCloudProfileMenuItems(params), container);
+    container.querySelector<HTMLButtonElement>('[data-value="machine:large"]')!.click();
+    container.querySelector<HTMLButtonElement>('[data-value="os:macos"]')!.click();
+    expect(onSelectMachine).toHaveBeenCalledExactlyOnceWith("large");
+    expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("macos");
+    render(renderCloudProfileMenuItems({ ...params, submitting: true }), container);
+    expect([...container.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
+  });
+
+  it("omits unavailable OS choices even when they are the current selection", () => {
+    const container = document.createElement("div");
+    render(
+      renderCloudProfileMenuItems({
+        profiles: [
+          {
+            id: "aws",
+            providerId: "aws",
+            operatingSystems: [
+              { id: "linux", label: "Linux" },
+              { id: "windows", label: "Windows", disabledReason: "Install WSL2" },
+            ],
+          },
+        ],
+        selectedId: "aws",
+        compact: true,
+        selectedOs: "windows",
+        submitting: false,
+        onSelect: vi.fn(),
+      }),
+      container,
+    );
+    const fixedOs = container.querySelector('[data-value="os:linux"]');
+    expect(fixedOs?.textContent).toBe("Linux");
+    expect(fixedOs?.tagName).toBe("SPAN");
+    expect(fixedOs?.hasAttribute("aria-pressed")).toBe(false);
+    expect(container.querySelector('[data-value="os:windows"]')).toBeNull();
+    expect(
+      container.querySelector('.new-session-page__cloud-configuration [aria-pressed="true"]'),
+    ).toBeNull();
   });
 
   it("disables cloud profiles with the runtime preflight reason", () => {
@@ -698,5 +334,31 @@ describe("cloud target menu", () => {
     const button = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
     expect(button?.disabled).toBe(true);
     expect(button?.title).toBe("The acpx runtime does not support cloud workers.");
+  });
+
+  it("disables only the cloud profile with a profile-specific reason", () => {
+    const reason =
+      "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.";
+    const container = document.createElement("div");
+    render(
+      renderCloudProfileMenuItems({
+        profiles: [
+          { id: "aws", providerId: "crabbox" },
+          { id: "ssh", providerId: "static-ssh" },
+        ],
+        selectedId: "",
+        submitting: false,
+        profileDisabledReason: (profile) => (profile.id === "aws" ? reason : undefined),
+        onSelect: vi.fn(),
+      }),
+      container,
+    );
+
+    const disabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
+    const enabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:ssh"]');
+    expect(disabled?.disabled).toBe(true);
+    expect(disabled?.title).toBe(reason);
+    expect(enabled?.disabled).toBe(false);
+    expect(enabled?.title).toBe("Cloud worker provider: static-ssh");
   });
 });

@@ -4,6 +4,7 @@
  */
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
+import { mapReplyDispatchCounts } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import {
   deliverInboundReplyWithMessageSendContextCore,
@@ -23,6 +24,30 @@ type ReplyOptionsWithoutModelSelected = Omit<
   "onModelSelected"
 >;
 type RecordInboundSessionFn = typeof import("../channels/session.js").recordInboundSession;
+
+function withLegacyDispatchCounts(
+  dispatch: DispatchReplyWithBufferedBlockDispatcher,
+): DispatchReplyWithBufferedBlockDispatcher {
+  // @deprecated Remove this receipt-to-count projection with the shim in the next Plugin SDK major.
+  return async (params) => {
+    const result = await dispatch(params);
+    const receipt = result.settledReceipt;
+    if (!receipt) {
+      return result;
+    }
+    const counts = mapReplyDispatchCounts(receipt.counts, (entry) => entry.delivered);
+    const failedCounts = mapReplyDispatchCounts(
+      receipt.counts,
+      (entry) => entry.failedBeforeSend + entry.failedAfterSend,
+    );
+    return {
+      ...result,
+      queuedFinal: counts.final > 0,
+      counts,
+      ...(Object.values(failedCounts).some((count) => count > 0) ? { failedCounts } : {}),
+    };
+  };
+}
 
 function buildInboundReplyDispatchBase(params: {
   cfg: OpenClawConfig;
@@ -49,8 +74,9 @@ function buildInboundReplyDispatchBase(params: {
     storePath: params.storePath,
     ctxPayload: params.ctxPayload,
     recordInboundSession: params.core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
+    dispatchReplyWithBufferedBlockDispatcher: withLegacyDispatchCounts(
       params.core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    ),
   };
 }
 
@@ -72,49 +98,6 @@ type RecordInboundSessionAndDispatchReplyParams = {
   replyOptions?: ReplyOptionsWithoutModelSelected;
 };
 
-async function recordInboundSessionAndDispatchReply(
-  params: RecordInboundSessionAndDispatchReplyParams,
-): Promise<void> {
-  await dispatchChannelInboundReply({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    agentId: params.agentId,
-    routeSessionKey: params.routeSessionKey,
-    storePath: params.storePath,
-    ctxPayload: params.ctxPayload,
-    recordInboundSession: params.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher: params.dispatchReplyWithBufferedBlockDispatcher,
-    delivery: {
-      preparePayload: (payload): OutboundReplyPayload =>
-        payload && typeof payload === "object" ? normalizeOutboundReplyPayloadCore(payload) : {},
-      deliver: async (payload, info) => {
-        if (params.durable) {
-          const durable = await deliverInboundReplyWithMessageSendContextCore({
-            cfg: params.cfg,
-            channel: params.channel,
-            accountId: params.accountId,
-            agentId: params.agentId,
-            ctxPayload: params.ctxPayload,
-            payload,
-            info,
-            ...params.durable,
-          });
-          throwIfDurableInboundReplyDeliveryFailed(durable);
-          if (isDurableInboundReplyDeliveryHandled(durable)) {
-            return durable.delivery;
-          }
-        }
-        return await params.deliver(payload as OutboundReplyPayload);
-      },
-      onError: params.onDispatchError,
-    },
-    replyPipeline: {},
-    replyOptions: params.replyOptions,
-    record: { onRecordError: params.onRecordError },
-  });
-}
-
 export async function dispatchInboundReplyWithBase(
   params: BuildInboundReplyDispatchBaseParams &
     Pick<
@@ -122,14 +105,37 @@ export async function dispatchInboundReplyWithBase(
       "deliver" | "durable" | "onRecordError" | "onDispatchError" | "replyOptions"
     >,
 ): Promise<void> {
-  const dispatchBase = buildInboundReplyDispatchBase(params);
-  await recordInboundSessionAndDispatchReply({
-    ...dispatchBase,
-    deliver: params.deliver,
-    durable: params.durable,
-    onRecordError: params.onRecordError,
-    onDispatchError: params.onDispatchError,
-    replyOptions: params.replyOptions,
+  const base = buildInboundReplyDispatchBase(params);
+  const { deliver, durable, onDispatchError, onRecordError, replyOptions } = params;
+  await dispatchChannelInboundReply({
+    ...base,
+    delivery: {
+      preparePayload: (payload): OutboundReplyPayload =>
+        payload && typeof payload === "object" ? normalizeOutboundReplyPayloadCore(payload) : {},
+      deliver: async (payload, info) => {
+        if (durable) {
+          const result = await deliverInboundReplyWithMessageSendContextCore({
+            cfg: base.cfg,
+            channel: base.channel,
+            accountId: base.accountId,
+            agentId: base.agentId,
+            ctxPayload: base.ctxPayload,
+            payload,
+            info,
+            ...durable,
+          });
+          throwIfDurableInboundReplyDeliveryFailed(result);
+          if (isDurableInboundReplyDeliveryHandled(result)) {
+            return result.delivery;
+          }
+        }
+        return await deliver(payload as OutboundReplyPayload);
+      },
+      onError: onDispatchError,
+    },
+    replyPipeline: {},
+    replyOptions,
+    record: { onRecordError },
   });
 }
 

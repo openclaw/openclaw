@@ -1,40 +1,35 @@
-/**
- * Browser CLI element interaction commands such as click, type, hover, drag,
- * select, screenshots, and input files.
- */
 import type { Command } from "commander";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
+  runBrowserCliCommand,
   parseBrowserNonNegativeIntegerOption,
   parseBrowserPositiveIntegerOption,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
-import { danger, defaultRuntime } from "../core-api.js";
-import {
-  callBrowserAct,
-  logBrowserActionResult,
-  requireRef,
-  resolveBrowserActionContext,
-} from "./shared.js";
+import { runBrowserAction, requireRef } from "./shared.js";
 
-/** Registers element-centric Browser action commands. */
+function parseBrowserMouseButtonOption(value: string): "left" | "right" | "middle" {
+  if (value === "left" || value === "right" || value === "middle") {
+    return value;
+  }
+  throw Object.assign(new Error("--button must be left, right, or middle."), {
+    name: "InvalidArgumentError",
+    code: "commander.invalidArgument",
+    exitCode: 1,
+  });
+}
+
 export function registerBrowserElementCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
-  const parseDecimalNumber = (value: string): number | undefined => {
-    const trimmed = value.trim();
-    if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed)) {
-      return undefined;
-    }
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  };
-
   const parseRequiredNumber = (value: string, label: string): number | undefined => {
-    const parsed = parseDecimalNumber(value);
-    if (parsed === undefined) {
+    const trimmed = value.trim();
+    const parsed = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    if (!Number.isFinite(parsed)) {
       defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
       defaultRuntime.exit(1);
       return undefined;
@@ -44,27 +39,17 @@ export function registerBrowserElementCommands(
 
   const runElementAction = async (params: {
     cmd: Command;
-    body: Record<string, unknown>;
-    successMessage: string | ((result: unknown) => string);
-    timeoutMs?: number;
+    body: BrowserActRequest;
+    successMessage: string | ((result: { url?: string }) => string);
   }): Promise<void> => {
-    const { parent, profile } = resolveBrowserActionContext(params.cmd, parentOpts);
-    try {
-      const result = await callBrowserAct({
+    const parent = parentOpts(params.cmd);
+    await runBrowserCliCommand(async () => {
+      await runBrowserAction({
         parent,
-        profile,
         body: params.body,
-        timeoutMs: params.timeoutMs,
+        successMessage: params.successMessage,
       });
-      const successMessage =
-        typeof params.successMessage === "function"
-          ? params.successMessage(result)
-          : params.successMessage;
-      logBrowserActionResult(parent, result, successMessage);
-    } catch (err) {
-      defaultRuntime.error(danger(String(err)));
-      defaultRuntime.exit(1);
-    }
+    });
   };
 
   browser
@@ -73,7 +58,7 @@ export function registerBrowserElementCommands(
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option("--double", "Double click", false)
-    .option("--button <left|right|middle>", "Mouse button to use")
+    .option("--button <left|right|middle>", "Mouse button to use", parseBrowserMouseButtonOption)
     .option("--modifiers <list>", "Comma-separated modifiers (Shift,Alt,Meta)")
     .action(async (ref: string | undefined, opts, cmd) => {
       const refValue = requireRef(ref);
@@ -97,7 +82,7 @@ export function registerBrowserElementCommands(
           modifiers,
         },
         successMessage: (result) => {
-          const url = (result as { url?: unknown }).url;
+          const url = result.url;
           const suffix = typeof url === "string" && url ? ` on ${url}` : "";
           return `clicked ref ${refValue}${suffix}`;
         },
@@ -111,7 +96,7 @@ export function registerBrowserElementCommands(
     .argument("<y>", "Viewport y coordinate")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option("--double", "Double click", false)
-    .option("--button <left|right|middle>", "Mouse button to use")
+    .option("--button <left|right|middle>", "Mouse button to use", parseBrowserMouseButtonOption)
     .option("--delay-ms <ms>", "Delay between mouse down/up", (v: string) =>
       parseBrowserNonNegativeIntegerOption(v, "--delay-ms"),
     )
@@ -130,10 +115,10 @@ export function registerBrowserElementCommands(
           targetId: normalizeOptionalString(opts.targetId),
           doubleClick: Boolean(opts.double),
           button: normalizeOptionalString(opts.button),
-          delayMs: Number.isFinite(opts.delayMs) ? opts.delayMs : undefined,
+          delayMs: opts.delayMs,
         },
         successMessage: (result) => {
-          const url = (result as { url?: unknown }).url;
+          const url = result.url;
           const suffix = typeof url === "string" && url ? ` on ${url}` : "";
           return `clicked ${x},${y}${suffix}`;
         },
@@ -206,16 +191,14 @@ export function registerBrowserElementCommands(
       if (!refValue) {
         return;
       }
-      const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
       await runElementAction({
         cmd,
         body: {
           kind: "scrollIntoView",
           ref: refValue,
           targetId: normalizeOptionalString(opts.targetId),
-          timeoutMs,
+          timeoutMs: opts.timeoutMs,
         },
-        timeoutMs,
         successMessage: `scrolled into view: ${refValue}`,
       });
     });

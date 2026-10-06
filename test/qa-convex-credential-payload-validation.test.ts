@@ -5,11 +5,67 @@ import { normalizeCredentialPayloadForKind } from "../qa/convex-credential-broke
 const BUZZ_DRIVER_PRIVATE_KEY = "01".repeat(32);
 const BUZZ_SUT_PRIVATE_KEY = "02".repeat(32);
 const BUZZ_DRIVER_NSEC = "nsec1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqstywftw";
+const TELEGRAM_PRIMARY_ARCHIVE = "YQ==";
+const TELEGRAM_GUEST_ARCHIVE = "Yg==";
+
+function buildTelegramTestUserbotPayload() {
+  return {
+    schemaVersion: 1,
+    environment: "test",
+    groupId: "-1001",
+    forumGroupId: "-1002",
+    forumTopicId: 42,
+    sutToken: "test-token",
+    sutUsername: "test_bot",
+    sutBotId: "700000001",
+    testerUserId: "700000002",
+    tdlibArchiveBase64: TELEGRAM_PRIMARY_ARCHIVE,
+    tdlibArchiveSha256: "a".repeat(64),
+    tdlibVersion: "1.8.67",
+    participants: [
+      {
+        alias: "guest",
+        testerUserId: "700000003",
+        tdlibArchiveBase64: TELEGRAM_GUEST_ARCHIVE,
+        tdlibArchiveSha256: "b".repeat(64),
+        tdlibVersion: "1.8.67",
+      },
+    ],
+  };
+}
+
+const buzzPayload = {
+  relayUrl: "wss://relay.qa.example",
+  roomId: "123e4567-e89b-42d3-a456-426614174000",
+  driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+  sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+};
+const discordPayload = {
+  guildId: "1496962067029299350",
+  channelId: "1496962068027281447",
+  driverBotToken: "driver-token",
+  sutBotToken: "sut-token",
+  sutApplicationId: "1496963665587601428",
+};
+
+const telegramPayload = {
+  schemaVersion: 1,
+  environment: "test",
+  groupId: "-100123",
+  sutToken: "test-token",
+  sutUsername: "test_bot",
+  sutBotId: "123",
+  testerUserId: "456",
+  tdlibArchiveBase64: "dGVzdA==",
+  tdlibArchiveSha256: "a".repeat(64),
+  tdlibVersion: "1.8.67",
+};
 
 describe("QA Convex credential payload validation", () => {
   it("normalizes Buzz credential payloads", () => {
     expect(
       normalizeCredentialPayloadForKind("buzz", {
+        ...buzzPayload,
         relayUrl: " wss://relay.qa.example ",
         roomId: " 123E4567-E89B-42D3-A456-426614174000 ",
         driverPrivateKey: ` ${BUZZ_DRIVER_PRIVATE_KEY} `,
@@ -18,10 +74,7 @@ describe("QA Convex credential payload validation", () => {
         ignored: true,
       }),
     ).toEqual({
-      relayUrl: "wss://relay.qa.example",
-      roomId: "123e4567-e89b-42d3-a456-426614174000",
-      driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
-      sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+      ...buzzPayload,
       driverAuthTag: '["auth","driver","conditions","signature"]',
     });
   });
@@ -31,10 +84,8 @@ describe("QA Convex credential payload validation", () => {
     (relayUrl) => {
       expect(
         normalizeCredentialPayloadForKind("buzz", {
+          ...buzzPayload,
           relayUrl,
-          roomId: "123e4567-e89b-42d3-a456-426614174000",
-          driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
-          sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
         }),
       ).toMatchObject({ relayUrl });
     },
@@ -43,10 +94,8 @@ describe("QA Convex credential payload validation", () => {
   it("rejects plaintext remote Buzz relay URLs", () => {
     expect(() =>
       normalizeCredentialPayloadForKind("buzz", {
+        ...buzzPayload,
         relayUrl: "ws://relay.qa.example",
-        roomId: "123e4567-e89b-42d3-a456-426614174000",
-        driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
-        sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
       }),
     ).toThrow(/wss:\/\//u);
   });
@@ -56,16 +105,15 @@ describe("QA Convex credential payload validation", () => {
     const invalidRelay = "https://relay.qa.example/private-path";
     expect(() =>
       normalizeCredentialPayloadForKind("buzz", {
+        ...buzzPayload,
         relayUrl: invalidRelay,
-        roomId: "123e4567-e89b-42d3-a456-426614174000",
         driverPrivateKey: privateKey,
         sutPrivateKey: privateKey,
       }),
     ).toThrow(/wss:\/\//u);
     try {
       normalizeCredentialPayloadForKind("buzz", {
-        relayUrl: "wss://relay.qa.example",
-        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        ...buzzPayload,
         driverPrivateKey: privateKey,
         sutPrivateKey: privateKey,
       });
@@ -77,26 +125,19 @@ describe("QA Convex credential payload validation", () => {
   it("rejects runtime-invalid Buzz secrets and equivalent key encodings", () => {
     expect(() =>
       normalizeCredentialPayloadForKind("buzz", {
-        relayUrl: "wss://relay.qa.example",
-        roomId: "123e4567-e89b-42d3-a456-426614174000",
-        driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+        ...buzzPayload,
         sutPrivateKey: BUZZ_DRIVER_NSEC,
       }),
     ).toThrow(/distinct driver and SUT identities/u);
     expect(() =>
       normalizeCredentialPayloadForKind("buzz", {
-        relayUrl: "wss://relay.qa.example",
-        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        ...buzzPayload,
         driverPrivateKey: "not-a-private-key",
-        sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
       }),
     ).toThrow(/nsec or 64-character hex private key/u);
     expect(() =>
       normalizeCredentialPayloadForKind("buzz", {
-        relayUrl: "wss://relay.qa.example",
-        roomId: "123e4567-e89b-42d3-a456-426614174000",
-        driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
-        sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+        ...buzzPayload,
         driverAuthTag: "not-an-auth-tag",
       }),
     ).toThrow(/auth tag JSON array/u);
@@ -105,32 +146,23 @@ describe("QA Convex credential payload validation", () => {
   it("normalizes Discord credential payloads", () => {
     expect(
       normalizeCredentialPayloadForKind("discord", {
+        ...discordPayload,
         guildId: " 1496962067029299350 ",
-        channelId: "1496962068027281447",
         voiceChannelId: "1496962069025263624",
         driverBotToken: " driver-token ",
-        sutBotToken: "sut-token",
-        sutApplicationId: "1496963665587601428",
         ignored: true,
       }),
     ).toEqual({
-      guildId: "1496962067029299350",
-      channelId: "1496962068027281447",
+      ...discordPayload,
       voiceChannelId: "1496962069025263624",
-      driverBotToken: "driver-token",
-      sutBotToken: "sut-token",
-      sutApplicationId: "1496963665587601428",
     });
   });
 
   it("rejects malformed Discord snowflakes", () => {
     expect(() =>
       normalizeCredentialPayloadForKind("discord", {
+        ...discordPayload,
         guildId: "not-a-snowflake",
-        channelId: "1496962068027281447",
-        driverBotToken: "driver-token",
-        sutBotToken: "sut-token",
-        sutApplicationId: "1496963665587601428",
       }),
     ).toThrow(/Discord snowflake/u);
   });
@@ -138,11 +170,8 @@ describe("QA Convex credential payload validation", () => {
   it("rejects empty Discord bot tokens", () => {
     expect(() =>
       normalizeCredentialPayloadForKind("discord", {
-        guildId: "1496962067029299350",
-        channelId: "1496962068027281447",
+        ...discordPayload,
         driverBotToken: " ",
-        sutBotToken: "sut-token",
-        sutApplicationId: "1496963665587601428",
       }),
     ).toThrow(/driverBotToken/u);
   });
@@ -150,12 +179,8 @@ describe("QA Convex credential payload validation", () => {
   it("rejects malformed optional Discord voice channel ids", () => {
     expect(() =>
       normalizeCredentialPayloadForKind("discord", {
-        guildId: "1496962067029299350",
-        channelId: "1496962068027281447",
+        ...discordPayload,
         voiceChannelId: "voice-channel",
-        driverBotToken: "driver-token",
-        sutBotToken: "sut-token",
-        sutApplicationId: "1496963665587601428",
       }),
     ).toThrow(/voiceChannelId/u);
   });
@@ -166,66 +191,79 @@ describe("QA Convex credential payload validation", () => {
     expect(normalizeCredentialPayloadForKind("future-kind", payload)).toBe(payload);
   });
 
-  it("normalizes Telegram user credential payloads", () => {
-    const sha256 = "a".repeat(64);
-
+  it("normalizes Telegram Test Server userbot credentials", () => {
     expect(
-      normalizeCredentialPayloadForKind("telegram-user", {
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        ...telegramPayload,
         groupId: " -100123 ",
-        sutToken: " sut-token ",
-        testerUserId: " 8709353529 ",
-        testerUsername: " OpenClawTestUser ",
-        telegramApiId: " 123456 ",
-        telegramApiHash: " api-hash ",
-        tdlibDatabaseEncryptionKey: " db-key ",
-        tdlibArchiveBase64: " tdlib-archive ",
-        tdlibArchiveSha256: sha256.toUpperCase(),
-        desktopTdataArchiveBase64: " desktop-archive ",
-        desktopTdataArchiveSha256: sha256,
+        sutToken: " test-token ",
+        sutUsername: " @test_bot ",
+        sutBotId: " 123 ",
+        testerUserId: " 456 ",
+        tdlibArchiveSha256: "A".repeat(64),
+        tdlibVersion: " 1.8.67 ",
         ignored: true,
       }),
-    ).toEqual({
-      groupId: "-100123",
-      sutToken: "sut-token",
-      testerUserId: "8709353529",
-      testerUsername: "OpenClawTestUser",
-      telegramApiId: "123456",
-      telegramApiHash: "api-hash",
-      tdlibDatabaseEncryptionKey: "db-key",
-      tdlibArchiveBase64: "tdlib-archive",
-      tdlibArchiveSha256: sha256,
-      desktopTdataArchiveBase64: "desktop-archive",
-      desktopTdataArchiveSha256: sha256,
+    ).toEqual(telegramPayload);
+  });
+
+  it("retains a validated Telegram forum topic and distinct participant sessions", () => {
+    const normalized = normalizeCredentialPayloadForKind(
+      "telegram-test-userbot",
+      buildTelegramTestUserbotPayload(),
+    );
+
+    expect({
+      forumGroupId: normalized.forumGroupId,
+      forumTopicId: normalized.forumTopicId,
+      participants: normalized.participants,
+    }).toEqual({
+      forumGroupId: "-1002",
+      forumTopicId: 42,
+      participants: [
+        {
+          alias: "guest",
+          testerUserId: "700000003",
+          tdlibArchiveBase64: TELEGRAM_GUEST_ARCHIVE,
+          tdlibArchiveSha256: "b".repeat(64),
+          tdlibVersion: "1.8.67",
+        },
+      ],
     });
   });
 
-  it("rejects malformed Telegram user credential payloads", () => {
-    const validPayload = {
-      groupId: "-100123",
-      sutToken: "sut-token",
-      testerUserId: "8709353529",
-      testerUsername: "OpenClawTestUser",
-      telegramApiId: "123456",
-      telegramApiHash: "api-hash",
-      tdlibDatabaseEncryptionKey: "db-key",
-      tdlibArchiveBase64: "tdlib-archive",
-      tdlibArchiveSha256: "a".repeat(64),
-      desktopTdataArchiveBase64: "desktop-archive",
-      desktopTdataArchiveSha256: "b".repeat(64),
-    };
+  it("rejects invalid Telegram forum selectors and duplicate participant authority", () => {
+    expect(() =>
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        ...buildTelegramTestUserbotPayload(),
+        forumTopicId: 0,
+      }),
+    ).toThrow(/invalid forumTopicId/u);
+    expect(() =>
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        ...buildTelegramTestUserbotPayload(),
+        participants: [
+          {
+            ...buildTelegramTestUserbotPayload().participants[0],
+            testerUserId: "700000002",
+          },
+        ],
+      }),
+    ).toThrow(/distinct participant identities/u);
+  });
 
+  it.each([
+    ["environment", { environment: "production" }],
+    ["bot identity", { sutBotId: "bot" }],
+    ["archive encoding", { tdlibArchiveBase64: "not-base64" }],
+    ["archive hash", { tdlibArchiveSha256: "not-a-hash" }],
+  ])("rejects malformed Telegram Test Server userbot %s", (_label, patch) => {
     expect(() =>
-      normalizeCredentialPayloadForKind("telegram-user", {
-        ...validPayload,
-        testerUserId: "tester",
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        ...telegramPayload,
+        ...patch,
       }),
-    ).toThrow(/testerUserId/u);
-    expect(() =>
-      normalizeCredentialPayloadForKind("telegram-user", {
-        ...validPayload,
-        tdlibArchiveSha256: "not-sha",
-      }),
-    ).toThrow(/tdlibArchiveSha256/u);
+    ).toThrow(/telegram-test-userbot/u);
   });
 
   it("normalizes WhatsApp credential payloads", () => {

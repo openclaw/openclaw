@@ -53,6 +53,7 @@ async function setupTempHome() {
   return {
     configPath: path.join(stateDir, "openclaw.json"),
     env,
+    stateDir,
     workspace,
   };
 }
@@ -100,7 +101,15 @@ describe("Skill proposal manual-target product proof", () => {
           status: "pending",
           target: {
             skillKey: "manual-gateway-proof",
-            skillFile: path.join(temp.workspace, "skills", "manual-gateway-proof", "SKILL.md"),
+            skillFile: path.join(
+              temp.stateDir,
+              "agents",
+              "main",
+              "agent",
+              "workshop-skills",
+              "manual-gateway-proof",
+              "SKILL.md",
+            ),
           },
         });
 
@@ -120,7 +129,7 @@ describe("Skill proposal manual-target product proof", () => {
         const inspected = (await started.client.request("skills.proposals.inspect", {
           agentId: "main",
           proposalId: created.record.id,
-        })) as { record: ProposalRecord };
+        })) as { record: ProposalRecord; revisionHash: string };
         expect(inspected.record).toMatchObject({
           id: created.record.id,
           status: "stale",
@@ -150,6 +159,7 @@ describe("Skill proposal manual-target product proof", () => {
           await started.client.request("skills.proposals.apply", {
             agentId: "main",
             proposalId: created.record.id,
+            expectedRevisionHash: inspected.revisionHash,
           });
         } catch (error) {
           applyError = error;

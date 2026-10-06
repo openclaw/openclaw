@@ -3,17 +3,17 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  DEFAULT_SESSION_LIST_QUERY,
-  type SessionArchivedFilter,
-} from "../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import type { SessionsRouteData } from "./sessions-page.ts";
+import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
+
+export type SessionsRouteData = {
+  expandedSessionKey: string | null;
+  statusFilter: SessionArchivedFilter;
+};
 
 function routeOptions(location: RouteLocation) {
   const search = new URLSearchParams(location.search);
   const expandedSessionKey = search.get("session")?.trim() || null;
-  // The retired internal `showArchived` param is deliberately not read; dashboard
+  // The retired internal `showArchived` param is deliberately not read; Sessions
   // URLs are not a shipped contract and stale links fall back to the Active view.
   const requestedStatus = search.get("status");
   const statusFilter: SessionArchivedFilter =
@@ -25,34 +25,10 @@ async function loadSessionsRoute(
   context: ApplicationContext,
   location: RouteLocation,
 ): Promise<SessionsRouteData> {
-  const gateway = context.gateway;
-  const gatewaySnapshot = gateway.snapshot;
-  const options = routeOptions(location);
-  const checkpointAgentId = parseAgentSessionKey(options.expandedSessionKey)?.agentId;
-  const scopeAgentId = checkpointAgentId ?? context.agentSelection.state.scopeId;
-  const [sessions] = await Promise.all([
-    context.sessions
-      .list({
-        ...DEFAULT_SESSION_LIST_QUERY,
-        search: options.expandedSessionKey ?? undefined,
-        includeGlobal: true,
-        includeUnknown: Boolean(options.expandedSessionKey),
-        archivedFilter: options.statusFilter,
-        ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
-      })
-      .then(
-        (result) => ({ result, error: null }),
-        (error: unknown) => ({ result: null, error: String(error) }),
-      ),
-    context.runtimeConfig.ensureLoaded().catch(() => undefined),
-  ]);
-  return {
-    gateway,
-    gatewaySnapshot,
-    result: sessions.result,
-    error: sessions.error,
-    ...options,
-  };
+  await context.runtimeConfig.ensureLoaded().catch(() => undefined);
+  // The mounted page owns list issuance, including scope/status navigation
+  // during a search. Prefetching here bypasses its single in-flight request.
+  return routeOptions(location);
 }
 
 export const page = definePage({

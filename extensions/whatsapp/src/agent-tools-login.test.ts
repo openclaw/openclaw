@@ -1,7 +1,13 @@
+import type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/core";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 // Whatsapp tests cover agent tools login plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
-import { createWhatsAppLoginTool } from "./agent-tools-login.js";
+import { registerWhatsAppLoginTool } from "./agent-tools-login.js";
 
 vi.mock("../login-qr-api.js", () => ({
   startWebLoginWithQr: vi.fn(),
@@ -11,13 +17,90 @@ vi.mock("../login-qr-api.js", () => ({
 const startWebLoginWithQrMock = vi.mocked(startWebLoginWithQr);
 const waitForWebLoginMock = vi.mocked(waitForWebLogin);
 
+function resolveRegisteredLoginTool(context: OpenClawPluginToolContext): AnyAgentTool | null {
+  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+  const api = createTestPluginApi({ registerTool });
+  registerWhatsAppLoginTool(api);
+  const factory = registerTool.mock.calls[0]?.[0];
+  if (!factory || typeof factory === "function" || !("contextVersion" in factory)) {
+    throw new Error("WhatsApp login tool factory was not registered");
+  }
+  expect(registerTool.mock.calls[0]?.[1]).toEqual({ name: "whatsapp_login" });
+  expect(factory.contextVersion).toBe(2);
+  const tool = factory.create({
+    ...context,
+    assertInvocationCurrent: context.assertInvocationCurrent ?? (() => {}),
+  });
+  if (Array.isArray(tool)) {
+    throw new Error("expected one WhatsApp login tool");
+  }
+  return tool ?? null;
+}
+
+function createOwnerLoginTool(context: OpenClawPluginToolContext = { senderIsOwner: true }) {
+  const tool = resolveRegisteredLoginTool(context);
+  if (!tool) {
+    throw new Error("expected WhatsApp login tool for owner sender");
+  }
+  return tool;
+}
+
 describe("createWhatsAppLoginTool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
+  it.each([false, undefined])("hides the login tool when owner status is %s", (senderIsOwner) => {
+    expect(resolveRegisteredLoginTool({ senderIsOwner })).toBeNull();
+  });
+
+  it("rejects credential persistence after the owning tool execution closes", async () => {
+    const tool = createOwnerLoginTool();
+    const controller = new AbortController();
+    let beforeCredentialPersistence: (() => Promise<void>) | undefined;
+    startWebLoginWithQrMock.mockImplementationOnce(async (options) => {
+      beforeCredentialPersistence = options?.beforeCredentialPersistence;
+      return { message: "login started" };
+    });
+
+    await tool.execute("tool-call-active", { action: "start" }, controller.signal);
+    await expect(beforeCredentialPersistence?.()).resolves.toBeUndefined();
+    controller.abort();
+
+    await expect(
+      tool.execute("tool-call-retained", { action: "start" }, controller.signal),
+    ).rejects.toThrow("WhatsApp login authority is no longer active");
+    await expect(beforeCredentialPersistence?.()).rejects.toThrow(
+      "WhatsApp login authority is no longer active",
+    );
+    expect(startWebLoginWithQrMock).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks continuation ownership at credential persistence without waiting for abort", async () => {
+    let current = true;
+    const tool = createOwnerLoginTool({
+      senderIsOwner: true,
+      assertInvocationCurrent: () => {
+        if (!current) {
+          throw new Error("owner revoked");
+        }
+      },
+    });
+    let persist: (() => Promise<void>) | undefined;
+    startWebLoginWithQrMock.mockImplementationOnce(async (options) => {
+      persist = options?.beforeCredentialPersistence;
+      return { message: "login started" };
+    });
+    const controller = new AbortController();
+    await tool.execute("owner-login", { action: "start" }, controller.signal);
+    await expect(persist?.()).resolves.toBeUndefined();
+    current = false;
+    expect(controller.signal.aborted).toBe(false);
+    await expect(persist?.()).rejects.toThrow("owner revoked");
+  });
+
   it("fully anchors the QR data URL pattern for grammar-constrained models", () => {
-    const tool = createWhatsAppLoginTool();
+    const tool = createOwnerLoginTool();
     const pattern = (tool.parameters as { properties: { currentQrDataUrl?: { pattern?: string } } })
       .properties.currentQrDataUrl?.pattern;
 
@@ -39,7 +122,7 @@ describe("createWhatsAppLoginTool", () => {
       qrDataUrl: "data:image/png;base64,next-qr",
     });
 
-    const tool = createWhatsAppLoginTool();
+    const tool = createOwnerLoginTool();
     const result = await tool.execute("tool-call-1", {
       action: "wait",
       timeoutMs: "5000",
@@ -79,22 +162,27 @@ describe("createWhatsAppLoginTool", () => {
       qrDataUrl: "data:image/png;base64,current-qr",
     });
 
-    const tool = createWhatsAppLoginTool();
-    await tool.execute("tool-call-start", {
-      action: "start",
-      timeoutMs: "6000",
-      accountId: "account-3",
-    });
+    const tool = createOwnerLoginTool();
+    await tool.execute(
+      "tool-call-start",
+      {
+        action: "start",
+        timeoutMs: "6000",
+        accountId: "account-3",
+      },
+      new AbortController().signal,
+    );
 
     expect(startWebLoginWithQrMock).toHaveBeenCalledWith({
       accountId: "account-3",
       timeoutMs: 6000,
       force: false,
+      beforeCredentialPersistence: expect.any(Function),
     });
   });
 
   it("rejects fractional timeoutMs before login actions", async () => {
-    const tool = createWhatsAppLoginTool();
+    const tool = createOwnerLoginTool();
 
     await expect(
       tool.execute("tool-call-start", {
@@ -117,8 +205,12 @@ describe("createWhatsAppLoginTool", () => {
       message: "✅ Linked! WhatsApp is ready.",
     });
 
-    const tool = createWhatsAppLoginTool();
-    await tool.execute("tool-call-start", { action: "start", accountId });
+    const tool = createOwnerLoginTool();
+    await tool.execute(
+      "tool-call-start",
+      { action: "start", accountId },
+      new AbortController().signal,
+    );
     await tool.execute("tool-call-wait", { action: "wait", timeoutMs: 5000, accountId });
 
     expect(waitForWebLoginMock).toHaveBeenCalledWith({

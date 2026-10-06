@@ -1,36 +1,20 @@
-// Write Cli Startup Metadata script supports OpenClaw repository automation.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import fs, {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { availableParallelism, tmpdir } from "node:os";
+import fs, { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import pMap from "p-map";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveCliStartupRootHelpBundleIdentity } from "./lib/cli-startup-root-help-bundle.js";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
-
-function dedupe(values: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    out.push(value);
-  }
-  return out;
-}
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptPath);
@@ -42,17 +26,16 @@ const ROOT_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
-// Each help render is an isolated CLI boot; concurrency only bounds process
-// fan-out, not output content, so scale with the host instead of serializing
-// eight boots two at a time.
-const COMMAND_HELP_RENDER_CONCURRENCY = Math.min(8, Math.max(2, availableParallelism()));
+// Cold CLI boots compete for the same module graph, so CPU count is not a safe
+// proxy for module-loading throughput on a disk-contended host.
+const COMMAND_HELP_RENDER_CONCURRENCY = 2;
 const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = [
+  "config",
   "doctor",
   "gateway",
   "models",
   "plugins",
   "sessions",
-  "tasks",
 ] as const;
 const CORE_CHANNEL_ORDER = [
   "telegram",
@@ -105,16 +88,6 @@ type SourceHelpRenderer<T = string> = (
   renderContext: RootHelpRenderContext,
   taskContext?: RenderTaskContext,
 ) => Awaitable<T>;
-type KillableChild = {
-  kill(signal: NodeJS.Signals): boolean;
-  pid?: number;
-};
-type RunTaskkill = (
-  command: string,
-  args: string[],
-  options: { stdio: "ignore" },
-) => { error?: unknown; status?: number | null } | undefined;
-
 class CliStartupMetadataRenderSupervisor {
   readonly #abortController = new AbortController();
   readonly #parentSignalHandlers: Array<{ handler: () => void; signal: NodeJS.Signals }> = [];
@@ -215,65 +188,6 @@ class CliStartupMetadataRenderSupervisor {
   }
 }
 
-function signalWindowsProcessTree(
-  pid: number,
-  signal: NodeJS.Signals,
-  runTaskkill: RunTaskkill = spawnSync,
-): boolean {
-  const args = ["/PID", String(pid), "/T"];
-  if (signal === "SIGKILL") {
-    args.push("/F");
-  }
-  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
-  return !result?.error && result?.status === 0;
-}
-
-function signalWindowsProcessTreeOrForce(
-  pid: number,
-  signal: NodeJS.Signals,
-  runTaskkill: RunTaskkill = spawnSync,
-): boolean {
-  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
-    return true;
-  }
-  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
-}
-
-function signalCliStartupMetadataProcessTree(
-  child: KillableChild,
-  signal: NodeJS.Signals,
-  {
-    appendDiagnostic = () => {},
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    appendDiagnostic?: (message: string) => void;
-    platform?: NodeJS.Platform;
-    runTaskkill?: RunTaskkill;
-    useProcessGroup?: boolean;
-  } = {},
-): void {
-  if (useProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-        appendDiagnostic(
-          `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`,
-        );
-      }
-    }
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
-      return;
-    }
-  }
-  child.kill(signal);
-}
-
 function updateHashFromFiles(
   hash: ReturnType<typeof createHash>,
   files: string[],
@@ -332,8 +246,6 @@ function resolveNodesHelpSourceSignature(sourceRootDir: string = rootDir): strin
     [
       path.join(sourceRootDir, "extensions/canvas/cli-metadata.ts"),
       path.join(sourceRootDir, "extensions/canvas/index.ts"),
-      path.join(sourceRootDir, "extensions/canvas/src/a2ui-jsonl.ts"),
-      path.join(sourceRootDir, "extensions/canvas/src/cli-helpers.ts"),
       path.join(sourceRootDir, "extensions/canvas/src/cli.ts"),
       path.join(sourceRootDir, "src/cli/program/help.ts"),
       path.join(sourceRootDir, "src/cli/program/context.ts"),
@@ -354,6 +266,7 @@ function resolveSubcommandHelpSourceSignature(sourceRootDir: string = rootDir): 
       path.join(sourceRootDir, "src/cli/program/context.ts"),
       path.join(sourceRootDir, "src/cli/banner.ts"),
       path.join(sourceRootDir, "src/cli/help-format.ts"),
+      path.join(sourceRootDir, "src/cli/config-cli.ts"),
       path.join(sourceRootDir, "src/cli/daemon-cli/register-service-commands.ts"),
       path.join(sourceRootDir, "src/cli/program/register.maintenance.ts"),
       path.join(sourceRootDir, "src/cli/program/register.status-health-sessions.ts"),
@@ -581,9 +494,9 @@ async function spawnText(
     let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     const signalChild = (signal: NodeJS.Signals) => {
-      signalCliStartupMetadataProcessTree(child, signal, {
-        appendDiagnostic: (message) => {
-          stderr += message;
+      terminateManagedChild(child, signal, {
+        onProcessGroupSignalError: (error) => {
+          stderr += `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`;
         },
         useProcessGroup,
       });
@@ -592,25 +505,23 @@ async function spawnText(
       if (!useProcessGroup || typeof child.pid !== "number") {
         return false;
       }
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code === "EPERM";
-      }
+      // Snapshot work belongs to the bounded drain, not this initial presence check.
+      return (
+        inspectManagedProcessGroup(child, {
+          deadlineAt: Date.now(),
+          errorPolicy: "alive-on-eperm",
+          useProcessGroup,
+        }) !== "dead"
+      );
     };
-    const waitForProcessGroupExit = async (timeoutMs: number) => {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
-        if (!processGroupIsAlive()) {
-          return true;
-        }
-        await new Promise((resolvePoll) => {
-          setTimeout(resolvePoll, 25);
-        });
-      }
-      return !processGroupIsAlive();
-    };
+    const waitForProcessGroupExit = (deadlineAt: number) =>
+      waitForManagedProcessGroupExit(child, Math.max(0, deadlineAt - Date.now()), {
+        deadlineAt,
+        errorPolicy: "alive-on-eperm",
+        useProcessGroup,
+        clampPollToDeadline: true,
+        pollIntervalMs: 25,
+      });
     const recordTerminalFailure = (error: Error) => {
       if (terminalFailure) {
         return terminalFailure;
@@ -677,39 +588,43 @@ async function spawnText(
       if (waitingForKillGrace) {
         return;
       }
+      const graceDeadlineAt = Date.now() + killGraceMs;
       waitingForKillGrace = true;
-      killTimer = setTimeout(() => {
-        waitingForKillGrace = false;
-        killTimer = undefined;
-        forceKillInFlight = true;
-        signalChild("SIGKILL");
-        const forceDrain = useProcessGroup
-          ? waitForProcessGroupExit(killGraceMs)
-          : Promise.resolve(true);
-        void forceDrain.then((drained) => {
-          forceKillInFlight = false;
-          if (!drained) {
-            processTreeCleanupFailure = Object.assign(
-              createFailure(
-                "process-tree-cleanup",
-                `process group did not exit within ${killGraceMs}ms after SIGKILL`,
-              ),
-              { preserveRenderState: true },
-            );
-            options.onTerminalFailure?.(processTreeCleanupFailure);
-          }
-          if (childClosedResult) {
-            finishClose(childClosedResult);
-          } else if (!drained) {
-            child.stdout.destroy();
-            child.stderr.destroy();
-            child.unref?.();
-            finishClose({ code: null, signal: "SIGKILL" });
-          }
-        });
-      }, killGraceMs);
+      killTimer = setTimeout(
+        () => {
+          waitingForKillGrace = false;
+          killTimer = undefined;
+          forceKillInFlight = true;
+          signalChild("SIGKILL");
+          const forceDrain = useProcessGroup
+            ? waitForProcessGroupExit(Date.now() + killGraceMs)
+            : Promise.resolve(true);
+          void forceDrain.then((drained) => {
+            forceKillInFlight = false;
+            if (!drained) {
+              processTreeCleanupFailure = Object.assign(
+                createFailure(
+                  "process-tree-cleanup",
+                  `process group did not exit within ${killGraceMs}ms after SIGKILL`,
+                ),
+                { preserveRenderState: true },
+              );
+              options.onTerminalFailure?.(processTreeCleanupFailure);
+            }
+            if (childClosedResult) {
+              finishClose(childClosedResult);
+            } else if (!drained) {
+              child.stdout.destroy();
+              child.stderr.destroy();
+              child.unref?.();
+              finishClose({ code: null, signal: "SIGKILL" });
+            }
+          });
+        },
+        Math.max(0, graceDeadlineAt - Date.now()),
+      );
       if (useProcessGroup) {
-        void waitForProcessGroupExit(killGraceMs).then((drained) => {
+        void waitForProcessGroupExit(graceDeadlineAt).then((drained) => {
           if (!drained || !waitingForKillGrace) {
             return;
           }
@@ -865,11 +780,10 @@ async function renderSourceRootHelpText(
   } satisfies RootHelpRenderOptions;
   const inlineModule = [
     `const mod = await import(${JSON.stringify(moduleUrl)});`,
-    "if (typeof mod.renderRootHelpText !== 'function') {",
-    `  throw new Error(${JSON.stringify("Source root-help module does not export renderRootHelpText.")});`,
+    "if (typeof mod.outputRootHelp !== 'function') {",
+    `  throw new Error(${JSON.stringify("Source root-help module does not export outputRootHelp.")});`,
     "}",
-    `const output = await mod.renderRootHelpText(${JSON.stringify(renderOptions)});`,
-    "process.stdout.write(output);",
+    `await mod.outputRootHelp(${JSON.stringify(renderOptions)});`,
     "process.exit(0);",
   ].join("\n");
   return await spawnText(["--import", "tsx", "--input-type=module", "--eval", inlineModule], {
@@ -880,17 +794,6 @@ async function renderSourceRootHelpText(
     signal: taskContext?.signal,
     timeoutMs: ROOT_HELP_RENDER_TIMEOUT_MS,
   });
-}
-
-async function renderSourceBrowserHelpText(
-  renderContext: RootHelpRenderContext,
-  taskContext?: RenderTaskContext,
-): Promise<string> {
-  // The launcher CLI boot renders byte-identical browser help to a direct
-  // tsx source render (registerBrowserCli + configureProgramHelp) while
-  // avoiding a tsx evaluation of the whole browser CLI import graph, which
-  // dominated this script's wall time.
-  return await renderSourceCommandHelpText("browser", renderContext, taskContext);
 }
 
 async function renderSourceCommandHelpText(
@@ -909,20 +812,6 @@ async function renderSourceCommandHelpText(
     signal: taskContext?.signal,
     timeoutMs: COMMAND_HELP_RENDER_TIMEOUT_MS,
   });
-}
-
-async function renderSourceSecretsHelpText(
-  renderContext: RootHelpRenderContext,
-  taskContext?: RenderTaskContext,
-): Promise<string> {
-  return await renderSourceCommandHelpText("secrets", renderContext, taskContext);
-}
-
-async function renderSourceNodesHelpText(
-  renderContext: RootHelpRenderContext,
-  taskContext?: RenderTaskContext,
-): Promise<string> {
-  return await renderSourceCommandHelpText("nodes", renderContext, taskContext);
 }
 
 async function renderSourceCommandHelpTextRecord(
@@ -996,7 +885,7 @@ async function writeCliStartupMetadata(options?: {
   const nodesHelpSourceSignature = resolveNodesHelpSourceSignature(resolvedSourceRootDir);
   const subcommandHelpSourceSignature = resolveSubcommandHelpSourceSignature(resolvedSourceRootDir);
   const bundledPluginsDir = path.join(resolvedDistDir, "extensions");
-  const channelOptions = dedupe([...CORE_CHANNEL_ORDER, ...channelCatalog.ids]);
+  const channelOptions = [...new Set([...CORE_CHANNEL_ORDER, ...channelCatalog.ids])];
 
   let existing: ExistingCliStartupMetadata | undefined;
   try {
@@ -1007,21 +896,19 @@ async function writeCliStartupMetadata(options?: {
 
   const reusableExisting =
     existing?.generatorSignature === generatorSignature &&
-    existing.channelCatalogSignature === channelCatalog.signature
+    existing.channelCatalogSignature === channelCatalog.signature &&
+    bundleIdentity &&
+    existing.rootHelpBundleSignature === bundleIdentity.signature
       ? existing
       : undefined;
   const reusableRootHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     typeof reusableExisting.rootHelpText === "string" &&
     reusableExisting.rootHelpText.length > 0
       ? reusableExisting.rootHelpText
       : undefined;
   const reusableBrowserHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.browserHelpSourceSignature === browserHelpSourceSignature &&
     typeof reusableExisting.browserHelpText === "string" &&
     reusableExisting.browserHelpText.length > 0
@@ -1029,8 +916,6 @@ async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableSecretsHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.secretsHelpSourceSignature === secretsHelpSourceSignature &&
     typeof reusableExisting.secretsHelpText === "string" &&
     reusableExisting.secretsHelpText.length > 0
@@ -1038,8 +923,6 @@ async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableNodesHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.nodesHelpSourceSignature === nodesHelpSourceSignature &&
     typeof reusableExisting.nodesHelpText === "string" &&
     reusableExisting.nodesHelpText.length > 0
@@ -1047,8 +930,6 @@ async function writeCliStartupMetadata(options?: {
       : undefined;
   const reusableSubcommandHelpText =
     reusableExisting &&
-    bundleIdentity &&
-    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
     reusableExisting.subcommandHelpSourceSignature === subcommandHelpSourceSignature &&
     hasAllPrecomputedSubcommandHelpText(reusableExisting.subcommandHelpText)
       ? (reusableExisting.subcommandHelpText as PrecomputedSubcommandHelpText)
@@ -1085,6 +966,11 @@ async function writeCliStartupMetadata(options?: {
               taskContext,
             ),
       );
+  // Root help traverses the plugin metadata graph too; finish it before command
+  // fan-out so sibling cold boots cannot starve its bounded render.
+  const afterRootHelp = <T>(render: () => Awaitable<T>) => rootHelpTextPromise.then(render);
+  const runSourceRenderer = <T>(render: SourceHelpRenderer<T>) =>
+    afterRootHelp(() => supervisor.run((taskContext) => render(renderContext, taskContext)));
   const hasCustomCommandRenderer =
     options?.renderSourceBrowserHelpText ||
     options?.renderSourceSecretsHelpText ||
@@ -1106,37 +992,38 @@ async function writeCliStartupMetadata(options?: {
   const commandHelpTextPromise =
     hasCustomCommandRenderer || sourceCommandsToRender.length === 0
       ? null
-      : renderSourceCommandHelpTextRecord(sourceCommandsToRender, renderContext, supervisor);
-  const browserHelpTextPromise = reusableBrowserHelpText
-    ? Promise.resolve(reusableBrowserHelpText)
-    : commandHelpTextPromise
-      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.browser)
-      : supervisor.run((taskContext) =>
-          (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(
-            renderContext,
-            taskContext,
-          ),
+      : afterRootHelp(() =>
+          renderSourceCommandHelpTextRecord(sourceCommandsToRender, renderContext, supervisor),
         );
-  const secretsHelpTextPromise = reusableSecretsHelpText
-    ? Promise.resolve(reusableSecretsHelpText)
-    : commandHelpTextPromise
-      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.secrets)
-      : supervisor.run((taskContext) =>
-          (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(
-            renderContext,
-            taskContext,
-          ),
-        );
-  const nodesHelpTextPromise = reusableNodesHelpText
-    ? Promise.resolve(reusableNodesHelpText)
-    : commandHelpTextPromise
-      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.nodes)
-      : supervisor.run((taskContext) =>
-          (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(
-            renderContext,
-            taskContext,
-          ),
-        );
+  const commandHelp = (
+    command: "browser" | "secrets" | "nodes",
+    reusable: string | undefined,
+    render?: SourceHelpRenderer,
+  ) =>
+    reusable !== undefined
+      ? Promise.resolve(reusable)
+      : commandHelpTextPromise
+        ? commandHelpTextPromise.then((help) => help[command])
+        : runSourceRenderer(
+            render ??
+              ((context, taskContext) =>
+                renderSourceCommandHelpText(command, context, taskContext)),
+          );
+  const browserHelpTextPromise = commandHelp(
+    "browser",
+    reusableBrowserHelpText,
+    options?.renderSourceBrowserHelpText,
+  );
+  const secretsHelpTextPromise = commandHelp(
+    "secrets",
+    reusableSecretsHelpText,
+    options?.renderSourceSecretsHelpText,
+  );
+  const nodesHelpTextPromise = commandHelp(
+    "nodes",
+    reusableNodesHelpText,
+    options?.renderSourceNodesHelpText,
+  );
   const subcommandHelpTextPromise = reusableSubcommandHelpText
     ? Promise.resolve(reusableSubcommandHelpText)
     : commandHelpTextPromise
@@ -1150,10 +1037,8 @@ async function writeCliStartupMetadata(options?: {
             ) as PrecomputedSubcommandHelpText,
         )
       : options?.renderSourceSubcommandHelpTextRecord
-        ? supervisor.run((taskContext) =>
-            options.renderSourceSubcommandHelpTextRecord!(renderContext, taskContext),
-          )
-        : renderSourceSubcommandHelpTextRecord(renderContext, supervisor);
+        ? runSourceRenderer(options.renderSourceSubcommandHelpTextRecord)
+        : afterRootHelp(() => renderSourceSubcommandHelpTextRecord(renderContext, supervisor));
   const [rootHelpText, browserHelpText, secretsHelpText, nodesHelpText, subcommandHelpText] =
     await settleRootHelpRenderPromises(
       [
@@ -1167,10 +1052,10 @@ async function writeCliStartupMetadata(options?: {
       supervisor,
     );
 
-  mkdirSync(resolvedDistDir, { recursive: true });
-  writeFileSync(
-    resolvedOutputPath,
-    `${JSON.stringify(
+  const outputDir = fs.realpathSync(path.dirname(resolvedOutputPath));
+  replaceFileAtomicSync({
+    filePath: path.join(outputDir, path.basename(resolvedOutputPath)),
+    content: `${JSON.stringify(
       {
         generatedBy: "scripts/write-cli-startup-metadata.ts",
         generatorSignature,
@@ -1190,8 +1075,11 @@ async function writeCliStartupMetadata(options?: {
       null,
       2,
     )}\n`,
-    "utf8",
-  );
+    // Keep build artifact permissions; the atomic helper defaults to private files/directories.
+    mode: 0o666 & ~process.umask(),
+    dirMode: fs.statSync(outputDir).mode,
+    preserveExistingMode: true,
+  });
 }
 
 function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
@@ -1206,7 +1094,6 @@ function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
 
 export const testing = {
   renderSourceRootHelpText,
-  signalCliStartupMetadataProcessTree,
   spawnText,
   writeCliStartupMetadata,
 };

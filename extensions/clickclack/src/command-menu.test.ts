@@ -39,6 +39,7 @@ async function syncNativeCommands(
   mocks.listNativeCommandSpecsForConfig.mockReturnValue(specs);
 
   await syncClickClackCommandMenu({
+    accountId: "default",
     cfg: {} as CoreConfig,
     client: { setBotCommands } as unknown as ReturnType<typeof createClickClackClient>,
     log,
@@ -84,6 +85,12 @@ describe("ClickClack command menu", () => {
       { warn },
     );
 
+    expect(mocks.listNativeCommandSpecsForConfig).toHaveBeenCalledWith(
+      {},
+      {
+        provider: "clickclack",
+      },
+    );
     expect(commands).toHaveLength(4);
     expect(commands[0]).toEqual({
       command: "deploy-now",
@@ -120,29 +127,5 @@ describe("ClickClack command menu", () => {
 
   it("returns an empty overwrite for an empty native catalog", async () => {
     await expect(syncNativeCommands([])).resolves.toEqual([]);
-  });
-
-  it("sources the catalog from the ClickClack native command registry", async () => {
-    const cfg = {} as CoreConfig;
-    const setBotCommands = vi.fn().mockResolvedValue([]);
-    mocks.listNativeCommandSpecsForConfig.mockReturnValue([
-      nativeCommand("status", { acceptsArgs: true }),
-    ]);
-
-    await syncClickClackCommandMenu({
-      cfg,
-      client: { setBotCommands } as unknown as ReturnType<typeof createClickClackClient>,
-    });
-
-    expect(mocks.listNativeCommandSpecsForConfig).toHaveBeenCalledWith(cfg, {
-      provider: "clickclack",
-    });
-    expect(setBotCommands).toHaveBeenCalledWith([
-      {
-        command: "status",
-        description: "Run status",
-        args_hint: "[args]",
-      },
-    ]);
   });
 });
