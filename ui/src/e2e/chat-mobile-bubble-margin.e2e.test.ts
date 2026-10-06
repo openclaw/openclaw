@@ -107,7 +107,10 @@ suite.define(() => {
                     `${label} media stays inside the activity`,
                   ).toBeGreaterThanOrEqual(-1);
                 }
-                await summary.click();
+                // The expanded summary's source name is a link that opens that session, so a
+                // click on the middle of the row can navigate instead of collapsing.
+                await summary.locator(".chat-session-activity__chevron").click();
+                await expectBrowser(activity, label).toHaveJSProperty("open", false);
                 await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
               } else if (!("excluded" in testCase)) {
                 await expect
