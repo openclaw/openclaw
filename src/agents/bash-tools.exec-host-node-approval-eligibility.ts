@@ -1,10 +1,60 @@
 import path from "node:path";
-import type { ExecSegmentSatisfiedBy } from "../infra/exec-approvals-allowlist.js";
+import {
+  evaluateExecAllowlistWithAuthorization,
+  type ExecAllowlistAnalysis,
+  type ExecSegmentSatisfiedBy,
+} from "../infra/exec-approvals-allowlist.js";
+import type { ExecAllowlistEntry } from "../infra/exec-approvals.js";
+import { analyzeArgvCommand } from "../infra/exec-argv-analysis.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import { resolveUnpinnedAutoApprovalEligibility } from "../infra/exec-auto-approval-eligibility.js";
 import { resolveExecWrapperTrustPlan } from "../infra/exec-wrapper-trust-plan.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
+
+export async function evaluateNodeDirectArgvAllowlist(params: {
+  argv: string[];
+  allowlist: ExecAllowlistEntry[];
+  cwd?: string;
+  env: NodeJS.ProcessEnv;
+  platform?: string | null;
+  trustedSafeBinDirs?: ReadonlySet<string>;
+}): Promise<ExecAllowlistAnalysis> {
+  const analysis = analyzeArgvCommand({
+    argv: params.argv,
+    cwd: params.cwd,
+    env: params.env,
+    platform: params.platform,
+  });
+  if (!analysis.ok) {
+    return {
+      analysisOk: false,
+      allowlistSatisfied: false,
+      allowlistMatches: [],
+      segments: analysis.segments,
+      segmentAllowlistEntries: [],
+      segmentSatisfiedBy: [],
+    };
+  }
+  const evaluation = await evaluateExecAllowlistWithAuthorization({
+    analysis,
+    allowlist: params.allowlist,
+    safeBins: new Set(),
+    cwd: params.cwd,
+    env: params.env,
+    platform: params.platform,
+    trustedSafeBinDirs: params.trustedSafeBinDirs,
+  });
+  return {
+    analysisOk: true,
+    allowlistSatisfied: evaluation.allowlistSatisfied,
+    allowlistMatches: evaluation.allowlistMatches,
+    segments: evaluation.segments ?? analysis.segments,
+    segmentAllowlistEntries: evaluation.segmentAllowlistEntries,
+    segmentSatisfiedBy: evaluation.segmentSatisfiedBy,
+    ...(evaluation.authorizationPlan ? { authorizationPlan: evaluation.authorizationPlan } : {}),
+  };
+}
 
 export function resolveNodeAutoApprovalEligibility(params: {
   argv: string[];

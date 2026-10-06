@@ -57,7 +57,7 @@ describe("buildNodeCommandInvocation", () => {
     },
   );
 
-  it.each(["echo hi", "tool a & tool b", 'tool "50%"', "build.cmd", 'tool "open'])(
+  it.each(["echo hi", "tool a & tool b", "tool (x)", "build.cmd", 'tool "open'])(
     "keeps %j on the unchanged cmd.exe envelope",
     (command) => {
       expect(buildNodeCommandInvocation(command, "win32")).toEqual({

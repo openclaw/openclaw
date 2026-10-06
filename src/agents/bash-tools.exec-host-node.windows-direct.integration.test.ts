@@ -39,6 +39,8 @@ vi.mock("./tools/nodes-utils.js", () => ({
 }));
 
 const ACCENTED_ARGUMENT = "deux mots é";
+const SPECIAL_ARGUMENT = 'a & b | c < d > e ^ f (g) 50% %PATH% !x! say "hi"\nline 2 é';
+const SPECIAL_ARGUMENT_SOURCE = 'a & b | c < d > e ^ f (g) 50% %PATH% !x! say \\"hi\\"\nline 2 é';
 
 type CapturedParams = Record<string, unknown> & { command?: unknown; rawCommand?: unknown };
 
@@ -173,6 +175,23 @@ describe.runIf(process.platform === "win32")("Windows node direct argv transport
     ]);
   });
 
+  it("delivers cmd.exe characters, a quote, and a line break inside quotes literally", async () => {
+    const script = resolveWindowsDirectCommandArgv(request.command)?.[1] ?? "";
+    const command = `"${process.execPath}" "${script}" "${SPECIAL_ARGUMENT_SOURCE}"`;
+    expect(resolveWindowsDirectCommandArgv(command)?.slice(2)).toEqual([SPECIAL_ARGUMENT]);
+
+    const result = await executeNodeHostCommand({ ...request, command });
+
+    expect(prepareParams[0]?.command).toEqual(resolveWindowsDirectCommandArgv(command));
+    expect(prepareParams[0]?.rawCommand).toBe(
+      formatExecCommand(resolveWindowsDirectCommandArgv(command) ?? []),
+    );
+    expect(result.details).toMatchObject({ status: "completed" });
+    expect(decodeChildArgv((result.details as { aggregated?: unknown }).aggregated)).toEqual([
+      SPECIAL_ARGUMENT,
+    ]);
+  });
+
   it("binds the approval card, the approval, and the executed argv to the same argv", async () => {
     setRuntimeConfigSnapshot({ tools: { exec: { security: "allowlist", ask: "on-miss" } } });
     saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
@@ -272,34 +291,31 @@ describe.runIf(process.platform === "win32")("Windows node direct argv transport
       await executeNodeHostCommand(agentCliRun(cli, "premier prompt"));
       await executeNodeHostCommand(agentCliRun(cli, "second prompt différent"));
       await executeNodeHostCommand(agentCliRun(cli, "Explique l'erreur"));
+      await executeNodeHostCommand(agentCliRun(cli, SPECIAL_ARGUMENT_SOURCE));
 
       expect(approvalRequests).toHaveLength(0);
       expect(runParams.map((params) => (params.command as string[]).slice(1))).toEqual([
         ["-p", "premier prompt", "--permission-mode", "plan"],
         ["-p", "second prompt différent", "--permission-mode", "plan"],
         ["-p", "Explique l'erreur", "--permission-mode", "plan"],
+        ["-p", SPECIAL_ARGUMENT, "--permission-mode", "plan"],
       ]);
     });
 
-    it("refuses before any approval when the prompt needs cmd.exe", async () => {
+    it("refuses before any approval when an operator outside quotes needs cmd.exe", async () => {
       const cli = await installFakeAgentCli();
       saveExecApprovals({
         version: 1,
         defaults: { security: "allowlist", ask: "on-miss" },
         agents: { "*": { allowlist: [{ pattern: cli, lastUsedAt: Date.now() }] } },
       });
+      const command = `"${cli}" -p "Corrige le bug" & echo fini`;
 
-      await expect(
-        executeNodeHostCommand(agentCliRun(cli, "Corrige le bug (urgent)")),
-      ).rejects.toThrow("SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime");
+      await expect(executeNodeHostCommand({ ...agentCliRun(cli, "x"), command })).rejects.toThrow(
+        "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime",
+      );
 
-      expect(prepareParams[0]?.command).toEqual([
-        "cmd.exe",
-        "/d",
-        "/s",
-        "/c",
-        `"${cli}" -p "Corrige le bug (urgent)" --permission-mode plan`,
-      ]);
+      expect(prepareParams[0]?.command).toEqual(["cmd.exe", "/d", "/s", "/c", command]);
       expect(approvalRequests).toHaveLength(0);
       expect(runParams).toHaveLength(0);
     });

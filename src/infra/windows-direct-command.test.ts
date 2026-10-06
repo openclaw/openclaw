@@ -20,23 +20,62 @@ describe("splitWindowsDirectCommandLine", () => {
     expect(splitWindowsDirectCommandLine(command)).toEqual(argv);
   });
 
-  it.each(["&", "|", "<", ">", "^", "%", "!", "(", ")", "\n", "\r"])(
-    "refuses %j outside and inside double quotes",
+  it.each(["&", "|", "<", ">", "^", "(", ")", "%", "!", "\n", "\r\n"])(
+    "keeps %j literal inside double quotes",
     (ch) => {
-      expect(splitWindowsDirectCommandLine(`tool a${ch}b`)).toBeNull();
-      expect(splitWindowsDirectCommandLine(`tool "a${ch}b"`)).toBeNull();
+      expect(splitWindowsDirectCommandLine(`tool "a${ch}b" next`)).toEqual([
+        "tool",
+        `a${ch}b`,
+        "next",
+      ]);
     },
   );
 
+  it.each(["&", "|", "<", ">", "^", "(", ")", "\n", "\r"])(
+    "keeps %j outside double quotes on the cmd.exe path",
+    (ch) => {
+      expect(splitWindowsDirectCommandLine(`tool a${ch}b`)).toBeNull();
+    },
+  );
+
+  it("passes percent and exclamation marks outside quotes literally", () => {
+    expect(splitWindowsDirectCommandLine("tool 50% %PATH% done!")).toEqual([
+      "tool",
+      "50%",
+      "%PATH%",
+      "done!",
+    ]);
+  });
+
+  it.each([
+    ["an escaped quote", 'tool "say \\"hi\\""', ["tool", 'say "hi"']],
+    ["an escaped quote outside quotes", 'tool a\\"b', ["tool", 'a"b']],
+    ["two backslashes before a closing quote", 'tool "a\\\\"b c', ["tool", "a\\b", "c"]],
+    ["three backslashes before a quote", 'tool "a\\\\\\"b"', ["tool", 'a\\"b']],
+    ["four backslashes before an opening quote", 'tool a\\\\\\\\"b c"', ["tool", "a\\\\b c"]],
+    [
+      "backslashes not followed by a quote",
+      'tool C:\\dir\\ "C:\\dir\\\\"',
+      ["tool", "C:\\dir\\", "C:\\dir\\"],
+    ],
+    ["doubled quotes inside quotes", 'tool "a""b"', ["tool", 'a"b']],
+    ["tripled quotes", 'tool """a"""', ["tool", '"a"']],
+    ["a quote glued after a closing quote", 'tool "a"b', ["tool", "ab"]],
+    ["quotes inside a token", 'tool a"b c"d', ["tool", "ab cd"]],
+    ["an empty argument", 'tool "" x', ["tool", "", "x"]],
+  ])("follows the Windows rules for %s", (_label, command, argv) => {
+    expect(splitWindowsDirectCommandLine(command)).toEqual(argv);
+  });
+
   it.each([
     ["an unbalanced quote", 'tool "open'],
-    ["a backslash before a closing quote", 'tool "C:\\dir\\"'],
-    ["a backslash before an opening quote", 'tool \\"x"'],
-    ["a quote inside a token", 'tool a"b c"d'],
-    ["a quote glued after a closing quote", 'tool "a"b'],
-    ["adjacent quoted sections", 'tool "a""b"'],
+    ["an escaped quote that leaves a quote open", 'tool "C:\\dir\\"'],
+    ["doubled quotes on which the runtime and CommandLineToArgvW disagree", 'tool "a""b c" d'],
     ["a control character", "tool a\u0007b"],
+    ["a control character inside quotes", 'tool "a\u0007b"'],
     ["an empty command", "   "],
+    ["an empty program", '"" x'],
+    ["a program glued to its closing quote", '"C:\\tool.exe"x'],
   ])("refuses %s", (_label, command) => {
     expect(splitWindowsDirectCommandLine(command)).toBeNull();
   });

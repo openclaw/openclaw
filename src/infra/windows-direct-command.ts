@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isShellWrapperInvocation } from "./shell-wrapper-resolution.js";
 
-const CMD_SIGNIFICANT_CHARS = /[&|<>^%!()\r\n]/;
+const CMD_OPERATOR_CHARS = /[&|<>^()\r\n]/;
 const CMD_INTERNAL_COMMANDS = new Set([
   "assoc",
   "break",
@@ -54,25 +54,45 @@ function isArgumentSeparator(ch: string | undefined): boolean {
   return ch === " " || ch === "\t";
 }
 
-function hasAmbiguousControlChar(command: string): boolean {
+function hasForbiddenControlChar(command: string): boolean {
   for (let index = 0; index < command.length; index += 1) {
     const code = command.charCodeAt(index);
-    if ((code < 0x20 && code !== 0x09) || code === 0x7f) {
+    const lineBreakOrTab = code === 0x09 || code === 0x0a || code === 0x0d;
+    if ((code < 0x20 && !lineBreakOrTab) || code === 0x7f) {
       return true;
     }
   }
   return false;
 }
 
-export function splitWindowsDirectCommandLine(command: string): string[] | null {
-  if (CMD_SIGNIFICANT_CHARS.test(command) || hasAmbiguousControlChar(command)) {
+function readProgramName(command: string): { program: string; next: number } | null {
+  if (command.startsWith('"')) {
+    const closing = command.indexOf('"', 1);
+    const program = closing === -1 ? "" : command.slice(1, closing);
+    const glued = closing + 1 < command.length && !isArgumentSeparator(command[closing + 1]);
+    if (!program || /[\r\n]/.test(program) || glued) {
+      return null;
+    }
+    return { program, next: closing + 1 };
+  }
+  let end = 0;
+  while (end < command.length && !isArgumentSeparator(command[end])) {
+    end += 1;
+  }
+  const program = command.slice(0, end);
+  if (!program || program.includes('"') || CMD_OPERATOR_CHARS.test(program)) {
     return null;
   }
-  if (command.includes('\\"')) {
-    return null;
-  }
+  return { program, next: end };
+}
+
+function splitArguments(
+  command: string,
+  start: number,
+  doubledQuoteInQuotes: "stays-quoted" | "ends-quote",
+): string[] | null {
   const argv: string[] = [];
-  let index = 0;
+  let index = start;
   while (index < command.length) {
     while (isArgumentSeparator(command[index])) {
       index += 1;
@@ -80,29 +100,76 @@ export function splitWindowsDirectCommandLine(command: string): string[] | null 
     if (index >= command.length) {
       break;
     }
-    if (command[index] === '"') {
-      const closing = command.indexOf('"', index + 1);
-      if (
-        closing === -1 ||
-        (closing + 1 < command.length && !isArgumentSeparator(command[closing + 1]))
-      ) {
+    let arg = "";
+    let quoted = false;
+    while (index < command.length) {
+      const ch = command[index] ?? "";
+      if (ch === "\\") {
+        let run = 0;
+        while (command[index + run] === "\\") {
+          run += 1;
+        }
+        if (command[index + run] !== '"') {
+          arg += "\\".repeat(run);
+          index += run;
+          continue;
+        }
+        arg += "\\".repeat(Math.floor(run / 2));
+        index += run;
+        if (run % 2 === 1) {
+          arg += '"';
+          index += 1;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        if (quoted && command[index + 1] === '"') {
+          arg += '"';
+          index += 2;
+          quoted = doubledQuoteInQuotes === "stays-quoted";
+          continue;
+        }
+        quoted = !quoted;
+        index += 1;
+        continue;
+      }
+      if (!quoted && isArgumentSeparator(ch)) {
+        break;
+      }
+      if (!quoted && CMD_OPERATOR_CHARS.test(ch)) {
         return null;
       }
-      argv.push(command.slice(index + 1, closing));
-      index = closing + 1;
-      continue;
+      arg += ch;
+      index += 1;
     }
-    let end = index;
-    while (end < command.length && !isArgumentSeparator(command[end])) {
-      if (command[end] === '"') {
-        return null;
-      }
-      end += 1;
+    if (quoted && doubledQuoteInQuotes === "stays-quoted") {
+      return null;
     }
-    argv.push(command.slice(index, end));
-    index = end;
+    argv.push(arg);
   }
-  return argv.length > 0 ? argv : null;
+  return argv;
+}
+
+export function splitWindowsDirectCommandLine(rawCommand: string): string[] | null {
+  const command = rawCommand.replace(/^[ \t]+/, "");
+  if (hasForbiddenControlChar(command)) {
+    return null;
+  }
+  const head = readProgramName(command);
+  if (!head) {
+    return null;
+  }
+  const runtimeArgs = splitArguments(command, head.next, "stays-quoted");
+  const shellArgs = splitArguments(command, head.next, "ends-quote");
+  if (
+    !runtimeArgs ||
+    !shellArgs ||
+    runtimeArgs.length !== shellArgs.length ||
+    runtimeArgs.some((arg, index) => arg !== shellArgs[index])
+  ) {
+    return null;
+  }
+  return [head.program, ...runtimeArgs];
 }
 
 function isCmdInternalCommand(executable: string): boolean {
