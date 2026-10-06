@@ -78,6 +78,13 @@ class SmsManager(
     private const val MMS_CONTENT_BASE = "content://mms"
     private const val MMS_PART_URI = "content://mms/part"
     private val PHONE_FORMATTING_REGEX = Regex("""[\s\-()]""")
+    private const val GSM7_CONCATENATED_PART_CHARS = 153
+    private const val UCS2_CONCATENATED_PART_CHARS = 67
+
+    /** GSM 7-bit default alphabet, single-septet characters only (no escape set). */
+    private const val GSM7_BASIC_ALPHABET =
+      "@£\$¥èéùìòÇ\nØø\rÅå_ΔΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡" +
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
 
     internal fun parseParams(
       paramsJson: String?,
@@ -381,11 +388,53 @@ class SmsManager(
         .drop(params.offset)
         .take(params.limit)
 
+    /**
+     * Splits a message into concatenated-SMS parts without consulting the
+     * platform. Used only when [AndroidSmsManager.divideMessage] is denied:
+     * its EMS-support probe reads TelephonyManager.getGroupIdLevel1(), which
+     * needs READ_PHONE_STATE on Samsung firmware carrying a NoEmsSupport
+     * carrier list. A message that is entirely GSM 7-bit basic encodes at
+     * 153 septets per part; anything else is UCS-2 at 67 chars per part.
+     * Characters from the GSM escape set fall into the UCS-2 bucket, which
+     * yields more parts than strictly necessary but never an over-long one.
+     */
+    internal fun splitForConcatenatedSms(message: String): List<String> {
+      val limit =
+        if (message.all { it in GSM7_BASIC_ALPHABET }) {
+          GSM7_CONCATENATED_PART_CHARS
+        } else {
+          UCS2_CONCATENATED_PART_CHARS
+        }
+      if (message.length <= limit) {
+        return listOf(message)
+      }
+      val parts = mutableListOf<String>()
+      var start = 0
+      while (start < message.length) {
+        var end = minOf(start + limit, message.length)
+        // UCS-2 counts both halves of a surrogate pair, but half a pair is not text.
+        if (end < message.length && message[end - 1].isHighSurrogate()) {
+          end -= 1
+        }
+        parts.add(message.substring(start, end))
+        start = end
+      }
+      return parts
+    }
+
     internal fun buildSendPlan(
       message: String,
       divider: (String) -> List<String>,
     ): SendPlan {
-      val parts = divider(message).ifEmpty { listOf(message) }
+      val divided =
+        try {
+          divider(message)
+        } catch (_: SecurityException) {
+          // Long messages keep sending instead of asking every node to grant a
+          // device-identity permission the send itself never needs.
+          splitForConcatenatedSms(message)
+        }
+      val parts = divided.ifEmpty { listOf(message) }
       return SendPlan(parts = parts, useMultipart = parts.size > 1)
     }
 
