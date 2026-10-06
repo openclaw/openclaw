@@ -9,6 +9,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { reserveAgentCreationClaimAdmission } from "./agent-creation-claim.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
@@ -178,7 +179,9 @@ export function assertAgentDatabaseResourceAdmission(
           closing.agentId === owned.agentId),
     )
   ) {
-    throw new Error(`Agent database resources are closing: ${owned.path}`);
+    throw new AgentDatabaseExecutionAdmissionClosedError(
+      `Agent database resources are closing: ${owned.path}`,
+    );
   }
 }
 

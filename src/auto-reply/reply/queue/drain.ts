@@ -26,6 +26,7 @@ import {
 } from "../../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
@@ -944,16 +945,19 @@ export function scheduleFollowupDrain(
 ): void {
   const existingQueue = FOLLOWUP_QUEUES.get(key);
   if (existingQueue?.draining) {
-    // The active drain keeps its current callback, but deferred retries must
-    // use the latest session/runtime context supplied by the finishing run.
+    // Keep the active callback, but preserve explicit wakeups so a refused
+    // attempt can hand off once to the latest session/runtime context.
     rememberFollowupDrainCallback(key, runFollowup);
+    if (existingQueue.drainOwner) {
+      existingQueue.drainOwner.rescheduleRequested = true;
+    }
     return;
   }
   const queue = beginQueueDrain(FOLLOWUP_QUEUES, key);
   if (!queue) {
     return;
   }
-  const drainOwner = {};
+  const drainOwner = { rescheduleRequested: false };
   queue.drainOwner = drainOwner;
   const assertDrainCurrent = () => {
     if (
@@ -977,6 +981,7 @@ export function scheduleFollowupDrain(
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
   const drainQueuedFollowups = async (): Promise<void> => {
     let waitingForSteer = false;
+    let databaseAdmissionClosed = false;
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
@@ -1190,6 +1195,9 @@ export function scheduleFollowupDrain(
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
+      // A closing or retired database cannot serve this drain. Keep the input
+      // for a fresh owner signal or restart recovery, without a retry loop.
+      databaseAdmissionClosed = err instanceof AgentDatabaseExecutionAdmissionClosedError;
       if (!(err instanceof FollowupRunDeferredError)) {
         if (isGatewayRestartDrainError(err)) {
           // A reversible signal fence may reopen. One-way abort synchronously
@@ -1214,7 +1222,7 @@ export function scheduleFollowupDrain(
         } else if (!hasPendingQueueWork) {
           FOLLOWUP_QUEUES.delete(key);
           clearFollowupDrainCallback(key);
-        } else {
+        } else if (!databaseAdmissionClosed || drainOwner.rescheduleRequested) {
           scheduleFollowupDrain(key, effectiveRunFollowup);
         }
       }
