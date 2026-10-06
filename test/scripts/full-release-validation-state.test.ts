@@ -896,18 +896,31 @@ describe("release child attempt composition", () => {
       ]);
     });
 
+    it("ignores never-executed copies beside a completed job in the effective attempt", () => {
+      const result = composeReleaseAttemptJobs([ghostAttempt], {
+        effectiveRunAttempt: 2,
+        plannedRunAttempt: 2,
+      });
+      expect(result.jobs).toEqual([
+        expect.objectContaining({
+          acceptedRunAttempt: 2,
+          conclusion: "success",
+          name: "checks-node-core-runtime-infra-process",
+        }),
+        expect.objectContaining({
+          acceptedRunAttempt: 2,
+          conclusion: "failure",
+          name: "checks-ui",
+        }),
+      ]);
+    });
+
     it.each<{
       label: string;
       attempts: Parameters<typeof composeReleaseAttemptJobs>[0];
       effectiveRunAttempt: number;
       plannedRunAttempt: number;
     }>([
-      {
-        label: "in the effective attempt",
-        attempts: [ghostAttempt],
-        effectiveRunAttempt: 2,
-        plannedRunAttempt: 2,
-      },
       {
         label: "without a completed sibling",
         attempts: [
