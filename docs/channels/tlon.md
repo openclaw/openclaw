@@ -198,7 +198,8 @@ answered, but as an ordinary unverified sender.
 
 Pending DM requests saved by versions before this behavior cannot be told apart from group DM
 claims. Approving one still adds the ship to `dmAllowlist`, but its stored message is not
-replayed; the sender has to send it again.
+replayed. The approval confirmation tells the owner the message was not processed and that the
+sender has to send it again.
 
 When `ownerShip` is set, unauthorized requests do not just get dropped — they queue a pending
 approval and DM the owner:

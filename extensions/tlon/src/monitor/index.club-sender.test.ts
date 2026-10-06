@@ -294,9 +294,15 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
           expect(inboundRuntimeMock.buildContext).toHaveBeenCalledWith(
             expect.objectContaining({ sender: expect.objectContaining({ id: "~bus" }) }),
           );
+          expect(pokedTexts().join("")).not.toContain("send it again");
         } else {
           expect(inboundRuntimeMock.buildContext).not.toHaveBeenCalled();
           expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+          // The owner is told the saved message was not processed and must be resent.
+          const confirmation = pokedTexts().join("");
+          expect(confirmation).toContain("Approved DM access for");
+          expect(confirmation).toContain("was not processed");
+          expect(confirmation).toContain("send it again");
         }
       });
     },

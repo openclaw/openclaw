@@ -11,6 +11,7 @@ import type { UrbitSSEClient } from "../urbit/sse-client.js";
 import {
   findPendingApproval,
   formatApprovalConfirmation,
+  requiresResendAfterApproval,
   formatApprovalRequest,
   formatBlockedList,
   formatPendingList,
@@ -229,7 +230,11 @@ export function createTlonApprovalRuntime(params: {
       switch (approval.type) {
         case "dm":
           await addToDmAllowlist(approval.requestingShip);
-          if (approval.originalMessage) {
+          if (requiresResendAfterApproval(approval)) {
+            runtime.log?.(
+              `[tlon] Not replaying pre-upgrade DM request from ${approval.requestingShip}: sender provenance unknown; owner told to request a resend`,
+            );
+          } else if (approval.originalMessage) {
             runtime.log?.(
               `[tlon] Processing original message from ${approval.requestingShip} after approval`,
             );

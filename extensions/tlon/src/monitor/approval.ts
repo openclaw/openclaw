@@ -105,6 +105,19 @@ export function removePendingApproval(
   return pendingApprovals.filter((a) => a.id !== id);
 }
 
+/**
+ * DM requests saved before sender provenance was recorded cannot be told apart from unverified
+ * group DM claims, so their stored message is never replayed; the sender must send it again.
+ */
+export function requiresResendAfterApproval(approval: PendingApproval): boolean {
+  return (
+    approval.type === "dm" &&
+    approval.originalMessage !== undefined &&
+    approval.clubId === undefined &&
+    approval.verifiedDirect !== true
+  );
+}
+
 export function formatApprovalConfirmation(
   approval: PendingApproval,
   action: "approve" | "deny" | "block",
@@ -118,6 +131,13 @@ export function formatApprovalConfirmation(
   switch (approval.type) {
     case "dm":
       if (action === "approve") {
+        if (requiresResendAfterApproval(approval)) {
+          return (
+            `${actionText} DM access for ${approval.requestingShip}. They can now message the bot.\n` +
+            `Their earlier message was saved before this version and its sender cannot be verified, ` +
+            `so it was not processed. Ask ${approval.requestingShip} to send it again.`
+          );
+        }
         return `${actionText} DM access for ${approval.requestingShip}. They can now message the bot.`;
       }
       return `${actionText} DM request from ${approval.requestingShip}.`;
