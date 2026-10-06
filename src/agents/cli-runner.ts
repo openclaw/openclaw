@@ -163,14 +163,24 @@ async function runCliAgentInternal(
             (reason) => generationAbortController.abort(reason),
           )
         : undefined;
-    const hookResult = await runCliBeforeAgentReply(params, generation?.assertCurrent);
+    // Hook handlers await arbitrary plugin work; their admission fence must carry
+    // every authority the post-hook preparation re-checks, or a revoked caller, a
+    // fired abort signal, or a rotated gateway lifecycle can drive network I/O
+    // through the hook after those authorities changed underneath the turn.
+    const assertHookAdmission = () => {
+      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
+      params.abortSignal?.throwIfAborted();
+      assertCallerCurrent?.();
+      generation?.assertCurrent();
+    };
+    const hookResult = await runCliBeforeAgentReply(params, assertHookAdmission);
     if (hookResult) {
       return hookResult;
     }
     // before_model_resolve must run before preparation normalizes the model for the
     // child process; the embedded runner emits it in model setup, the CLI path
     // returns before that setup, so it is emitted here (see model-resolve-hook).
-    await applyCliModelResolveHookForRun(params, generation?.assertCurrent);
+    await applyCliModelResolveHookForRun(params, assertHookAdmission);
     modelExecution = bindOperatorModelExecution(
       readRunOperatorAuthority(params),
       params.requesterModel,
