@@ -17,9 +17,15 @@ export async function fetchPagedSessionRows(params: {
   }
   const rowsByKey = new Map<string, GatewaySessionRow>();
   let expectedTotal: number | undefined;
+  // Rows a UI overlay (an optimistic deletion) removed after the server counted
+  // them. They are members of the server window that no page will ever return,
+  // so they count toward completeness; otherwise a stable, complete window
+  // re-reads itself and then reports that it kept changing.
+  let hiddenRows = 0;
   for (let pass = 0; pass < MAX_SESSION_LIST_PASSES; pass += 1) {
     // Include prefetched rows in first-pass progress so a moving row triggers a retry.
     const rowsBeforePass = rowsByKey.size;
+    hiddenRows = 0;
     const seenOffsets = new Set<number>();
     let offset = 0;
     let prefetched = pass === 0 ? params.initialResult : undefined;
@@ -37,12 +43,14 @@ export async function fetchPagedSessionRows(params: {
         // Managed pagination already owns accumulated membership. A replacement
         // must retire old rows instead of completing against a cross-pass union.
         rowsByKey.clear();
+        hiddenRows = 0;
         expectedTotal = result.totalCount;
       }
       // Optional later-page counts must never erase a known larger roster.
       if (typeof result.totalCount === "number") {
         expectedTotal = Math.max(expectedTotal ?? 0, result.totalCount);
       }
+      hiddenRows += Math.max(0, (result.serverRowCount ?? 0) - result.sessions.length);
       const rows = params.mapPageRows?.(result.sessions) ?? result.sessions;
       for (const row of rows) {
         rowsByKey.set(row.key, row);
@@ -50,7 +58,7 @@ export async function fetchPagedSessionRows(params: {
       const hasMore =
         result.hasMore ??
         (typeof result.totalCount === "number" &&
-          offset + result.sessions.length < result.totalCount);
+          offset + result.sessions.length + hiddenRows < result.totalCount);
       if (!hasMore) {
         break;
       }
@@ -66,7 +74,7 @@ export async function fetchPagedSessionRows(params: {
     if (
       (params.resultKind !== "window" && rowsByKey.size === rowsBeforePass) ||
       expectedTotal === undefined ||
-      rowsByKey.size >= expectedTotal
+      rowsByKey.size + hiddenRows >= expectedTotal
     ) {
       break;
     }
@@ -75,7 +83,7 @@ export async function fetchPagedSessionRows(params: {
   if (
     params.incompletePaginationError &&
     expectedTotal !== undefined &&
-    rowsByKey.size < expectedTotal
+    rowsByKey.size + hiddenRows < expectedTotal
   ) {
     throw new Error(params.incompletePaginationError);
   }
