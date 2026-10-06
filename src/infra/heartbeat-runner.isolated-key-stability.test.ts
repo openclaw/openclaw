@@ -70,6 +70,30 @@ it("recovers an archived isolated session on the next heartbeat tick", async () 
   );
 });
 
+it("keeps the isolated session's sidebar preferences across scheduled runs", async () => {
+  await withIsolatedHeartbeat(async ({ baseKey, isolatedKey, replySpy, seed, run, storePath }) => {
+    const preferences = { label: "Heartbeat", category: "Automations", icon: "bot" };
+    await seed(isolatedKey, {
+      sessionId: "previous-heartbeat-session",
+      heartbeatIsolatedBaseSessionKey: baseKey,
+      ...preferences,
+    });
+    let previousSessionId: string | undefined = "previous-heartbeat-session";
+    for (let turn = 0; turn < 2; turn += 1) {
+      expect((await run({ agentId: "main", reason: "interval" })).status).toBe("ran");
+      expect(replySpy.mock.calls[turn]?.[0].SessionKey).toBe(isolatedKey);
+      const entry = readSessionStoreForTest(storePath)[isolatedKey];
+      expect(entry).toMatchObject({
+        ...preferences,
+        heartbeatIsolatedBaseSessionKey: baseKey,
+        sessionId: expect.any(String),
+      });
+      expect(entry?.sessionId).not.toBe(previousSessionId);
+      previousSessionId = entry?.sessionId;
+    }
+  });
+});
+
 it("converges multiply accumulated suffixes without a stored base marker", async () => {
   await withIsolatedHeartbeat(async ({ baseKey, isolatedKey, replySpy, seed, run, storePath }) => {
     const legacyKey = `${baseKey}:heartbeat:heartbeat:heartbeat`;
